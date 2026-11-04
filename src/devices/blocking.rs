@@ -548,7 +548,7 @@ mod tests {
     }
 
     fn errno(r: Result<Vec<u8>, DevError>) -> i32 {
-        i32::from(r.unwrap_err().errno())
+        r.unwrap_err().errno()
     }
 
     #[test]

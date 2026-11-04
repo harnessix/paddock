@@ -28,7 +28,7 @@ struct Fake {
 
 impl Fake {
     fn new(version: &str, tarball: Vec<u8>, sums: Vec<u8>) -> Self {
-        let release = Release::for_tag(&format!("v{version}"), "x86_64").unwrap();
+        let release = Release::for_target(&format!("v{version}"), "x86_64", "linux").unwrap();
         let mut files = BTreeMap::new();
         files.insert(release.tarball_url(), tarball);
         files.insert(release.checksum_url(), sums);
@@ -135,7 +135,7 @@ fn versions_compare_like_semver() {
 
 #[test]
 fn release_names_follow_the_release_workflow() {
-    let r = Release::for_tag("v0.1.8", "x86_64").unwrap();
+    let r = Release::for_target("v0.1.8", "x86_64", "linux").unwrap();
     assert_eq!(r.tarball(), "paddock-0.1.8-x86_64-linux.tar.gz");
     assert_eq!(r.checksum(), "paddock-0.1.8-x86_64-linux.tar.gz.sha256");
     assert_eq!(r.member(), "paddock-0.1.8-x86_64-linux/paddock");
@@ -150,7 +150,7 @@ fn release_names_follow_the_release_workflow() {
 
 #[test]
 fn aarch64_release_names_follow_the_release_workflow() {
-    let r = Release::for_tag("v0.1.8", "aarch64").unwrap();
+    let r = Release::for_target("v0.1.8", "aarch64", "linux").unwrap();
     assert_eq!(r.arch, "aarch64");
     assert_eq!(r.tarball(), "paddock-0.1.8-aarch64-linux.tar.gz");
     assert_eq!(r.checksum(), "paddock-0.1.8-aarch64-linux.tar.gz.sha256");
@@ -164,6 +164,18 @@ fn aarch64_release_names_follow_the_release_workflow() {
         "https://github.com/harnessix/omarchy-paddock/releases/download/v0.1.8/paddock-0.1.8-aarch64-linux.tar.gz.sha256"
     );
     assert!(check_url(&r.checksum_url()).is_ok());
+}
+
+#[test]
+fn macos_release_names_follow_the_release_workflow() {
+    let r = Release::for_target("v0.1.8", "aarch64", "macos").unwrap();
+    assert_eq!(r.tarball(), "paddock-0.1.8-aarch64-macos.tar.gz");
+    assert_eq!(r.member(), "paddock-0.1.8-aarch64-macos/paddock");
+    let r = Release::for_target("v0.1.8", "x86_64", "macos").unwrap();
+    assert_eq!(r.checksum(), "paddock-0.1.8-x86_64-macos.tar.gz.sha256");
+    // The binary of this machine gets the assets of its own system.
+    let host = Release::for_tag("v0.1.8", std::env::consts::ARCH).unwrap();
+    assert_eq!(host.os, std::env::consts::OS);
 }
 
 #[test]
@@ -184,11 +196,11 @@ fn release_workflow_builds_every_architecture() {
     let yml = include_str!("../../.github/workflows/release.yml");
     for arch in ARCHS {
         assert!(
-            yml.contains(&format!("arch: {arch}")),
-            "release.yml has no matrix entry for {arch}"
+            yml.contains(&format!("arch: {arch}\n            os: linux\n")),
+            "release.yml has no Linux build for {arch}"
         );
     }
-    assert!(yml.contains(r#"name="paddock-${TAG#v}-${{ matrix.arch }}-linux""#));
+    assert!(yml.contains(r#"name="paddock-${TAG#v}-${{ matrix.arch }}-${{ matrix.os }}""#));
 }
 
 #[test]
@@ -308,7 +320,7 @@ fn update_replaces_the_binary_after_every_check() {
     let t = tempfile::tempdir().unwrap();
     let env = env_in(t.path(), false);
     let tb = tarball(t.path(), "9.9.9", "paddock 9.9.9");
-    let rel = Release::for_tag("v9.9.9", "x86_64").unwrap();
+    let rel = Release::for_target("v9.9.9", "x86_64", "linux").unwrap();
     let src = Fake::new("9.9.9", tb.clone(), sums_for(&rel, &tb));
     let bin = old_binary(t.path());
     install(&env, &src, &rel, &bin, None, &tar()).unwrap();
@@ -332,7 +344,7 @@ fn a_binary_with_the_wrong_version_is_refused() {
     let t = tempfile::tempdir().unwrap();
     let env = env_in(t.path(), false);
     let tb = tarball(t.path(), "9.9.9", "paddock 0.0.1");
-    let rel = Release::for_tag("v9.9.9", "x86_64").unwrap();
+    let rel = Release::for_target("v9.9.9", "x86_64", "linux").unwrap();
     let src = Fake::new("9.9.9", tb.clone(), sums_for(&rel, &tb));
     let bin = old_binary(t.path());
     let e = install(&env, &src, &rel, &bin, None, &tar()).unwrap_err();
@@ -445,4 +457,11 @@ fn files_changed_after_the_start_mean_a_restart() {
     assert!(changed_after(std::slice::from_ref(&f), now - 60));
     assert!(!changed_after(std::slice::from_ref(&f), now + 60));
     assert!(!changed_after(&[t.path().join("missing")], 0));
+}
+
+#[test]
+fn the_release_repository_is_owner_and_name() {
+    let (owner, name) = REPO.split_once('/').unwrap();
+    assert!(!owner.is_empty() && !name.contains('/'));
+    assert_eq!(REPO_URL, format!("https://github.com/{REPO}"));
 }

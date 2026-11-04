@@ -38,6 +38,7 @@ pub const USER_ONLY: &[&str] = &[
     "profiles",
     "detach",
     "compaction",
+    "macos",
     "hooks",
     "speckit",
     "loft",

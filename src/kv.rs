@@ -1525,13 +1525,7 @@ fn write_error(e: WriteError) -> Result<Response> {
 
 /// True when the other end closed its side.
 fn peer_gone(conn: &UnixStream) -> bool {
-    let mut p = libc::pollfd {
-        fd: conn.as_raw_fd(),
-        events: libc::POLLIN | libc::POLLRDHUP,
-        revents: 0,
-    };
-    let n = unsafe { libc::poll(&mut p, 1, 0) };
-    n > 0 && p.revents & (libc::POLLRDHUP | libc::POLLHUP | libc::POLLERR) != 0
+    crate::platform::peer_gone(conn.as_raw_fd())
 }
 
 pub(crate) fn request_id() -> String {
@@ -1930,7 +1924,13 @@ pub fn start(
     let monitor = crate::monitor::watch(env.clone(), id.clone());
     let svc =
         Service::new(env.clone(), id, cfg, approver, Duration::from_secs(wait)).with_bridge(bridge);
-    let sock = env.paddock_run().join(&spec.id).join("kv.sock");
+    let sock = match crate::sockpath::named(env, &spec.id, "kv.sock") {
+        Ok(p) => p,
+        Err(e) => {
+            spec.notices.push(format!("paddock kv is off: {e:#}"));
+            return None;
+        }
+    };
     match serve(&sock, svc) {
         Ok(mut s) => {
             s.monitor = Some(monitor);

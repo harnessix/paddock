@@ -14,6 +14,12 @@ icon = "visual-studio-code"
 schemes = ["vscode"]
 open_roots = true
 
+# On macOS paddock runs the app bundle with Seatbelt (README, App mode on
+# macOS). It is an Electron app without App Sandbox.
+[app.macos]
+bundles = ["/Applications/Visual Studio Code.app", "~/Applications/Visual Studio Code.app"]
+user_data = "Library/Application Support/Code"
+
 # Usage data, error telemetry and crash reports off. Experiments stop with
 # them, and the second setting turns them off on its own. Extensions keep
 # their own telemetry settings. Code - OSS builds use the second folder.
@@ -26,6 +32,17 @@ value = "off"
 
 [[privacy.settings]]
 file = ".config/Code/User/settings.json"
+path = ["workbench.enableExperiments"]
+value = false
+
+# The same settings in the data folder of the macOS app.
+[[privacy.settings]]
+file = "Library/Application Support/Code/User/settings.json"
+path = ["telemetry.telemetryLevel"]
+value = "off"
+
+[[privacy.settings]]
+file = "Library/Application Support/Code/User/settings.json"
 path = ["workbench.enableExperiments"]
 value = false
 

@@ -83,7 +83,7 @@ impl Detector for Git {
         let Some(layout) = crate::hostgit::Layout::discover(cx.project)? else {
             return Ok(());
         };
-        if !layout.common_dir.starts_with(cx.project) {
+        if !crate::paths::within(&layout.common_dir, cx.project) {
             // A linked worktree: commits write to the main repository's git directory.
             spec.add_mount(Mount::same(
                 &layout.common_dir,
@@ -108,7 +108,7 @@ impl Detector for Git {
             ));
         }
         for dir in layout.protected_dirs() {
-            if dir != layout.dot_git && dir.starts_with(cx.project) {
+            if dir != layout.dot_git && crate::paths::within(&dir, cx.project) {
                 // A worktree or submodule git directory inside the project
                 // gets its own mount point as well.
                 spec.add_mount(Mount::same(

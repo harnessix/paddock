@@ -102,6 +102,13 @@ pub fn note_opened(raw: &str) {
     }
 }
 
+/// The ports that are allowed now.
+pub fn allowed_ports() -> Vec<u16> {
+    let mut m = ALLOWED.lock().unwrap();
+    m.retain(|_, until| *until > Instant::now());
+    m.keys().copied().collect()
+}
+
 pub fn allowed(port: u16) -> bool {
     let mut m = ALLOWED.lock().unwrap();
     m.retain(|_, until| *until > Instant::now());
@@ -135,14 +142,31 @@ pub fn open_shim(env: &HostEnv, spec: &mut SandboxSpec, origin: &str) -> Result<
 pub fn prepare(
     env: &HostEnv,
     spec: &mut SandboxSpec,
-    srt: bool,
+    backend: &str,
 ) -> Result<Option<crate::app::ports::Forwarder>> {
     let origin = "login callbacks";
     let run = env.paddock_run().join(&spec.id);
     open_shim(env, spec, origin)?;
 
+    // Seatbelt shares the host network: the callback reaches the harness
+    // on host localhost, and no forwarder is needed. Programs on macOS open
+    // a link with `open URL` (Claude Code through Node's `open`), and
+    // Seatbelt denies Launch Services, so `open` is the shim too. Codex and
+    // Grok Build call Launch Services themselves: that fails, and they
+    // print the link instead.
+    if backend == crate::backend::seatbelt::NAME {
+        let shim = run.join("open");
+        crate::gui::write_file(&shim, OPEN_SHIM, 0o755)?;
+        spec.add_tool("open", shim, origin);
+        return Ok(None);
+    }
     // srt cannot place the shared folder that the forwarder uses.
-    if srt {
+    // The VM backend: paddock in the guest prepares the sandbox, and the
+    // host run forwards the allowed ports into the guest (vm/attach.rs).
+    if backend == crate::backend::vm::NAME {
+        return Ok(None);
+    }
+    if backend == "srt" {
         spec.warnings.push(
             "login callbacks to localhost need the bwrap, docker or podman backend; on srt, log in with a device code or an API key".into(),
         );
@@ -159,8 +183,16 @@ pub fn prepare(
     }
     spec.set_env("PADDOCK_INBOUND_PORTS", "1", origin);
     spec.setup.push("paddock inbound >/dev/null 2>&1 &".into());
+    // In the guest of the VM backend, the host allows the ports: it
+    // forwards only the ports of the login pages that it opened.
+    let filter: fn(u16) -> bool =
+        if crate::vm::agent::guest_socket(crate::vm::agent::HOST_SOCKET_VAR).is_some() {
+            |_| true
+        } else {
+            allowed
+        };
     Ok(Some(crate::app::ports::Forwarder::start_filtered(
-        inbound, allowed,
+        inbound, filter,
     )))
 }
 
@@ -204,6 +236,32 @@ mod tests {
             enc("https://a.example/?redirect_uri=https://evil.example:9/")
         );
         assert!(callback_ports(&far).is_empty());
+    }
+
+    #[test]
+    fn a_seatbelt_run_opens_links_with_open_too() {
+        let t = tempfile::tempdir().unwrap();
+        let home = t.path().join("home");
+        let env = HostEnv::from_parts(home.clone(), "u".into(), 501, 20, Default::default());
+        let mut s = SandboxSpec::new(
+            "id".into(),
+            "fake",
+            &home.join("p"),
+            home.join("sb"),
+            &home,
+            501,
+            20,
+            "u",
+        );
+        assert!(prepare(&env, &mut s, crate::backend::seatbelt::NAME)
+            .unwrap()
+            .is_none());
+        for name in ["open", "xdg-open"] {
+            let t = s.host_tools.iter().find(|t| t.name == name).unwrap();
+            let text = std::fs::read_to_string(&t.src).unwrap();
+            assert!(text.contains("exec paddock host open \"$a\""), "{name}");
+        }
+        assert!(s.mounts.is_empty());
     }
 
     #[test]

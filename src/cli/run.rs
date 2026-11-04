@@ -83,9 +83,6 @@ pub(crate) fn start_detached(env: &HostEnv, a: &RunArgs) -> Result<i32> {
             opts.harness
         );
     }
-    let Some(tmux) = paddock::view::Tmux::find(env) else {
-        bail!("--detach needs tmux on PATH: paddock runs the harness in a tmux session of its own. Install tmux, or run without --detach")
-    };
     let prompt: Vec<u8> = match (&a.prompt_file, &a.prompt) {
         (Some(f), None) => {
             let len = std::fs::metadata(f)
@@ -102,6 +99,9 @@ pub(crate) fn start_detached(env: &HostEnv, a: &RunArgs) -> Result<i32> {
     if prompt.iter().all(u8::is_ascii_whitespace) {
         bail!("the prompt is empty");
     }
+    let Some(tmux) = paddock::view::Tmux::find(env) else {
+        bail!("--detach needs tmux on PATH: paddock runs the harness in a tmux session of its own. Install tmux, or run without --detach")
+    };
     let project = build::resolve_project(opts.project.as_deref())?;
     let id = state::new_id(&opts.harness, &project);
     let job = paddock::detach::Job {
@@ -167,7 +167,13 @@ fn start_with(
 ) -> Result<i32> {
     let mut opts = a.options(env, shell)?;
     opts.detach = detach.as_ref().map(|(id, _)| id.clone());
-    let built = build::build(env, &opts)?;
+    let mut built = build::build(env, &opts)?;
+    // The VM backend starts the same run with paddock in the guest.
+    built.spec.intent = paddock::spec::Intent {
+        shell,
+        no_yolo: opts.no_yolo,
+        args: opts.args.clone(),
+    };
     // The first prompt: a read-only copy where the [oneshot] prompt goes.
     let prompt_home = match &detach {
         Some((_, prompt)) => {
@@ -220,6 +226,7 @@ pub(crate) fn explain(env: &HostEnv, a: &RunArgs, json: bool) -> Result<()> {
     let s = &built.spec;
     let cleanup = || {
         let _ = std::fs::remove_dir_all(env.paddock_run().join(&s.id));
+        paddock::sockpath::remove_run_sockets(&env.paddock_run(), env.uid, &s.id);
         paddock::shadow::discard(s);
         paddock::borrow::end(env, &s.id);
         if let Some(w) = &built.worktree {

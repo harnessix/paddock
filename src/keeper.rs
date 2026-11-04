@@ -57,7 +57,14 @@ pub const KINDS: &[Kind] = &[Kind {
     args: &["-s", "read-only", "-a", "on-request", "app-server"],
 }];
 
+/// The kind of login that the keeper keeps for `harness`. None on macOS:
+/// the keeper sandbox is bwrap, so no keeper runs there, and a login with
+/// its refresh token taken out could never be renewed. The harness then
+/// renews its own login in the sandbox, as before the keeper.
 pub fn kind_for(harness: &str) -> Option<&'static Kind> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
     KINDS.iter().find(|k| k.harness == harness)
 }
 

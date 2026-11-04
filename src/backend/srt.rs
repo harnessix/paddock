@@ -357,52 +357,9 @@ impl Backend for Srt {
         crate::safefs::Root::open(&spec.home_src)?
             .dir(Path::new(".paddock-tmp").join(&spec.id).as_path(), true)?;
         vars.insert("TMPDIR".into(), s(&bridge));
-        // srt cannot bind-mount: the socket stays at its host path, in the run
-        // folder, which allowRead already covers.
-        if let Some(sock) = &spec.host_socket {
-            vars.insert("PADDOCK_HOST_SOCKET".into(), s(sock));
-        }
-        if let Some(sock) = &spec.kv_socket {
-            vars.insert("PADDOCK_KV_SOCKET".into(), s(sock));
-        }
-        if let Some(sock) = &spec.ssh_agent_socket {
-            vars.insert("SSH_AUTH_SOCK".into(), s(sock));
-        }
-        if let Some(dir) = &spec.devices {
-            vars.insert("PADDOCK_DEVICES".into(), s(dir));
-        }
-        if let Some(src) = spec
-            .mounts
-            .iter()
-            .find(|m| m.dst == Path::new(crate::pasture::MOUNT))
-            .and_then(|m| m.src.as_ref())
-        {
-            vars.insert("PADDOCK_PASTURE".into(), s(src));
-        }
-        if let Some(src) = spec
-            .mounts
-            .iter()
-            .find(|m| m.dst == Path::new(crate::pasture::workbench::MOUNT))
-            .and_then(|m| m.src.as_ref())
-        {
-            vars.insert(crate::pasture::workbench::ENV.into(), s(src));
-        }
-        if let Some(src) = spec
-            .mounts
-            .iter()
-            .find(|m| m.dst == Path::new(crate::pasture::ports::PORTS_MOUNT))
-            .and_then(|m| m.src.as_ref())
-        {
-            vars.insert(crate::pasture::ports::PORTS_ENV.into(), s(src));
-        }
-        if let Some(src) = spec
-            .mounts
-            .iter()
-            .find(|m| m.dst == Path::new(crate::pasture::ports::OWN_MOUNT))
-            .and_then(|m| m.src.as_ref())
-        {
-            vars.insert(crate::pasture::ports::OWN_ENV.into(), s(src));
-        }
+        // srt cannot bind-mount: the sockets and the pasture folders stay at
+        // their host paths, which allowRead already covers.
+        super::host_path_env(spec, &mut vars);
         vars.insert("CLAUDE_CODE_TMPDIR".into(), s(&tmp));
         // Host tools appear in their own directories, not under /run/paddock/bin.
         // paddock's own wrappers in the run folder come first. Other tools,

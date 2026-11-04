@@ -33,7 +33,7 @@ const PUSH_TIMEOUT: u64 = 600;
 pub const IDLE: Duration = Duration::from_secs(120);
 
 pub fn socket_path(env: &HostEnv) -> PathBuf {
-    env.paddock_run().join("gatewayd.sock")
+    crate::sockpath::named_or_run(env, "", "gatewayd.sock")
 }
 
 /// Run one job that `verify` accepted. The result is the JSON that the
@@ -279,6 +279,7 @@ pub struct DesktopExec {
     pub workdir: PathBuf,
 }
 
+#[cfg(target_os = "linux")]
 /// Host variables that the desktop tools need: the Wayland display and the
 /// compositor.
 const DESKTOP_ENV: &[&str] = &[
@@ -287,6 +288,7 @@ const DESKTOP_ENV: &[&str] = &[
     "HYPRLAND_INSTANCE_SIGNATURE",
 ];
 
+#[cfg(target_os = "linux")]
 /// The isolation of a desktop tool: no home, no network, and of the runtime
 /// folder only the Wayland socket and the compositor's sockets.
 fn desktop_cfg(job: &Job, workdir: &Path) -> crate::execbox::ExecCfg {
@@ -312,6 +314,7 @@ fn desktop_cfg(job: &Job, workdir: &Path) -> crate::execbox::ExecCfg {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn desktop(
     env: &HostEnv,
     how: crate::execbox::Isolation,
@@ -376,6 +379,7 @@ fn desktop(
 }
 
 /// `x,y wxh` of the active window from `hyprctl activewindow -j`.
+#[cfg(target_os = "linux")]
 fn window_geometry(json: &str) -> Result<String> {
     let v: serde_json::Value = serde_json::from_str(json).context("no active window")?;
     let at = v["at"].as_array().context("no active window")?;
@@ -407,6 +411,7 @@ pub fn base64(data: &[u8]) -> String {
     out
 }
 
+#[cfg(target_os = "linux")]
 /// Put text on the clipboard. `wl-copy --foreground` keeps it there until
 /// something else is copied, so it runs in its own unit (or process) that
 /// outlives this request.
@@ -499,6 +504,7 @@ fn copy(
 /// Open a link in the user's browser: through the desktop portal (the
 /// desktop starts the browser, outside paddock), else with xdg-open and
 /// only the variables that a browser needs.
+#[cfg(target_os = "linux")]
 fn open_url(
     env: &HostEnv,
     url: &str,
@@ -537,6 +543,7 @@ fn open_url(
     Ok(())
 }
 
+#[cfg(target_os = "linux")]
 fn portal_open_uri(env: &HostEnv, url: &str) -> Result<()> {
     let conn = crate::broker::notify::session(env)?;
     let p = zbus::blocking::Proxy::new(
@@ -548,6 +555,58 @@ fn portal_open_uri(env: &HostEnv, url: &str) -> Result<()> {
     let opts: std::collections::HashMap<&str, zbus::zvariant::Value<'_>> = Default::default();
     let _: zbus::zvariant::OwnedObjectPath = p.call("OpenURI", &("", url, opts))?;
     Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn desktop(
+    env: &HostEnv,
+    how: crate::execbox::Isolation,
+    job: &Job,
+    x: &DesktopExec,
+) -> Result<serde_json::Value> {
+    let _ = (env, how, job, x);
+    Err(crate::platform::unavailable("this desktop action"))
+}
+
+/// Open a link in the user's browser with `open`, which asks Launch
+/// Services. The broker allows http and https links only; this checks it
+/// again, so no other scheme or option reaches `open`.
+#[cfg(target_os = "macos")]
+fn open_url(
+    env: &HostEnv,
+    url: &str,
+    host: &std::collections::BTreeMap<String, String>,
+) -> Result<()> {
+    let _ = (env, host);
+    if !web_link(url) {
+        bail!("only http and https links can be opened");
+    }
+    std::process::Command::new("/usr/bin/open")
+        .arg(url)
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .context("cannot start /usr/bin/open")?;
+    Ok(())
+}
+
+/// An http or https link.
+pub fn web_link(url: &str) -> bool {
+    url::Url::parse(url).is_ok_and(|u| matches!(u.scheme(), "http" | "https"))
+        && (url.starts_with("http://") || url.starts_with("https://"))
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn open_url(
+    env: &HostEnv,
+    url: &str,
+    host: &std::collections::BTreeMap<String, String>,
+) -> Result<()> {
+    let _ = (env, url, host);
+    Err(crate::platform::unavailable("this desktop action"))
 }
 
 /// Check a job and run it. Every refusal is an error with the reason.
@@ -932,277 +991,5 @@ pub fn status_line(env: &HostEnv) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-
-    #[test]
-    fn a_request_that_ends_while_the_clock_is_read_is_no_quiet_time() {
-        // The clock said 5, then a request ended at 6.
-        assert_eq!(quiet(5, 6), 0);
-        assert_eq!(quiet(130, 10), 120);
-    }
-    use super::*;
-
-    #[test]
-    fn the_units_name_the_same_socket_as_paddock() {
-        let s = socket_unit();
-        assert!(s.contains("ListenStream=%t/paddock/gatewayd.sock"));
-        assert!(s.contains("SocketMode=0600"));
-        let svc = service_unit(Path::new("/home/demo/.local/bin/paddock"));
-        assert!(svc.contains("ExecStart=/home/demo/.local/bin/paddock gatewayd"));
-        let env = HostEnv::from_parts(
-            "/home/demo".into(),
-            "u".into(),
-            1000,
-            1000,
-            [("XDG_RUNTIME_DIR".to_string(), "/run/user/1000".to_string())].into(),
-        );
-        assert_eq!(
-            socket_path(&env),
-            Path::new("/run/user/1000/paddock/gatewayd.sock")
-        );
-    }
-
-    #[test]
-    fn without_isolation_exec_is_refused_not_run() {
-        let t = tempfile::tempdir().unwrap();
-        let env = HostEnv::from_parts(t.path().join("home"), "u".into(), 1, 1, Default::default());
-        let key = [3u8; 32];
-        let req = Request {
-            v: 1,
-            cap: "exec".into(),
-            args: [("argv".to_string(), serde_json::json!(["touch", "ran"]))]
-                .into_iter()
-                .collect(),
-            reason: String::new(),
-        };
-        let job = gateway::sign(
-            &key,
-            "s",
-            t.path(),
-            &req,
-            Default::default(),
-            serde_json::Value::Null,
-        )
-        .unwrap();
-        let seen = Seen::default();
-        let no = || {
-            Err(
-                "exec needs a systemd user instance or bwrap to run a command in isolation"
-                    .to_string(),
-            )
-        };
-        let e = handle(&env, no(), &key, &seen, &job).unwrap_err();
-        assert!(format!("{e:#}").contains("isolation"), "{e:#}");
-        assert!(!t.path().join("ran").exists());
-        let e = handle(&env, no(), &key, &seen, &job).unwrap_err();
-        assert!(format!("{e:#}").contains("used already"), "{e:#}");
-    }
-
-    /// A push in a real systemd unit (home read-only, only the scratch
-    /// repository and the local remote writable), where this host has a
-    /// systemd user instance. Opt in: `cargo test --lib gatewayd -- --ignored`.
-    #[test]
-    #[ignore]
-    fn a_push_runs_in_a_systemd_unit() {
-        let host = HostEnv::detect().unwrap();
-        if crate::execbox::detect(&host).ok() != Some(crate::execbox::Isolation::Systemd) {
-            eprintln!("skipped: no systemd user instance");
-            return;
-        }
-        let t = tempfile::Builder::new()
-            .prefix("paddock-push-")
-            .tempdir_in(host.home.join(".cache"))
-            .unwrap();
-        let git = |dir: &Path, args: &[&str]| -> String {
-            let out = std::process::Command::new("git")
-                .arg("-C")
-                .arg(dir)
-                .args(["-c", "user.name=t", "-c", "user.email=t@localhost"])
-                .args(args)
-                .output()
-                .unwrap();
-            assert!(out.status.success(), "git {args:?}: {out:?}");
-            String::from_utf8_lossy(&out.stdout).trim().to_string()
-        };
-        let work = t.path().join("work");
-        let remote = t.path().join("remote.git");
-        std::fs::create_dir_all(&work).unwrap();
-        git(
-            t.path(),
-            &[
-                "init",
-                "-q",
-                "--bare",
-                "-b",
-                "main",
-                remote.to_str().unwrap(),
-            ],
-        );
-        git(&work, &["init", "-q", "-b", "main"]);
-        git(&work, &["commit", "-q", "--allow-empty", "-m", "first"]);
-        git(
-            &work,
-            &["remote", "add", "origin", remote.to_str().unwrap()],
-        );
-        git(&work, &["push", "-q", "origin", "main"]);
-        git(&work, &["commit", "-q", "--allow-empty", "-m", "second"]);
-        let head = git(&work, &["rev-parse", "HEAD"]);
-        let repo = crate::broker::git::Repo::snapshot(&work).unwrap();
-        let run_dir = t.path().join("run");
-        std::fs::create_dir_all(&run_dir).unwrap();
-        let mut args = std::collections::BTreeMap::new();
-        args.insert("remote".to_string(), serde_json::json!("origin"));
-        args.insert(
-            "url".to_string(),
-            serde_json::json!(remote.to_str().unwrap()),
-        );
-        args.insert(
-            "refs".to_string(),
-            serde_json::json!([{"src": "HEAD", "sha": head, "dst": "refs/heads/main"}]),
-        );
-        let plan = crate::broker::git::plan(Some(&repo), &run_dir, &args).unwrap();
-        let req = Request {
-            v: 1,
-            cap: "git-push".into(),
-            args,
-            reason: String::new(),
-        };
-        let key = [5u8; 32];
-        let job = gateway::sign(
-            &key,
-            "s",
-            &work,
-            &req,
-            host_env(),
-            serde_json::to_value(plan.exec()).unwrap(),
-        )
-        .unwrap();
-        let r = handle(
-            &host,
-            Ok(crate::execbox::Isolation::Systemd),
-            &key,
-            &Seen::default(),
-            &job,
-        )
-        .unwrap();
-        assert_eq!(r["refs"][0]["ok"], true, "{r}");
-        assert_eq!(git(&remote, &["rev-parse", "main"]), head);
-    }
-
-    #[test]
-    fn base64_matches_rfc_4648() {
-        for (raw, want) in [
-            ("", ""),
-            ("f", "Zg=="),
-            ("fo", "Zm8="),
-            ("foo", "Zm9v"),
-            ("foob", "Zm9vYg=="),
-            ("fooba", "Zm9vYmE="),
-            ("foobar", "Zm9vYmFy"),
-        ] {
-            assert_eq!(base64(raw.as_bytes()), want, "{raw}");
-        }
-    }
-
-    #[test]
-    fn the_active_window_becomes_a_grim_geometry() {
-        let j = r#"{"at": [10, 20], "size": [800, 600], "title": "x"}"#;
-        assert_eq!(window_geometry(j).unwrap(), "10,20 800x600");
-        assert!(window_geometry("{}").is_err());
-    }
-
-    #[test]
-    fn a_desktop_tool_sees_the_display_and_nothing_else() {
-        let t = tempfile::tempdir().unwrap();
-        let rt = t.path().join("run");
-        std::fs::create_dir_all(rt.join("hypr/sig")).unwrap();
-        std::fs::write(rt.join("wayland-1"), "").unwrap();
-        let job = Job {
-            grant: gateway::Grant {
-                v: 1,
-                hash: String::new(),
-                cap: "screenshot".into(),
-                sandbox: "s".into(),
-                project: "/p".into(),
-                expires: 0,
-                nonce: "n".into(),
-            },
-            request: Request {
-                v: 1,
-                cap: "screenshot".into(),
-                args: Default::default(),
-                reason: String::new(),
-            },
-            env: [
-                ("XDG_RUNTIME_DIR", rt.to_str().unwrap()),
-                ("WAYLAND_DISPLAY", "wayland-1"),
-                ("HYPRLAND_INSTANCE_SIGNATURE", "sig"),
-                ("GITHUB_TOKEN", "secret"),
-            ]
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect(),
-            plan: serde_json::Value::Null,
-            mac: String::new(),
-        };
-        let c = desktop_cfg(&job, Path::new("/w"));
-        assert_eq!(c.home, crate::execbox::Home::Hidden);
-        assert!(!c.network);
-        assert_eq!(c.paths, [PathBuf::from("/w")]);
-        assert_eq!(c.ro_paths, [rt.join("wayland-1"), rt.join("hypr/sig")]);
-        let vars = c.pass_env(&job.env);
-        assert!(vars.contains_key("WAYLAND_DISPLAY"));
-        assert!(!vars.contains_key("GITHUB_TOKEN"));
-    }
-
-    #[test]
-    fn the_executor_runs_only_gh_by_an_absolute_path() {
-        let t = tempfile::tempdir().unwrap();
-        let env = HostEnv::from_parts(t.path().join("home"), "u".into(), 1, 1, Default::default());
-        let key = [4u8; 32];
-        for tool in ["gh", "/usr/bin/curl", "/tmp/gh/../sh"] {
-            let plan = crate::broker::forge::ForgeExec {
-                tool: tool.into(),
-                argv: vec!["--version".into()],
-                stdin: None,
-                timeout: 5,
-                workdir: t.path().into(),
-            };
-            let req = Request {
-                v: 1,
-                cap: "forge".into(),
-                args: Default::default(),
-                reason: String::new(),
-            };
-            let job = gateway::sign(
-                &key,
-                "s",
-                t.path(),
-                &req,
-                Default::default(),
-                serde_json::to_value(&plan).unwrap(),
-            )
-            .unwrap();
-            let e = handle(
-                &env,
-                Ok(crate::execbox::Isolation::None),
-                &key,
-                &Seen::default(),
-                &job,
-            )
-            .unwrap_err();
-            assert!(format!("{e:#}").contains("does not run"), "{tool}: {e:#}");
-        }
-    }
-
-    #[test]
-    fn remove_leaves_units_that_paddock_did_not_write() {
-        let t = tempfile::tempdir().unwrap();
-        let env = HostEnv::from_parts(t.path().join("home"), "u".into(), 1, 1, Default::default());
-        let dir = unit_dir(&env);
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join(SOCKET_UNIT), "[Socket]\nmine\n").unwrap();
-        assert!(remove(&env).unwrap().is_empty());
-        assert!(dir.join(SOCKET_UNIT).exists());
-    }
-}
+#[path = "gatewayd_tests.rs"]
+mod tests;

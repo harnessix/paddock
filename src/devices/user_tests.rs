@@ -612,7 +612,7 @@ fn a_paid_device_stops_at_its_budget_until_the_user_raises_it() {
         assert!(String::from_utf8_lossy(&out).ends_with("ok"));
     }
     assert_eq!(dev.call(&call(), req), Err(DevError::BudgetUsed));
-    assert_eq!(DevError::BudgetUsed.errno(), fuser::Errno::EDQUOT);
+    assert_eq!(DevError::BudgetUsed.errno(), libc::EDQUOT);
     assert_eq!(seen.lock().unwrap().len(), 3);
     let catalog = String::from_utf8(catalog(&[Arc::new(Http::new(
         paid_dev(addr, "budget = 1.0\n"),

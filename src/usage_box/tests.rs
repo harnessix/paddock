@@ -560,6 +560,7 @@ fn freshest_login_prefers_latest_expiry_then_latest_mtime() {
     assert_eq!(v.logins.get(&g_host), Some(&g_sb2));
 }
 
+#[cfg(target_os = "linux")] // the keeper runs on Linux only
 #[test]
 fn codex_kept_login_comes_from_the_keeper_copy() {
     let t = tempfile::tempdir().unwrap();

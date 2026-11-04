@@ -6,12 +6,19 @@
 //! the text stays with the user.
 
 use crate::env::HostEnv;
-use anyhow::{Context as _, Result};
+#[cfg(target_os = "linux")]
+use anyhow::Context as _;
+use anyhow::Result;
+#[cfg(target_os = "linux")]
 use std::collections::HashMap;
+#[cfg(target_os = "linux")]
 use zbus::blocking::{connection::Builder, Connection, Proxy};
+#[cfg(target_os = "linux")]
 use zbus::zvariant::Value;
 
+#[cfg(target_os = "linux")]
 const DEST: &str = "org.freedesktop.Notifications";
+#[cfg(target_os = "linux")]
 const PATH: &str = "/org/freedesktop/Notifications";
 
 /// One notification. `actions` are (key, label) pairs.
@@ -26,6 +33,7 @@ pub struct Note {
 /// The session bus of the host user. The address comes from the host
 /// environment that paddock read at start, not from the current process, so
 /// tests with a fake environment never reach the real desktop.
+#[cfg(target_os = "linux")]
 pub fn session(env: &HostEnv) -> Result<Connection> {
     let addr = match env.var("DBUS_SESSION_BUS_ADDRESS") {
         Some(a) if !a.is_empty() => a.to_string(),
@@ -42,6 +50,7 @@ pub fn session(env: &HostEnv) -> Result<Connection> {
     Ok(Builder::address(addr.as_str())?.build()?)
 }
 
+#[cfg(target_os = "linux")]
 fn proxy(conn: &Connection) -> Result<Proxy<'static>> {
     Ok(Proxy::new(conn, DEST, PATH, DEST)?)
 }
@@ -56,6 +65,7 @@ pub fn escape_markup(s: &str) -> String {
         .replace('>', "&gt;")
 }
 
+#[cfg(target_os = "linux")]
 fn reads_markup(p: &Proxy<'_>) -> bool {
     p.call::<_, _, Vec<String>>("GetCapabilities", &())
         .map(|caps| caps.iter().any(|c| c == "body-markup"))
@@ -63,6 +73,7 @@ fn reads_markup(p: &Proxy<'_>) -> bool {
         .unwrap_or(true)
 }
 
+#[cfg(target_os = "linux")]
 fn send(p: &Proxy<'_>, n: &Note) -> Result<u32> {
     let body = if reads_markup(p) {
         escape_markup(&n.body)
@@ -93,6 +104,7 @@ fn send(p: &Proxy<'_>, n: &Note) -> Result<u32> {
 }
 
 /// Show a notification and return at once.
+#[cfg(target_os = "linux")]
 pub fn show(env: &HostEnv, n: &Note) -> Result<()> {
     let conn = session(env)?;
     send(&proxy(&conn)?, n)?;
@@ -103,6 +115,7 @@ pub fn show(env: &HostEnv, n: &Note) -> Result<()> {
 /// that the user picks. The call returns when the notification is shown; a
 /// thread waits for the answer until the notification closes. The returned
 /// handle closes the notification early.
+#[cfg(target_os = "linux")]
 pub fn ask(
     env: &HostEnv,
     n: &Note,
@@ -143,17 +156,50 @@ pub fn ask(
 }
 
 /// A shown notification.
+#[cfg(target_os = "linux")]
 pub struct Handle {
     conn: Connection,
     id: u32,
 }
 
+#[cfg(target_os = "linux")]
 impl Handle {
     pub fn close(&self) {
         if let Ok(p) = proxy(&self.conn) {
             let _: Result<(), _> = p.call("CloseNotification", &(self.id,));
         }
     }
+}
+
+/// macOS: `osascript`, with the text as arguments of the script (see
+/// `onboard::notification_argv`), so no shell and no AppleScript parses it.
+/// The text is in the arguments of osascript while it runs. Actions are not
+/// offered: [`ask`] refuses. As on Linux, a run with a home that is not the
+/// user's own (a test) never reaches the real desktop.
+#[cfg(not(target_os = "linux"))]
+pub fn show(env: &HostEnv, n: &Note) -> Result<()> {
+    if !crate::launchers::home_is_real(env) {
+        anyhow::bail!("no desktop notification: HOME is not the home of this user");
+    }
+    crate::onboard::mac_notify(&n.summary, &n.body)
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn ask(
+    env: &HostEnv,
+    n: &Note,
+    on_action: impl FnOnce(&str) + Send + 'static,
+) -> Result<Handle> {
+    let _ = (env, n, on_action);
+    Err(crate::platform::unavailable("a desktop notification"))
+}
+
+#[cfg(not(target_os = "linux"))]
+pub struct Handle;
+
+#[cfg(not(target_os = "linux"))]
+impl Handle {
+    pub fn close(&self) {}
 }
 
 #[cfg(test)]

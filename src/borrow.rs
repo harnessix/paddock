@@ -566,7 +566,7 @@ fn nonce() -> String {
 /// Copy the opened folder into the borrow folder of sandbox `id` and write
 /// its manifest. Returns the name of the copy.
 pub fn borrow(env: &HostEnv, id: &str, p: &BorrowPlan, max: u64) -> Result<serde_json::Value> {
-    let src = p.src.proc_path();
+    let src = p.src.proc_path()?;
     let entries = scan(&src)?;
     let m = meta(env, id);
     crate::privfs::dir(&m)?;

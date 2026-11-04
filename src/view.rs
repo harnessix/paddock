@@ -36,7 +36,7 @@ pub const ACTIVITY_CHARS: usize = 120;
 const CAPTURE_KEEP: usize = 4 << 20;
 
 pub fn socket(env: &HostEnv) -> PathBuf {
-    env.paddock_run().join("view.sock")
+    crate::sockpath::named_or_run(env, "", "view.sock")
 }
 pub fn dir(env: &HostEnv) -> PathBuf {
     env.paddock_run().join("view")
@@ -279,8 +279,7 @@ impl Tmux {
     /// follows `log` until the process `pid` (the paddock that runs the
     /// sandbox) ends, then prints `end`. The pane stays after that.
     pub fn start(&self, id: &str, header: &str, log: &Path, pid: u32, end: &Path) -> Result<()> {
-        let script = "printf '%s\\n\\n' \"$1\"; tail -n +1 --pid=\"$3\" -f -- \"$2\"; \
-                      cat -- \"$4\" 2>/dev/null";
+        let script = pane::SCRIPT;
         let mut cmd: Vec<OsString> = ["sh", "-c", script, "paddock-view", header]
             .iter()
             .map(OsString::from)
@@ -1065,13 +1064,12 @@ impl Opener {
                 "sandbox {id} has no run log, and tmux is not installed. A sandbox started from a terminal has no view, it uses that terminal"
             ),
         };
-        let mut argv: Vec<OsString> = match (&self.xdg_terminal_exec, &self.terminal) {
-            (Some(x), _) => vec![x.clone().into()],
-            (None, Some(t)) => vec![t.into(), "-e".into()],
-            (None, None) => {
-                bail!("no terminal to open: install xdg-terminal-exec or set $TERMINAL")
-            }
-        };
+        // macOS without $TERMINAL opens a window of Terminal.
+        let mut argv = crate::onboard::terminal_command(
+            self.xdg_terminal_exec.as_deref(),
+            self.terminal.as_deref(),
+            crate::onboard::Os::HOST,
+        )?;
         argv.extend(inner);
         Ok(argv)
     }
@@ -1100,5 +1098,6 @@ pub fn open(env: &HostEnv, id: &str, write: bool) -> Result<()> {
     Ok(())
 }
 
+mod pane;
 #[cfg(test)]
 pub(crate) mod tests;

@@ -17,7 +17,7 @@
 
 use crate::env::HostEnv;
 use crate::proxy::HostProxy;
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::cmp::Ordering;
@@ -28,8 +28,8 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 use url::Url;
 
-pub const REPO: &str = "harnessix/omarchy-paddock";
-pub const REPO_URL: &str = "https://github.com/harnessix/omarchy-paddock";
+pub const REPO: &str = env!("PADDOCK_RELEASE_REPO"); // set by build.rs
+pub const REPO_URL: &str = concat!("https://github.com/", env!("PADDOCK_RELEASE_REPO"));
 pub const PLUGIN_ID: &str = "harnessix.paddock";
 pub const CURRENT: &str = env!("CARGO_PKG_VERSION");
 
@@ -164,69 +164,8 @@ pub fn is_newer(latest: &str, current: &str) -> bool {
 // ---------------------------------------------------------------------------
 // Releases
 
-/// A release and the names of its assets, as `.github/workflows/release.yml`
-/// builds them.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Release {
-    pub version: String,
-    pub tag: String,
-    /// The CPU architecture of the assets, one of [`ARCHS`].
-    pub arch: &'static str,
-}
-
-/// The CPU architectures that have a release binary, as
-/// `std::env::consts::ARCH` names them.
-pub const ARCHS: &[&str] = &["x86_64", "aarch64"];
-
-/// The release architecture for `arch`, or an error for one without a
-/// release binary.
-pub fn release_arch(arch: &str) -> Result<&'static str> {
-    ARCHS.iter().copied().find(|a| *a == arch).ok_or_else(|| {
-        anyhow!(
-            "paddock has no release binary for the {arch} architecture, only for {}. Build paddock from source with cargo instead",
-            ARCHS.join(" and ")
-        )
-    })
-}
-
-impl Release {
-    /// The release of a tag such as `v0.1.8` for the architecture `arch`
-    /// (`std::env::consts::ARCH`). The tag must be a plain version: it goes
-    /// into URLs and into the tarball member name.
-    pub fn for_tag(tag: &str, arch: &str) -> Result<Self> {
-        let arch = release_arch(arch)?;
-        let v = Version::parse(tag).ok_or_else(|| {
-            anyhow!("the latest release has the tag {tag:?}, which is not a version")
-        })?;
-        Ok(Self {
-            version: v.to_string(),
-            tag: format!("v{v}"),
-            arch,
-        })
-    }
-    fn stem(&self) -> String {
-        format!("paddock-{}-{}-linux", self.version, self.arch)
-    }
-    pub fn tarball(&self) -> String {
-        format!("{}.tar.gz", self.stem())
-    }
-    pub fn checksum(&self) -> String {
-        format!("{}.sha256", self.tarball())
-    }
-    /// The binary inside the tarball.
-    pub fn member(&self) -> String {
-        format!("{}/paddock", self.stem())
-    }
-    fn asset_url(&self, name: &str) -> String {
-        format!("{REPO_URL}/releases/download/{}/{name}", self.tag)
-    }
-    pub fn tarball_url(&self) -> String {
-        self.asset_url(&self.tarball())
-    }
-    pub fn checksum_url(&self) -> String {
-        self.asset_url(&self.checksum())
-    }
-}
+mod release;
+pub use release::{release_arch, Release, ARCHS};
 
 /// Where releases come from. Tests use a fake one: no test opens a network
 /// connection.

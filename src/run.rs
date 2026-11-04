@@ -5,7 +5,7 @@ use crate::build::Built;
 use crate::env::HostEnv;
 use crate::gui::{self, WindowCompositor};
 use crate::manifest::hex;
-use crate::spec::{GuiMode, SandboxSpec};
+use crate::spec::{GuiMode, Network, SandboxSpec};
 use crate::state::{self, AuthSync, Running, SyncStep};
 use anyhow::{bail, Context, Result};
 use sha2::{Digest, Sha256};
@@ -193,12 +193,12 @@ fn setup_credentials(
             return Ok(RunCredentials::default());
         }
     };
-    if backend == "srt" {
+    if matches!(backend, "srt" | "seatbelt") {
         plan.deliver.retain(|(n, c)| {
             let keep = c.via != Via::Gateway;
             if !keep {
                 say(&format!(
-                    "credential {n}: the srt backend cannot reach the gateway; use the bwrap, docker or podman backend"
+                    "credential {n}: the {backend} backend cannot reach the gateway; use the bwrap, docker or podman backend"
                 ));
             }
             keep
@@ -323,7 +323,7 @@ fn setup_credentials(
     if !routes.is_empty() {
         let run_dir = env.paddock_run().join(&built.spec.id);
         crate::privfs::dir(&run_dir)?;
-        let sock = run_dir.join("credentials.sock");
+        let sock = crate::sockpath::named(env, &built.spec.id, "credentials.sock")?;
         let (e1, e2, spec) = (env.clone(), env.clone(), built.spec.clone());
         let id = built.spec.id.clone();
         let hosts: Vec<String> = routes.values().map(|r| r.host.clone()).collect();
@@ -383,48 +383,26 @@ fn setup_credentials(
 /// Network mode `api` on bwrap, docker and podman: the sandbox has no
 /// network. The paddock proxy (proxy.rs) on a Unix socket lets through TLS to
 /// the allowed hosts, and `paddock relay` offers it on 127.0.0.1:3131 in the
-/// sandbox. srt enforces the list with its own proxy.
+/// sandbox. srt enforces the list with its own proxy, and seatbelt starts
+/// its proxy with `backend::start_host_proxy`.
 fn start_api_proxy(env: &HostEnv, built: &mut Built, backend: &str) -> Result<()> {
-    if built.spec.network != crate::spec::Network::Api || backend == "srt" {
+    if built.spec.network != Network::Api || matches!(backend, "srt" | "seatbelt" | "vm") {
         return Ok(());
     }
     use crate::proxy::{allow, API_PORT, API_SOCKET_IN_SANDBOX};
     let run_dir = env.paddock_run().join(&built.spec.id);
     crate::privfs::dir(&run_dir)?;
-    let sock = run_dir.join("api-proxy.sock");
+    let sock = crate::sockpath::named(env, &built.spec.id, "api-proxy.sock")?;
     let (list, _) = allow::Allowlist::parse(&built.spec.allow_domains);
-    let (e1, spec) = (env.clone(), built.spec.clone());
-    let refusals = allow::Refusals::new(std::sync::Arc::new(move |host: &str, why: &str| {
-        crate::broker::audit_line(
-            &e1,
-            &serde_json::json!({
-                "time": crate::state::now(),
-                "sandbox": spec.id,
-                "harness": spec.harness,
-                "project": spec.project,
-                "capability": "network",
-                "detail": format!("api: {host}: {why}"),
-                "decision": "refused",
-            }),
-        );
-    }));
-    let mut cfg = crate::proxy::HostProxy::from_vars(|k| env.var(k).map(str::to_string));
-    cfg.allow_lan = built.spec.lan;
-    cfg.boundary = Some(crate::boundary::proxy_sink(env, &built.spec.id));
-    cfg.egress = crate::monitor::egress::sink(
-        env,
-        &built.spec.id,
-        &built.spec.harness,
-        &built.spec.project,
-    );
+    let refusals = backend::api_refusals(env, &built.spec);
+    let mut cfg = backend::host_proxy_cfg(env, &built.spec);
+    // The api proxy reaches no host loopback port.
+    cfg.allow_loopback = Vec::new();
     cfg.api = Some(allow::ApiPolicy {
         list,
         refusals: Some(refusals),
     });
-    for w in cfg.cleartext_warnings() {
-        log::warn!("{w}");
-    }
-    crate::proxy::serve(&sock, cfg)?;
+    let sock = crate::vm::agent::api_proxy(sock, cfg)?;
     built.spec.add_mount(crate::spec::Mount::bind(
         &sock,
         API_SOCKET_IN_SANDBOX,
@@ -464,7 +442,7 @@ fn start_ssh_agent(
     sshagent::check_host(Some(&upstream), &keys)?;
     let run_dir = env.paddock_run().join(&built.spec.id);
     crate::privfs::dir(&run_dir)?;
-    let sock = run_dir.join("ssh-agent.sock");
+    let sock = crate::sockpath::named(env, &built.spec.id, "ssh-agent.sock")?;
     let (e1, spec) = (env.clone(), built.spec.clone());
     sshagent::Proxy::new(
         keys,
@@ -591,7 +569,7 @@ impl Drop for EndOfRun<'_> {
         }
         // Before the run folder goes: quota peers keep the end of this run.
         crate::timer::end_runs(self.env, &self.id, crate::state::now());
-        let _ = std::fs::remove_dir_all(self.env.paddock_run().join(&self.id));
+        crate::sockpath::end_run(&self.env.paddock_run(), self.env.uid, &self.id);
         crate::borrow::end(self.env, &self.id);
         crate::recover::Session::end(self.env, &self.id);
         if self.view {
@@ -672,7 +650,7 @@ pub fn run(
         None
     };
     backend.prepare(env, &built.spec, interactive)?;
-    let (repo, spawner, broker) = start_broker(env, &mut built, interactive, backend.name())?;
+    let (repo, spawner, broker) = host_tools::broker(env, &mut built, interactive, backend.name())?;
     // paddock kv and the devices. Each one is optional: when it cannot start,
     // the sandbox starts without it and a notice says why.
     let kv_approver: std::sync::Arc<dyn crate::broker::Approver> = built
@@ -737,25 +715,15 @@ pub fn run(
     );
     // Terminal harnesses that log in through a browser and a localhost callback.
     let _login = if built.profile.launch.login_callback && built.spec.gui.mode != GuiMode::App {
-        crate::login::prepare(env, &mut built.spec, backend.name() == "srt")?
+        crate::login::prepare(env, &mut built.spec, backend.name())?
     } else {
         None
     };
-    if let Some(sock) = backend::relay_socket(env, backend.name(), &built.spec) {
-        let mut cfg = crate::proxy::HostProxy::from_vars(|k| env.var(k).map(str::to_string));
-        cfg.allow_loopback = built.spec.host_ports.iter().map(|(p, _)| *p).collect();
-        cfg.allow_lan = built.spec.lan;
-        cfg.boundary = Some(crate::boundary::proxy_sink(env, &built.spec.id));
-        cfg.egress = crate::monitor::egress::sink(
-            env,
-            &built.spec.id,
-            &built.spec.harness,
-            &built.spec.project,
-        );
-        for w in cfg.cleartext_warnings() {
-            log::warn!("{w}");
+    backend::start_host_proxy(env, &mut built.spec, backend.name())?;
+    if backend.name() == backend::seatbelt::NAME {
+        if let Err(e) = backend::seatbelt::keychain::start(env, &mut built.spec, &built.auth) {
+            eprintln!("paddock: warning: no keychain for this run: {e:#}");
         }
-        crate::proxy::serve(&sock, cfg)?;
     }
     // The shared install step: a clean sandbox without the project installs
     // registry tools into the shared mise installs. srt cannot mount the
@@ -1026,15 +994,15 @@ pub fn run(
         // when that one is killed. SIGTERM, so a container CLI passes it on.
         let deathsig = built.spawn.is_some();
         if take_tty || deathsig {
-            // SAFETY: setsid, ioctl and prctl are async-signal-safe. The
-            // slave is fd 0 when `take_tty` is set.
+            // SAFETY: setsid and ioctl are async-signal-safe, and so is the
+            // parent-death helper. The slave is fd 0 when `take_tty` is set.
             unsafe {
                 cmd.pre_exec(move || {
                     if take_tty {
                         crate::relay::take_controlling_tty()?;
                     }
                     if deathsig {
-                        libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
+                        crate::platform::arm_parent_death_signal()?;
                     }
                     Ok(())
                 });
@@ -1172,7 +1140,7 @@ pub fn run(
     // (a VPN that comes up later) and report them: they stay reachable until
     // the next start.
     let new_addrs = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
-    let monitor = (backend.name() == "bwrap" && spec.network == crate::spec::Network::Egress)
+    let monitor = (backend.name() == "bwrap" && spec.network == Network::Egress)
         .then(|| EgressAddrMonitor::start(env.clone(), running.clone(), new_addrs.clone()));
 
     let live = HistorySync::start(history, HISTORY_EVERY);
@@ -1355,7 +1323,7 @@ pub fn select_backend(env: &HostEnv, built: &Built) -> Result<Box<dyn Backend>> 
         app: built.spec.gui.mode == crate::spec::GuiMode::App,
         keyring: built.spec.keyring,
     });
-    backend::select(env, &built.spec, &built.backend)
+    backend::select(env, &built.spec, &crate::vm::select::wanted(env, built)?)
 }
 
 /// Start the host passthrough for this sandbox and give the sandbox the
@@ -1375,7 +1343,7 @@ fn start_broker(
 ) -> Result<BrokerStart> {
     let run_dir = env.paddock_run().join(&built.spec.id);
     crate::privfs::dir(&run_dir)?;
-    let sock = run_dir.join("host.sock");
+    let sock = crate::sockpath::named(env, &built.spec.id, "host.sock")?;
     let mut policy = crate::broker::HostPolicy::load(env)?;
     // A child never gets a mode that its parent did not have.
     if let Some(c) = &built.spawn {
@@ -1457,13 +1425,17 @@ fn start_broker(
         spawn_id: built.spawn.as_ref().map(|c| c.spawn_id.clone()),
         pasture: built.pasture.clone(),
         // A spawn child and a detached run get their task as this file.
-        task_file: (built.spawn.is_some() || built.detach).then(|| {
-            built
-                .spec
-                .home
-                .join(crate::spawn::prompt_rel(&built.spec.id))
-        }),
+        // Seatbelt cannot move the sandbox home to the host home's path.
+        task_file: (built.spawn.is_some() || built.detach)
+            .then_some(match backend {
+                backend::seatbelt::NAME => &built.spec.home_src,
+                _ => &built.spec.home,
+            })
+            .map(|h| h.join(crate::spawn::prompt_rel(&built.spec.id))),
     };
+    if backend == backend::seatbelt::NAME {
+        broker.refused = backend::seatbelt::run::BROKER_REFUSALS.to_vec();
+    }
     if built.detach {
         let ctl = std::sync::Arc::new(crate::detach::Ctl::new(env.clone(), built.spec.id.clone()));
         ctl.watch(built.profile.screens.error.clone());

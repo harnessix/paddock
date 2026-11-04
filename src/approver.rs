@@ -102,20 +102,33 @@ pub fn user_file(env: &HostEnv) -> PathBuf {
 /// A path is trusted when it and every parent are owned by root and not
 /// writable by group or others.
 pub fn root_owned_chain(path: &Path) -> Result<()> {
-    let mut cur = Some(path);
-    while let Some(p) = cur {
-        let m =
-            std::fs::symlink_metadata(p).with_context(|| format!("cannot read {}", p.display()))?;
+    let mut cur = path.to_path_buf();
+    loop {
+        let m = std::fs::symlink_metadata(&cur)
+            .with_context(|| format!("cannot read {}", cur.display()))?;
         if m.file_type().is_symlink() {
-            bail!("{} is a symbolic link", p.display());
+            // macOS makes /etc a symlink to /private/etc. Follow a root-owned
+            // link that others cannot write. A user-owned link is refused.
+            if m.uid() != 0 {
+                bail!("{} is a symbolic link", cur.display());
+            }
+            if m.mode() & 0o022 != 0 {
+                bail!("{} is writable by group or others", cur.display());
+            }
+            cur = std::fs::canonicalize(&cur)
+                .with_context(|| format!("cannot resolve {}", cur.display()))?;
+            continue;
         }
         if m.uid() != 0 {
-            bail!("{} is not owned by root", p.display());
+            bail!("{} is not owned by root", cur.display());
         }
         if m.mode() & 0o022 != 0 {
-            bail!("{} is writable by group or others", p.display());
+            bail!("{} is writable by group or others", cur.display());
         }
-        cur = p.parent().filter(|q| !q.as_os_str().is_empty());
+        match cur.parent() {
+            Some(p) if !p.as_os_str().is_empty() => cur = p.to_path_buf(),
+            _ => break,
+        }
     }
     Ok(())
 }

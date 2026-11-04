@@ -153,6 +153,8 @@ impl World {
             .collect()
     }
 
+    // Only the Linux tests start agents through omarchy-agent.
+    #[cfg(target_os = "linux")]
     fn launch_log(&self) -> Vec<String> {
         std::fs::read_to_string(self.root.join("launch.log"))
             .unwrap_or_default()
@@ -172,6 +174,8 @@ fn ok(o: &Output) -> String {
     text
 }
 
+// macOS refuses the omarchy-agent scope (tests/macos_onboarding.rs).
+#[cfg(target_os = "linux")]
 #[test]
 fn omarchy_agent_starts_run_in_a_sandbox_and_typed_commands_do_not() {
     if !common::bwrap_works() {
@@ -299,6 +303,8 @@ fn omarchy_agent_starts_run_in_a_sandbox_and_typed_commands_do_not() {
     assert!(list.contains("scope omarchy-agent: off"), "{list}");
 }
 
+// macOS refuses the omarchy-agent scope (tests/macos_onboarding.rs).
+#[cfg(target_os = "linux")]
 #[test]
 fn the_block_wraps_the_usage_command_and_removal_keeps_the_rest() {
     let w = world();
@@ -329,6 +335,8 @@ fn the_block_wraps_the_usage_command_and_removal_keeps_the_rest() {
     assert!(!list.contains("usage-update: wrapped"), "{list}");
 }
 
+// macOS refuses the omarchy-agent scope (tests/macos_onboarding.rs).
+#[cfg(target_os = "linux")]
 #[test]
 fn a_user_usage_wrapper_is_never_replaced() {
     let w = world();
@@ -343,6 +351,8 @@ fn a_user_usage_wrapper_is_never_replaced() {
     assert_eq!(std::fs::read_to_string(&config).unwrap(), own);
 }
 
+// macOS refuses the omarchy-agent scope (tests/macos_onboarding.rs).
+#[cfg(target_os = "linux")]
 #[test]
 fn a_user_wrapper_is_never_replaced() {
     let w = world();

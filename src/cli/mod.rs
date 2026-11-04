@@ -27,6 +27,8 @@ pub(crate) mod storage;
 pub(crate) mod timer;
 pub(crate) mod tools;
 pub(crate) mod update;
+pub(crate) mod vm;
+pub(crate) mod vm_run;
 pub(crate) mod windows;
 pub(crate) mod worktree;
 
@@ -337,7 +339,7 @@ pub(crate) enum Cmd {
         loft: bool,
         #[arg(long)]
         no_loft: bool,
-        /// The default backend: auto, bwrap, podman, docker or srt.
+        /// The default backend: auto, bwrap, podman, docker, srt or seatbelt (macOS).
         #[arg(long)]
         backend: Option<String>,
         /// Save a workspace folder for an app, as NAME=DIR. Repeat it for
@@ -490,6 +492,10 @@ pub(crate) enum Cmd {
     /// Inside an app sandbox: the link and notification services on its private bus.
     #[command(hide = true)]
     Portal,
+    /// On macOS: mark the windows of app sandboxes with a frame, a badge and
+    /// a menu bar item. paddock starts this with an app sandbox.
+    #[command(hide = true)]
+    Mark,
     /// On the host: run one child sandbox that another sandbox asked for
     /// (`paddock-host spawn`). The parent's paddock starts this.
     #[command(hide = true)]
@@ -560,6 +566,21 @@ pub(crate) enum Cmd {
         #[arg(long)]
         ready_file: Option<PathBuf>,
     },
+    /// The VM backend on macOS: its guest files and the running VM.
+    Vm {
+        #[command(subcommand)]
+        cmd: vm::VmCmd,
+    },
+    /// In the guest of the VM backend: the agent that starts the runs. The
+    /// init of the guest starts it.
+    #[command(hide = true)]
+    VmAgent(vm_run::AgentArgs),
+    /// The launch of a run on the VM backend. paddock starts this.
+    #[command(hide = true)]
+    VmAttach { job: PathBuf },
+    /// The supervisor of the VM. paddock starts this.
+    #[command(hide = true)]
+    VmServe { project: PathBuf },
     #[command(external_subcommand)]
     External(Vec<String>),
 }
@@ -611,7 +632,7 @@ pub(crate) struct RunArgs {
     harness: Option<String>,
     /// Project directory. Defaults to the current directory, widened to its git root.
     path: Option<PathBuf>,
-    /// auto, bwrap, docker or podman.
+    /// auto, bwrap, docker, podman, srt, seatbelt or vm (macOS).
     #[arg(long, short)]
     backend: Option<String>,
     /// none, api, egress or host. api: only the model API hosts of the

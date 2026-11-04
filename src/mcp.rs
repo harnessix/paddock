@@ -216,7 +216,9 @@ pub fn implicit(env: &HostEnv, project: &Path, p: &Path, trusted: bool) -> bool 
     if !plain(p) {
         return false;
     }
-    p.starts_with(project) || is_shared_tool(env, p) || (trusted && is_tool_install(env, p))
+    crate::paths::within(p, project)
+        || is_shared_tool(env, p)
+        || (trusted && is_tool_install(env, p))
 }
 
 /// Host paths in the arguments, resolved, outside the project.
@@ -233,9 +235,10 @@ fn host_paths_in_args(env: &HostEnv, args: &[String], project: &Path) -> Vec<Pat
         let Ok(real) = std::fs::canonicalize(&p) else {
             continue;
         };
-        if !real.starts_with(project) {
-            v.push(real);
+        if crate::paths::within(&real, project) || crate::paths::within(&p, project) {
+            continue;
         }
+        v.push(crate::paths::spelling_of(&p, &real));
     }
     v
 }
@@ -276,9 +279,12 @@ pub fn assess(env: &HostEnv, s: &Server, m: &Manifest, project: &Path) -> Status
     let allowed = m.mcp.allow.contains(&s.name);
     // The user's own configuration names the command, unless the name leads
     // through the project, where the sandbox chooses a symlink's target.
-    let trusted = s.trusted && !raw.starts_with(project);
+    // `/var` and `/private/var` are one directory on macOS. Compare the
+    // canonical paths, and keep the spelling the caller passed in.
+    let trusted = s.trusted && !crate::paths::within(&raw, project);
     let (closure, mut path) = runtime_closure(env, &canonical).unwrap_or_default();
-    let exe_root = install_root(&canonical);
+    let exe_root_real = install_root(&canonical);
+    let exe_root = crate::paths::spelling_of(&raw, &exe_root_real);
     let exe_trusted = trusted && is_tool_install(env, &canonical);
     // Every host path the server would get, and whether it may get it
     // without approval.
@@ -286,10 +292,15 @@ pub fn assess(env: &HostEnv, s: &Server, m: &Manifest, project: &Path) -> Status
     for p in closure {
         // Interpreters come from script headers, which whoever wrote the
         // script chose: only the narrow rule applies to them.
-        let ok = implicit(env, project, &p, false) || (p == exe_root && exe_trusted);
+        let p = crate::paths::spelling_of(&raw, &p);
+        let ok = implicit(env, project, &p, false)
+            || (crate::paths::same_file(&p, &exe_root) && exe_trusted);
         wanted.push((p, ok));
     }
-    if raw != canonical && !raw.starts_with(project) && !implicit(env, project, &raw, trusted) {
+    if !crate::paths::same_file(&raw, &canonical)
+        && !crate::paths::within(&raw, project)
+        && !implicit(env, project, &raw, trusted)
+    {
         wanted.push((raw.clone(), false));
     }
     for p in host_paths_in_args(env, &s.args, project) {
@@ -298,7 +309,7 @@ pub fn assess(env: &HostEnv, s: &Server, m: &Manifest, project: &Path) -> Status
             wanted.push((p, false));
         }
     }
-    wanted.retain(|(p, _)| !p.starts_with(project));
+    wanted.retain(|(p, _)| !crate::paths::within(p, project));
     wanted.sort();
     wanted.dedup_by(|a, b| a.0 == b.0);
     if wanted.iter().any(|(_, ok)| !ok) && !allowed {
@@ -316,7 +327,7 @@ pub fn assess(env: &HostEnv, s: &Server, m: &Manifest, project: &Path) -> Status
         .filter(|p| !is_system_path(p))
         .collect();
     let mut tools = Vec::new();
-    if exe_root == canonical {
+    if exe_root_real == canonical {
         // A single file in a shared bin directory: expose only that file.
         let name = Path::new(cmd)
             .file_name()
@@ -327,7 +338,7 @@ pub fn assess(env: &HostEnv, s: &Server, m: &Manifest, project: &Path) -> Status
         path.push(dir.to_path_buf());
     }
     if let Some(dir) = raw.parent() {
-        if raw != canonical
+        if !crate::paths::same_file(&raw, &canonical)
             && !is_system_path(&raw)
             && implicit(env, project, &raw, trusted)
             && install_root(&raw) != raw

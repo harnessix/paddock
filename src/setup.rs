@@ -13,6 +13,7 @@
 use crate::doctor;
 use crate::env::HostEnv;
 use crate::launchers::{self, Kind};
+use crate::onboard::{self, Feature, Os};
 use crate::shims;
 use crate::update;
 use anyhow::{bail, Context, Result};
@@ -20,7 +21,10 @@ use std::io::{BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-pub const BACKENDS: &[&str] = &["auto", "bwrap", "podman", "docker", "srt"];
+/// The backends that `--backend` accepts on this platform.
+pub fn backends() -> &'static [&'static str] {
+    onboard::backends(Os::HOST)
+}
 
 /// Questions to the user. `None` in [`run`] means: ask nothing.
 pub trait Ask {
@@ -112,7 +116,35 @@ fn remove_command(pkgs: &[&str]) -> String {
     }
 }
 
+/// The packages step on macOS: it names the commands and runs none.
+fn mac_packages(env: &HostEnv) {
+    println!("1. Programs (paddock doctor)");
+    let (sys, sys_ok) = onboard::mac_system_lines(&onboard::MacProbe::host());
+    let (_, req, opt) = onboard::mac_dep_lines(|c| env.which(c));
+    if sys_ok && req.is_empty() {
+        println!("   ok       sandbox-exec, the command line tools and git are there");
+    }
+    for l in sys.iter().filter(|l| !l.trim_start().starts_with("ok")) {
+        println!(" {l}");
+    }
+    if !req.is_empty() {
+        println!("   MISSING  install with: {}", req.join("; "));
+    }
+    if !opt.is_empty() {
+        println!("   absent   optional: {}", opt.join("; "));
+    }
+    if !(sys_ok && req.is_empty()) {
+        if let Some(line) = onboard::refusal(Os::HOST, Feature::PackageInstall) {
+            println!("            {line}");
+        }
+    }
+}
+
 fn packages(env: &HostEnv, ask: &mut Option<&mut dyn Ask>, out: &mut Outcome) -> Result<()> {
+    if Os::HOST == Os::Macos {
+        mac_packages(env);
+        return Ok(());
+    }
     println!("1. System packages (paddock doctor)");
     let (req, opt) = missing(env);
     if req.is_empty() {
@@ -174,8 +206,13 @@ fn shims_step(
     out: &mut Outcome,
 ) -> Result<()> {
     println!("\n2. Sandbox by default (shell commands)");
+    let rcs = if Os::HOST == Os::Macos {
+        "~/.zshrc (it creates one when there is none) and in ~/.bashrc where it exists"
+    } else {
+        "~/.bashrc and ~/.zshrc"
+    };
     println!(
-        "   Typing claude, codex or another harness command in bash or zsh starts it in a sandbox.\n   It changes one marked line in ~/.bashrc and ~/.zshrc, and writes {}.\n   Undo: paddock shims remove, or paddock setup --no-shims",
+        "   Typing claude, codex or another harness command in bash or zsh starts it in a sandbox.\n   It changes one marked line in {rcs}, and writes {}.\n   Undo: paddock shims remove, or paddock setup --no-shims",
         tilde(env, &shims::script_file(env))
     );
     let on = shims::installed(env);
@@ -225,6 +262,10 @@ fn launchers_step(
     out: &mut Outcome,
 ) -> Result<()> {
     println!("\n3. Launchers");
+    if let Some(line) = onboard::refusal(Os::HOST, Feature::Launchers) {
+        println!("   skipped  {line}");
+        return Ok(());
+    }
     println!(
         "   A \"Paddock\" folder in the app menu with an entry for each harness and app.\n   It writes desktop entries in {}, and a marked block in the Omarchy menu file where it exists.\n   Undo: paddock launchers remove, or paddock setup --no-launchers",
         tilde(env, &env.data_dir.join("applications"))
@@ -254,6 +295,10 @@ fn plugin_step(
     out: &mut Outcome,
 ) -> Result<()> {
     println!("\n4. Omarchy bar widget");
+    if let Some(line) = onboard::refusal(Os::HOST, Feature::BarWidget) {
+        println!("   skipped  {line}");
+        return Ok(());
+    }
     let Some(omarchy) = env.which("omarchy") else {
         println!("   skipped  Omarchy is not installed");
         if o.plugin == Some(true) {
@@ -336,7 +381,8 @@ fn backend_step(
     println!("\n5. Default backend");
     let current = current_backend(env)?;
     println!(
-        "   now: {current}. auto picks bwrap: every host tool, and starts in milliseconds. podman or docker\n   suit projects that need system packages the host does not have. It sets backend in {}.\n   Undo: paddock setup --backend {current}",
+        "   now: {current}. {} It sets backend in {}.\n   Undo: paddock setup --backend {current}",
+        onboard::auto_backend_text(Os::HOST),
         tilde(env, &config_file(env))
     );
     let want = match &o.backend {
@@ -346,7 +392,7 @@ fn backend_step(
             .map(|a| {
                 a.line(&format!(
                     "Backend ({}), Enter keeps {current}: ",
-                    BACKENDS.join(", ")
+                    backends().join(", ")
                 ))
             })
             .filter(|s| !s.is_empty()),
@@ -355,8 +401,11 @@ fn backend_step(
         println!("   ok       not changed; set with: paddock setup --backend NAME");
         return Ok(());
     };
-    if !BACKENDS.contains(&want.as_str()) {
-        bail!("unknown backend {want}; use one of {}", BACKENDS.join(", "));
+    if !backends().contains(&want.as_str()) {
+        bail!(
+            "unknown backend {want}; use one of {}",
+            backends().join(", ")
+        );
     }
     if want == current {
         println!("   ok       already {current}");
@@ -460,8 +509,8 @@ fn privacy_step(env: &HostEnv) -> Result<()> {
 pub fn run(env: &HostEnv, o: &Opts, mut ask: Option<&mut dyn Ask>) -> Result<Outcome> {
     update::refuse_in_sandbox(env, "paddock setup")?;
     if let Some(b) = &o.backend {
-        if !BACKENDS.contains(&b.as_str()) {
-            bail!("unknown backend {b}; use one of {}", BACKENDS.join(", "));
+        if !backends().contains(&b.as_str()) {
+            bail!("unknown backend {b}; use one of {}", backends().join(", "));
         }
     }
     let mut out = Outcome::default();
@@ -553,11 +602,14 @@ mod tests {
             backend: Some("podman".into()),
             app_roots: vec![],
         };
+        // macOS skips the launchers.
+        let linux = Os::HOST == Os::Linux;
+        let steps = if linux { 3 } else { 2 };
         let first = run(&env, &o, None).unwrap();
-        assert_eq!(first.changes.len(), 3, "{:?}", first.changes);
+        assert_eq!(first.changes.len(), steps, "{:?}", first.changes);
         let rc = std::fs::read_to_string(env.home.join(".bashrc")).unwrap();
         assert!(rc.starts_with("# mine\nalias ll='ls -l'\n") && rc.contains("paddock shims"));
-        assert!(launchers::installed(&env));
+        assert_eq!(launchers::installed(&env), linux);
         assert_eq!(current_backend(&env).unwrap(), "podman");
 
         let before = snapshot(t.path());
@@ -566,9 +618,14 @@ mod tests {
         let none = run(&env, &Opts::default(), None).unwrap();
         assert!(none.changes.is_empty(), "{:?}", none.changes);
         // An interactive run asks only about the packages (missing: PATH is
-        // empty), the backend and the loft, and changes nothing
-        // when the user presses Enter.
-        let mut s = Script(vec!["n".into(), String::new(), "n".into()]);
+        // empty, Linux only), the backend and the loft, and changes
+        // nothing when the user presses Enter.
+        let answers = if linux {
+            vec!["n".into(), String::new(), "n".into()]
+        } else {
+            vec![String::new(), "n".into()]
+        };
+        let mut s = Script(answers);
         let asked = run(&env, &Opts::default(), Some(&mut s)).unwrap();
         assert!(asked.changes.is_empty(), "{:?}", asked.changes);
         assert_eq!(snapshot(t.path()), before, "a second run changed files");
@@ -582,7 +639,7 @@ mod tests {
             backend: Some("auto".into()),
             app_roots: vec![],
         };
-        assert_eq!(run(&env, &undo, None).unwrap().changes.len(), 3);
+        assert_eq!(run(&env, &undo, None).unwrap().changes.len(), steps);
         let rc = std::fs::read_to_string(env.home.join(".bashrc")).unwrap();
         assert_eq!(rc, "# mine\nalias ll='ls -l'\n");
         assert!(!launchers::installed(&env));
@@ -598,13 +655,12 @@ mod tests {
         let env = env_in(t.path());
         // No sudo, shims yes, launchers no, backend docker, no loft. Omarchy is not on PATH,
         // so there is no plugin question.
-        let mut s = Script(vec![
-            "n".into(),
-            "y".into(),
-            "n".into(),
-            "docker".into(),
-            "n".into(),
-        ]);
+        // macOS asks neither about packages nor about launchers.
+        let answers = match Os::HOST {
+            Os::Linux => vec!["n", "y", "n", "docker", "n"],
+            Os::Macos => vec!["y", "docker", "n"],
+        };
+        let mut s = Script(answers.into_iter().map(String::from).collect());
         let r = run(&env, &Opts::default(), Some(&mut s)).unwrap();
         assert_eq!(r.changes.len(), 2, "{:?}", r.changes);
         assert!(shims::installed(&env));

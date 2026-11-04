@@ -446,6 +446,9 @@ pub fn dedupe_files(
 
 /// Name of the file system of `p`, and whether it can share file data.
 pub fn fs_kind(p: &Path) -> Option<(&'static str, bool)> {
+    if !cfg!(target_os = "linux") {
+        return p.exists().then_some(("a macOS file system", false));
+    }
     let c = std::ffi::CString::new(p.as_os_str().as_encoded_bytes()).ok()?;
     let mut s: libc::statfs = unsafe { std::mem::zeroed() };
     // SAFETY: c is a valid C string and s a statfs buffer.
@@ -728,11 +731,10 @@ pub fn spawn_after_run(env: &HostEnv, home: &Path) {
 
 /// Lowest CPU and I/O priority for the background run.
 pub fn be_idle() {
-    // SAFETY: plain syscalls on this process.
+    // SAFETY: plain calls on this process.
     unsafe {
         libc::setpriority(libc::PRIO_PROCESS, 0, 19);
-        // IOPRIO_WHO_PROCESS, this process, class IDLE.
-        libc::syscall(libc::SYS_ioprio_set, 1, 0, 3 << 13);
+        crate::platform::be_idle_io();
     }
 }
 

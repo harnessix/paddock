@@ -29,6 +29,7 @@ fn original(t: &Path) -> PathBuf {
     o
 }
 
+#[cfg(target_os = "linux")]
 fn borrowed(e: &HostEnv, o: &Path) -> (String, PathBuf) {
     let p = plan_borrow(e, o, no_check).unwrap();
     let r = borrow(e, "s-1", &p, DEFAULT_MAX).unwrap();
@@ -109,6 +110,8 @@ fn the_manifest_finds_added_changed_and_deleted_entries() {
     assert_eq!(d, vec!["src/gone.rs"]);
 }
 
+// Borrow names the open folder through /proc/self/fd. macOS has no such path.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_borrow_copies_the_folder_and_keeps_the_original() {
     let t = tempfile::tempdir().unwrap();
@@ -139,6 +142,8 @@ fn a_borrow_copies_the_folder_and_keeps_the_original() {
     assert!(o.join("README").exists());
 }
 
+// Borrow names the open folder through /proc/self/fd. macOS has no such path.
+#[cfg(target_os = "linux")]
 #[test]
 fn without_reflinks_the_size_limit_holds() {
     let t = tempfile::tempdir().unwrap();
@@ -149,12 +154,14 @@ fn without_reflinks_the_size_limit_holds() {
     // A file system with reflinks copies it anyway; others refuse.
     let stage = t.path().join("stage");
     std::fs::create_dir(&stage).unwrap();
-    let entries = scan(&p.src.proc_path()).unwrap();
+    let entries = scan(&p.src.proc_path().unwrap()).unwrap();
     if let Err(err) = copy_tree(&p.src.root().unwrap(), &stage, &entries, 100) {
         assert!(format!("{err:#}").contains("[borrow] max"), "{err:#}");
     }
 }
 
+// Borrow names the open folder through /proc/self/fd. macOS has no such path.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_borrow_never_copies_through_a_folder_swapped_for_a_symlink() {
     // Review C-H2: the sandbox swaps a folder for a link after the scan.
@@ -162,7 +169,7 @@ fn a_borrow_never_copies_through_a_folder_swapped_for_a_symlink() {
     let e = env(t.path());
     let o = original(t.path());
     let p = plan_borrow(&e, &o, no_check).unwrap();
-    let entries = scan(&p.src.proc_path()).unwrap();
+    let entries = scan(&p.src.proc_path().unwrap()).unwrap();
     let secret = t.path().join("secret");
     std::fs::create_dir(&secret).unwrap();
     std::fs::write(secret.join("a.rs"), "key").unwrap();
@@ -174,6 +181,8 @@ fn a_borrow_never_copies_through_a_folder_swapped_for_a_symlink() {
     assert!(std::fs::read_to_string(stage.join("src/a.rs")).map_or(true, |s| s != "key"));
 }
 
+// Borrow names the open folder through /proc/self/fd. macOS has no such path.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_return_writes_the_changes_back_with_the_safety_rules() {
     let t = tempfile::tempdir().unwrap();
@@ -232,6 +241,8 @@ fn a_return_writes_the_changes_back_with_the_safety_rules() {
     assert!(list(&e, "s-1").is_empty());
 }
 
+// Borrow names the open folder through /proc/self/fd. macOS has no such path.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_return_never_writes_through_a_folder_swapped_for_a_symlink() {
     // Review C-H3: the swap comes after the last check of the original.
@@ -258,6 +269,8 @@ fn a_return_never_writes_through_a_folder_swapped_for_a_symlink() {
     assert!(!home.join("new.rs").exists());
 }
 
+// Borrow names the open folder through /proc/self/fd. macOS has no such path.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_folder_with_git_files_that_became_a_file_stops_the_return_before_it_writes() {
     // Review C-L10: the write failed halfway and left the original changed.
@@ -281,6 +294,8 @@ fn a_folder_with_git_files_that_became_a_file_stops_the_return_before_it_writes(
     assert!(o.join("sub/f").exists());
 }
 
+// Borrow names the open folder through /proc/self/fd. macOS has no such path.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_return_refuses_when_the_original_changed_after_the_borrow() {
     let t = tempfile::tempdir().unwrap();
@@ -312,6 +327,8 @@ fn a_return_refuses_when_the_original_changed_after_the_borrow() {
     );
 }
 
+// Borrow names the open folder through /proc/self/fd. macOS has no such path.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_return_refuses_symlinks_that_point_outside() {
     let t = tempfile::tempdir().unwrap();
@@ -324,6 +341,8 @@ fn a_return_refuses_symlinks_that_point_outside() {
     assert!(!o.join("pw").exists());
 }
 
+// Borrow names the open folder through /proc/self/fd. macOS has no such path.
+#[cfg(target_os = "linux")]
 #[test]
 fn chained_symlinks_that_leave_the_folder_stop_the_return() {
     // Review A-M6.
@@ -361,6 +380,8 @@ fn symlinks_are_followed_in_the_tree_to_find_where_they_lead() {
     assert!(!leaves(&tree, "d/x", Path::new("../s/d")));
 }
 
+// Borrow names the open folder through /proc/self/fd. macOS has no such path.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_symlinked_folder_in_the_copy_is_never_followed() {
     let t = tempfile::tempdir().unwrap();
@@ -384,4 +405,19 @@ fn a_folder_that_host_programs_read_gets_a_warning() {
     assert!(host_read_warning(&e, &e.home.join(".config/app")).is_some());
     assert!(host_read_warning(&e, Path::new("/etc/x")).is_some());
     assert!(host_read_warning(&e, &e.home.join("src/lib")).is_none());
+}
+
+/// macOS has no /proc/self/fd path for an open folder. Borrow refuses.
+#[cfg(not(target_os = "linux"))]
+#[test]
+fn borrow_is_refused_without_proc_self_fd() {
+    let t = tempfile::tempdir().unwrap();
+    let e = env(t.path());
+    let o = original(t.path());
+    let plan = plan_borrow(&e, &o, no_check).unwrap();
+    let err = borrow(&e, "s-1", &plan, DEFAULT_MAX).unwrap_err();
+    assert!(
+        format!("{err:#}").contains("not available on macOS"),
+        "{err:#}"
+    );
 }

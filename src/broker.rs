@@ -138,6 +138,9 @@ pub struct Broker {
     /// The kv service of this sandbox, for the compaction record. Set once
     /// the store runs; it starts after the broker.
     pub kv: std::sync::OnceLock<Arc<crate::kv::Service>>,
+    /// Capabilities that the backend of this run cannot give, with the
+    /// reason. They are off, never asked (a Seatbelt run has no borrow).
+    pub refused: Vec<(&'static str, &'static str)>,
     grants: Mutex<Vec<String>>,
     /// "Deny for this session": the keys of the request and the user's note.
     denials: Mutex<Vec<(String, Option<String>)>>,
@@ -161,6 +164,7 @@ impl Broker {
             detach: None,
             run: Default::default(),
             kv: std::sync::OnceLock::new(),
+            refused: Vec::new(),
             grants: Mutex::new(Vec::new()),
             denials: Mutex::new(Vec::new()),
         }
@@ -171,6 +175,9 @@ impl Broker {
     /// allows, or when `[spawn] harnesses` names no harness. The depth comes
     /// from the host, never from the sandbox.
     pub fn mode(&self, cap: &str) -> Mode {
+        if self.refused.iter().any(|(c, _)| *c == cap) {
+            return Mode::Deny;
+        }
         let m = self.policy.mode(cap);
         if cap != "spawn" {
             return m;
@@ -273,6 +280,9 @@ impl Broker {
         // The sandbox reads its own boundary log: a read, never asked.
         if req.cap == "boundary" {
             return self.handle_boundary();
+        }
+        if let Some((_, why)) = self.refused.iter().find(|(c, _)| *c == req.cap) {
+            return Response::new(Status::Disabled, *why);
         }
         self.handle_gated(req)
     }

@@ -5,6 +5,7 @@ description = "OpenAI Codex CLI"
 unverified = [
   "state.auth .codex/.credentials.json: the file store for MCP OAuth tokens",
   "compaction: the trusted hash of paddock's hook, from the source of codex 0.166.0",
+  "state.settings features.unified_exec_tty: shell commands without a pty on macOS, from the source of codex 0.166.0",
 ]
 
 [locate]
@@ -41,6 +42,22 @@ dir = ".codex"
 file = ".codex/config.toml"
 path = ["projects", "{project}", "trust_level"]
 value = "trusted"
+
+# macOS: released Codex builds have the hardened runtime, so dyld ignores
+# paddock's pty library, and a Seatbelt run cannot open a pty. Codex's shell
+# tool (exec_command) uses pipes unless the model asks for a terminal
+# (tty = true). With unified_exec_tty = false the tool has no tty argument,
+# so every command runs with pipes. "unified_exec = false" does not help:
+# since codex 0.150.0 Codex turns it on again unless a managed requirement
+# pins it (core/src/config/managed_features.rs). paddock sets this value
+# only when the harness gets no ptys from paddock (when = "no_pty").
+# https://github.com/openai/codex/blob/main/codex-rs/features/src/lib.rs
+[[state.settings]]
+file = ".codex/config.toml"
+format = "toml"
+path = ["features", "unified_exec_tty"]
+value = false
+when = "no_pty"
 
 [[mcp]]
 file = ".codex/config.toml"

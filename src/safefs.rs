@@ -7,6 +7,58 @@
 //! opened: `openat` to read, a new file plus `renameat` to write, `unlinkat`
 //! to remove. A symlink anywhere on the way is an error, never followed.
 //! Use plain `std::fs` only for paths that only the host can write.
+//!
+//! # Guarantees
+//!
+//! - `Root::open`: the last component is not a symlink. The folders above
+//!   it belong to the host and are followed.
+//! - `Root::dir`, `Dir::subdir`: every component opens with `O_NOFOLLOW`
+//!   below the open folder before it. A symlink or a file on the way is an
+//!   error. With `create`, missing folders get mode 0700.
+//! - `Root::read`, `Dir::read`, `Dir::open_read`, `open_file`, `read_path`:
+//!   only a regular file is read. A symlink (unless `follow`), a folder, a
+//!   FIFO or a device is an error, so a read never hangs. A read stops after
+//!   `max` bytes.
+//! - `Root::write`, `Dir::write`, `Dir::write_from`: a new file next to the
+//!   name, then a rename over the name. A symlink at the name gets replaced,
+//!   never written through.
+//! - `Dir::create_new`, `Dir::new_file`, `Dir::new_subdir`: a new entry
+//!   only. An existing entry or a symlink there is never replaced or opened.
+//! - `Dir::move_in`: a rename that never replaces an entry at the target.
+//! - `Dir::exchange`: two entries of one folder swap names in one step.
+//! - `Root::remove`, `Dir::remove`, `Dir::remove_dir`: `unlinkat` in the open
+//!   folder. A symlink is removed itself.
+//! - `Root::remove_tree`, `Dir::remove_tree`, `remove_tree_path`: everything
+//!   below is removed through open folders. Symlinks are removed, never
+//!   followed. A folder without write permission gets it through its open fd.
+//! - `Dir::kind`, `Dir::entries`, `Dir::file_names`, `Dir::stats`: `fstatat`
+//!   with `AT_SYMLINK_NOFOLLOW`. Nothing is opened.
+//! - `Dir::connect`: only a socket, never a symlink to one.
+//! - `Root::copy_in`, `Dir::copy_source`, `Source`: the source opens once.
+//!   Later steps work on the open fd, so a path that changes cannot redirect
+//!   the copy. Only regular files and folders get copied.
+//! - `resolve_approved`: a symlink inside a folder that a sandbox can write
+//!   is an error.
+//!
+//! # Linux and macOS
+//!
+//! Linux opens an entry to look at it with `O_PATH`. Such an fd opens
+//! nothing, so a FIFO, a device or a socket is never opened. It also gets
+//! reopened through `/proc/self/fd`. macOS has neither. There `Node::at`
+//! first takes `fstatat` and then opens only a regular file (`O_RDONLY`,
+//! `O_NONBLOCK`, `O_NOCTTY`) or a folder (`O_RDONLY | O_DIRECTORY`, or
+//! `O_SEARCH` without read permission). Any other kind keeps only its stat.
+//! The kind checks then use the stat of the open fd, so an entry swapped in
+//! between the two calls is checked as what was opened. Inside a sandbox
+//! folder, `O_NOFOLLOW` leaves only a FIFO to swap in, and a FIFO opens at
+//! once with `O_NONBLOCK`. For a path open (`open_file`, `Source::open`) a
+//! race on a folder above the file can make macOS open a device, but never
+//! read it. The other macOS calls: `renameatx_np` with `RENAME_EXCL` or
+//! `RENAME_SWAP`, `fcntl(F_GETPATH)`, `fdopendir`, `fchmod`.
+//!
+//! Not available on macOS yet: `Dir::connect` and `Source::proc_path`, as
+//! no path names an open fd there, and removing a folder that has neither
+//! read nor search permission. These return an error that says so.
 
 use anyhow::{bail, Context, Result};
 use std::collections::VecDeque;
@@ -93,15 +145,48 @@ fn kind_of(st: &libc::stat) -> Kind {
     }
 }
 
+/// The mode bits as `u32`. `mode_t` is `u16` on macOS.
+#[allow(clippy::unnecessary_cast)]
+fn mode_of(st: &libc::stat) -> u32 {
+    st.st_mode as u32
+}
+
 /// The path that names an open fd itself. Opening, connecting or changing
 /// it acts on the object the fd holds, never on a path that could change.
+#[cfg(target_os = "linux")]
 fn fd_path(fd: &OwnedFd) -> String {
     format!("/proc/self/fd/{}", fd.as_raw_fd())
 }
 
+/// Where an open file or folder is now, from the kernel.
+#[cfg(target_os = "linux")]
+fn fd_real_path(fd: &OwnedFd) -> Result<PathBuf> {
+    Ok(std::fs::read_link(fd_path(fd))?)
+}
+
+/// Where an open file or folder is now, from the kernel.
+#[cfg(target_os = "macos")]
+fn fd_real_path(fd: &OwnedFd) -> Result<PathBuf> {
+    let mut buf = vec![0u8; libc::PATH_MAX as usize];
+    // SAFETY: F_GETPATH writes a NUL-terminated path of at most PATH_MAX
+    // bytes into buf.
+    if unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_GETPATH, buf.as_mut_ptr()) } < 0 {
+        return Err(last_err().into());
+    }
+    let len = buf.iter().position(|b| *b == 0).unwrap_or(buf.len());
+    buf.truncate(len);
+    Ok(PathBuf::from(OsString::from_vec(buf)))
+}
+
 fn open_path(path: &CString, flags: libc::c_int) -> std::io::Result<OwnedFd> {
-    // SAFETY: open with a NUL-terminated path; the fd is owned on success.
-    let r = unsafe { libc::open(path.as_ptr(), flags | libc::O_CLOEXEC) };
+    open_raw(libc::AT_FDCWD, path, flags)
+}
+
+/// `openat` with only `O_CLOEXEC` added, so a symlink at the end is
+/// followed unless `flags` has `O_NOFOLLOW`.
+fn open_raw(dir: libc::c_int, name: &CString, flags: libc::c_int) -> std::io::Result<OwnedFd> {
+    // SAFETY: openat with a NUL-terminated name; the fd is owned on success.
+    let r = unsafe { libc::openat(dir, name.as_ptr(), flags | libc::O_CLOEXEC) };
     if r < 0 {
         Err(last_err())
     } else {
@@ -109,21 +194,79 @@ fn open_path(path: &CString, flags: libc::c_int) -> std::io::Result<OwnedFd> {
     }
 }
 
-/// Open the regular file behind an `O_PATH` fd for reading. The fd is checked
-/// first, so a FIFO or a device is never opened.
-fn reopen_read(fd: &OwnedFd, what: &Path) -> Result<std::fs::File> {
-    match kind_of(&fstat(fd)?) {
-        Kind::File => {}
-        Kind::Symlink => bail!(
-            "{} is a symlink; paddock does not follow it",
-            what.display()
-        ),
-        _ => bail!("{} is not a regular file", what.display()),
+mod node;
+use node::Node;
+
+/// The renameat2 system call, direct: the musl libc of the Rust musl
+/// targets (the guest binary of the VM backend) has no wrapper for it.
+#[cfg(target_os = "linux")]
+fn renameat2(
+    fd: libc::c_int,
+    a: &CString,
+    to: libc::c_int,
+    b: &CString,
+    flags: libc::c_uint,
+) -> std::io::Result<()> {
+    // SAFETY: renameat2 with NUL-terminated names that outlive the call.
+    let r = unsafe { libc::syscall(libc::SYS_renameat2, fd, a.as_ptr(), to, b.as_ptr(), flags) };
+    if r != 0 {
+        return Err(last_err());
     }
-    let p = CString::new(fd_path(fd)).expect("no NUL in a /proc path");
-    let f = open_path(&p, libc::O_RDONLY | libc::O_NONBLOCK | libc::O_NOCTTY)
-        .with_context(|| format!("cannot read {}", what.display()))?;
-    Ok(std::fs::File::from(f))
+    Ok(())
+}
+
+/// Rename `from` in `fromdir` to `to` in `todir`. An entry at `to` is never
+/// replaced: that is an error.
+#[cfg(target_os = "linux")]
+fn rename_noreplace(
+    fromdir: libc::c_int,
+    from: &CString,
+    todir: libc::c_int,
+    to: &CString,
+) -> std::io::Result<()> {
+    renameat2(fromdir, from, todir, to, libc::RENAME_NOREPLACE)
+}
+
+/// Rename `from` in `fromdir` to `to` in `todir`. An entry at `to` is never
+/// replaced: that is an error.
+#[cfg(target_os = "macos")]
+fn rename_noreplace(
+    fromdir: libc::c_int,
+    from: &CString,
+    todir: libc::c_int,
+    to: &CString,
+) -> std::io::Result<()> {
+    // SAFETY: renameatx_np (<stdio.h>) with NUL-terminated names.
+    let r = unsafe {
+        libc::renameatx_np(
+            fromdir,
+            from.as_ptr(),
+            todir,
+            to.as_ptr(),
+            libc::RENAME_EXCL,
+        )
+    };
+    if r != 0 {
+        return Err(last_err());
+    }
+    Ok(())
+}
+
+/// Swap the entries `a` and `b` of the folder `dir` in one step.
+#[cfg(target_os = "linux")]
+fn rename_exchange(dir: libc::c_int, a: &CString, b: &CString) -> std::io::Result<()> {
+    renameat2(dir, a, dir, b, libc::RENAME_EXCHANGE)
+}
+
+/// Swap the entries `a` and `b` of the folder `dir` in one step.
+#[cfg(target_os = "macos")]
+fn rename_exchange(dir: libc::c_int, a: &CString, b: &CString) -> std::io::Result<()> {
+    // SAFETY: renameatx_np (<stdio.h>) with NUL-terminated names.
+    let r = unsafe { libc::renameatx_np(dir, a.as_ptr(), dir, b.as_ptr(), libc::RENAME_SWAP) };
+    if r != 0 {
+        return Err(last_err());
+    }
+    Ok(())
 }
 
 /// Read at most `max` bytes; more is an error.
@@ -137,11 +280,49 @@ fn read_limited(f: std::fs::File, max: u64, what: &Path) -> Result<Vec<u8>> {
 }
 
 /// The names in an open folder.
+#[cfg(target_os = "linux")]
 fn list(dir: &OwnedFd) -> Result<Vec<std::ffi::OsString>> {
     let mut out = Vec::new();
     for e in std::fs::read_dir(fd_path(dir))? {
         out.push(e?.file_name());
     }
+    Ok(out)
+}
+
+/// The names in an open folder, without `.` and `..`. A new fd of the
+/// folder gets its own offset, so `dir` itself does not change.
+#[cfg(target_os = "macos")]
+fn list(dir: &OwnedFd) -> Result<Vec<std::ffi::OsString>> {
+    use std::os::fd::IntoRawFd;
+    let raw = reopen_dir(dir)?.into_raw_fd();
+    // SAFETY: fdopendir owns raw on success. On failure raw stays ours.
+    let dp = unsafe { libc::fdopendir(raw) };
+    if dp.is_null() {
+        let e = last_err();
+        unsafe { libc::close(raw) };
+        return Err(e.into());
+    }
+    let mut out = Vec::new();
+    let result = loop {
+        // SAFETY: errno is thread local. readdir leaves it at 0 at the end.
+        unsafe { *libc::__error() = 0 };
+        let ent = unsafe { libc::readdir(dp) };
+        if ent.is_null() {
+            let e = last_err();
+            break match e.raw_os_error() {
+                Some(0) | None => Ok(()),
+                _ => Err(e),
+            };
+        }
+        // SAFETY: d_name of a dirent from readdir is NUL-terminated.
+        let name = unsafe { std::ffi::CStr::from_ptr((*ent).d_name.as_ptr()) }.to_bytes();
+        if name != b"." && name != b".." {
+            out.push(OsString::from_vec(name.to_vec()));
+        }
+    };
+    // SAFETY: closedir closes the stream and its fd once.
+    unsafe { libc::closedir(dp) };
+    result?;
     Ok(out)
 }
 
@@ -160,18 +341,14 @@ fn reopen_dir(fd: &OwnedFd) -> std::io::Result<OwnedFd> {
 /// A FIFO, a device or a folder is an error and is never opened, so a read
 /// cannot hang.
 pub fn open_file(path: &Path, follow: bool) -> Result<Option<std::fs::File>> {
-    let mut flags = libc::O_PATH;
-    if !follow {
-        flags |= libc::O_NOFOLLOW;
-    }
-    let fd = match open_path(&cstr(path.as_os_str())?, flags) {
-        Ok(f) => f,
+    let node = match Node::at(libc::AT_FDCWD, &cstr(path.as_os_str())?, follow) {
+        Ok(n) => n,
         Err(e) if e.raw_os_error() == Some(libc::ENOENT) => return Ok(None),
         Err(e) => {
             return Err(anyhow::Error::from(e).context(format!("cannot open {}", path.display())))
         }
     };
-    reopen_read(&fd, path).map(Some)
+    node.read(path).map(Some)
 }
 
 /// Read a regular file by path, at most `max` bytes. See `open_file`.
@@ -269,7 +446,7 @@ pub fn resolve_approved(path: &Path, writable: &[PathBuf]) -> Result<PathBuf> {
 /// later step works on the open fd, so a path that changes after the check,
 /// for example while the user decides, cannot redirect the copy.
 pub struct Source {
-    fd: OwnedFd,
+    node: Node,
     kind: Kind,
 }
 
@@ -277,21 +454,21 @@ impl Source {
     /// Open `path`. Symlinks in it are followed, as the user named it;
     /// `real_path` tells where it led. Only a regular file or a folder opens.
     pub fn open(path: &Path) -> Result<Self> {
-        let fd = open_path(&cstr(path.as_os_str())?, libc::O_PATH)
+        let node = Node::at(libc::AT_FDCWD, &cstr(path.as_os_str())?, true)
             .with_context(|| format!("{} does not exist on the host", path.display()))?;
-        let kind = kind_of(&fstat(&fd)?);
+        let kind = node.kind();
         if !matches!(kind, Kind::File | Kind::Dir) {
             bail!(
                 "{} is not a regular file or a folder; paddock copies only those",
                 path.display()
             );
         }
-        Ok(Self { fd, kind })
+        Ok(Self { node, kind })
     }
 
     /// Where the open file or folder is now.
     pub fn real_path(&self) -> Result<PathBuf> {
-        Ok(std::fs::read_link(fd_path(&self.fd))?)
+        fd_real_path(self.node.fd()?)
     }
 
     pub fn is_dir(&self) -> bool {
@@ -300,8 +477,15 @@ impl Source {
 
     /// A path that names the open file or folder itself, valid in this
     /// process while the Source lives.
-    pub fn proc_path(&self) -> PathBuf {
-        PathBuf::from(fd_path(&self.fd))
+    #[cfg(target_os = "linux")]
+    pub fn proc_path(&self) -> Result<PathBuf> {
+        Ok(PathBuf::from(fd_path(self.node.fd()?)))
+    }
+
+    /// macOS has no path that names an open fd and can be walked below.
+    #[cfg(target_os = "macos")]
+    pub fn proc_path(&self) -> Result<PathBuf> {
+        bail!("a path to an open host folder (/proc/self/fd) is not available on macOS yet")
     }
 
     /// The open folder as a `Root`, to walk it without following a symlink.
@@ -310,46 +494,64 @@ impl Source {
             bail!("not a folder");
         }
         Ok(Root {
-            fd: reopen_dir(&self.fd)?,
+            fd: self.node.dir()?,
             path: self.real_path()?,
         })
     }
 
     /// The device and inode of the open file or folder.
+    #[allow(clippy::unnecessary_cast)]
     pub fn id(&self) -> Result<(u64, u64)> {
-        let st = fstat(&self.fd)?;
-        Ok((st.st_dev, st.st_ino))
+        let st = fstat(self.node.fd()?)?;
+        // st_dev is i32 on macOS.
+        Ok((st.st_dev as u64, st.st_ino))
     }
 
     /// The bytes a copy takes; it stops counting above `limit`. Symlinks,
     /// FIFOs and devices inside a folder do not count: a copy skips them.
     pub fn size(&self, limit: u64) -> Result<u64> {
         let mut total = 0;
-        size_of(&self.fd, self.kind, limit, &mut total, 0)?;
+        size_of(&self.node, limit, &mut total, 0)?;
         Ok(total)
     }
 }
 
-fn size_of(fd: &OwnedFd, kind: Kind, limit: u64, total: &mut u64, depth: usize) -> Result<()> {
-    match kind {
-        Kind::File => *total += fstat(fd)?.st_size as u64,
+fn size_of(node: &Node, limit: u64, total: &mut u64, depth: usize) -> Result<()> {
+    match node.kind() {
+        Kind::File => *total += fstat(node.fd()?)?.st_size as u64,
         Kind::Dir => {
             if depth > MAX_DEPTH {
                 bail!("the folder is too deep");
             }
-            let d = reopen_dir(fd)?;
+            let d = node.dir()?;
             for name in list(&d)? {
                 if *total > limit {
                     break;
                 }
-                let e = openat(d.as_raw_fd(), &cstr(&name)?, libc::O_PATH, 0)?;
-                let k = kind_of(&fstat(&e)?);
-                size_of(&e, k, limit, total, depth + 1)?;
+                let e = Node::at(d.as_raw_fd(), &cstr(&name)?, false)?;
+                size_of(&e, limit, total, depth + 1)?;
             }
         }
         _ => {}
     }
     Ok(())
+}
+
+/// Connect to the socket that `node` holds, through its own fd path.
+#[cfg(target_os = "linux")]
+fn connect_node(node: &Node, what: &Path) -> Result<std::os::unix::net::UnixStream> {
+    std::os::unix::net::UnixStream::connect(fd_path(node.fd()?))
+        .with_context(|| format!("cannot connect to {}", what.display()))
+}
+
+/// macOS connects a Unix socket only by path, and a path can be swapped for
+/// a symlink after the check.
+#[cfg(target_os = "macos")]
+fn connect_node(_node: &Node, what: &Path) -> Result<std::os::unix::net::UnixStream> {
+    bail!(
+        "connecting to the socket {} inside a sandbox folder is not available on macOS yet",
+        what.display()
+    )
 }
 
 fn symlink_error(e: std::io::Error, what: &Path) -> anyhow::Error {
@@ -465,19 +667,18 @@ impl Root {
     /// Symlinks, FIFOs and devices in the source are skipped; nothing in the
     /// target is followed.
     pub fn copy_in(&self, from: &Path, rel: &Path) -> Result<()> {
-        let fd = openat(libc::AT_FDCWD, &cstr(from.as_os_str())?, libc::O_PATH, 0)
+        let node = Node::at(libc::AT_FDCWD, &cstr(from.as_os_str())?, false)
             .with_context(|| format!("cannot open {}", from.display()))?;
         let mut budget = MAX_COPY;
-        let st = fstat(&fd)?;
-        match kind_of(&st) {
+        match node.kind() {
             Kind::Dir => self
                 .dir(rel, true)?
-                .copy_dir_fd(&reopen_dir(&fd)?, &mut budget, 0),
+                .copy_dir_fd(&node.dir()?, &mut budget, 0),
             Kind::File => {
                 let (parent, name) = Self::split(rel)?;
-                let bytes = read_limited(reopen_read(&fd, from)?, budget, from)?;
+                let bytes = read_limited(node.read(from)?, budget, from)?;
                 self.dir(parent, true)?
-                    .write(name, &bytes, (st.st_mode & 0o755) | 0o600)
+                    .write(name, &bytes, (mode_of(&node.st) & 0o755) | 0o600)
             }
             _ => Ok(()),
         }
@@ -525,22 +726,19 @@ impl Dir {
     /// Where this open folder really is now, from the kernel, not from the
     /// path that was walked.
     pub fn real_path(&self) -> Result<PathBuf> {
-        Ok(std::fs::read_link(format!(
-            "/proc/self/fd/{}",
-            self.fd.as_raw_fd()
-        ))?)
+        fd_real_path(&self.fd)
     }
 
     /// Read a regular file. None when it does not exist. A symlink, a folder
     /// or a special file is an error; a FIFO or a device is never opened.
     pub fn read(&self, name: &OsStr, max: u64) -> Result<Option<Vec<u8>>> {
         let what = self.path.join(name);
-        let fd = match openat(self.fd.as_raw_fd(), &cstr(name)?, libc::O_PATH, 0) {
-            Ok(f) => f,
+        let node = match Node::at(self.fd.as_raw_fd(), &cstr(name)?, false) {
+            Ok(n) => n,
             Err(e) if e.raw_os_error() == Some(libc::ENOENT) => return Ok(None),
             Err(e) => return Err(symlink_error(e, &what)),
         };
-        let f = reopen_read(&fd, &what)?;
+        let f = node.read(&what)?;
         if f.metadata()?.len() > max {
             bail!("{} is larger than {} bytes", what.display(), max);
         }
@@ -551,12 +749,12 @@ impl Dir {
     /// when it does not exist. A FIFO or a device is never opened.
     pub fn open_read(&self, name: &OsStr) -> Result<Option<std::fs::File>> {
         let what = self.path.join(name);
-        let fd = match openat(self.fd.as_raw_fd(), &cstr(name)?, libc::O_PATH, 0) {
-            Ok(f) => f,
+        let node = match Node::at(self.fd.as_raw_fd(), &cstr(name)?, false) {
+            Ok(n) => n,
             Err(e) if e.raw_os_error() == Some(libc::ENOENT) => return Ok(None),
             Err(e) => return Err(symlink_error(e, &what)),
         };
-        reopen_read(&fd, &what).map(Some)
+        node.read(&what).map(Some)
     }
 
     /// The target of the symlink `name`.
@@ -587,21 +785,20 @@ impl Dir {
             CString::new(from.as_os_str().as_bytes()).map_err(std::io::Error::other)?,
             CString::new(name.as_bytes()).map_err(std::io::Error::other)?,
         );
-        // SAFETY: renameat2 with NUL-terminated names; NOREPLACE never
-        // replaces an entry that the sandbox put there.
-        let r = unsafe {
-            libc::renameat2(
-                libc::AT_FDCWD,
-                f.as_ptr(),
-                self.fd.as_raw_fd(),
-                n.as_ptr(),
-                libc::RENAME_NOREPLACE,
+        // Never replaces an entry that the sandbox put there.
+        rename_noreplace(libc::AT_FDCWD, &f, self.fd.as_raw_fd(), &n)
+    }
+
+    /// Swap the entries `a` and `b` of this folder in one step. Both must
+    /// exist. Symlinks are swapped as they are, never followed.
+    pub fn exchange(&self, a: &OsStr, b: &OsStr) -> Result<()> {
+        rename_exchange(self.fd.as_raw_fd(), &cstr(a)?, &cstr(b)?).with_context(|| {
+            format!(
+                "cannot swap {} and {}",
+                self.path.join(a).display(),
+                self.path.join(b).display()
             )
-        };
-        if r != 0 {
-            return Err(last_err());
-        }
-        Ok(())
+        })
     }
 
     /// What the entry `name` is, without following it. None when missing.
@@ -654,13 +851,12 @@ impl Dir {
     /// sandbox cannot point the host at another socket of the host.
     pub fn connect(&self, name: &OsStr) -> Result<std::os::unix::net::UnixStream> {
         let what = self.path.join(name);
-        let fd = openat(self.fd.as_raw_fd(), &cstr(name)?, libc::O_PATH, 0)
+        let node = Node::at(self.fd.as_raw_fd(), &cstr(name)?, false)
             .map_err(|e| symlink_error(e, &what))?;
-        if kind_of(&fstat(&fd)?) != Kind::Socket {
+        if node.kind() != Kind::Socket {
             bail!("{} is not a socket", what.display());
         }
-        std::os::unix::net::UnixStream::connect(fd_path(&fd))
-            .with_context(|| format!("cannot connect to {}", what.display()))
+        connect_node(&node, &what)
     }
 
     /// Remove `name` and everything below it. Symlinks are removed, never
@@ -673,12 +869,12 @@ impl Dir {
     fn remove_tree_at(&self, name: &OsStr, depth: usize) -> Result<()> {
         let n = cstr(name)?;
         let path = self.path.join(name);
-        let e = match openat(self.fd.as_raw_fd(), &n, libc::O_PATH, 0) {
+        let e = match Node::at(self.fd.as_raw_fd(), &n, false) {
             Ok(f) => f,
             Err(e) if e.raw_os_error() == Some(libc::ENOENT) => return Ok(()),
             Err(e) => return Err(symlink_error(e, &path)),
         };
-        let st = fstat(&e)?;
+        let st = e.st;
         if kind_of(&st) != Kind::Dir {
             return self.remove(name);
         }
@@ -686,16 +882,14 @@ impl Dir {
             bail!("{} is too deep to remove", path.display());
         }
         if st.st_mode & 0o700 != 0o700 {
-            // chmod of /proc/self/fd/N changes the open folder, not a path.
-            let p = CString::new(fd_path(&e)).expect("no NUL in a /proc path");
-            // SAFETY: chmod with a NUL-terminated path.
-            if unsafe { libc::chmod(p.as_ptr(), (st.st_mode & 0o7777) | 0o700) } != 0 {
-                return Err(anyhow::Error::from(last_err())
-                    .context(format!("cannot change {}", path.display())));
+            if let Err(err) = e.chmod((st.st_mode & 0o7777) | 0o700) {
+                return Err(
+                    anyhow::Error::from(err).context(format!("cannot change {}", path.display()))
+                );
             }
         }
         let sub = Dir {
-            fd: reopen_dir(&e).map_err(|e| symlink_error(e, &path))?,
+            fd: e.dir().map_err(|e| symlink_error(e, &path))?,
             path: path.clone(),
         };
         for child in list(&sub.fd)? {
@@ -719,7 +913,9 @@ impl Dir {
         let mut budget = max;
         if src.kind == Kind::Dir {
             let (d, name) = self.new_subdir(want)?;
-            let r = reopen_dir(&src.fd)
+            let r = src
+                .node
+                .dir()
                 .map_err(anyhow::Error::from)
                 .and_then(|s| d.copy_dir_fd(&s, &mut budget, 0));
             if let Err(e) = r {
@@ -728,9 +924,11 @@ impl Dir {
             }
             Ok(name)
         } else {
-            let mode = fstat(&src.fd)?.st_mode & 0o755;
+            let mode = mode_of(&fstat(src.node.fd()?)?) & 0o755;
             let (mut f, name) = self.new_file(want, mode | 0o600)?;
-            let r = reopen_read(&src.fd, Path::new(want))
+            let r = src
+                .node
+                .read(Path::new(want))
                 .and_then(|s| read_limited(s, budget, Path::new(want)))
                 .and_then(|b| Ok(f.write_all(&b)?));
             if let Err(e) = r {
@@ -749,19 +947,18 @@ impl Dir {
             bail!("{} is too deep to copy", self.path.display());
         }
         for name in list(src)? {
-            let e = openat(src.as_raw_fd(), &cstr(&name)?, libc::O_PATH, 0)?;
-            let st = fstat(&e)?;
-            match kind_of(&st) {
+            let e = Node::at(src.as_raw_fd(), &cstr(&name)?, false)?;
+            match e.kind() {
                 Kind::Dir => {
                     let sub = self.subdir(&name, true)?;
-                    sub.copy_dir_fd(&reopen_dir(&e)?, budget, depth + 1)?;
+                    sub.copy_dir_fd(&e.dir()?, budget, depth + 1)?;
                 }
                 Kind::File => {
                     let what = self.path.join(&name);
-                    let bytes = read_limited(reopen_read(&e, &what)?, *budget, &what)
+                    let bytes = read_limited(e.read(&what)?, *budget, &what)
                         .context("the copy is larger than the limit")?;
                     *budget -= bytes.len() as u64;
-                    self.write(&name, &bytes, (st.st_mode & 0o755) | 0o600)?;
+                    self.write(&name, &bytes, (mode_of(&e.st) & 0o755) | 0o600)?;
                 }
                 _ => {}
             }
@@ -969,221 +1166,4 @@ impl Dir {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::os::unix::fs::symlink;
-
-    #[test]
-    fn writes_and_reads_never_follow_symlinks() {
-        let t = tempfile::tempdir().unwrap();
-        let root = t.path().join("home");
-        let outside = t.path().join("outside");
-        std::fs::create_dir_all(&root).unwrap();
-        std::fs::create_dir_all(&outside).unwrap();
-        std::fs::write(outside.join("secret"), "host secret").unwrap();
-        let r = Root::open(&root).unwrap();
-
-        // A symlinked file is neither read nor written through.
-        symlink(outside.join("secret"), root.join("token")).unwrap();
-        assert!(r.read(Path::new("token"), MAX_READ).is_err());
-        r.write(Path::new("token"), b"new", 0o600).unwrap();
-        assert_eq!(
-            std::fs::read_to_string(outside.join("secret")).unwrap(),
-            "host secret"
-        );
-        assert!(!std::fs::symlink_metadata(root.join("token"))
-            .unwrap()
-            .file_type()
-            .is_symlink());
-
-        // A symlinked folder on the way is refused.
-        symlink(&outside, root.join(".config")).unwrap();
-        assert!(r
-            .write(Path::new(".config/x/token"), b"new", 0o600)
-            .is_err());
-        assert!(r.read(Path::new(".config/secret"), MAX_READ).is_err());
-        assert!(r.remove(Path::new(".config/secret")).is_err());
-        assert!(outside.join("secret").exists());
-        assert!(!outside.join("x").exists());
-
-        // Plain files work, and missing ones read as None.
-        r.write(Path::new("a/b/c.json"), b"{}", 0o600).unwrap();
-        assert_eq!(
-            r.read(Path::new("a/b/c.json"), MAX_READ).unwrap().unwrap(),
-            b"{}"
-        );
-        assert!(r.read(Path::new("a/missing"), MAX_READ).unwrap().is_none());
-        assert!(r.read(Path::new("nothere/x"), MAX_READ).unwrap().is_none());
-        assert!(r.write(Path::new("../escape"), b"x", 0o600).is_err());
-    }
-
-    #[test]
-    fn copy_in_and_new_names() {
-        let t = tempfile::tempdir().unwrap();
-        let root = t.path().join("p");
-        let src = t.path().join("src");
-        std::fs::create_dir_all(src.join("d")).unwrap();
-        std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(src.join("d/f"), "1").unwrap();
-        symlink("/etc/passwd", src.join("link")).unwrap();
-        let r = Root::open(&root).unwrap();
-        r.copy_in(&src, Path::new("x/y")).unwrap();
-        assert_eq!(std::fs::read_to_string(root.join("x/y/d/f")).unwrap(), "1");
-        assert!(!root.join("x/y/link").exists());
-        let d = r.dir(Path::new("x"), false).unwrap();
-        let (_, a) = d.new_file("shot.png", 0o600).unwrap();
-        let (_, b) = d.new_file("shot.png", 0o600).unwrap();
-        assert_eq!((a.as_str(), b.as_str()), ("shot.png", "shot-1.png"));
-        let (_, n) = d.new_subdir("y").unwrap();
-        assert_eq!(n, "y-1");
-    }
-
-    fn mkfifo(p: &Path) {
-        let c = CString::new(p.as_os_str().as_bytes()).unwrap();
-        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
-    }
-
-    #[test]
-    fn reads_never_open_fifos_or_devices() {
-        let t = tempfile::tempdir().unwrap();
-        let root = t.path();
-        mkfifo(&root.join("fifo"));
-        symlink("/dev/zero", root.join("zero")).unwrap();
-        std::fs::write(root.join("big"), vec![b'x'; 100]).unwrap();
-        let r = Root::open(root).unwrap();
-        // Each of these would block or never end if it were opened.
-        assert!(r.read(Path::new("fifo"), MAX_READ).is_err());
-        assert!(r.read(Path::new("zero"), MAX_READ).is_err());
-        assert!(read_path(&root.join("fifo"), true, MAX_READ).is_err());
-        assert!(read_path(&root.join("zero"), true, MAX_READ).is_err());
-        assert!(read_path(&root.join("zero"), false, MAX_READ).is_err());
-        assert!(read_path(&root.join("big"), false, 10).is_err());
-        assert_eq!(
-            read_path(&root.join("big"), false, 100)
-                .unwrap()
-                .unwrap()
-                .len(),
-            100
-        );
-        assert!(read_path(&root.join("missing"), false, 10)
-            .unwrap()
-            .is_none());
-        assert!(Source::open(&root.join("fifo")).is_err());
-        assert!(Source::open(&root.join("zero")).is_err());
-        let d = r.dir(Path::new(""), false).unwrap();
-        assert_eq!(d.kind(OsStr::new("fifo")).unwrap(), Some(Kind::Other));
-        assert_eq!(d.kind(OsStr::new("zero")).unwrap(), Some(Kind::Symlink));
-        assert_eq!(d.kind(OsStr::new("none")).unwrap(), None);
-    }
-
-    #[test]
-    fn remove_tree_never_follows_links_and_handles_read_only_folders() {
-        let t = tempfile::tempdir().unwrap();
-        let (root, outside) = (t.path().join("home"), t.path().join("outside"));
-        std::fs::create_dir_all(root.join("a/ro/deep")).unwrap();
-        std::fs::create_dir_all(outside.join("keyrings")).unwrap();
-        std::fs::write(outside.join("keyrings/login"), "secret").unwrap();
-        std::fs::write(root.join("a/ro/deep/f"), "x").unwrap();
-        symlink(&outside, root.join("a/ro/link")).unwrap();
-        mkfifo(&root.join("a/fifo"));
-        let ro = |p: &Path, m| std::fs::set_permissions(p, PermissionsExt::from_mode(m)).unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        ro(&root.join("a/ro/deep"), 0o500);
-        ro(&root.join("a/ro"), 0o000);
-        // A planted folder link on the way: nothing outside is removed.
-        symlink(&outside, root.join(".local")).unwrap();
-        let r = Root::open(&root).unwrap();
-        assert!(r.remove_tree(Path::new(".local/keyrings")).is_err());
-        assert!(outside.join("keyrings/login").exists());
-        // The link itself goes, its target stays.
-        r.remove_tree(Path::new(".local")).unwrap();
-        assert!(outside.join("keyrings/login").exists());
-        r.remove_tree(Path::new("a")).unwrap();
-        assert!(!root.join("a").exists());
-        assert!(outside.join("keyrings/login").exists());
-        r.remove_tree(Path::new("missing/x")).unwrap();
-        // By path, the last component is not followed either.
-        symlink(&outside, t.path().join("l")).unwrap();
-        remove_tree_path(&t.path().join("l")).unwrap();
-        assert!(outside.join("keyrings/login").exists());
-    }
-
-    #[test]
-    fn approved_paths_refuse_links_in_writable_folders() {
-        let t = tempfile::tempdir().unwrap();
-        let base = std::fs::canonicalize(t.path()).unwrap();
-        let (project, host) = (base.join("project"), base.join("host"));
-        std::fs::create_dir_all(project.join("vendor/lib")).unwrap();
-        std::fs::create_dir_all(host.join("docs")).unwrap();
-        let w = vec![project.clone()];
-        // Plain folders and `..` resolve as they are.
-        assert_eq!(
-            resolve_approved(&project.join("vendor/lib"), &w).unwrap(),
-            project.join("vendor/lib")
-        );
-        assert_eq!(
-            resolve_approved(&project.join("vendor/../vendor"), &w).unwrap(),
-            project.join("vendor")
-        );
-        // A host link (outside the writable folders) is followed.
-        symlink(&host, base.join("host-link")).unwrap();
-        assert_eq!(
-            resolve_approved(&base.join("host-link/docs"), &w).unwrap(),
-            host.join("docs")
-        );
-        // A link that the sandbox could plant in the project is refused,
-        // also when it is reached through a host link.
-        symlink(host.join("docs"), project.join("shared")).unwrap();
-        assert!(resolve_approved(&project.join("shared"), &w).is_err());
-        symlink(&project, base.join("p-link")).unwrap();
-        assert!(resolve_approved(&base.join("p-link/shared"), &w).is_err());
-        symlink(&host, project.join("vendor/up")).unwrap();
-        assert!(resolve_approved(&project.join("vendor/up/docs"), &w).is_err());
-        assert!(resolve_approved(&project.join("missing"), &w).is_err());
-    }
-
-    #[test]
-    fn sources_copy_what_was_opened() {
-        let t = tempfile::tempdir().unwrap();
-        let (src, dst) = (t.path().join("src"), t.path().join("dst"));
-        std::fs::create_dir_all(src.join("d")).unwrap();
-        std::fs::create_dir_all(&dst).unwrap();
-        std::fs::write(src.join("d/f"), "abc").unwrap();
-        std::fs::write(src.join("big"), vec![0u8; 50]).unwrap();
-        mkfifo(&src.join("d/fifo"));
-        symlink("/etc/passwd", src.join("d/link")).unwrap();
-        let s = Source::open(&src).unwrap();
-        assert!(s.is_dir());
-        assert_eq!(s.size(1000).unwrap(), 53);
-        // Renaming the folder after it was opened changes nothing.
-        std::fs::rename(&src, t.path().join("moved")).unwrap();
-        assert_eq!(s.real_path().unwrap(), t.path().join("moved"));
-        let d = Root::open(&dst).unwrap().dir(Path::new(""), false).unwrap();
-        let n = d.copy_source(&s, "src", 1000).unwrap();
-        assert_eq!(
-            std::fs::read_to_string(dst.join(&n).join("d/f")).unwrap(),
-            "abc"
-        );
-        assert!(std::fs::symlink_metadata(dst.join(&n).join("d/fifo")).is_err());
-        assert!(std::fs::symlink_metadata(dst.join(&n).join("d/link")).is_err());
-        // Over the limit: nothing stays behind.
-        assert!(d.copy_source(&s, "small", 10).is_err());
-        assert!(!dst.join("small").exists());
-    }
-
-    #[test]
-    fn connect_refuses_a_link_to_another_socket() {
-        let t = tempfile::tempdir().unwrap();
-        let _l = std::os::unix::net::UnixListener::bind(t.path().join("host.sock")).unwrap();
-        let _m = std::os::unix::net::UnixListener::bind(t.path().join("mine.sock")).unwrap();
-        symlink(t.path().join("host.sock"), t.path().join("planted.sock")).unwrap();
-        let d = Root::open(t.path())
-            .unwrap()
-            .dir(Path::new(""), false)
-            .unwrap();
-        assert!(d.connect(OsStr::new("planted.sock")).is_err());
-        assert!(d.connect(OsStr::new("mine.sock")).is_ok());
-        std::fs::write(t.path().join("file"), "").unwrap();
-        assert!(d.connect(OsStr::new("file")).is_err());
-    }
-}
+mod tests;

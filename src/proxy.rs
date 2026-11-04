@@ -413,10 +413,9 @@ pub fn local_addrs() -> Vec<IpAddr> {
 /// addresses that passed, so a direct connection uses exactly these and a
 /// second lookup (DNS rebinding) cannot change the target.
 fn check_target(cfg: &HostProxy, host: &str, port: u16) -> Result<Vec<std::net::SocketAddr>> {
-    let resolved: Vec<std::net::SocketAddr> = match (host, port).to_socket_addrs() {
-        Ok(it) => it.collect(),
-        // Names that only the upstream proxy can resolve are not local.
-        Err(_) => return Ok(vec![]),
+    let resolved: Vec<std::net::SocketAddr> = match target::resolve_target(host, port) {
+        Ok(v) => v,
+        Err(_) => return Ok(vec![]), // only an upstream proxy may resolve this name
     };
     let local: Vec<IpAddr> = local_addrs().into_iter().map(canonical).collect();
     for a in &resolved {
@@ -963,6 +962,7 @@ pub fn relay(listen: &str, socket: &Path, forward: &[u16], ready: Option<&Path>)
 }
 
 pub mod allow;
+mod target;
 pub(crate) mod tls;
 
 #[cfg(test)]

@@ -253,7 +253,7 @@ fn scan_worktrees(
         let repo = repos.get(&name(&sdir)).cloned();
         for path in subdirs(&sdir) {
             let mut w = Worktree {
-                running: running_projects.contains(path.as_path()),
+                running: crate::paths::any_same(running_projects.iter().copied(), &path),
                 path: path.clone(),
                 repo: None,
                 branch: None,
@@ -265,7 +265,7 @@ fn scan_worktrees(
                 let list = listed
                     .entry(repo.clone())
                     .or_insert_with(|| list_worktrees(repo));
-                if let Some(l) = list.iter().find(|l| l.path == path) {
+                if let Some(l) = crate::paths::find_same(&*list, &path, |l| &l.path) {
                     // The branch that paddock made, not the one the worktree
                     // is on now. Without a record, only a `paddock/` branch.
                     let branch = match recorded_worktree_branch(env, &path) {
@@ -467,7 +467,7 @@ pub fn scan(env: &HostEnv, host: &Host, with_sizes: bool) -> Inventory {
             Scratch {
                 harness: name(&path),
                 last_active: changed.max(started),
-                running: running_projects.contains(path.as_path()),
+                running: crate::paths::any_same(running_projects.iter().copied(), &path),
                 entries,
                 bytes: 0,
                 path,

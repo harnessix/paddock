@@ -9,6 +9,12 @@ use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
 
+mod mac_app;
+mod paths;
+pub use mac_app::{MacApp, ProfileMacos};
+pub use paths::is_system_path;
+use paths::{canonical, is_shim};
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Profile {
@@ -35,14 +41,14 @@ pub struct Profile {
     pub unverified: Vec<String>,
     /// Present for desktop apps, which `paddock app` runs.
     pub app: Option<AppProfile>,
-    /// The non-interactive mode that runs one task and exits. `paddock-host
-    /// spawn` starts a harness only with this command.
+    /// The one-task mode, the only command that `paddock-host spawn` starts.
     pub oneshot: Option<OneShot>,
-    /// The interactive command with a first prompt, for `paddock run
-    /// --detach`. Without it, paddock refuses `--detach`.
+    /// The first-prompt command of `paddock run --detach`, which needs it.
     pub detach: Option<Detach>,
     /// The hook that runs after a context compaction (compaction.rs).
     pub compaction: Option<crate::compaction::Hook>,
+    #[serde(default)]
+    pub macos: ProfileMacos,
     /// Where the harness reads hooks: paddock carries the user's hook
     /// entries there and checks their programs (hooks.rs).
     pub hooks: Option<crate::hooks::Files>,
@@ -139,6 +145,7 @@ pub struct AppProfile {
     /// open the folders they are given.
     #[serde(default)]
     pub open_roots: bool,
+    pub macos: Option<MacApp>, // The app on macOS, run with Seatbelt.
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -414,6 +421,17 @@ pub struct Setting {
     /// it already, for a hook beside the user's own hooks.
     #[serde(default)]
     pub append: bool,
+    /// `"no_pty"`: only for a Seatbelt run on macOS whose harness ignores
+    /// paddock's pty library (backend/seatbelt/run.rs `start_pty`).
+    #[serde(default)]
+    pub when: Option<When>,
+}
+
+/// The condition of a settings entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum When {
+    NoPty,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -592,6 +610,14 @@ impl<'a> HarnessFactory<'a> {
         self.profiles.get(name).map(|(p, _)| p)
     }
 
+    /// The file of a user profile, None for a built-in one.
+    pub fn user_file(&self, name: &str) -> Option<PathBuf> {
+        self.profiles
+            .get(name)
+            .map(|(_, s)| PathBuf::from(s))
+            .filter(|s| s.is_absolute())
+    }
+
     pub fn create(&self, name: &str) -> Result<Harness> {
         let (profile, source) = self.profiles.get(name).ok_or_else(|| {
             anyhow!(
@@ -666,31 +692,6 @@ impl<'a> HarnessFactory<'a> {
     }
 }
 
-/// A version-manager shim re-enters the manager, which is not mounted in the sandbox.
-fn is_shim(path: &Path) -> bool {
-    path.components()
-        .any(|c| matches!(c, Component::Normal(s) if s == "shims" || s == "command-wrappers"))
-}
-
-fn canonical(path: &Path) -> Result<PathBuf> {
-    std::fs::canonicalize(path).with_context(|| format!("cannot resolve {}", path.display()))
-}
-
-const SYSTEM_PREFIXES: &[&str] = &[
-    "/usr/",
-    "/bin/",
-    "/sbin/",
-    "/lib/",
-    "/lib64/",
-    "/opt/",
-    "/nix/store/",
-];
-
-pub fn is_system_path(p: &Path) -> bool {
-    let s = p.to_string_lossy();
-    SYSTEM_PREFIXES.iter().any(|pre| s.starts_with(pre))
-}
-
 /// Find what an executable needs from the host: its install directory and, for
 /// scripts, the interpreter named in the shebang line.
 pub fn runtime_closure(env: &HostEnv, exe: &Path) -> Result<(Vec<PathBuf>, Vec<PathBuf>)> {
@@ -729,7 +730,7 @@ pub fn runtime_closure(env: &HostEnv, exe: &Path) -> Result<(Vec<PathBuf>, Vec<P
     mounts.dedup();
     // Drop mounts that sit inside another mount.
     let all = mounts.clone();
-    mounts.retain(|m| !all.iter().any(|o| o != m && m.starts_with(o)));
+    mounts.retain(|m| !all.iter().any(|o| crate::paths::strictly_inside(m, o)));
     path_dirs.dedup();
     Ok((mounts, path_dirs))
 }

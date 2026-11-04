@@ -136,8 +136,23 @@ impl World {
         )
     }
 
+    /// The shared view socket. macOS keeps it in `/tmp/paddock-<uid>`,
+    /// named by a hash of the run directory as paddock sees it.
     fn sock(&self) -> PathBuf {
-        self.root.join("run/paddock/view.sock")
+        let uid = unsafe { libc::getuid() };
+        let mut runs = vec![self.root.join("run/paddock")];
+        if let Ok(real) = self.root.canonicalize() {
+            runs.push(real.join("run/paddock"));
+        }
+        let socks: Vec<PathBuf> = runs
+            .iter()
+            .map(|r| paddock::sockpath::socket_dir(r, uid, "").join("view.sock"))
+            .collect();
+        socks
+            .iter()
+            .find(|s| s.exists())
+            .unwrap_or(&socks[0])
+            .clone()
     }
 
     fn tmux(&self) -> Command {

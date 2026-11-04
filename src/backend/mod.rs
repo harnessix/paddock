@@ -3,7 +3,9 @@
 
 pub mod bwrap;
 pub mod docker;
+pub mod seatbelt;
 pub mod srt;
+pub mod vm;
 
 use crate::env::HostEnv;
 use crate::spec::{Network, SandboxSpec};
@@ -39,7 +41,11 @@ pub fn by_name(name: &str) -> Result<Box<dyn Backend>> {
         "docker" => Ok(Box::new(docker::Docker::new("docker"))),
         "podman" => Ok(Box::new(docker::Docker::new("podman"))),
         "srt" => Ok(Box::new(srt::Srt)),
-        _ => bail!("unknown backend '{name}': use auto, bwrap, docker, podman or srt"),
+        seatbelt::NAME => Ok(Box::new(seatbelt::run::SeatbeltRun)),
+        vm::NAME => Ok(Box::new(vm::Vm)),
+        _ => bail!(
+            "unknown backend '{name}': use auto, bwrap, docker, podman, srt, seatbelt or vm (macOS)"
+        ),
     }
 }
 
@@ -51,9 +57,12 @@ pub fn select(env: &HostEnv, spec: &SandboxSpec, wanted: &str) -> Result<Box<dyn
         return Ok(b);
     }
     let mut reasons = Vec::new();
-    // Only srt filters by domain, so allowlist mode picks it.
+    // Only srt filters by domain, so allowlist mode picks it. macOS has no
+    // bubblewrap: Seatbelt comes first there.
     let order: &[&str] = if spec.network == Network::Allowlist {
         &["srt"]
+    } else if cfg!(target_os = "macos") {
+        &[seatbelt::NAME, "podman", "docker"]
     } else {
         &["bwrap", "podman", "docker"]
     };
@@ -130,10 +139,114 @@ pub fn identity_files(spec: &SandboxSpec) -> (String, String) {
 /// Container backends in network mode 'egress' reach the network only through
 /// the host proxy on this socket.
 pub fn relay_socket(env: &HostEnv, backend: &str, spec: &SandboxSpec) -> Option<PathBuf> {
-    (matches!(backend, "docker" | "podman") && spec.network == Network::Egress)
-        .then(|| env.paddock_run().join(&spec.id).join("proxy.sock"))
+    if !(matches!(backend, "docker" | "podman") && spec.network == Network::Egress) {
+        return None;
+    }
+    crate::sockpath::host_socket(&env.paddock_run(), env.uid, &spec.id, "proxy.sock").ok()
 }
 
 pub fn needs_pasta(spec: &SandboxSpec) -> bool {
     spec.network == Network::Egress
+}
+
+/// The configuration of paddock's proxy for one sandbox: the host proxy
+/// variables, the allowed loopback ports and the logs.
+pub fn host_proxy_cfg(env: &HostEnv, spec: &SandboxSpec) -> crate::proxy::HostProxy {
+    let mut cfg = crate::proxy::HostProxy::from_vars(|k| env.var(k).map(str::to_string));
+    cfg.allow_loopback = spec.host_ports.iter().map(|(p, _)| *p).collect();
+    cfg.allow_lan = spec.lan;
+    cfg.boundary = Some(crate::boundary::proxy_sink(env, &spec.id));
+    cfg.egress = crate::monitor::egress::sink(env, &spec.id, &spec.harness, &spec.project);
+    for w in cfg.cleartext_warnings() {
+        log::warn!("{w}");
+    }
+    cfg
+}
+
+/// Start paddock's proxy for the backends that reach it from the host side:
+/// docker and podman in network mode egress (a socket), and seatbelt in
+/// network modes egress and api (a localhost port). seatbelt also starts
+/// its pty broker here.
+pub fn start_host_proxy(env: &HostEnv, spec: &mut SandboxSpec, backend: &str) -> Result<()> {
+    let ptys = if backend == seatbelt::NAME {
+        seatbelt::run::start_proxy(env, spec)?;
+        seatbelt::run::start_pty(env, spec)?
+    } else if backend == vm::NAME {
+        vm::start_proxy(env, spec)?;
+        true
+    } else {
+        if let Some(sock) = relay_socket(env, backend, spec) {
+            crate::proxy::serve(&sock, host_proxy_cfg(env, spec))?;
+        }
+        true
+    };
+    pty_settings(spec, ptys);
+    Ok(())
+}
+
+/// The settings for a harness without new ptys (`when = "no_pty"`) stay
+/// only when `ptys` is false.
+pub fn pty_settings(spec: &mut SandboxSpec, ptys: bool) {
+    spec.home_settings.retain(|s| !(ptys && s.no_pty));
+}
+
+/// Network mode api: each host that the proxy refuses goes into the audit log.
+pub fn api_refusals(env: &HostEnv, spec: &SandboxSpec) -> crate::proxy::allow::Refusals {
+    let (e1, spec) = (env.clone(), spec.clone());
+    crate::proxy::allow::Refusals::new(std::sync::Arc::new(move |host: &str, why: &str| {
+        crate::broker::audit_line(
+            &e1,
+            &serde_json::json!({
+                "time": crate::state::now(),
+                "sandbox": spec.id,
+                "harness": spec.harness,
+                "project": spec.project,
+                "capability": "network",
+                "detail": format!("api: {host}: {why}"),
+                "decision": "refused",
+            }),
+        );
+    }))
+}
+
+/// Backends that cannot move a host path (srt, seatbelt) leave the sockets
+/// and the pasture folders at their host paths. These variables name them.
+pub fn host_path_env(spec: &SandboxSpec, vars: &mut BTreeMap<String, String>) {
+    let s = |p: &std::path::Path| p.display().to_string();
+    if let Some(sock) = &spec.host_socket {
+        vars.insert("PADDOCK_HOST_SOCKET".into(), s(sock));
+    }
+    if let Some(sock) = &spec.kv_socket {
+        vars.insert("PADDOCK_KV_SOCKET".into(), s(sock));
+    }
+    if let Some(sock) = &spec.ssh_agent_socket {
+        vars.insert("SSH_AUTH_SOCK".into(), s(sock));
+    }
+    if let Some(dir) = &spec.devices {
+        vars.insert("PADDOCK_DEVICES".into(), s(dir));
+    }
+    for (mount, var) in [
+        (crate::pasture::MOUNT, "PADDOCK_PASTURE"),
+        (
+            crate::pasture::workbench::MOUNT,
+            crate::pasture::workbench::ENV,
+        ),
+        (
+            crate::pasture::ports::PORTS_MOUNT,
+            crate::pasture::ports::PORTS_ENV,
+        ),
+        (
+            crate::pasture::ports::OWN_MOUNT,
+            crate::pasture::ports::OWN_ENV,
+        ),
+    ] {
+        if let Some(src) = spec
+            .mounts
+            .iter()
+            .find(|m| m.dst == std::path::Path::new(mount))
+            .and_then(|m| m.src.as_ref())
+        {
+            vars.insert(var.into(), s(src));
+        }
+    }
 }

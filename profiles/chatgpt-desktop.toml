@@ -19,6 +19,12 @@ display_name = "ChatGPT"
 icon = "chatgpt"
 schemes = ["codex"]
 
+# On macOS the ChatGPT app uses Apple's App Sandbox, which cannot run inside
+# Seatbelt. paddock refuses it there: Apple already confines it.
+[app.macos]
+bundles = ["/Applications/ChatGPT.app"]
+app_sandbox = true
+
 # OpenAI documents no telemetry setting for the desktop app.
 # https://help.openai.com/en/articles/7730893-data-controls-faq
 [privacy.training]

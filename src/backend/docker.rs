@@ -413,7 +413,7 @@ impl Backend for Docker {
         }
         a.extend(["--env-file".into(), p(&env_f)]);
 
-        let proxy_sock = run_dir.join("proxy.sock");
+        let proxy_sock = crate::sockpath::named(env, &spec.id, "proxy.sock")?;
         let mut mounts = vec![
             mount_arg("bind", Some(&passwd_f), Path::new("/etc/passwd"), true)?,
             mount_arg("bind", Some(&group_f), Path::new("/etc/group"), true)?,

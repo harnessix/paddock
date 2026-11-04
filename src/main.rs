@@ -54,23 +54,33 @@ fn real_main() -> Result<i32> {
     {
         return cli::run::relay(listen, socket, forward, ready_file.as_deref());
     }
+    // In the guest: before HostEnv::detect, as root without a home.
+    let cmd = match cli.cmd {
+        Cmd::VmAgent(a) => return cli::vm_run::vm_agent(a),
+        other => other,
+    };
     let env = HostEnv::detect()?;
     paddock::privfs::secure_roots(&env);
     // A harness start: bring the menu and the shims up to date in the
     // background when harnesses or paddock changed.
     if matches!(
-        cli.cmd,
+        cmd,
         Cmd::Run(_) | Cmd::External(_) | Cmd::Wrap { .. } | Cmd::Shell(_)
     ) {
         paddock::refresh::spawn_if_changed(&env);
     }
-    match cli.cmd {
+    match cmd {
         Cmd::Relay { .. }
         | Cmd::Host { .. }
         | Cmd::Inbound
         | Cmd::Portal
         | Cmd::DetachRun { .. } => unreachable!(),
         Cmd::SpawnChild { job } => cli::run::spawn_child(&env, job),
+        Cmd::Vm { cmd } => cli::vm::run(&env, cmd),
+        Cmd::VmAgent(_) => unreachable!(),
+        Cmd::VmAttach { job } => cli::vm_run::vm_attach(&env, job),
+        Cmd::VmServe { project } => cli::vm_run::vm_serve(&env, project),
+        Cmd::Mark => paddock::mark::main(&env),
         Cmd::Approvals { json, cmd } => cli::approver::approvals(&env, json, cmd),
         Cmd::Worktree { cmd } => cli::worktree::run(&env, cmd),
         Cmd::Spec { cmd } => cli::spec::run(&env, cmd),

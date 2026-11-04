@@ -782,8 +782,8 @@ fn the_prompt_never_reaches_argv_or_the_audit_log_and_results_reach_the_inbox() 
     // The fake child records its arguments and its command line as the
     // kernel shows them to other users, then writes a result.
     let script = format!(
-        "printf '%s\\n' \"$0\" \"$@\" > {out}; tr '\\0' ' ' < /proc/$$/cmdline >> {out}; \
-         d=$(dirname \"$1\"); stat -c %a \"$d/prompt.md\" >> {out}; \
+        "printf '%s\\n' \"$0\" \"$@\" > {out}; if [ -r /proc/$$/cmdline ]; then tr '\\0' ' ' < /proc/$$/cmdline >> {out}; fi; \
+         d=$(dirname \"$1\"); stat -c %a \"$d/prompt.md\" >> {out} 2>/dev/null || stat -f %Lp \"$d/prompt.md\" >> {out}; \
          printf '{{\"exit_code\":0,\"branch\":\"b\",\"base\":\"c\",\"commits\":2,\"uncommitted\":0,\"stat\":\" a | 1 +\",\"output\":\"all done\",\"output_truncated\":false,\"started\":1,\"ended\":2}}' > \"$d/result.json\"",
         out = seen.display()
     );

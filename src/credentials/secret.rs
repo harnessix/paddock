@@ -294,6 +294,10 @@ pub(crate) mod tests {
             .expect("small secrets should share a page");
         let keep = all.swap_remove(i);
         drop(all);
+        if std::fs::read_to_string("/proc/self/status").is_err() {
+            eprintln!("skipped: /proc/self/status is not available here");
+            return;
+        }
         assert!(vm_lck() > 0, "the page of a live secret was unlocked");
         drop(keep);
     }

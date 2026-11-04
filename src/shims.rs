@@ -4,7 +4,9 @@
 //! - One script, `shims.sh` in paddock's data directory, defines a shell
 //!   function for each command of each installed terminal harness.
 //! - One marked line in `~/.bashrc` and `~/.zshrc` (where they exist) sources
-//!   that script, only if it is still there.
+//!   that script, only if it is still there. On macOS, where zsh is the
+//!   default shell, install creates `~/.zshrc` when there is none, and
+//!   remove deletes it again when nothing else is in it.
 //!
 //! A function, not a PATH entry: version managers such as mise put their own
 //! directories first on PATH at every prompt, but a function always wins.
@@ -16,6 +18,7 @@
 
 use crate::env::HostEnv;
 use crate::launchers::{self, Kind};
+use crate::onboard::Os;
 use crate::profile::HarnessFactory;
 use anyhow::Result;
 use std::path::{Path, PathBuf};
@@ -140,18 +143,9 @@ pub fn install(env: &HostEnv) -> Result<Report> {
     let file = script_file(env);
     crate::privfs::write(&file, script(&shims, &paddock))?;
     let line = rc_line(env);
-    let rcs = rc_files(env);
+    let rcs = crate::onboard::rc_targets(&env.home, Os::HOST);
     for rc in &rcs {
-        let text = std::fs::read_to_string(rc)?;
-        let mut new = strip_line(&text);
-        if !new.is_empty() && !new.ends_with('\n') {
-            new.push('\n');
-        }
-        new.push_str(&line);
-        new.push('\n');
-        if new != text {
-            std::fs::write(rc, new)?;
-        }
+        add_line(rc, &line)?;
     }
     Ok(Report {
         shims,
@@ -159,13 +153,41 @@ pub fn install(env: &HostEnv) -> Result<Report> {
     })
 }
 
+/// Add the marked line to `rc`, once. A missing `rc` is created (a new
+/// `~/.zshrc` on macOS).
+fn add_line(rc: &Path, line: &str) -> Result<()> {
+    let text = match std::fs::read_to_string(rc) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+        r => r?,
+    };
+    let mut new = strip_line(&text);
+    if !new.is_empty() && !new.ends_with('\n') {
+        new.push('\n');
+    }
+    new.push_str(line);
+    new.push('\n');
+    if new != text {
+        std::fs::write(rc, new)?;
+    }
+    Ok(())
+}
+
 pub fn remove(env: &HostEnv) -> Result<Vec<PathBuf>> {
+    remove_on(env, Os::HOST)
+}
+
+fn remove_on(env: &HostEnv, os: Os) -> Result<Vec<PathBuf>> {
     let mut removed = Vec::new();
     for rc in rc_files(env) {
         let text = std::fs::read_to_string(&rc)?;
         let clean = strip_line(&text);
         if clean != text {
-            std::fs::write(&rc, clean)?;
+            // A ~/.zshrc that install created on macOS goes away again.
+            if crate::onboard::removes_empty_rc(&rc, &clean, os) {
+                std::fs::remove_file(&rc)?;
+            } else {
+                std::fs::write(&rc, clean)?;
+            }
             removed.push(rc);
         }
     }
@@ -258,5 +280,36 @@ mod tests {
         remove(&e).unwrap();
         assert_eq!(std::fs::read_to_string(&rc).unwrap(), original);
         assert!(!installed(&e));
+    }
+
+    #[test]
+    fn a_zshrc_that_macos_install_creates_goes_away_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let e = env(dir.path());
+        let line = rc_line(&e);
+        for rc in crate::onboard::rc_targets(dir.path(), Os::Macos) {
+            add_line(&rc, &line).unwrap();
+        }
+        let zshrc = dir.path().join(".zshrc");
+        assert_eq!(
+            std::fs::read_to_string(&zshrc).unwrap(),
+            format!("{line}\n")
+        );
+        remove_on(&e, Os::Macos).unwrap();
+        assert!(!zshrc.exists());
+
+        // A .zshrc with the user's own lines keeps them, and stays.
+        std::fs::write(&zshrc, "export EDITOR=vi").unwrap();
+        add_line(&zshrc, &line).unwrap();
+        add_line(&zshrc, &line).unwrap();
+        remove_on(&e, Os::Macos).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(&zshrc).unwrap(),
+            "export EDITOR=vi\n"
+        );
+        // Linux never deletes an rc file.
+        std::fs::write(&zshrc, format!("{line}\n")).unwrap();
+        remove_on(&e, Os::Linux).unwrap();
+        assert_eq!(std::fs::read_to_string(&zshrc).unwrap(), "");
     }
 }

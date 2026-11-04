@@ -88,11 +88,8 @@ fn refuses_other_addresses_of_this_host() {
     assert_eq!(connect(&sock, "0.0.0.0:9").0, 403);
 }
 
-#[test]
-fn unreachable_target_gives_502() {
-    let (_d, sock) = start(HostProxy::default());
-    assert_eq!(connect(&sock, "no-such-host.invalid:443").0, 502);
-}
+#[path = "names.rs"]
+mod names;
 
 #[test]
 fn forwards_plain_http_in_origin_form() {
@@ -183,9 +180,12 @@ fn no_proxy_goes_direct() {
     assert!(
         cfg.bypass("x.bypass.invalid") && cfg.bypass("10.1.2.3") && !cfg.bypass("api.example.com")
     );
+    if !names::names_fail_to_resolve() {
+        return;
+    }
     let (_d, sock) = start(cfg);
     // Direct: the name does not resolve, so 502, and the upstream sees nothing.
-    assert_eq!(connect(&sock, "x.bypass.invalid:443").0, 502);
+    assert_eq!(connect(&sock, "x.bypass.invalid:9").0, 502);
     assert!(log.lock().unwrap().is_empty());
 }
 

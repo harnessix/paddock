@@ -1,7 +1,7 @@
 use super::*;
 use std::collections::BTreeMap;
 use std::io::Read;
-use std::os::fd::{FromRawFd, OwnedFd};
+use std::os::fd::OwnedFd;
 
 fn env_in(t: &Path, extra: &[(&str, &str)]) -> HostEnv {
     let run = t.join("run");
@@ -40,9 +40,8 @@ const HARNESS: &str = "printf 'out one\\n'; printf 'err one\\n' >&2; printf '\\0
                        sleep 0.3; printf 'out two' ; printf 'err two' >&2; exit 7";
 
 fn pipe() -> (OwnedFd, OwnedFd) {
-    let mut fds = [0; 2];
-    assert_eq!(unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) }, 0);
-    unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) }
+    let (r, w) = std::io::pipe().expect("pipe");
+    (r.into(), w.into())
 }
 
 /// Run the fake harness with the view: its streams go through a `Tee` into
@@ -111,7 +110,14 @@ fn the_caller_sees_the_same_output_and_exit_code_with_and_without_tmux() {
         eprintln!("skipped: tmux is not installed");
         return;
     };
-    assert!(tmux.sock.starts_with(t2.path()));
+    // macOS keeps sockets short, under /tmp/paddock-<uid> (sockpath.rs).
+    assert!(
+        tmux.sock.starts_with(t2.path())
+            || (cfg!(target_os = "macos")
+                && tmux.sock.to_string_lossy().starts_with("/tmp/paddock-")),
+        "{}",
+        tmux.sock.display()
+    );
     let _server = Server(Some(tmux.clone()));
     let (o, e, code, session) = run_with_view(&on, "sbtmux");
     assert!(session, "the tmux session did not start");
@@ -285,8 +291,18 @@ fn view_opens_tmux_or_the_log_in_the_right_terminal() {
         ["foot", "-e", "tail", "-n", "+1", "-f", "--", &log]
     );
     o.terminal = None;
-    let e = o.command("sbview", false).unwrap_err().to_string();
-    assert!(e.contains("xdg-terminal-exec"), "{e}");
+    if cfg!(target_os = "macos") {
+        // macOS opens a window of Terminal with osascript.
+        let argv = s(o.command("sbview", false).unwrap());
+        assert_eq!(argv[0], crate::onboard::OSASCRIPT);
+        assert_eq!(
+            argv[argv.len() - 6..],
+            ["tail", "-n", "+1", "-f", "--", &log]
+        );
+    } else {
+        let e = o.command("sbview", false).unwrap_err().to_string();
+        assert!(e.contains("xdg-terminal-exec"), "{e}");
+    }
 
     // A tmux session: attach, read-only unless --write.
     let Some(exe) = tmux_exe else {

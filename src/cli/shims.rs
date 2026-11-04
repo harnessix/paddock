@@ -1,6 +1,7 @@
 use anyhow::{bail, Result};
 use clap::Subcommand;
 use paddock::env::HostEnv;
+use paddock::onboard::{self, Feature, Os};
 
 #[derive(Subcommand)]
 pub(crate) enum ShimsCmd {
@@ -60,6 +61,7 @@ pub(crate) fn run(env: &HostEnv, cmd: ShimsCmd) -> Result<i32> {
         ShimsCmd::LaunchTui { args } => paddock::omarchy::launch_tui(env, &args),
         ShimsCmd::Install { scope } if scope == "omarchy-agent" => {
             use paddock::omarchy;
+            onboard::refuse(Feature::OmarchyScope)?;
             let r = omarchy::install(env)?;
             println!(
                 "Added the omarchy-agent wrapper to {} (one marked block).",
@@ -97,18 +99,22 @@ pub(crate) fn run(env: &HostEnv, cmd: ShimsCmd) -> Result<i32> {
                 ShimsCmd::Exec { .. } | ShimsCmd::LaunchTui { .. } => unreachable!(),
                 ShimsCmd::List => {
                     let s = paddock::omarchy::status(env);
-                    println!(
-                        "scope omarchy-agent: {}",
-                        if s.on() {
-                            "on, agents that omarchy-agent starts run in a sandbox"
-                        } else if s.user_wrapper {
-                            "off, your mise config has its own wrapper for omarchy-agent or omarchy-agent-usage-update"
-                        } else if s.block || s.shims {
-                            "incomplete, run paddock shims install --scope omarchy-agent again"
-                        } else {
-                            "off"
-                        }
-                    );
+                    if let Some(line) = onboard::refusal(Os::HOST, Feature::OmarchyScope) {
+                        println!("scope omarchy-agent: off, {line}");
+                    } else {
+                        println!(
+                            "scope omarchy-agent: {}",
+                            if s.on() {
+                                "on, agents that omarchy-agent starts run in a sandbox"
+                            } else if s.user_wrapper {
+                                "off, your mise config has its own wrapper for omarchy-agent or omarchy-agent-usage-update"
+                            } else if s.block || s.shims {
+                                "incomplete, run paddock shims install --scope omarchy-agent again"
+                            } else {
+                                "off"
+                            }
+                        );
+                    }
                     if s.on() {
                         println!(
                             "  {}: wrapped, the agents panel's usage scripts run in the usage box",
@@ -150,6 +156,10 @@ pub(crate) fn run(env: &HostEnv, cmd: ShimsCmd) -> Result<i32> {
                     for p in shims::remove(env)? {
                         println!("removed {}", p.display());
                     }
+                    if Os::HOST == Os::Macos {
+                        println!("Open a new shell, or run `unset -f` on the commands, to stop using them in this shell.");
+                        return Ok(0);
+                    }
                     let (removed, reshim) = paddock::omarchy::remove(env)?;
                     for p in removed
                         .into_iter()
@@ -170,6 +180,7 @@ pub(crate) fn run(env: &HostEnv, cmd: ShimsCmd) -> Result<i32> {
 
 pub(crate) fn launchers(env: &HostEnv, cmd: LaunchersCmd) -> Result<i32> {
     use paddock::launchers::{self, Kind};
+    onboard::refuse(Feature::Launchers)?;
     match cmd {
         LaunchersCmd::List => {
             for e in launchers::detect(env)? {

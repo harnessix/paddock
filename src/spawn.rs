@@ -990,7 +990,8 @@ impl Spawner {
             .stdin(std::process::Stdio::null())
             .stdout(log.try_clone()?)
             .stderr(log);
-        // SAFETY: only async-signal-safe calls between fork and exec.
+        // SAFETY: setsid is async-signal-safe. The parent-death arming
+        // returns before exec. Linux calls prctl. macOS forks a watcher.
         unsafe {
             cmd.pre_exec(|| {
                 // Its own session: a Ctrl-C in the parent's terminal does
@@ -998,8 +999,7 @@ impl Spawner {
                 libc::setsid();
                 // The child ends when the parent's paddock ends, even when
                 // that one is killed.
-                libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
-                Ok(())
+                crate::platform::arm_parent_death_signal()
             });
         }
         Ok(cmd)
@@ -1755,19 +1755,8 @@ pub fn snapshot_commit(dir: &Path, index: &Path, id: &str) -> Result<String> {
     Ok(c.trim().to_string())
 }
 
-/// Turn every writable mount below one of `roots` into a read-only one.
-pub fn make_read_only(spec: &mut crate::spec::SandboxSpec, roots: &[PathBuf]) {
-    for m in spec.mounts.iter_mut() {
-        let under = m
-            .src
-            .as_ref()
-            .is_some_and(|s| roots.iter().any(|r| s.starts_with(r)));
-        if m.kind == MountKind::Rw && under {
-            m.kind = MountKind::Ro;
-            m.origin = format!("{} (read-only: reviewer)", m.origin);
-        }
-    }
-}
+mod readonly;
+pub use readonly::make_read_only;
 
 /// The chain line on an approval card for a request from a child.
 pub fn chain_text(chain: &[String]) -> Option<String> {

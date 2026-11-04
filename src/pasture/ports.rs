@@ -236,6 +236,9 @@ pub fn splice<A: Stream, B: Stream>(a: A, b: B) {
 /// The work for one accepted connection.
 type Job = Box<dyn FnOnce() + Send>;
 
+#[path = "accept.rs"]
+mod ready;
+
 /// A listener that runs in its own thread until [`Listener::stop`].
 pub struct Listener {
     stop: Arc<AtomicBool>,
@@ -254,11 +257,10 @@ impl Listener {
         let stop = Arc::new(AtomicBool::new(false));
         let s2 = stop.clone();
         let thread = std::thread::spawn(move || {
-            while !s2.load(Ordering::SeqCst) {
+            while ready::ready(fd, &s2) {
                 match accept(&l) {
-                    Ok(job) => {
-                        std::thread::spawn(job);
-                    }
+                    Ok(job) if !s2.load(Ordering::SeqCst) => drop(std::thread::spawn(job)),
+                    Ok(_) => break,
                     Err(_) if s2.load(Ordering::SeqCst) => break,
                     Err(_) => std::thread::sleep(Duration::from_millis(100)),
                 }
@@ -286,8 +288,10 @@ impl Listener {
             move |l: &UnixListener| {
                 let (c, _) = l.accept()?;
                 Ok(Box::new(move || {
-                    if let Ok(t) = TcpStream::connect(("127.0.0.1", port)) {
-                        splice(c, t);
+                    let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
+                    match TcpStream::connect_timeout(&addr, Duration::from_secs(2)) {
+                        Ok(t) => splice(c, t),
+                        Err(_) => c.shut(Shutdown::Both),
                     }
                 }) as Job)
             },
@@ -303,10 +307,9 @@ impl Listener {
         Ok(Self::run(l, fd, None, move |l: &TcpListener| {
             let (c, _) = l.accept()?;
             let path = path.clone();
-            Ok(Box::new(move || {
-                if let Ok(u) = UnixStream::connect(&path) {
-                    splice(c, u);
-                }
+            Ok(Box::new(move || match UnixStream::connect(&path) {
+                Ok(u) => splice(c, u),
+                Err(_) => c.shut(Shutdown::Both),
             }) as Job)
         }))
     }
@@ -314,9 +317,8 @@ impl Listener {
     /// Stop accepting. Open connections go on until they close. A socket
     /// file goes, unless another member bound a new one there.
     pub fn stop(mut self) {
+        // The accept thread sees the flag within one tick.
         self.stop.store(true, Ordering::SeqCst);
-        // Wakes the blocked accept on Linux; the thread then drops the
-        // listener.
         unsafe { libc::shutdown(self.fd, libc::SHUT_RDWR) };
         if let Some(t) = self.thread.take() {
             let _ = t.join();

@@ -151,3 +151,19 @@ fn model_and_effort_args_name_their_placeholder_once() {
         }
     }
 }
+
+#[test]
+fn a_link_to_a_multi_call_program_keeps_its_name() {
+    let t = tempfile::tempdir().unwrap();
+    let root = t.path().canonicalize().unwrap();
+    std::fs::write(root.join("busybox"), "").unwrap();
+    std::fs::write(root.join("tool"), "").unwrap();
+    std::os::unix::fs::symlink(root.join("busybox"), root.join("sh")).unwrap();
+    std::os::unix::fs::symlink(root.join("tool"), root.join("t")).unwrap();
+    assert_eq!(canonical(&root.join("sh")).unwrap(), root.join("sh"));
+    assert_eq!(
+        canonical(&root.join("busybox")).unwrap(),
+        root.join("busybox")
+    );
+    assert_eq!(canonical(&root.join("t")).unwrap(), root.join("tool"));
+}

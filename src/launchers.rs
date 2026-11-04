@@ -114,6 +114,8 @@ pub fn detect(env: &HostEnv) -> Result<Vec<Entry>> {
             }
             Some(a) => {
                 let installed = match &a.flatpak {
+                    // Flatpak is Linux only.
+                    Some(_) if !cfg!(target_os = "linux") => false,
                     Some(id) => Command::new("flatpak")
                         .args(["info", "--show-ref", id])
                         .output()

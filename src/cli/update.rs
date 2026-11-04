@@ -7,6 +7,13 @@ pub(crate) fn update_cmd(env: &HostEnv, check: bool, yes: bool) -> Result<i32> {
     update::refuse_in_sandbox(env, "paddock update")?;
     let gh = update::GitHub::from_env(env, std::time::Duration::from_secs(30));
     let rel = gh.latest()?;
+    // macOS: no release binary to install, and no Omarchy plugin.
+    if let Some(line) = paddock::onboard::refusal(
+        paddock::onboard::Os::HOST,
+        paddock::onboard::Feature::UpdateBinary,
+    ) {
+        return Ok(mac_update(&rel.version, check, line));
+    }
     let target = update::current_binary()?;
     let owner = update::package_owner(env, &target);
     let plugin = update::plugin_installed(env) == Some(true);
@@ -77,6 +84,48 @@ pub(crate) fn update_cmd(env: &HostEnv, check: bool, yes: bool) -> Result<i32> {
     Ok(code)
 }
 
+/// `paddock update` on macOS: says whether a newer release is out and how
+/// to build it. It never downloads a binary.
+fn mac_update(latest: &str, check: bool, line: &str) -> i32 {
+    use paddock::update;
+    if !update::is_newer(latest, update::CURRENT) {
+        println!("paddock {} is the latest release.", update::CURRENT);
+        return 0;
+    }
+    println!("paddock {latest} is out; this is {}.", update::CURRENT);
+    let brew = update::current_binary().is_ok_and(|p| homebrew_owned(&p));
+    if brew {
+        println!("Homebrew installed paddock. Update it with: brew upgrade paddock");
+    } else {
+        println!("{line}");
+    }
+    i32::from(!check)
+}
+
 pub(crate) fn run(env: &HostEnv, check: bool, yes: bool) -> Result<i32> {
     update_cmd(env, check, yes)
+}
+
+/// True when Homebrew installed `path`: the binary is in a `Cellar` folder,
+/// such as /opt/homebrew/Cellar/paddock/0.2.0/bin/paddock.
+fn homebrew_owned(path: &std::path::Path) -> bool {
+    path.components().any(|c| c.as_os_str() == "Cellar")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::homebrew_owned;
+    use std::path::Path;
+
+    #[test]
+    fn a_binary_in_a_homebrew_cellar_is_homebrew_owned() {
+        assert!(homebrew_owned(Path::new(
+            "/opt/homebrew/Cellar/paddock/0.2.0/bin/paddock"
+        )));
+        assert!(homebrew_owned(Path::new(
+            "/usr/local/Cellar/paddock/0.2.0/bin/paddock"
+        )));
+        assert!(!homebrew_owned(Path::new("/opt/homebrew/bin/paddock")));
+        assert!(!homebrew_owned(Path::new("/Users/a/.cargo/bin/paddock")));
+    }
 }

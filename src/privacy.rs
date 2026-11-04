@@ -118,6 +118,7 @@ pub fn push_settings(
             origin: origin.to_string(),
             append: s.append,
             codex_trust: None,
+            no_pty: s.when == Some(crate::profile::When::NoPty),
         });
     }
     Ok(())
@@ -360,6 +361,7 @@ mod tests {
             origin: "test".into(),
             append: false,
             codex_trust: None,
+            no_pty: false,
         }
     }
 

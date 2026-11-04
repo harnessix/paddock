@@ -142,7 +142,9 @@ fn setup(harness: &str) -> Setup {
         task_file: Some("/home/demo/.paddock-spawn/x-spawn-abc/prompt.md".into()),
     };
     let _ = broker.kv.set(Arc::new(child));
-    let sock = root.join("run/host.sock");
+    // macOS keeps host sockets in /tmp/paddock-<uid>: the temp folder is too long.
+    let uid = unsafe { libc::getuid() };
+    let sock = paddock::sockpath::host_socket(&root.join("run"), uid, "", "host.sock").unwrap();
     paddock::broker::serve(&sock, Arc::new(broker)).unwrap();
 
     // `paddock-host` as the sandbox has it.

@@ -124,6 +124,56 @@ omarchy plugin add https://github.com/harnessix/omarchy-paddock --enable
 
 `omarchy plugin add` always installs the widget from the default branch, because it takes no tag. `paddock update` updates the widget together with the command.
 
+### macOS
+
+paddock runs on Apple silicon Macs. Install it with Homebrew, or build it from a clone.
+
+With Homebrew, add the paddock tap, then install paddock and tmux:
+
+```sh
+brew tap harnessix/paddock
+brew install paddock tmux
+```
+
+The formula builds paddock from the source of the release, signs `paddock-vm` for the VM backend, and on Apple silicon installs the guest files of the VM. `brew upgrade paddock` installs a newer release. Then continue with step 4.
+
+To build from a clone:
+
+1. Install the command line tools. They give `git`, and `cc` builds the pty library of paddock:
+
+   ```sh
+   xcode-select --install
+   ```
+
+2. Install Rust with rustup. Then, in the root of a clone of this repository, build and install paddock:
+
+   ```sh
+   cargo install --path .
+   ```
+
+3. Install tmux for detached runs and `paddock view`: `brew install tmux`.
+
+4. Run the setup and the checks, and start an agent in a project:
+
+   ```sh
+   paddock setup
+   paddock doctor
+   paddock codex ~/src/api
+   ```
+
+The shell step of `paddock setup` adds one marked line to `~/.zshrc`, and creates the file when there is none. Then `codex` in a new shell starts in a sandbox. `paddock shims remove` takes the line out, and deletes `~/.zshrc` when nothing else is in it.
+
+On macOS the agent runs under Seatbelt (`sandbox-exec`). It writes the project and its own sandbox home, reads the system, and cannot read your real home. Its network goes through the proxy of paddock. [Terminal runs on macOS](#terminal-runs-on-macos) has the details.
+
+These parts are Linux only. On macOS, the command refuses with one line, or `paddock setup` skips the step:
+
+- `paddock launchers` (XDG desktop entries).
+- `paddock shims install --scope omarchy-agent` and the Omarchy bar widget.
+- `paddock update` replaces no binary. It says when a release is out. Then you run `brew upgrade paddock`, or you update the clone and run `cargo install --path .` again.
+- The devices of `/dev/paddock`, and the systemd units of `paddock gateway install`.
+
+`paddock setup` names the missing programs with the command that installs them, and installs nothing itself. Notifications use `osascript`. `paddock view` opens a Terminal window when `$TERMINAL` is not set.
+
 The widget lists running sandboxes with their backend, network, display and login. Press Enter on a sandbox to go to the terminal that runs it (Hyprland). The row actions open the project folder, copy its path, show the display window of a sandbox in `window` mode, and stop the sandbox after a second press. The New button starts a sandbox in two steps: pick a recent project, then a harness that is installed on this machine, and paddock opens a terminal that runs it. The Checks button runs `paddock doctor`. Every action has a key, and the panel footer lists them.
 
 ### Update
@@ -1716,6 +1766,103 @@ Known limits:
 - To add a folder, restart the app. A running sandbox cannot get new mounts.
 - Custom links (`claude://`, `codex://`, `vscode://`) reach the app in its sandbox after `paddock app install`, which makes paddock their handler. `paddock app uninstall` gives them back to the old handler. A login page that the app opens through paddock and that returns to `http://127.0.0.1:PORT` reaches the app: paddock opens that one port on 127.0.0.1 of your machine for ten minutes, while the app listens on it. If an app opens its login page in another way, set `[apps.NAME] login_ports = true` in `~/.config/paddock/config.toml`. Then all the ports the app listens on are open on 127.0.0.1 of your machine while it listens, for any local program.
 
+### App mode on macOS
+
+On macOS, `paddock app run vscode ~/src/api` runs the app bundle under Seatbelt (`sandbox-exec`) instead of bubblewrap. paddock knows `vscode` (`/Applications/Visual Studio Code.app`) and `claude-desktop` (`/Applications/Claude.app`).
+
+What the sandbox gives the app:
+
+- The workspace folders and the sandbox home are writable. The app bundle and the system folders are read-only. Everything else is denied, also your real home.
+- `HOME` and `CFFIXED_USER_HOME` point at the sandbox home, so the app's Application Support and preferences live there.
+- The app connects only to localhost. paddock's proxy listens there and passes its traffic on, with the same rules as network mode `egress` (or `api`). Electron apps get `--proxy-server` and the proxy variables.
+- Electron apps get `--no-sandbox`, because Chromium's own sandbox cannot start inside Seatbelt. They get `--use-mock-keychain`, so they never read or write your Keychain, and a data folder of their own (`--user-data-dir`) in the sandbox home.
+- Hidden files such as `.env` stay denied inside the workspace folders.
+
+Every window of an app sandbox carries a mark, so that you can tell it from your other windows:
+
+- A thin frame around the window. Sage means that traffic goes only through paddock's proxy (network `egress` or `api`) or that there is no network. Amber means a wider network.
+- A badge such as `paddock · vscode · egress · 2h` on the top right corner. It shows for a few seconds when the window gets focus, and while the pointer is near the corner. Click it for the sandbox details.
+- A shield in the menu bar with the number of protected windows. Its menu lists each window. Choose one to bring it to the front.
+
+paddock starts the marks with the first app sandbox, and they end with the last one. The marks need no permission. If you want the menu to raise the exact window instead of the app, open System Settings, then Privacy & Security, then Accessibility, and turn on the app that runs paddock (your terminal app). To turn the marks off, set `PADDOCK_MARK=0`. Terminal windows of agent runs get no mark yet.
+
+The limits:
+
+- Denied, not absent. The names of files in your real home stay visible (the app can `stat` them), but the app cannot read or write them.
+- Apps that use Apple's App Sandbox (ChatGPT, for example) crash inside Seatbelt. paddock refuses them: Apple already confines them. Start them as usual.
+- One instance per data folder. paddock refuses a start when the app already runs with the same data folder, because the running copy would take over the start.
+- The app reaches the macOS services that a desktop app needs (the window server, the pasteboard, Launch Services). It can ask macOS to open a link or another app, outside the sandbox. It can also connect to services on your Mac's localhost.
+- Not there yet on macOS, and refused when you ask for them: `[apps.NAME] bus`, `login_ports`, the devices of `/dev/paddock`, `paddock freeze`, network modes `host` and `allowlist`, and backends other than Seatbelt. Links (`claude://`) do not reach the sandbox yet.
+
+### Terminal runs on macOS
+
+On macOS, `paddock run codex ~/src/api` runs the agent under Seatbelt (`sandbox-exec`). The backend is `seatbelt`, and `--backend auto` picks it for most runs on macOS (see [the VM backend](#the-vm-backend-on-macos)). `docker` and `podman` stay available.
+
+What the sandbox gives the agent:
+
+- The project, or its worktree, is writable. Hidden files such as `.env` stay denied.
+- The sandbox home is writable. `HOME` and `CFFIXED_USER_HOME` point at it. It gets the read-only imports of the profile and the login of `[state] auth`, as on Linux.
+- The system folders, `/opt` (Homebrew) and `/nix` are read-only. Everything else is denied, also your real home and the shared `/tmp`.
+- Network modes `egress` and `api` connect only to a relay on a free localhost port, which passes the traffic to paddock's proxy. The proxy variables point at the relay. In mode `egress`, the sandbox can also reach the host ports that `[network] host_ports` allows. Network mode `none` has no IP network.
+- `paddock-host` works: kv, spawn, `done`, timers and the other host requests. The sockets stay at their host paths, and `PADDOCK_HOST_SOCKET` and `PADDOCK_KV_SOCKET` name them.
+- `--env clean` passes only the allowlist, as on Linux. `paddock run --detach` uses paddock's tmux server, as on Linux.
+- The agent reaches a short list of macOS services: user names, the system log, TLS certificate checks and file change events. It does not reach the Keychain, the pasteboard, Launch Services or the preferences of your real home.
+
+The limits:
+
+- Denied, not absent. The names of files in your real home stay visible, but the agent cannot read or write them. The user names of your Mac and its hardware UUID stay readable.
+- Shared caches (`~/.npm` and the others) are not shared: the sandbox home keeps its own copy. paddock names them at the start.
+- The profile allows only the relay and the allowed host ports. So the agent cannot connect to its own servers on localhost, such as a dev server, unless you open a port range (see below). On macOS 15, Seatbelt also counts the other addresses of your Mac as localhost. The same ports then open on those addresses too, and no other ports.
+- The agent cannot open a terminal by its path (`/dev/ttys*` or `/dev/ptmx`). Seatbelt cannot tell a new terminal from your other terminals by path, and an open terminal gives its keystrokes away. No process in the sandbox can push input into a terminal (`TIOCSTI`).
+- Some features are not there yet on macOS. If you ask for one, paddock refuses the start, or the request, with one line:
+  - network modes `host` and `allowlist`, and display modes other than `off`
+  - the devices of `/dev/paddock`, `paddock freeze`, and `paddock-host borrow` and `return`
+  - `--profile default`, the private keyring, login ports and links into the sandbox
+  - credentials that go through the gateway
+- `paddock doctor --escape` is for the Linux backends. The Seatbelt checks run with `cargo test` on a Mac.
+
+New terminals (ptys) come from paddock. Some agents open a pty for their shell tool, for example Codex's unified exec. paddock opens each pty on the host and sends both ends into the sandbox over a Unix socket. A small library asks for them in place of `openpty`, `forkpty` and `posix_openpt`. paddock loads it into the agent with `DYLD_INSERT_LIBRARIES`. This works only when the agent's program takes the library:
+
+- A program that you build yourself, or a script for a Node or Python from Homebrew or nodejs.org, takes it.
+- A program with the hardened runtime ignores it, unless it has the entitlements `com.apple.security.cs.allow-dyld-environment-variables` and `com.apple.security.cs.disable-library-validation`. The released Codex builds (npm, Homebrew, GitHub) have the hardened runtime without them.
+- macOS drops the library for its own programs (`/bin`, `/usr/bin`), and for a script that starts with `#!/usr/bin/env`.
+
+If the agent ignores the library, paddock prints one line at the start, for example `paddock: no pty for codex: ... has the hardened runtime without ...`. Its requests for a new pty then stay refused, as before. A program that the agent starts from `/bin/bash` or `/bin/zsh` does not get the library either. paddock gives a run at most 64 new ptys in 10 seconds.
+
+To let the agent reach its own servers, open a range of localhost ports in `~/.config/paddock/config.toml`:
+
+```toml
+[macos]
+localhost_ports = "3000-3999"
+```
+
+In network mode `egress`, the agent can then listen on these ports and connect to them. macOS has no network namespace, so the range also reaches the services of your Mac on these ports. Choose a range that your own services do not use. `paddock run` prints the range at the start. The range has at most 1024 ports. No range is open by default, and the project `paddock.toml` cannot set one.
+
+### The VM backend on macOS
+
+`paddock run codex --backend vm` runs the agent with Linux paddock and bwrap in a light Linux VM. Use it when an agent needs a Linux sandbox on a Mac, for example new ptys for a harness that ignores paddock's pty library. paddock kv, the devices of `/dev/paddock` and borrow do not reach the VM yet. The VM needs Apple silicon and its files. `paddock vm setup` downloads them once, after it shows the URL, size and sha256 and asks you. `paddock run` never downloads anything.
+
+The first run starts one VM for your user. Later runs use the same VM. It stops after 10 minutes without a run. The VM has no network device, and the project folder is the only host folder in it, at the same path. Your home is never in it. Host requests, network modes `egress` and `api`, and login pages in your browser go to paddock on the Mac, as on Linux. The logins of the agent stay in the VM, in a home per sandbox. The VM holds one project at a time. A run in another project stops with a message while the runs of the first project go on.
+
+```sh
+paddock vm status    # the running VM: pid, uptime, runs and project
+paddock vm stop      # stop it, with its runs
+```
+
+`--backend auto` chooses as follows:
+
+1. `paddock app run` uses Seatbelt.
+2. A run that needs a Linux-only feature, or new ptys that Seatbelt cannot give its harness, uses the VM. If the VM files are missing, paddock stops and names `paddock vm setup`.
+3. A harness profile with `[macos] backend = "seatbelt"` uses Seatbelt, for tools that need macOS itself, such as Xcode or codesign.
+4. Every other run uses Seatbelt, unless your configuration makes the VM the default:
+
+```toml
+[macos]
+backend = "vm"
+```
+
+`paddock run` prints the backend and the reason at the start. The VM has no display: display modes `window` and `headless` stay Linux only, and network mode `host` is not available in the VM.
+
 ## Sandbox by default
 
 An agent reads files with the same commands that you use. One wrong `grep -r` or `find ~` outside a sandbox sends your SSH keys, other projects and personal files into the agent's context, and to the vendor. `paddock shims install` makes the sandbox the default, so that you do not have to remember `paddock`:
@@ -1841,6 +1988,8 @@ paddock finds the folders in `mounts.rw`, `mounts.ro` and `secrets.hide` again a
 | :--- | :--- |
 | bwrap (default) | You want every host tool, and start in milliseconds. |
 | podman, docker | The project needs system packages that the host does not have. The base image follows the host distribution. |
+| seatbelt (macOS) | You run an agent on a Mac. `--backend auto` picks it for most runs. |
+| vm (macOS) | You need a Linux-only feature on a Mac. See [The VM backend on macOS](#the-vm-backend-on-macos). |
 
 Prefer rootless podman over docker. paddock runs it with `--userns=keep-id`, so files in the project keep your user as owner. The default seccomp profile of podman allows nested user namespaces, a common start of kernel exploits, so paddock derives a profile that blocks only that.
 

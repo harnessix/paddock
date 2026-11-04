@@ -480,6 +480,7 @@ mod tests {
 
     /// A Codex login with a refresh token goes to the keeper path and out
     /// of the box. An API-key login, or none, stays in the box.
+    #[cfg(target_os = "linux")] // the keeper runs on Linux only
     #[test]
     fn a_kept_codex_login_leaves_the_box_for_the_keeper() {
         let t = tempfile::tempdir().unwrap();

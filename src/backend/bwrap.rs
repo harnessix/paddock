@@ -12,6 +12,8 @@ use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+mod mounts;
+
 pub struct Bwrap;
 
 /// A link-local address that pasta answers DNS queries on.
@@ -195,12 +197,20 @@ impl Backend for Bwrap {
         {
             a.extend(["--bind".into(), p(&spec.home_src), p(&spec.home)]);
         }
-        for m in spec.ordered_mounts() {
+        let trees = mounts::system_trees();
+        let ordered = spec.ordered_mounts();
+        for m in &ordered {
             match m.kind {
-                MountKind::Ro => {
-                    a.extend(["--ro-bind".into(), p(m.src.as_ref().unwrap()), p(&m.dst)])
+                MountKind::Ro | MountKind::Rw => {
+                    if let Some((src, dst)) = mounts::bind(m, &trees, &ordered) {
+                        let flag = if m.kind == MountKind::Ro {
+                            "--ro-bind"
+                        } else {
+                            "--bind"
+                        };
+                        a.extend([flag.into(), p(&src), p(&dst)]);
+                    }
                 }
-                MountKind::Rw => a.extend(["--bind".into(), p(m.src.as_ref().unwrap()), p(&m.dst)]),
                 MountKind::Tmpfs => a.extend(["--tmpfs".into(), p(&m.dst)]),
                 MountKind::Overlay => a.extend(overlay_args(m)),
                 MountKind::MaskFile => a.extend(["--ro-bind".into(), p(&empty_f), p(&m.dst)]),

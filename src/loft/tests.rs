@@ -1,6 +1,11 @@
 use super::*;
 use std::process::Command;
 
+/// The in-place mounts, as on Linux, on every system.
+fn mount(env: &HostEnv, spec: &mut SandboxSpec, repo: &Path) -> Result<()> {
+    mount_with(env, spec, repo, true)
+}
+
 fn temp_env() -> (tempfile::TempDir, HostEnv) {
     let t = tempfile::tempdir().unwrap();
     let env = HostEnv::from_parts(
@@ -210,6 +215,37 @@ fn the_loft_mounts_its_paths_and_notes_and_keeps_them_out_of_git() {
 }
 
 #[test]
+fn without_in_place_mounts_the_loft_keeps_the_link_and_the_exclude_lines() {
+    let (t, env) = temp_env();
+    let repo = repo(t.path());
+    host::init(&env, &repo).unwrap();
+    let loft = Loft::of(&env, &repo);
+    std::fs::write(loft.tree().join("CLAUDE.md"), "# rules\n").unwrap();
+    let mut spec = new_spec(&repo, t.path());
+    mount_with(&env, &mut spec, &repo, false).unwrap();
+    let origins: Vec<&str> = spec.mounts.iter().map(|m| m.origin.as_str()).collect();
+    assert_eq!(origins, ["loft notes"], "{origins:?}");
+    let n = &spec.mounts[0];
+    assert_eq!(n.src.as_deref(), Some(n.dst.as_path()));
+    assert_eq!(n.dst, loft.notes());
+    // No mount point: the project keeps no empty CLAUDE.md.
+    assert!(!repo.join("CLAUDE.md").exists());
+    let ex = std::fs::read_to_string(repo.join(".git/info/exclude")).unwrap();
+    assert!(
+        ex.contains("/.paddock\n") && ex.contains("/CLAUDE.md\n"),
+        "{ex}"
+    );
+    std::fs::write(repo.join("CLAUDE.md"), "x").unwrap();
+    assert_eq!(git(&repo, &["status", "--porcelain"]), "");
+    // A worktree has no link: it keeps its own .paddock/ folder.
+    let mut spec = new_spec(&t.path().join("other"), t.path());
+    std::fs::create_dir_all(&spec.project).unwrap();
+    let other = spec.project.clone();
+    mount_with(&env, &mut spec, &other, false).unwrap();
+    assert!(spec.mounts.is_empty(), "{:?}", spec.mounts);
+}
+
+#[test]
 fn auto_makes_the_loft_at_the_first_run_and_remove_keeps_it() {
     let (t, env) = temp_env();
     let repo = repo(t.path());
@@ -316,9 +352,12 @@ fn the_loft_commits_once_per_run() {
     assert_eq!(count(), 2);
     assert!(git::commit(&loft, "by hand").unwrap());
     assert_eq!(count(), 3);
-    // A worktree commits to the same loft.
+    // A worktree commits to the same loft, also when its path goes
+    // through a link, as `/var` is a link to `/private/var` on macOS.
     write_cfg(&env, "");
-    let wt = t.path().join("wt");
+    let link = t.path().join("link");
+    std::os::unix::fs::symlink(t.path().canonicalize().unwrap(), &link).unwrap();
+    let wt = link.join("wt");
     git(
         &repo,
         &[

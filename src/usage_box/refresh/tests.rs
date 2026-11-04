@@ -62,6 +62,7 @@ fn a_lapsed_login_with_a_refresh_token_is_due() {
     assert_eq!(due(&e, NOW).len(), 1);
 }
 
+#[cfg(target_os = "linux")] // the keeper runs on Linux only
 #[test]
 fn isolated_account_kept_and_unconfigured_logins_are_never_refreshed() {
     let t = tempfile::tempdir().unwrap();

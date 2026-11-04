@@ -230,7 +230,7 @@ impl Layout {
                 why
             )
         };
-        if git_dir.starts_with(work_tree) {
+        if crate::paths::within(&git_dir, work_tree) {
             return Err(bad("is inside the work tree"));
         }
         if !is_dir_no_link(&git_dir) || !looks_like_git_dir(&git_dir) {
@@ -262,8 +262,8 @@ impl Layout {
         Ok(Layout {
             work_tree: work_tree.to_path_buf(),
             dot_git: dot.to_path_buf(),
-            git_dir,
-            common_dir: common,
+            git_dir: crate::paths::spelling_of(work_tree, &git_dir),
+            common_dir: crate::paths::spelling_of(work_tree, &common),
             linked: true,
         })
     }

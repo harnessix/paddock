@@ -158,6 +158,18 @@ pub fn install_command(pkgs: &[&str]) -> String {
 }
 
 pub fn report(env: &HostEnv) -> Result<bool> {
+    let os = crate::onboard::Os::HOST;
+    let deps_ok = match os {
+        crate::onboard::Os::Macos => {
+            crate::onboard::mac_doctor_deps(env, &crate::onboard::MacProbe::host())
+        }
+        crate::onboard::Os::Linux => linux_deps(env),
+    };
+    report_rest(env, os)?;
+    Ok(deps_ok)
+}
+
+fn linux_deps(env: &HostEnv) -> bool {
     let fam = family();
     let mut missing_required = Vec::new();
     let mut missing_optional = Vec::new();
@@ -193,7 +205,11 @@ pub fn report(env: &HostEnv) -> Result<bool> {
             install_command(&missing_optional)
         );
     }
+    missing_required.is_empty()
+}
 
+fn report_rest(env: &HostEnv, os: crate::onboard::Os) -> Result<()> {
+    let linux = os == crate::onboard::Os::Linux;
     println!("\nBackends:");
     let probe_spec = crate::spec::SandboxSpec::new(
         "doctor".into(),
@@ -205,7 +221,7 @@ pub fn report(env: &HostEnv) -> Result<bool> {
         env.gid,
         &env.user,
     );
-    for name in ["bwrap", "podman", "docker", "srt"] {
+    for &name in crate::onboard::doctor_backends(os) {
         let b = backend::by_name(name)?;
         // srt only filters by domain: check it with the mode it serves.
         let mut spec = probe_spec.clone();
@@ -219,10 +235,13 @@ pub fn report(env: &HostEnv) -> Result<bool> {
     }
 
     println!("\nDevices and paddock kv:");
-    for l in crate::devices::doctor_lines(env)
-        .into_iter()
-        .chain(crate::kv::doctor_lines(env))
-    {
+    let devices = match linux {
+        true => crate::devices::doctor_lines(env),
+        false => crate::onboard::refused_line(os, crate::onboard::Feature::Devices)
+            .into_iter()
+            .collect(),
+    };
+    for l in devices.into_iter().chain(crate::kv::doctor_lines(env)) {
         println!("{l}");
     }
 
@@ -282,7 +301,7 @@ pub fn report(env: &HostEnv) -> Result<bool> {
     }
 
     let s = crate::omarchy::status(env);
-    if s.block || s.shims || env.which(crate::omarchy::SCOPE).is_some() {
+    if linux && (s.block || s.shims || env.which(crate::omarchy::SCOPE).is_some()) {
         println!("\nOmarchy agents (paddock shims --scope omarchy-agent):");
         for l in crate::omarchy::doctor_lines(env) {
             println!("{l}");
@@ -305,18 +324,25 @@ pub fn report(env: &HostEnv) -> Result<bool> {
         }
     }
 
-    println!("\nGateway (host requests):");
-    println!("{}", crate::gatewayd::status_line(env));
+    if linux {
+        println!("\nGateway (host requests):");
+        println!("{}", crate::gatewayd::status_line(env));
+    } else {
+        println!("\nLinux only (refused on macOS with one line):");
+        crate::onboard::refused_lines(os)
+            .iter()
+            .for_each(|l| println!("{l}"));
+    }
 
     println!("\nUpdates:");
     for l in crate::update::doctor_lines(env) {
         println!("{l}");
     }
-    Ok(missing_required.is_empty())
+    Ok(())
 }
 
-/// The IPv4 default gateway, from /proc/net/route.
 /// The id of the host session bus, if there is one.
+#[cfg(target_os = "linux")]
 fn host_bus_id() -> Option<String> {
     let c = zbus::blocking::Connection::session().ok()?;
     let id = zbus::blocking::fdo::DBusProxy::new(&c)
@@ -326,6 +352,13 @@ fn host_bus_id() -> Option<String> {
     Some(id.to_string())
 }
 
+/// macOS has no D-Bus session bus.
+#[cfg(not(target_os = "linux"))]
+fn host_bus_id() -> Option<String> {
+    None
+}
+
+/// The IPv4 default gateway, from /proc/net/route.
 fn default_gateway() -> Option<std::net::IpAddr> {
     let text = std::fs::read_to_string("/proc/net/route").ok()?;
     text.lines().skip(1).find_map(|l| {
@@ -369,6 +402,12 @@ pub struct EscapeOpts {
 
 /// Run the probe in a real sandbox. Returns the number of failed checks.
 pub fn escape(env: &HostEnv, o: &EscapeOpts) -> Result<usize> {
+    // probe.sh checks mounts, namespaces and /proc. The Seatbelt checks are
+    // in src/backend/seatbelt/run_macos_tests.rs and tests/seatbelt_run.rs.
+    let mac_auto = crate::onboard::Os::HOST == crate::onboard::Os::Macos && o.backend == "auto";
+    if o.backend == crate::backend::seatbelt::NAME || mac_auto {
+        anyhow::bail!("the escape probe is for the Linux backends: on macOS the Seatbelt checks run with cargo test, and --backend podman or docker probes a Linux container");
+    }
     // Homes of earlier runs whose scratch project is gone go too.
     let mut scratch = Scratch::new(&env.paddock_cache().join(SCRATCH_DIR))?;
     crate::storage::remove_doctor_homes(env);
@@ -1259,59 +1298,5 @@ fn s_set_approvals(built: &mut build::Built, env: &HostEnv) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::os::unix::fs::PermissionsExt;
-
-    #[test]
-    fn each_escape_run_gets_its_own_scratch_and_removes_only_that() {
-        let t = tempfile::tempdir().unwrap();
-        let base = t.path().join("cache/paddock/doctor-runs");
-        let a = Scratch::new(&base).unwrap();
-        let mut b = Scratch::new(&base).unwrap();
-        assert_ne!(a.root, b.root);
-        for s in [&a, &b] {
-            assert_eq!(s.root.parent(), Some(base.as_path()));
-            let m = std::fs::metadata(&s.root).unwrap().permissions().mode();
-            assert_eq!(m & 0o777, 0o700);
-        }
-        // What a run leaves: a git object folder without write permission,
-        // a link out of the scratch folder, and its own sandbox home.
-        let outside = t.path().join("outside");
-        std::fs::create_dir_all(&outside).unwrap();
-        std::fs::write(outside.join("keep"), "x").unwrap();
-        for s in [&a, &b] {
-            let objects = s.root.join("project/.git/objects/ab");
-            std::fs::create_dir_all(&objects).unwrap();
-            std::fs::write(objects.join("cd"), "x").unwrap();
-            std::fs::set_permissions(&objects, std::fs::Permissions::from_mode(0o500)).unwrap();
-            std::os::unix::fs::symlink(&outside, s.root.join("project/link")).unwrap();
-        }
-        let home_b = t.path().join("data/homes/doctor/shared/b");
-        std::fs::create_dir_all(&home_b).unwrap();
-        b.also_remove(home_b.clone());
-
-        let (a_root, b_root) = (a.root.clone(), b.root.clone());
-        drop(b);
-        assert!(!b_root.exists());
-        assert!(!home_b.exists());
-        assert!(a_root.join("project/.git/objects/ab/cd").exists());
-        assert!(outside.join("keep").exists(), "the link was followed");
-
-        // A new run removes what dead runs and older versions left, never
-        // the folder of a live run.
-        let dead = base.join(format!("{}-0011223344556677", i32::MAX));
-        std::fs::create_dir_all(dead.join("project")).unwrap();
-        std::fs::create_dir_all(base.join("project")).unwrap();
-        std::fs::write(base.join("host-canary"), "x").unwrap();
-        let c = Scratch::new(&base).unwrap();
-        assert!(!dead.exists());
-        assert!(!base.join("project").exists());
-        assert!(!base.join("host-canary").exists());
-        assert!(a_root.exists());
-        drop(a);
-        drop(c);
-        assert_eq!(std::fs::read_dir(&base).unwrap().count(), 0);
-        assert!(outside.join("keep").exists());
-    }
-}
+#[path = "doctor_tests.rs"]
+mod tests;

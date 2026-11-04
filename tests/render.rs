@@ -129,7 +129,13 @@ fn the_machine_identity_follows_the_login() {
             continue;
         }
         let backend = Docker::new(cli);
-        let host = backend.render(&env, &spec, false).unwrap().args.join(" ");
+        let host = match backend.render(&env, &spec, false) {
+            Ok(l) => l.args.join(" "),
+            Err(e) => {
+                assert!(e.to_string().contains("cannot pick a base image"), "{e}");
+                continue;
+            }
+        };
         if std::path::Path::new("/etc/machine-id").is_file() {
             assert!(
                 host.contains("src=/etc/machine-id,dst=/etc/machine-id,readonly"),
@@ -147,6 +153,35 @@ fn the_machine_identity_follows_the_login() {
         assert_eq!(file(&l, "machine-id"), own.machine_id);
         if std::path::Path::new("/sys/devices/virtual/dmi").is_dir() {
             assert!(a.contains("dst=/sys/devices/virtual/dmi"), "{a}");
+        }
+    }
+}
+
+#[test]
+fn bwrap_binds_nothing_onto_a_symlink() {
+    let (_t, env, mut spec) = fake();
+    if env.which("bwrap").is_none() {
+        return;
+    }
+    // A harness program that is a link in /usr, as `/usr/bin/sh` is on
+    // Arch (bash) and in Alpine (busybox).
+    let Some(link) = ["/usr/bin/sh", "/bin/sh"]
+        .iter()
+        .map(PathBuf::from)
+        .find(|p| std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink()))
+    else {
+        return;
+    };
+    spec.add_mount(Mount::same(&link, false, "profile fake: install"));
+    let l = Bwrap.render(&env, &spec, false).unwrap();
+    for w in l.args.windows(3) {
+        if w[0] == "--ro-bind" || w[0] == "--bind" {
+            let md = std::fs::symlink_metadata(&w[2]);
+            assert!(
+                !md.is_ok_and(|m| m.file_type().is_symlink()),
+                "bind onto the symlink {}",
+                w[2]
+            );
         }
     }
 }

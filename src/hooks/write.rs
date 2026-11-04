@@ -181,6 +181,7 @@ fn trust(
             origin: "hooks".into(),
             append: false,
             codex_trust: None,
+            no_pty: false,
         });
     }
     let refs: Vec<&HomeSetting> = values.iter().collect();

@@ -162,6 +162,11 @@ pub struct HomeSetting {
     /// (compaction/codex.rs).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub codex_trust: Option<CodexTrust>,
+    /// Only when the harness gets no new ptys from paddock
+    /// (profile.rs `When::NoPty`). `backend::start_host_proxy` drops it
+    /// otherwise.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub no_pty: bool,
 }
 
 /// Where Codex keeps the trust of a hook that paddock adds.
@@ -358,6 +363,18 @@ pub struct SandboxSpec {
     /// the harness's host data (shadow.rs). Only bwrap runs it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shadow: Option<crate::shadow::Plan>,
+    /// What the user asked for, before paddock turned it into `command`.
+    /// The VM backend starts the same run with paddock in the guest.
+    #[serde(skip)]
+    pub intent: Intent,
+}
+
+/// The harness arguments and switches of the command line.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Intent {
+    pub shell: bool,
+    pub no_yolo: bool,
+    pub args: Vec<String>,
 }
 
 impl SandboxSpec {
@@ -422,6 +439,7 @@ impl SandboxSpec {
             hooks: Vec::new(),
             uploads: Vec::new(),
             shadow: None,
+            intent: Intent::default(),
         }
     }
 

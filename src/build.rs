@@ -1138,10 +1138,10 @@ mod tests {
             })
         };
         let bypass = vec!["skipDangerousModePermissionPrompt".to_string()];
-        let (_t, proj, b) = built(false);
+        let (_t, proj, b) = built(false); // the path getcwd sees
         let trust = vec![
             "projects".to_string(),
-            proj.display().to_string(),
+            std::fs::canonicalize(&proj).unwrap().display().to_string(),
             "hasTrustDialogAccepted".to_string(),
         ];
         assert!(has(&b, ".claude/settings.json", &bypass));
@@ -1149,7 +1149,7 @@ mod tests {
         let (_t, proj, b) = built(true);
         let trust = vec![
             "projects".to_string(),
-            proj.display().to_string(),
+            std::fs::canonicalize(&proj).unwrap().display().to_string(),
             "hasTrustDialogAccepted".to_string(),
         ];
         assert!(
@@ -1335,7 +1335,7 @@ mod tests {
             .command
             .contains(&"--disable-client-telemetry".to_string()));
         let (_t, b) = privacy_spec("codex", "", "");
-        let s = &b.spec.home_settings[0];
+        let s = b.spec.home_settings.iter().find(|s| !s.no_pty).unwrap();
         assert_eq!(s.file, PathBuf::from(".codex/config.toml"));
         assert_eq!(s.path, vec!["analytics", "enabled"]);
         assert_eq!(s.value, serde_json::json!(false));
@@ -1365,7 +1365,7 @@ mod tests {
         assert!(!b.spec.env.values().any(|v| v.origin.contains("privacy")));
         assert_eq!(b.spec.env["DISABLE_TELEMETRY"].value, "");
         let (_t, b) = privacy_spec("codex", user, "");
-        assert!(b.spec.home_settings.is_empty());
+        assert!(b.spec.home_settings.iter().all(|s| s.no_pty));
         let (_t, b) = privacy_spec("copilot", user, "");
         assert!(!b
             .spec
@@ -1379,13 +1379,13 @@ mod tests {
         let off = "[privacy]\ntelemetry = \"off\"\n";
         // Turning telemetry on from the project is ignored ...
         let (_t, b) = privacy_spec("codex", "", vendor);
-        assert_eq!(b.spec.home_settings.len(), 1);
+        assert_eq!(b.spec.home_settings.iter().filter(|s| !s.no_pty).count(), 1);
         // ... and so are project variables with the same names.
         let (_t, b) = privacy_spec("claude", "", "[env.set]\nDISABLE_ERROR_REPORTING = \"\"\n");
         assert_eq!(b.spec.env["DISABLE_ERROR_REPORTING"].value, "1");
         // A project cannot turn vendor mode off either.
         let (_t, b) = privacy_spec("codex", vendor, off);
-        assert!(b.spec.home_settings.is_empty());
+        assert!(b.spec.home_settings.iter().all(|s| s.no_pty));
     }
 
     #[test]

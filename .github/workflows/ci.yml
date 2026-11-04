@@ -25,6 +25,29 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test --locked
 
+  # No Linux step checks the macOS target: ring and the bundled SQLite
+  # compile C code that needs the headers of the Apple SDK. This job covers
+  # the macOS code instead.
+  rust-macos:
+    name: fmt, clippy, test (macOS)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test --locked
+      # The release signs paddock-vm the same way. This step finds a broken
+      # entitlements file before a release does.
+      - name: Sign paddock-vm
+        run: |
+          cargo build --locked --bin paddock-vm
+          codesign --force --sign - --entitlements packaging/macos/paddock-vm.entitlements target/debug/paddock-vm
+          codesign -d --entitlements - target/debug/paddock-vm 2>&1 | grep -q com.apple.security.virtualization
+
   escape-probe:
     name: escape probe (bwrap)
     runs-on: ubuntu-24.04

@@ -7,6 +7,25 @@ use crate::gui;
 use anyhow::{Context, Result};
 use std::path::Path;
 
+/// The broker of the run. In the guest of the VM backend, the broker of
+/// the host run answers: the agent passes its socket on to the sandbox.
+pub(super) fn broker(
+    env: &HostEnv,
+    built: &mut Built,
+    interactive: bool,
+    backend: &str,
+) -> Result<super::BrokerStart> {
+    let Some(guest) = crate::vm::agent::guest_socket(crate::vm::agent::HOST_SOCKET_VAR) else {
+        return super::start_broker(env, built, interactive, backend);
+    };
+    let run_dir = env.paddock_run().join(&built.spec.id);
+    crate::privfs::dir(&run_dir)?;
+    let repo = crate::broker::git::Repo::snapshot(&built.spec.project);
+    built.spec.host_socket = Some(guest);
+    add(env, built, &run_dir)?;
+    Ok((repo, None, None))
+}
+
 pub(super) fn add(env: &HostEnv, built: &mut Built, run_dir: &Path) -> Result<()> {
     // The client is paddock itself. A small wrapper gives it the name that
     // agents use, the same way on every backend.

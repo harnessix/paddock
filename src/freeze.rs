@@ -23,6 +23,7 @@ use crate::env::HostEnv;
 use crate::state::Running;
 use anyhow::{bail, Context as _, Result};
 use std::path::{Path, PathBuf};
+#[cfg(target_os = "linux")]
 use std::time::{Duration, Instant};
 
 /// What happens to the leases of a sandbox while it is frozen.
@@ -112,6 +113,7 @@ pub fn own_scope() -> Option<String> {
 /// Put the stopped process `pid` into the new scope `unit`, over the user
 /// manager's D-Bus API (what `systemd-run --scope` does for itself), and
 /// wait until the kernel shows it there.
+#[cfg(target_os = "linux")]
 pub fn move_to_scope(env: &HostEnv, pid: u32, unit: &str, id: &str) -> Result<()> {
     use zbus::zvariant::Value;
     let conn = crate::broker::notify::session(env)?;
@@ -137,6 +139,12 @@ pub fn move_to_scope(env: &HostEnv, pid: u32, unit: &str, id: &str) -> Result<()
         std::thread::sleep(Duration::from_millis(10));
     }
     Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn move_to_scope(env: &HostEnv, pid: u32, unit: &str, id: &str) -> Result<()> {
+    let _ = (env, pid, unit, id);
+    Err(crate::platform::unavailable("freeze"))
 }
 
 /// The first argument of the start stub.
@@ -185,12 +193,14 @@ pub fn frozen(env: &HostEnv, id: &str) -> Option<(u64, String)> {
     ))
 }
 
+#[cfg(target_os = "linux")]
 fn container_cli(env: &HostEnv, backend: &str) -> Option<PathBuf> {
     matches!(backend, "docker" | "podman")
         .then(|| env.which(backend))
         .flatten()
 }
 
+#[cfg(target_os = "linux")]
 fn run(cmd: &mut std::process::Command) -> Result<()> {
     let out = cmd
         .stdin(std::process::Stdio::null())
@@ -203,7 +213,14 @@ fn run(cmd: &mut std::process::Command) -> Result<()> {
 }
 
 /// Freeze or thaw one sandbox.
+#[cfg(target_os = "linux")]
 fn set(env: &HostEnv, r: &Running, freeze: bool) -> Result<()> {
+    if r.backend == crate::backend::seatbelt::NAME {
+        bail!(
+            "{} runs with Seatbelt on macOS: freeze is not there yet on macOS",
+            r.id
+        );
+    }
     if let Some(cli) = container_cli(env, &r.backend) {
         let verb = if freeze { "pause" } else { "unpause" };
         return run(std::process::Command::new(cli).args([verb, &format!("paddock-{}", r.id)]));
@@ -227,6 +244,12 @@ fn set(env: &HostEnv, r: &Running, freeze: bool) -> Result<()> {
     p.call::<_, _, ()>(method, &(unit,))
         .with_context(|| format!("{method} {unit}"))?;
     Ok(())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn set(env: &HostEnv, r: &Running, freeze: bool) -> Result<()> {
+    let _ = (env, r, freeze);
+    Err(crate::platform::unavailable("freeze"))
 }
 
 /// The state of a sandbox in paddock kv, for the other members of its

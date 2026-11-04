@@ -173,8 +173,9 @@ fn the_executor_refuses_forged_and_replayed_grants() {
     let env = paddock::env::HostEnv::from_parts(
         w.root.join("home"),
         "demo".into(),
-        1000,
-        1000,
+        // The executor finds its socket by the real user (macOS: /tmp/paddock-<uid>).
+        unsafe { libc::getuid() },
+        unsafe { libc::getgid() },
         vars.clone(),
     );
     let mut daemon = executor(&w, &vars);
@@ -244,8 +245,9 @@ fn executor(w: &World, vars: &std::collections::BTreeMap<String, String>) -> std
     let env = paddock::env::HostEnv::from_parts(
         w.root.join("home"),
         "demo".into(),
-        1000,
-        1000,
+        // The executor finds its socket by the real user (macOS: /tmp/paddock-<uid>).
+        unsafe { libc::getuid() },
+        unsafe { libc::getgid() },
         vars.clone(),
     );
     let child = Command::new(env!("CARGO_BIN_EXE_paddock"))
@@ -276,8 +278,9 @@ fn exec_job(
     let env = paddock::env::HostEnv::from_parts(
         w.root.join("home"),
         "demo".into(),
-        1000,
-        1000,
+        // The executor finds its socket by the real user (macOS: /tmp/paddock-<uid>).
+        unsafe { libc::getuid() },
+        unsafe { libc::getgid() },
         vars.clone(),
     );
     let req = paddock::broker::Request {
@@ -439,8 +442,9 @@ fn an_approved_push_runs_in_the_executor() {
     let env = paddock::env::HostEnv::from_parts(
         w.root.join("home"),
         "demo".into(),
-        1000,
-        1000,
+        // The executor finds its socket by the real user (macOS: /tmp/paddock-<uid>).
+        unsafe { libc::getuid() },
+        unsafe { libc::getgid() },
         vars.clone(),
     );
     let repo = paddock::broker::git::Repo::snapshot(&work).unwrap();
@@ -517,8 +521,9 @@ fn an_approved_gh_call_runs_in_the_executor() {
     let env = paddock::env::HostEnv::from_parts(
         w.root.join("home"),
         "demo".into(),
-        1000,
-        1000,
+        // The executor finds its socket by the real user (macOS: /tmp/paddock-<uid>).
+        unsafe { libc::getuid() },
+        unsafe { libc::getgid() },
         vars.clone(),
     );
     let workdir = w.root.join("run/paddock/s1/req-1");

@@ -247,13 +247,17 @@ pub struct Loft {
 
 impl Loft {
     /// The loft of the repository of `dir` (a worktree counts as its main
-    /// work tree).
+    /// work tree). The key is the physical path: `repo_of` keeps the
+    /// spelling of `dir`, and on macOS `/var/folders/...` and
+    /// `/private/var/folders/...` are the same repository.
     pub fn of(env: &HostEnv, dir: &Path) -> Self {
+        let repo = speckit::repo_of(dir);
+        let repo = std::fs::canonicalize(&repo).unwrap_or(repo);
         Self {
             root: env
                 .paddock_data()
                 .join("loft")
-                .join(crate::kv::shard::project_hash(&speckit::repo_of(dir))),
+                .join(crate::kv::shard::project_hash(&repo)),
         }
     }
 
@@ -383,10 +387,27 @@ pub fn exclude_line(e: &Entry) -> String {
     format!("/{}", e.path)
 }
 
+/// The loft mounts its paths over the project's paths. Those are bind
+/// mounts at a new place, which bwrap and the containers give, but
+/// Seatbelt and the VM backend on macOS do not.
+pub const IN_PLACE: bool = cfg!(not(target_os = "macos"));
+
 /// The build step: the notes folder, the loft's private paths, and the
 /// Spec Kit store. `repo` is the repository key (the main work tree of a
 /// worktree).
 pub fn mount(env: &HostEnv, spec: &mut SandboxSpec, repo: &Path) -> Result<()> {
+    mount_with(env, spec, repo, IN_PLACE)
+}
+
+/// [`mount`]. Without `in_place` (macOS), the sandbox gets the notes only
+/// through the `.paddock` link of `paddock loft init`, and the private
+/// paths stay in the project. The exclude lines keep them out of git.
+pub fn mount_with(
+    env: &HostEnv,
+    spec: &mut SandboxSpec,
+    repo: &Path,
+    in_place: bool,
+) -> Result<()> {
     let cfg = Cfg::load(env);
     let loft = Loft::of(env, repo);
     if cfg.auto && !loft.initialized() && !loft.off() {
@@ -397,25 +418,51 @@ pub fn mount(env: &HostEnv, spec: &mut SandboxSpec, repo: &Path) -> Result<()> {
     }
     let project = spec.project.clone();
     let mut lines = vec![format!("/{NOTES}")];
-    if let Err(e) = notes(spec, &loft, &project) {
+    if let Err(e) = notes(spec, &loft, &project, in_place) {
         log::warn!("no notes folder .paddock/ in this sandbox: {e:#}");
     }
     let active = loft.active();
-    for e in entries(&cfg).iter().filter(|e| external(&cfg, active, e)) {
-        if mount_entry(spec, &loft, &project, e)? {
-            lines.push(exclude_line(e));
+    let private: Vec<Entry> = entries(&cfg)
+        .into_iter()
+        .filter(|e| external(&cfg, active, e))
+        .collect();
+    if in_place {
+        for e in &private {
+            if mount_entry(spec, &loft, &project, e)? {
+                lines.push(exclude_line(e));
+            }
         }
+    } else {
+        if private
+            .iter()
+            .any(|e| std::fs::symlink_metadata(loft.path(e)).is_ok())
+        {
+            log::warn!(
+                "the loft cannot show its files in place on macOS: the sandbox sees the project's own files, and git ignores them"
+            );
+        }
+        lines.extend(private.iter().map(exclude_line));
     }
     if let Err(e) = exclude(&project, "the loft", &lines) {
         log::warn!("cannot keep the loft out of git: {e:#}");
     }
-    speckit::mount(env, spec, repo)
+    if in_place {
+        return speckit::mount(env, spec, repo);
+    }
+    let sk = speckit::Cfg::load(env);
+    if sk.enabled && speckit_external(env, &sk, repo) {
+        log::warn!("the Spec Kit store cannot show its folders in place on macOS: the sandbox sees the project's own .specify/ and specs/, and git ignores them");
+        if let Err(e) = speckit::exclude(&project) {
+            log::warn!("cannot keep the Spec Kit folders out of git: {e:#}");
+        }
+    }
+    Ok(())
 }
 
 /// `.paddock/` of the sandbox is the loft's notes folder. The project's
 /// inbox stays visible at `.paddock/inbox/`. A project whose `.paddock` is
 /// the host link to the loft sees the loft at the link's target.
-fn notes(spec: &mut SandboxSpec, loft: &Loft, project: &Path) -> Result<()> {
+fn notes(spec: &mut SandboxSpec, loft: &Loft, project: &Path, in_place: bool) -> Result<()> {
     let notes = loft.notes();
     crate::privfs::dir(&notes)?;
     let dst = project.join(NOTES);
@@ -429,6 +476,8 @@ fn notes(spec: &mut SandboxSpec, loft: &Loft, project: &Path) -> Result<()> {
             spec.add_mount(Mount::same(&notes, true, "loft notes"));
         }
         Ok(m) if !m.is_dir() => anyhow::bail!("{} is not a folder", dst.display()),
+        // The project's own `.paddock/` folder, in the project.
+        _ if !in_place => {}
         _ => {
             let inbox = crate::broker::inbox(project)?;
             spec.add_mount(Mount::bind(&notes, &dst, true, "loft notes"));
