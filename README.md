@@ -60,7 +60,7 @@ Inside the paddock, the agent cannot see the SSH key on the machine, the `.env` 
    omarchy plugin add https://github.com/harnessix/omarchy-paddock --enable
    ```
 
-2. Install the `paddock` command from the latest release, v0.2.0: the prebuilt binary, or `bin/install` from a clone of that tag. Both are described below.
+2. Install the `paddock` command from the latest release, v0.2.1: the prebuilt binary, or `bin/install` from a clone of that tag. Both are described below.
 
 3. Run the setup. It checks the system packages, and offers the shell commands, the launchers, the bar widget and the default backend, one step at a time. Each step says what it changes and how to undo it. A second run shows the state and changes nothing unless you ask. The last step lists where you turn off the use of your data for training (see [Privacy defaults](#privacy-defaults)).
 
@@ -74,12 +74,12 @@ Inside the paddock, the agent cannot see the SSH key on the machine, the `.env` 
 
 ### From a clone or a release
 
-paddock is one Rust command for Linux and macOS. The Omarchy bar widget lives in its own repository, [harnessix/omarchy-paddock](https://github.com/harnessix/omarchy-paddock). The commands below install the latest release, v0.2.0. The `main` branch can hold changes that are not released yet.
+paddock is one Rust command for Linux and macOS. The Omarchy bar widget lives in its own repository, [harnessix/omarchy-paddock](https://github.com/harnessix/omarchy-paddock). The commands below install the latest release, v0.2.1. The `main` branch can hold changes that are not released yet.
 
 Clone the release tag, and run the installer from its root. It installs the system packages, builds paddock, and runs `paddock doctor`.
 
 ```sh
-git clone --branch v0.2.0 https://github.com/harnessix/paddock
+git clone --branch v0.2.1 https://github.com/harnessix/paddock
 cd paddock
 bin/install
 ```
@@ -87,15 +87,15 @@ bin/install
 Without a Rust toolchain, use the prebuilt binary of the release. It is one file. Download it with its checksum, check the checksum, copy the binary to `~/.local/bin`, and run `paddock doctor`, which prints the command that installs the system packages below:
 
 ```sh
-curl -fLO https://github.com/harnessix/paddock/releases/download/v0.2.0/paddock-0.2.0-x86_64-linux.tar.gz
-curl -fLO https://github.com/harnessix/paddock/releases/download/v0.2.0/paddock-0.2.0-x86_64-linux.tar.gz.sha256
-sha256sum -c paddock-0.2.0-x86_64-linux.tar.gz.sha256
-tar -xzf paddock-0.2.0-x86_64-linux.tar.gz
-install -m 755 paddock-0.2.0-x86_64-linux/paddock ~/.local/bin/paddock
+curl -fLO https://github.com/harnessix/paddock/releases/download/v0.2.1/paddock-0.2.1-x86_64-linux.tar.gz
+curl -fLO https://github.com/harnessix/paddock/releases/download/v0.2.1/paddock-0.2.1-x86_64-linux.tar.gz.sha256
+sha256sum -c paddock-0.2.1-x86_64-linux.tar.gz.sha256
+tar -xzf paddock-0.2.1-x86_64-linux.tar.gz
+install -m 755 paddock-0.2.1-x86_64-linux/paddock ~/.local/bin/paddock
 paddock doctor
 ```
 
-On a 64-bit Arm machine (aarch64), use `aarch64` in place of `x86_64` in these names. Releases after 0.2.0 have this binary.
+On a 64-bit Arm machine (aarch64), use `aarch64` in place of `x86_64` in these names.
 
 All releases are on the [releases page](https://github.com/harnessix/paddock/releases).
 
