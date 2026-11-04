@@ -1,0 +1,1 @@
+- New: `PADDOCK_VM_SHARE` names the folders where paddock looks for the VM files of a Homebrew install. An empty value turns them off, and the tests use it so that an installed paddock does not change their result.
