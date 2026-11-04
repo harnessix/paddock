@@ -28,6 +28,8 @@ fn err(dir: &Path) -> String {
 fn env_in(t: &Path) -> HostEnv {
     let mut vars = BTreeMap::new();
     vars.insert("XDG_DATA_HOME".into(), t.join("data").display().to_string());
+    // No Homebrew install of the guest files on this machine counts.
+    vars.insert("PADDOCK_VM_SHARE".into(), String::new());
     HostEnv::from_parts(t.join("home"), "demo".into(), 1000, 1000, vars)
 }
 

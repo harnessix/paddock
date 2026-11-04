@@ -118,6 +118,7 @@ fn vm_status_says_not_running() {
         .env("HOME", t.path())
         .env("PATH", "/usr/bin:/bin")
         .env("XDG_RUNTIME_DIR", t.path().join("run"))
+        .env("PADDOCK_VM_SHARE", "")
         .args(["vm", "status"])
         .output()
         .unwrap();

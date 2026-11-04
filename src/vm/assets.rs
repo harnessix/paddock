@@ -111,7 +111,14 @@ pub fn default_assets_dir(env: &HostEnv) -> PathBuf {
 }
 
 /// The share folders of the Homebrew formula, next to the binary first.
-fn homebrew_dirs() -> Vec<PathBuf> {
+/// `PADDOCK_VM_SHARE` replaces them with its own list (`:` between
+/// folders); an empty value means none, as the tests use it.
+fn homebrew_dirs(env: &HostEnv) -> Vec<PathBuf> {
+    if let Some(list) = env.var("PADDOCK_VM_SHARE") {
+        return std::env::split_paths(list)
+            .filter(|p| !p.as_os_str().is_empty())
+            .collect();
+    }
     let mut dirs = Vec::new();
     if let Ok(exe) = std::env::current_exe() {
         if let Some(prefix) = exe.parent().and_then(|p| p.parent()) {
@@ -130,7 +137,7 @@ pub fn assets_dir(env: &HostEnv) -> PathBuf {
     if user.join(MANIFEST).exists() {
         return user;
     }
-    homebrew_dirs()
+    homebrew_dirs(env)
         .into_iter()
         .find(|d| d.join(MANIFEST).exists())
         .unwrap_or(user)
