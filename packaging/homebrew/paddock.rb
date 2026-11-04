@@ -1,7 +1,7 @@
 # Homebrew formula for paddock. It builds from the source tarball of a
-# release. The release workflow fills in @VERSION@, @SHA256@, @REPO@ and the
-# @VM_*@ values of the guest files, and attaches the result to the release
-# as paddock.rb. Copy that file into a tap.
+# release. The release workflow fills in the version, the checksums, the
+# repository and the guest files of the VM, and attaches the result to the
+# release as paddock.rb. Copy that file into a tap.
 class Paddock < Formula
   desc "Run any coding-agent harness with full auto-approval inside an isolated sandbox"
   homepage "https://github.com/@REPO@"
