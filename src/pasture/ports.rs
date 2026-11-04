@@ -791,6 +791,10 @@ mod tests {
         assert!(try_lock(tmp.path(), "a1").is_none());
         assert!(try_lock(tmp.path(), "b1").is_some());
         drop(first);
-        assert!(try_lock(tmp.path(), "a1").is_some());
+        // A child forked by another test holds the descriptor until exec.
+        assert!((0..100).any(|_| {
+            std::thread::sleep(Duration::from_millis(20));
+            try_lock(tmp.path(), "a1").is_some()
+        }));
     }
 }
