@@ -108,7 +108,7 @@ fn fragment_rules_on_a_temporary_repository() {
     assert!(text.contains("changelog: label exemption: no"), "{text}");
     assert!(text.contains("changelog: release exemption: no"), "{text}");
     assert!(
-        text.contains("no fragment for a change under src/, plugin/, profiles/ or skills/"),
+        text.contains("no fragment for a change under src/, profiles/ or skills/"),
         "{text}"
     );
     assert!(!text.contains("changelog: ok"), "{text}");

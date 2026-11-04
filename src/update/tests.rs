@@ -141,7 +141,7 @@ fn release_names_follow_the_release_workflow() {
     assert_eq!(r.member(), "paddock-0.1.8-x86_64-linux/paddock");
     assert_eq!(
         r.tarball_url(),
-        "https://github.com/harnessix/omarchy-paddock/releases/download/v0.1.8/paddock-0.1.8-x86_64-linux.tar.gz"
+        "https://github.com/harnessix/paddock/releases/download/v0.1.8/paddock-0.1.8-x86_64-linux.tar.gz"
     );
     assert!(check_url(&r.tarball_url()).is_ok());
     assert!(Release::for_tag("v0.1.8/../../x", "x86_64").is_err());
@@ -157,11 +157,11 @@ fn aarch64_release_names_follow_the_release_workflow() {
     assert_eq!(r.member(), "paddock-0.1.8-aarch64-linux/paddock");
     assert_eq!(
         r.tarball_url(),
-        "https://github.com/harnessix/omarchy-paddock/releases/download/v0.1.8/paddock-0.1.8-aarch64-linux.tar.gz"
+        "https://github.com/harnessix/paddock/releases/download/v0.1.8/paddock-0.1.8-aarch64-linux.tar.gz"
     );
     assert_eq!(
         r.checksum_url(),
-        "https://github.com/harnessix/omarchy-paddock/releases/download/v0.1.8/paddock-0.1.8-aarch64-linux.tar.gz.sha256"
+        "https://github.com/harnessix/paddock/releases/download/v0.1.8/paddock-0.1.8-aarch64-linux.tar.gz.sha256"
     );
     assert!(check_url(&r.checksum_url()).is_ok());
 }

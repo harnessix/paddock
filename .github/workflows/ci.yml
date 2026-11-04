@@ -89,13 +89,6 @@ jobs:
       - uses: actions/checkout@v4
       - run: .github/scripts/file-size.sh
 
-  plugin-manifest:
-    name: plugin manifest
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - run: .github/scripts/check-manifest.sh
-
   leak-guard:
     name: leak guard
     runs-on: ubuntu-24.04

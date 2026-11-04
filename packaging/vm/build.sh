@@ -255,7 +255,7 @@ chmod 644 "$IMG"
 
 # 5. assets.toml. The URLs follow the pattern of the GitHub releases. The
 # files are there only after a release attaches them.
-REPO="${GITHUB_REPOSITORY:-harnessix/omarchy-paddock}"
+REPO="${GITHUB_REPOSITORY:-harnessix/paddock}"
 VERSION=$(sed -n 's/^version = "\(.*\)"/\1/p' "$ROOT/Cargo.toml" | head -n 1)
 entry() {
   name="$1" file="$2" version="$3"

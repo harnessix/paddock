@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run every automated check: unit and integration tests, the plugin manifest,
+# Run every automated check: unit and integration tests, the leak guard,
 # and the escape probe on each backend this host can run.
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -9,11 +9,7 @@ cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test
 
-.github/scripts/check-manifest.sh
 .github/scripts/leak-guard.sh
-if command -v omarchy >/dev/null; then
-  omarchy plugin validate .
-fi
 
 bin=target/debug/paddock
 cargo build -q

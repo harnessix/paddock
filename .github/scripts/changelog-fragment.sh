@@ -94,7 +94,7 @@ frags=()
 
 consider_need() {
   case "$1" in
-    src/*|plugin/*|profiles/*|skills/*) need=1 ;;
+    src/*|profiles/*|skills/*) need=1 ;;
   esac
 }
 
@@ -131,7 +131,7 @@ if [ "$need" = 1 ] && [ "$have" = 0 ]; then
   elif [ -n "$release_reason" ]; then
     echo "changelog: fragment not required in a release pull request"
   else
-    echo "changelog: no fragment for a change under src/, plugin/, profiles/ or skills/"
+    echo "changelog: no fragment for a change under src/, profiles/ or skills/"
     status=1
   fi
 fi

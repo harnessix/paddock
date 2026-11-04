@@ -1,0 +1,1 @@
+- Changed: this repository holds only paddock itself, for Linux and macOS. The Omarchy bar widget moved to harnessix/omarchy-paddock, which pulls paddock in as a pinned copy. `paddock update` reads the releases of harnessix/paddock.

@@ -53,8 +53,6 @@ fn the_install_commands_name_the_current_release() {
 
 #[test]
 fn the_package_files_name_the_current_version() {
-    let manifest: serde_json::Value = serde_json::from_str(&read("manifest.json")).unwrap();
-    assert_eq!(manifest["version"], VERSION, "manifest.json");
     assert!(
         read("pkgbuild/PKGBUILD").contains(&format!("\npkgver={VERSION}\n")),
         "pkgbuild/PKGBUILD"

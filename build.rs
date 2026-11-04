@@ -49,7 +49,7 @@ fn release_repo() {
     println!("cargo:rerun-if-env-changed=PADDOCK_RELEASE_REPO");
     let repo = std::env::var("PADDOCK_RELEASE_REPO").unwrap_or_default();
     let repo = if repo.is_empty() {
-        "harnessix/omarchy-paddock".to_string()
+        "harnessix/paddock".to_string()
     } else {
         repo
     };
