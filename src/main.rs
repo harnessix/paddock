@@ -190,6 +190,7 @@ fn real_main() -> Result<i32> {
         Cmd::Timer { cmd } => cli::timer::run(&env, cmd),
         Cmd::Logins { cmd } => cli::logins::run(&env, cmd),
         Cmd::Credentials { cmd } => cli::credentials::run(&env, cmd),
+        Cmd::Tack { cmd } => cli::tack::run(&env, cmd),
         Cmd::Boundary { id, json, follow } => {
             cli::status::boundary(&env, paddock::ids::resolve(&env, &id)?, json, follow)
         }

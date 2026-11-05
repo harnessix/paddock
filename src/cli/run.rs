@@ -243,6 +243,7 @@ pub(crate) fn explain(env: &HostEnv, a: &RunArgs, json: bool) -> Result<()> {
             }
         }
         v["screens"] = paddock::screens::explain(&built.profile).into();
+        v["tack"] = paddock::tack::report::explain(env, &s.env).into();
         v["backend"] = match &backend {
             Ok(b) => b.name().into(),
             Err(e) => format!("unavailable: {e}").into(),
@@ -318,6 +319,13 @@ pub(crate) fn explain(env: &HostEnv, a: &RunArgs, json: bool) -> Result<()> {
             v.value.clone()
         };
         println!("  {k}={val}\n         {}", v.origin);
+    }
+    let tack = paddock::tack::report::explain(env, &s.env);
+    if !tack.is_empty() {
+        println!("\ntack (secrets that only allowlisted programs receive):");
+        for l in tack {
+            println!("{l}");
+        }
     }
     if !s.home_settings.is_empty() {
         println!("\nsettings written into the sandbox home (the host files stay as they are):");

@@ -798,6 +798,56 @@ For every way:
 - The bar panel marks a sandbox that holds a delivered value, and names the gateway credentials that it uses.
 - `paddock credentials list` shows the registered credentials, whether their source is there, how often each was delivered, how many requests went through the gateway, how many ssh signatures were allowed, and how often each secret file was opened. The audit log (`paddock log`) records each question, answer, request (method, host, path without its query) and revocation by name, never a value.
 
+### tack: secrets that only allowlisted programs receive
+
+tack keeps a secret such as `GH_TOKEN` out of your shell startup files and out of the environment of your processes. A process sees a reference, `tack://GH_TOKEN`, in place of the value. The reference holds only the name. It holds no part of the value and no hash of it. tack works on the host, inside and outside a sandbox.
+
+This version has the first part of tack. It stores the values, writes the references, and checks the configuration. It does not give a value to any program yet. After an import, every process, `gh` too, sees the reference and not the value. A later version starts the allowlisted programs with the real value. Until then, import a secret only if no program that you use needs it from the environment.
+
+The values stay in the stores that you already have:
+
+- `backend = "keyring"` (the default) is the system keyring. On Linux, paddock uses `secret-tool` (package libsecret) and a Secret Service such as gnome-keyring or KeePassXC. On macOS, it uses the login keychain through `security`. The items have the service `paddock-tack` and the name of the secret.
+- `backend = "command"` is a password manager command that prints the value, as `from = "command"` of `[credentials]` does. paddock only reads it.
+
+Only the user configuration, `~/.config/paddock/config.toml`, can have the `[tack]` table. paddock refuses a project `paddock.toml` that names it, because an agent can edit the project.
+
+```toml
+[tack.secrets.GH_TOKEN]
+hosts = ["api.github.com", "github.com"]   # optional
+
+[[tack.secrets.GH_TOKEN.allow]]
+program = "/usr/bin/gh"
+sha256 = "..."      # optional: sha256sum /usr/bin/gh
+# signer = "..."    # optional, macOS: the signing identity
+
+[[tack.secrets.GH_TOKEN.callers]]
+kind = "sandbox"    # or "agent", or program = "/path"
+action = "refuse"   # or "ask"
+
+[tack.secrets.OPENAI_API_KEY]
+backend = "command"
+command = ["op", "read", "op://Private/OpenAI/key"]
+```
+
+An allowlist entry names a program by its absolute path. paddock refuses shells, interpreters (`python`, `node` and others), `env`, `printenv` and `sudo`, also through a symbolic link: they run any command that they get, so they would give the value to that command. `callers` and `hosts` are checked and kept. The version that starts programs with the value enforces them.
+
+To move a value out of your files, name the variable:
+
+```sh
+paddock tack import GH_TOKEN                      # print what would change
+paddock tack import GH_TOKEN --file ~/src/app/.env --yes
+```
+
+- The command reads `~/.profile`, the bash and zsh startup files, the fish configuration, `~/.config/environment.d/*.conf`, and each file that you name with `--file`.
+- It changes only plain lines, such as `export GH_TOKEN=value`, `GH_TOKEN='value'` or `set -gx GH_TOKEN value`. It names a line where the shell computes the value, such as `$(pass show gh)`, and does not change that line.
+- Without `--yes`, it prints the plan and changes nothing.
+- With `--yes`, it first writes the value into the store and reads it back. It changes a file only after the store holds the same value. Each changed file gets a backup under `~/.local/state/paddock/tack/backups/`, with mode 0600. The command prints the `cp` command that undoes the change. The backup holds the old value, so delete it when the new file works.
+- If the files hold two different values, or the store holds a different value, the command stops for that variable. `--replace` overwrites the value in the keyring.
+- A file that changes while the command runs is not written. A crash leaves each file whole, the old one or the new one. If you run the command again, it finishes the work.
+- No output and no log line holds a value.
+
+`paddock tack list` shows the secrets, their store, their reference and their programs. `paddock explain` shows what the sandbox sees for each secret. `paddock doctor` has a block for tack. The block shows if the store is reachable or locked, the plain values that are still in your files or in the current environment, and the allowlisted programs that are missing or whose content changed since you wrote their `sha256`.
+
 ## Privacy defaults
 
 paddock turns off vendor telemetry in every sandbox. It uses the switches that each vendor documents. It sets them only inside the sandbox: as environment variables, or in the sandbox's own copy of a settings file. Your host configuration does not change. `paddock explain` shows each switch and the profile that sets it.

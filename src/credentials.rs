@@ -730,7 +730,7 @@ pub fn read(env: &HostEnv, plan: &Plan) -> (Vec<Value>, Vec<String>) {
     (out, notices)
 }
 
-fn run_command(cmd: &[String]) -> Result<secret::Secret> {
+pub(crate) fn run_command(cmd: &[String]) -> Result<secret::Secret> {
     use std::process::{Command, Stdio};
     let mut child = Command::new(&cmd[0])
         .args(&cmd[1..])

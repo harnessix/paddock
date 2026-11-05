@@ -24,6 +24,7 @@ pub(crate) mod skill;
 pub(crate) mod spec;
 pub(crate) mod status;
 pub(crate) mod storage;
+pub(crate) mod tack;
 pub(crate) mod timer;
 pub(crate) mod tools;
 pub(crate) mod update;
@@ -428,6 +429,12 @@ pub(crate) enum Cmd {
     Credentials {
         #[command(subcommand)]
         cmd: credentials::CredentialsCmd,
+    },
+    /// Secrets in environment variables that only allowlisted programs
+    /// receive ([tack] of the user configuration). Never a value.
+    Tack {
+        #[command(subcommand)]
+        cmd: tack::TackCmd,
     },
     /// The ledger and the budgets of paid devices.
     Devices {
