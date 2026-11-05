@@ -127,6 +127,34 @@ pub fn identify(path: &Path, uid: u32, cache: &HashCache) -> Result<Ident, Ident
     })
 }
 
+/// The SHA-256 of a program file that is open already, through the cache:
+/// the starter checks with it that the file it runs is the one that was
+/// decided on.
+pub fn identify_open(
+    f: &std::fs::File,
+    m: &std::fs::Metadata,
+    cache: &HashCache,
+) -> Result<String, IdentError> {
+    if m.len() > MAX_PROGRAM {
+        return Err(IdentError::TooLarge);
+    }
+    let key: Key = (
+        m.dev(),
+        m.ino(),
+        m.mtime(),
+        m.mtime_nsec(),
+        m.ctime(),
+        m.ctime_nsec(),
+        m.len(),
+    );
+    if let Some(h) = cache.get(&key) {
+        return Ok(h);
+    }
+    let h = hash(f.take(MAX_PROGRAM + 1)).map_err(|e| IdentError::Unreadable(e.to_string()))?;
+    cache.put(key, h.clone());
+    Ok(h)
+}
+
 fn hash(mut r: impl Read) -> std::io::Result<String> {
     let mut h = Sha256::new();
     let mut buf = vec![0u8; 64 * 1024];

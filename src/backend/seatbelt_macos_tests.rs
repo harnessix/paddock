@@ -214,3 +214,117 @@ fn tack_service_paths_and_plist_are_the_macos_ones() {
         .unwrap();
     assert!(ok.success());
 }
+
+#[test]
+fn tack_descriptors_pass_over_a_socket_on_macos() {
+    use std::io::{Read, Write};
+    use std::os::fd::AsRawFd;
+    let (a, b) = std::os::unix::net::UnixStream::pair().unwrap();
+    let (mut r, w) = std::os::unix::net::UnixStream::pair().unwrap();
+    crate::tack::fdpass::send(&a, b"hello", &[w.as_raw_fd()]).unwrap();
+    drop(w);
+    let mut buf = [0u8; 5];
+    let (n, fds) = crate::tack::fdpass::recv(&b, &mut buf, 3).unwrap();
+    assert_eq!(&buf[..n], b"hello");
+    assert_eq!(fds.len(), 1);
+    let flags = unsafe { libc::fcntl(fds[0].as_raw_fd(), libc::F_GETFD) };
+    assert_ne!(
+        flags & libc::FD_CLOEXEC,
+        0,
+        "a received descriptor is close-on-exec"
+    );
+    let mut got = std::os::unix::net::UnixStream::from(fds.into_iter().next().unwrap());
+    got.write_all(b"x").unwrap();
+    drop(got);
+    let mut s = String::new();
+    r.read_to_string(&mut s).unwrap();
+    assert_eq!(s, "x");
+}
+
+#[test]
+fn tack_the_stand_in_runs_the_program_with_references_on_macos() {
+    use std::os::unix::fs::PermissionsExt;
+    let t = tempfile::tempdir().unwrap();
+    let bin = t.path().join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    let gh = bin.join("gh");
+    std::fs::write(&gh, "#!/bin/sh\n").unwrap();
+    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut vars = std::collections::BTreeMap::new();
+    vars.insert("PATH".to_string(), bin.display().to_string());
+    let env = crate::env::HostEnv::from_parts(t.path().into(), "u".into(), 501, 20, vars);
+    std::fs::create_dir_all(env.paddock_config()).unwrap();
+    std::fs::write(
+        crate::tack::config::file(&env),
+        format!(
+            "[tack.secrets.GH_TOKEN]\n[[tack.secrets.GH_TOKEN.allow]]\nprogram = \"{}\"\n",
+            gh.display()
+        ),
+    )
+    .unwrap();
+    let paths = crate::tack::service::Paths::under(&t.path().join("root"));
+    let r = crate::tack::standin::route(&env, true, None, &["gh".into()], &paths);
+    match r {
+        crate::tack::standin::Route::Direct {
+            note: Some((kind, msg)),
+            ..
+        } => {
+            assert_eq!(kind, "platform");
+            assert!(
+                msg.contains("Linux only") && msg.contains("GH_TOKEN"),
+                "{msg}"
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[test]
+fn tack_a_start_request_gets_a_clear_answer_from_a_macos_tackd() {
+    use crate::tack::daemon::{bind, Server, Users};
+    struct NoCfg;
+    impl Users for NoCfg {
+        fn config(&self, _: u32) -> Result<crate::tack::config::Tack, String> {
+            Ok(Default::default())
+        }
+    }
+    let me = unsafe { libc::geteuid() };
+    let t = tempfile::tempdir().unwrap();
+    let mut table = crate::tack::procs::Fake::default()
+        .add(1, 0, "/sbin/launchd", &[])
+        .add(
+            std::process::id(),
+            1,
+            "/usr/local/bin/paddock",
+            &["paddock"],
+        );
+    table.0.get_mut(&std::process::id()).unwrap().uid = me;
+    let audit = crate::tack::audit::Log::new(t.path().join("log/tackd.log"), me);
+    let server = std::sync::Arc::new(Server::new(Box::new(table), Box::new(NoCfg), audit));
+    assert!(
+        server.starter.is_none(),
+        "tackd starts no program on macOS yet"
+    );
+    let sock = t.path().join("run/tackd.sock");
+    let l = bind(&sock, me).unwrap();
+    let s = server.clone();
+    std::thread::spawn(move || s.serve(l));
+    let req = crate::tack::proto::Start {
+        program: "/bin/ls".into(),
+        argv0: "ls".into(),
+        args: vec![],
+        cwd: "/".into(),
+        caller_pid: std::process::id(),
+        env: vec![],
+        stdio: [false; 3],
+    };
+    let c = std::os::unix::net::UnixStream::connect(&sock).unwrap();
+    let o = crate::tack::standin::session(&c, &req, &[], None, &mut |_| {}).unwrap();
+    // /bin/ls is on no allowlist: a denial, and nothing starts.
+    assert!(
+        matches!(o, crate::tack::standin::Outcome::Denied(_)),
+        "{o:?}"
+    );
+    assert!(crate::tack::standin::from_terminal(libc::SIGINT, 0));
+    assert!(!crate::tack::standin::from_terminal(libc::SIGTERM, 0));
+}

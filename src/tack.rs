@@ -16,17 +16,21 @@
 //! - `report`: `paddock tack list`, the `paddock explain` lines and the
 //!   `paddock doctor` block.
 //!
-//! The service that starts allowlisted programs with the value (tackd)
-//! uses `config::Tack` for the policy, `program::check` for the program
-//! identity and `store::open` for the value. Nothing here starts a
-//! program with a value yet.
+//! The service (tackd, `daemon`) decides with `policy`, from `procs` and
+//! `ident`, and on Linux starts the program with its values (`start`,
+//! `caller`, `launchenv`). The client side is `standin` (`paddock tack
+//! run`), which the stand-ins on PATH run (`tackshims`); `fdpass` hands
+//! it the caller's standard streams.
 
 pub mod audit;
+pub mod caller;
 pub mod client;
 pub mod config;
 pub mod daemon;
+pub mod fdpass;
 pub mod ident;
 pub mod import;
+pub mod launchenv;
 pub mod lines;
 pub mod peer;
 pub mod policy;
@@ -36,10 +40,18 @@ pub mod proto;
 pub mod reference;
 pub mod report;
 pub mod service;
+pub mod standin;
+#[cfg(target_os = "linux")]
+pub mod start;
 pub mod status;
 pub mod store;
+pub mod tackshims;
 
 pub use reference::Reference;
+
+/// How a program that tackd starts is protected from the other processes
+/// of its user, in this version: not yet. Phase 4 adds the protection.
+pub const UNPROTECTED: &str = "unprotected (phase 4)";
 
 use crate::env::HostEnv;
 use std::path::PathBuf;

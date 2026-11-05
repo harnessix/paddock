@@ -26,7 +26,7 @@ pub const KEEP: usize = 4;
 /// The most lines that one audit request returns.
 pub const MAX_LINES: usize = 2000;
 /// The most bytes of lines that one answer carries (under the frame limit).
-const MAX_ANSWER: usize = super::proto::MAX_FRAME - 16 * 1024;
+const MAX_ANSWER: usize = 240 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Record {

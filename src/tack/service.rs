@@ -72,10 +72,17 @@ pub fn unit_text(p: &Paths) -> String {
     format!(
         "# {MARK}
 #
-# tackd decides which program receives which tack secret. It reads the
-# [tack] table of the user who asks, the process table and program files,
-# and writes an audit log. It starts no program and opens no network
+# tackd decides which program receives which tack secret, and starts the
+# allowed programs with their secrets as the user who asked. It reads the
+# [tack] table of that user, the process table and program files, runs the
+# user's store as that user, and writes an audit log. It opens no network
 # connection. paddock tack status shows its state.
+#
+# A program that tackd starts is its child: it inherits every namespace,
+# system call filter and device rule of this unit. So this unit has no
+# private file system view, no private network or /tmp, and no system call
+# filter: the program must see and reach what it would from your shell.
+# tackd's own limits are its capabilities and NoNewPrivileges below.
 
 [Unit]
 Description=paddock tackd: secrets for allowlisted programs
@@ -88,59 +95,34 @@ ExecStart={bin} tack serve
 # Start again after a crash, quickly: clients see a clear error meanwhile.
 Restart=always
 RestartSec=1
+# A restart or an update stops tackd only: the programs that it started
+# keep running (they live in the cgroup of the user who started them).
+KillMode=process
 
 # root, because it reads the configuration and the processes of every
-# user. Only these two capabilities remain:
+# user and starts programs as them. Only these capabilities remain:
 #   CAP_DAC_READ_SEARCH: read each user's configuration and program files.
 #   CAP_SYS_PTRACE: read the program, root folder and namespaces of other
 #   users' processes in /proc (it never attaches to a process).
+#   CAP_SETUID, CAP_SETGID: become the user (and the user's own groups)
+#   before a program or a store tool starts.
+#   CAP_KILL: pass the stand-in's signals on to the program.
+#   CAP_DAC_OVERRIDE: move the program into the caller's cgroup.
 User=root
-CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_SYS_PTRACE
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_SYS_PTRACE CAP_SETUID CAP_SETGID CAP_KILL CAP_DAC_OVERRIDE
 AmbientCapabilities=
-# No setuid program can give it more.
+# No setuid program can give it, or a program it starts, more rights.
 NoNewPrivileges=yes
-# The file system is read-only for it, except its own two folders:
-# the socket folder (RuntimeDirectory, 0755 so every user reaches the
-# socket) and the audit log folder (LogsDirectory, 0700, root only).
-ProtectSystem=strict
-ProtectHome=read-only
+# The socket folder (0755 so every user reaches the socket) and the audit
+# log folder (0700, root only).
 RuntimeDirectory=paddock-tackd
 RuntimeDirectoryMode=0755
 LogsDirectory=paddock
 LogsDirectoryMode=0700
 UMask=0077
-# Its own /tmp and a minimal /dev.
-PrivateTmp=yes
-PrivateDevices=yes
-DevicePolicy=closed
-# No network: a Unix socket in the file system works without one.
-PrivateNetwork=yes
-RestrictAddressFamilies=AF_UNIX
-IPAddressDeny=any
-# It must see every process to walk the caller chain: /proc stays whole.
-ProtectProc=default
-ProcSubset=all
-# Kernel settings, modules, logs, cgroups, clock and host name are out
-# of reach.
-ProtectKernelTunables=yes
-ProtectKernelModules=yes
-ProtectKernelLogs=yes
-ProtectControlGroups=yes
-ProtectClock=yes
-ProtectHostname=yes
-# No new namespaces, real-time scheduling, setuid files, personality
-# changes, or memory that is both writable and executable.
-RestrictNamespaces=yes
-RestrictRealtime=yes
+# No setuid files, no personality changes.
 RestrictSUIDSGID=yes
 LockPersonality=yes
-MemoryDenyWriteExecute=yes
-KeyringMode=private
-# Only the system calls of an ordinary service, for this architecture.
-SystemCallArchitectures=native
-SystemCallFilter=@system-service
-SystemCallFilter=~@privileged @resources @mount @swap @reboot @raw-io @module @obsolete @cpu-emulation @debug
-SystemCallErrorNumber=EPERM
 
 [Install]
 WantedBy=multi-user.target

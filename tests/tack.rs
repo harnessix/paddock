@@ -262,26 +262,68 @@ fn doctor_has_a_tack_block() {
 }
 
 #[test]
-fn setup_and_remove_need_root_and_the_host() {
+fn setup_and_remove_without_root_are_the_stand_ins_and_on_the_host_only() {
     let w = World::new("ok");
     if unsafe { libc::geteuid() } == 0 {
         return;
     }
+    w.config(
+        "[tack.secrets.GH_TOKEN]\n[[tack.secrets.GH_TOKEN.allow]]\nprogram = \"/usr/bin/gh\"\n",
+    );
+    // As the user: the stand-ins and the PATH lines, no system file.
+    let o = w.paddock(&["tack", "setup"], &[]);
+    assert!(o.status.success(), "{}", text(&o));
+    let shim = w.root.join("data/paddock/tack/bin/gh");
+    let script = std::fs::read_to_string(&shim).unwrap_or_default();
+    assert!(script.contains("tack run --shim -- 'gh'"), "{}", text(&o));
+    assert!(text(&o).contains("Stand-ins for gh"), "{}", text(&o));
+    let o = w.paddock(&["tack", "remove"], &[]);
+    assert!(o.status.success(), "{}", text(&o));
+    assert!(!shim.exists());
     for cmd in ["setup", "remove"] {
-        let o = w.paddock(&["tack", cmd], &[]);
-        assert!(!o.status.success());
-        assert!(
-            text(&o).contains(&format!("sudo paddock tack {cmd}")),
-            "{}",
-            text(&o)
-        );
-        // In a sandbox it says that first.
+        // In a sandbox it refuses, and says why.
         let o = w.paddock(&["tack", cmd], &[("PADDOCK", "1")]);
+        assert!(!o.status.success());
         assert!(text(&o).contains("runs on the host only"), "{}", text(&o));
     }
     let o = w.paddock(&["tack", "serve"], &[]);
     assert!(!o.status.success());
     assert!(text(&o).contains("tackd runs as root"), "{}", text(&o));
+}
+
+#[test]
+fn a_stand_in_without_tackd_runs_the_program_with_the_reference() {
+    let w = World::new("ok");
+    let gh = w.root.join("bin/gh");
+    std::fs::write(&gh, "#!/bin/sh\necho \"gh $* token=$GH_TOKEN\"\nexit 3\n").unwrap();
+    std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
+    w.config(&format!(
+        "[tack.secrets.GH_TOKEN]\n[[tack.secrets.GH_TOKEN.allow]]\nprogram = \"{}\"\n",
+        gh.display()
+    ));
+    let installed = std::path::Path::new("/etc/systemd/system/paddock-tackd.service").exists();
+    if installed || !cfg!(target_os = "linux") {
+        return;
+    }
+    let run = w.root.join("run").display().to_string();
+    let env = [
+        ("GH_TOKEN", "tack://GH_TOKEN"),
+        ("XDG_RUNTIME_DIR", run.as_str()),
+    ];
+    let o = w.paddock(&["tack", "run", "gh", "pr", "list"], &env);
+    assert_eq!(o.status.code(), Some(3), "{}", text(&o));
+    assert_eq!(
+        String::from_utf8_lossy(&o.stdout),
+        "gh pr list token=tack://GH_TOKEN\n"
+    );
+    assert!(text(&o).contains("tackd is not installed"), "{}", text(&o));
+    // Not in the output: the note is once per session.
+    let o = w.paddock(&["tack", "run", "gh"], &env);
+    assert!(
+        !String::from_utf8_lossy(&o.stderr).contains("not installed"),
+        "{}",
+        text(&o)
+    );
 }
 
 #[test]

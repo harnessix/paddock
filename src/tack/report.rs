@@ -15,8 +15,8 @@ use std::time::Duration;
 /// How long doctor waits for the keyring.
 const DOCTOR_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// What every process sees in phase 1, said once in each report.
-pub const PHASE_NOTE: &str = "this paddock does not give the values to programs yet: every process sees the reference, such as tack://NAME (README \"tack\")";
+/// Who gets the values in this version, said once in each report.
+pub const PHASE_NOTE: &str = "with tackd on Linux, an allowlisted program that starts through its stand-in on PATH (paddock tack setup) or through paddock tack run gets the values, not yet protected from other processes of your user; every other process sees the reference, such as tack://NAME (README \"tack\")";
 
 /// One secret for `paddock tack list`.
 #[derive(Debug, Serialize)]
@@ -208,6 +208,9 @@ pub fn doctor_with(env: &HostEnv, open: import::Opener) -> Vec<String> {
             "  note     {backups} backups in {} hold old files with plain values: delete them once the new files work",
             super::show(env, &super::backup_dir(env))
         ));
+    }
+    if let Ok(c) = config::load(env) {
+        out.extend(super::tackshims::doctor_lines(env, &c));
     }
     out.push(format!("  note     {PHASE_NOTE}"));
     out

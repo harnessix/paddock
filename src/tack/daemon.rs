@@ -1,5 +1,5 @@
 //! tackd: the root service that decides which program receives which
-//! secret. It starts nothing yet: it answers launch requests and writes the
+//! secret, starts the allowed programs with it (Linux), and writes the
 //! audit log.
 //!
 //! - It listens on a socket that every user can reach (0666, in a
@@ -15,6 +15,11 @@
 //!   tackd up for the others.
 //! - Every decision is written to the audit log before the answer is
 //!   sent. When it cannot be written, tackd does not allow.
+//! - A start request that is allowed starts the program (`Starter`; on
+//!   Linux `start::Linux`) and keeps the connection until the program ends:
+//!   tackd sends what happens to the program and passes on the signals
+//!   that the stand-in sends. A running program does not hold one of the
+//!   connection slots above; it counts against `MAX_RUNNING_PER_UID`.
 
 use super::audit::{Log, Record};
 use super::config::{self, Tack};
@@ -22,8 +27,9 @@ use super::ident::{self, HashCache};
 use super::peer;
 use super::policy::{self, Input, Peer};
 use super::procs::{self, Table};
-use super::proto::{self, Answer, Decision, Request, Status, Verdict};
+use super::proto::{self, Answer, Control, Decision, Event, Request, Start, Status, Verdict};
 use std::io::{self, Read};
+use std::os::fd::OwnedFd;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
@@ -41,6 +47,31 @@ pub const MAX_PER_UID: usize = 6;
 pub const FRAME_DEADLINE: Duration = Duration::from_secs(5);
 /// The largest user configuration that tackd reads.
 const MAX_CONFIG: u64 = 1 << 20;
+/// The most programs that tackd runs at once, and for one uid.
+pub const MAX_RUNNING: usize = 1024;
+pub const MAX_RUNNING_PER_UID: usize = 128;
+
+/// Starts an allowed program. Linux: `start::Linux`.
+pub trait Starter: Send + Sync {
+    fn start(
+        &self,
+        peer: Peer,
+        req: &Start,
+        d: &Decision,
+        cfg: &Tack,
+        fds: Vec<OwnedFd>,
+    ) -> Result<Box<dyn Program>, String>;
+}
+
+/// A program that tackd started.
+pub trait Program: Send + Sync {
+    fn pid(&self) -> u32;
+    /// For the audit: the protection, the cgroup, dropped variables.
+    fn note(&self) -> String;
+    /// Wait for what happens next. `Exited` and `Killed` are the last.
+    fn next(&self) -> Event;
+    fn signal(&self, sig: i32, group: bool) -> Result<(), String>;
+}
 
 /// Where tackd finds a user's configuration.
 pub trait Users: Send + Sync {
@@ -52,6 +83,11 @@ pub struct Passwd;
 
 /// The home folder of a uid, from the passwd database (thread-safe).
 pub fn home_of(uid: u32) -> Option<PathBuf> {
+    passwd(uid).map(|(_, home)| home)
+}
+
+/// The name and home folder of a uid, from the passwd database.
+pub fn passwd(uid: u32) -> Option<(String, PathBuf)> {
     let mut buf = vec![0u8; 16 * 1024];
     let mut pw: libc::passwd = unsafe { std::mem::zeroed() };
     let mut out: *mut libc::passwd = std::ptr::null_mut();
@@ -66,14 +102,20 @@ pub fn home_of(uid: u32) -> Option<PathBuf> {
             &mut out,
         )
     };
-    if r != 0 || out.is_null() || pw.pw_dir.is_null() {
+    if r != 0 || out.is_null() || pw.pw_dir.is_null() || pw.pw_name.is_null() {
         return None;
     }
-    // SAFETY: pw_dir is a NUL-terminated string in buf.
-    let dir = unsafe { std::ffi::CStr::from_ptr(pw.pw_dir) };
+    // SAFETY: pw_dir and pw_name are NUL-terminated strings in buf.
+    let (dir, name) = unsafe {
+        (
+            std::ffi::CStr::from_ptr(pw.pw_dir),
+            std::ffi::CStr::from_ptr(pw.pw_name),
+        )
+    };
     use std::os::unix::ffi::OsStrExt;
     let p = PathBuf::from(std::ffi::OsStr::from_bytes(dir.to_bytes()));
-    p.is_absolute().then_some(p)
+    let name = name.to_string_lossy().into_owned();
+    p.is_absolute().then_some((name, p))
 }
 
 /// The configuration file that tackd reads for a home folder.
@@ -133,13 +175,16 @@ struct Counters {
     allowed: AtomicU64,
     denied: AtomicU64,
     errors: AtomicU64,
+    started: AtomicU64,
 }
 
 pub struct Server {
     pub table: Box<dyn Table + Send + Sync>,
     pub users: Box<dyn Users>,
     pub audit: Log,
-    pub cache: HashCache,
+    pub cache: Arc<HashCache>,
+    /// None: this tackd decides, and starts nothing (macOS for now).
+    pub starter: Option<Box<dyn Starter>>,
     pub agents: Vec<String>,
     pub signer: fn(&Path) -> Option<String>,
     pub started: u64,
@@ -150,6 +195,31 @@ pub struct Server {
     counts: Counters,
     conns: AtomicUsize,
     per_uid: std::sync::Mutex<std::collections::HashMap<u32, usize>>,
+    running: std::sync::Mutex<std::collections::HashMap<u32, usize>>,
+    pub max_running: usize,
+    pub max_running_per_uid: usize,
+}
+
+/// What a request comes to.
+enum Handled {
+    Answer(Answer),
+    /// A start request, decided; the configuration it was decided with.
+    Start(Box<Start>, Decision, Option<Tack>),
+}
+
+/// A program's place in the count of running programs, given back on drop.
+struct RunSlot<'a>(&'a Server, u32);
+
+impl Drop for RunSlot<'_> {
+    fn drop(&mut self) {
+        let mut m = self.0.running.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(n) = m.get_mut(&self.1) {
+            *n -= 1;
+            if *n == 0 {
+                m.remove(&self.1);
+            }
+        }
+    }
 }
 
 /// One connection's place in the count of its uid, given back on drop.
@@ -173,7 +243,8 @@ impl Server {
             table,
             users,
             audit,
-            cache: HashCache::default(),
+            cache: Arc::new(HashCache::default()),
+            starter: None,
             agents: procs::agent_names(),
             signer: ident::signer,
             started: crate::state::now(),
@@ -183,11 +254,24 @@ impl Server {
             counts: Counters::default(),
             conns: AtomicUsize::new(0),
             per_uid: Default::default(),
+            running: Default::default(),
+            max_running: MAX_RUNNING,
+            max_running_per_uid: MAX_RUNNING_PER_UID,
         }
     }
 
     /// Decide a launch request and put it on record.
     fn launch(&self, peer: Peer, alive: &dyn Fn() -> bool, req: &proto::Launch) -> Decision {
+        self.decide(peer, alive, req).0
+    }
+
+    /// Decide, put it on record, and keep the configuration for a start.
+    fn decide(
+        &self,
+        peer: Peer,
+        alive: &dyn Fn() -> bool,
+        req: &proto::Launch,
+    ) -> (Decision, Option<Tack>) {
         let cfg = self.users.config(peer.uid);
         let chain = procs::chain(self.table.as_ref(), peer.pid, &self.agents);
         let path = Path::new(&req.program);
@@ -227,7 +311,20 @@ impl Server {
             Verdict::Allow => self.counts.allowed.fetch_add(1, Ordering::Relaxed),
             _ => self.counts.denied.fetch_add(1, Ordering::Relaxed),
         };
-        d
+        (d, cfg.ok())
+    }
+
+    /// An audit line about a start: `event` is started, ended or failed.
+    fn audit_start(&self, peer: Peer, program: &str, d: &Decision, event: &str, reason: String) {
+        let mut rec = Record::from_decision(crate::state::now(), peer, program, d);
+        rec.decision = event.to_string();
+        rec.reason = reason;
+        if let Err(e) = self.audit.write(&rec) {
+            eprintln!(
+                "tackd: cannot write the audit log {}: {e}",
+                self.audit.path().display()
+            );
+        }
     }
 
     pub fn status(&self) -> Status {
@@ -241,13 +338,27 @@ impl Server {
             allowed: self.counts.allowed.load(Ordering::Relaxed),
             denied: self.counts.denied.load(Ordering::Relaxed),
             errors: self.counts.errors.load(Ordering::Relaxed),
+            started_programs: self.counts.started.load(Ordering::Relaxed),
+            running: self
+                .running
+                .lock()
+                .map(|m| m.values().sum::<usize>() as u64)
+                .unwrap_or(0),
             audit: self.audit.path().display().to_string(),
             audit_error,
         }
     }
 
-    /// The answer to one request frame from `peer`.
+    /// The answer to one request frame from `peer`. A start request gets
+    /// its decision here; only a connection can start a program.
     pub fn answer(&self, peer: Peer, alive: &dyn Fn() -> bool, body: &[u8]) -> Answer {
+        match self.handle(peer, alive, body) {
+            Handled::Answer(a) => a,
+            Handled::Start(_, d, _) => Answer::Decision(d),
+        }
+    }
+
+    fn handle(&self, peer: Peer, alive: &dyn Fn() -> bool, body: &[u8]) -> Handled {
         self.counts.requests.fetch_add(1, Ordering::Relaxed);
         let req = match proto::parse_request(body) {
             Ok(r) => r,
@@ -257,20 +368,25 @@ impl Server {
                     "tackd: refused a request of uid {} pid {}: {e}",
                     peer.uid, peer.pid
                 );
-                return Answer::error(e);
+                return Handled::Answer(Answer::error(e));
             }
         };
-        match req {
+        Handled::Answer(match req {
             Request::Launch(l) => Answer::Decision(self.launch(peer, alive, &l)),
             Request::Status {} => Answer::Status(self.status()),
             Request::Audit { lines } => Answer::Audit {
                 lines: self.audit.read((peer.uid != 0).then_some(peer.uid), lines),
             },
-        }
+            Request::Start(s) => {
+                let (d, cfg) = self.decide(peer, alive, &s.launch());
+                return Handled::Start(Box::new(s), d, cfg);
+            }
+        })
     }
 
-    /// Serve one connection: one request, one answer.
-    fn serve_conn(&self, conn: UnixStream) -> io::Result<()> {
+    /// Serve one connection: one request, one answer; for a start that
+    /// runs, the program to stay with.
+    fn serve_conn(&self, conn: UnixStream) -> io::Result<Option<Session>> {
         conn.set_write_timeout(Some(self.deadline))?;
         let cred = match peer::of(&conn) {
             Ok(c) => c,
@@ -297,14 +413,32 @@ impl Server {
                         "tackd is busy with {} requests of your user: try again",
                         self.max_per_uid
                     ))),
-                );
+                )
+                .map(|_| None);
             }
             *n += 1;
             UidSlot(self, cred.uid)
         };
-        let mut r = Deadline::new(&conn, self.deadline);
-        let answer = match proto::read_frame(&mut r) {
-            Ok(body) => self.answer(cred.peer(), &|| cred.alive(), &body),
+        let answer = match read_request(&conn, self.deadline) {
+            Ok((body, fds)) => match self.handle(cred.peer(), &|| cred.alive(), &body) {
+                Handled::Answer(a) => a,
+                Handled::Start(req, d, _) if d.verdict != Verdict::Allow => {
+                    drop(fds);
+                    let _ = req;
+                    Answer::Decision(d)
+                }
+                Handled::Start(req, d, cfg) => {
+                    let peer = cred.peer();
+                    let p = self.start(&conn, peer, &req, d.clone(), cfg, fds)?;
+                    return Ok(p.map(|p| Session {
+                        conn,
+                        peer,
+                        req,
+                        decision: d,
+                        program: p,
+                    }));
+                }
+            },
             Err(e) => {
                 self.counts.errors.fetch_add(1, Ordering::Relaxed);
                 let msg = match e.kind() {
@@ -317,7 +451,7 @@ impl Server {
             }
         };
         let mut w = &conn;
-        proto::write_frame(&mut w, &proto::envelope(answer))
+        proto::write_frame(&mut w, &proto::envelope(answer)).map(|_| None)
     }
 
     /// Accept connections until the listener fails.
@@ -349,10 +483,13 @@ impl Server {
             let spawned = std::thread::Builder::new()
                 .name("tackd-conn".into())
                 .spawn(move || {
-                    if let Err(e) = me.serve_conn(conn) {
-                        log::debug!("tackd connection: {e}");
-                    }
+                    let r = me.serve_conn(conn);
                     me.conns.fetch_sub(1, Ordering::SeqCst);
+                    match r {
+                        Ok(Some(s)) => me.supervise(s.conn, s.peer, &s.req, &s.decision, s.program),
+                        Ok(None) => {}
+                        Err(e) => log::debug!("tackd connection: {e}"),
+                    }
                 });
             if let Err(e) = spawned {
                 self.conns.fetch_sub(1, Ordering::SeqCst);
@@ -360,6 +497,45 @@ impl Server {
             }
         }
     }
+}
+
+/// A started program and its connection, for `supervise`.
+struct Session {
+    conn: UnixStream,
+    peer: Peer,
+    req: Box<Start>,
+    decision: Decision,
+    program: Box<dyn Program>,
+}
+
+/// Read one request frame within `deadline`, with the descriptors that
+/// came on its first bytes.
+fn read_request(conn: &UnixStream, deadline: Duration) -> io::Result<(Vec<u8>, Vec<OwnedFd>)> {
+    let end = Instant::now() + deadline;
+    conn.set_read_timeout(Some(deadline))?;
+    let mut len = [0u8; 4];
+    let (mut got, fds) = super::fdpass::recv(conn, &mut len, super::fdpass::MAX_FDS)?;
+    if got == 0 {
+        return Err(io::ErrorKind::UnexpectedEof.into());
+    }
+    let mut r = Deadline { s: conn, end };
+    while got < 4 {
+        let n = r.read(&mut len[got..])?;
+        if n == 0 {
+            return Err(io::ErrorKind::UnexpectedEof.into());
+        }
+        got += n;
+    }
+    let n = u32::from_be_bytes(len) as usize;
+    if n > proto::MAX_FRAME {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("a message of {n} bytes; the limit is {}", proto::MAX_FRAME),
+        ));
+    }
+    let mut body = vec![0u8; n];
+    r.read_exact(&mut body)?;
+    Ok((body, fds))
 }
 
 fn refuse(mut d: Decision, reason: String) -> Decision {
@@ -375,15 +551,6 @@ fn refuse(mut d: Decision, reason: String) -> Decision {
 struct Deadline<'a> {
     s: &'a UnixStream,
     end: Instant,
-}
-
-impl<'a> Deadline<'a> {
-    fn new(s: &'a UnixStream, d: Duration) -> Self {
-        Deadline {
-            s,
-            end: Instant::now() + d,
-        }
-    }
 }
 
 impl Read for Deadline<'_> {
@@ -458,11 +625,16 @@ pub fn main(paths: &super::service::Paths) -> anyhow::Result<i32> {
             paths.audit.display()
         );
     }
-    let server = Arc::new(Server::new(
-        Box::new(procs::Kernel::new()),
-        Box::new(Passwd),
-        audit,
-    ));
+    let server = Server::new(Box::new(procs::Kernel::new()), Box::new(Passwd), audit);
+    #[cfg(target_os = "linux")]
+    let server = {
+        let mut server = server;
+        let mut l = super::start::Linux::new(Box::new(super::start::Stores));
+        l.cache = server.cache.clone();
+        server.starter = Some(Box::new(l));
+        server
+    };
+    let server = Arc::new(server);
     let l = bind(&paths.socket, 0)?;
     eprintln!(
         "tackd {} started: pid {}, socket {}, audit {}, protocol {}",
@@ -475,6 +647,9 @@ pub fn main(paths: &super::service::Paths) -> anyhow::Result<i32> {
     server.serve(l)?;
     Ok(1)
 }
+
+#[path = "daemon_run.rs"]
+mod run;
 
 #[cfg(test)]
 #[path = "daemon_tests.rs"]

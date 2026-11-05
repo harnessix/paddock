@@ -70,6 +70,14 @@ pub fn lines(s: &State, ours: &str) -> Vec<String> {
                 "  ok       socket {} answers (protocol {:?})",
                 s.socket, st.protocols
             ));
+            if cfg!(target_os = "linux") {
+                out.push(format!(
+                    "  ok       {} programs started with their secrets, {} running; {}",
+                    st.started_programs,
+                    st.running,
+                    super::UNPROTECTED
+                ));
+            }
             if st.version != ours {
                 out.push(format!(
                     "  CHECK    tackd is version {} and this paddock is {ours}: run sudo paddock tack setup to update tackd",
@@ -146,6 +154,8 @@ mod tests {
             allowed: 2,
             denied: 2,
             errors: 1,
+            started_programs: 3,
+            running: 1,
             audit: "/var/log/paddock/tackd.log".into(),
             audit_error: None,
         }
@@ -180,7 +190,11 @@ mod tests {
         );
         assert!(l[0].contains("2 allowed, 2 denied, 1 refused"), "{l:?}");
         assert!(l[1].contains("socket /run/paddock-tackd/tackd.sock answers"));
-        assert_eq!(l.len(), 2);
+        let n = if cfg!(target_os = "linux") { 3 } else { 2 };
+        assert_eq!(l.len(), n);
+        if n == 3 {
+            assert!(l[2].contains("3 programs started") && l[2].contains("1 running"));
+        }
     }
 
     #[test]
@@ -236,7 +250,7 @@ mod tests {
         );
         assert_eq!(
             lines_for(&plain, &state(true, Ok(st("1.0.0"))), "1.0.0").len(),
-            2
+            if cfg!(target_os = "linux") { 3 } else { 2 }
         );
     }
 

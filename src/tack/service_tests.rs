@@ -88,22 +88,37 @@ fn the_unit_runs_the_root_copy_with_least_privilege() {
     for want in [
         "ExecStart=/usr/local/libexec/paddock/tackd tack serve",
         "User=root",
-        "CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_SYS_PTRACE\n",
+        "CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_SYS_PTRACE CAP_SETUID CAP_SETGID CAP_KILL CAP_DAC_OVERRIDE\n",
         "NoNewPrivileges=yes",
-        "ProtectSystem=strict",
-        "ProtectHome=read-only",
         "RuntimeDirectory=paddock-tackd",
         "RuntimeDirectoryMode=0755",
         "LogsDirectoryMode=0700",
-        "PrivateNetwork=yes",
-        "RestrictAddressFamilies=AF_UNIX",
-        "ProcSubset=all",
-        "SystemCallFilter=@system-service",
-        "MemoryDenyWriteExecute=yes",
+        "KillMode=process",
         "Restart=always",
         "WantedBy=multi-user.target",
     ] {
         assert!(text.contains(want), "missing {want:?}");
+    }
+    // A started program inherits the unit's namespaces and filters: none
+    // that would change what it sees or can do.
+    for gone in [
+        "ProtectSystem",
+        "ProtectHome",
+        "PrivateTmp",
+        "PrivateNetwork",
+        "PrivateDevices",
+        "RestrictAddressFamilies",
+        "SystemCallFilter",
+        "MemoryDenyWriteExecute",
+        "RestrictNamespaces",
+        "IPAddressDeny",
+        "ProtectHostname",
+        "SystemCallArchitectures",
+    ] {
+        assert!(
+            !text.lines().any(|l| l.starts_with(gone)),
+            "{gone} would reach the started programs"
+        );
     }
     if !cfg!(target_os = "macos") {
         assert_eq!(p.socket, Path::new("/run/paddock-tackd/tackd.sock"));

@@ -75,7 +75,40 @@ pub fn open(env: &HostEnv, cfg: &SecretCfg) -> Result<Box<dyn Store>, StoreError
         Backend::Keyring => Ok(Box::new(Keyring::find(env)?)),
         Backend::Command => Ok(Box::new(CommandStore {
             cmd: cfg.command.clone(),
+            prepare: None,
         })),
+    }
+}
+
+/// What tackd does to each store command before it starts: run it as the
+/// calling user, with that user's environment.
+pub type Prepare = std::sync::Arc<dyn Fn(&mut Command) + Send + Sync>;
+
+/// The store of one secret for tackd: the tools run through `prepare`;
+/// `env` (the caller's, as tackd sees it) finds the tools.
+pub fn open_as(
+    env: &HostEnv,
+    cfg: &SecretCfg,
+    prepare: Prepare,
+) -> Result<Box<dyn Store>, StoreError> {
+    match cfg.backend {
+        Backend::Keyring => {
+            let mut k = Keyring::find(env)?;
+            k.prepare = Some(prepare);
+            Ok(Box::new(k))
+        }
+        Backend::Command => {
+            let mut cmd = cfg.command.clone();
+            // The first word by the caller's PATH; tackd's own PATH is
+            // not the user's.
+            if let Some(p) = cmd.first().and_then(|w| env.which(w)) {
+                cmd[0] = p.display().to_string();
+            }
+            Ok(Box::new(CommandStore {
+                cmd,
+                prepare: Some(prepare),
+            }))
+        }
     }
 }
 
@@ -90,6 +123,7 @@ pub enum Tool {
 pub struct Keyring {
     tool: Tool,
     timeout: Duration,
+    prepare: Option<Prepare>,
 }
 
 impl Keyring {
@@ -121,6 +155,7 @@ impl Keyring {
         Self {
             tool,
             timeout: TIMEOUT,
+            prepare: None,
         }
     }
 
@@ -155,7 +190,7 @@ impl Store for Keyring {
                 vec!["find-generic-password", "-s", SERVICE, "-a", name, "-w"],
             ),
         };
-        let out = run(prog, &args, None, self.timeout)?;
+        let out = run(prog, &args, None, self.timeout, self.prepare.as_ref())?;
         match (&self.tool, out.code) {
             (Tool::SecretTool(_), 0) if !out.stdout.is_empty() => Ok(out.stdout),
             // secret-tool says nothing when there is no such item.
@@ -188,6 +223,7 @@ impl Store for Keyring {
                     &["store", &label, "service", SERVICE, "name", name],
                     Some(value),
                     self.timeout,
+                    self.prepare.as_ref(),
                 )?
             }
             Tool::Security(p) => {
@@ -199,7 +235,7 @@ impl Store for Keyring {
                     crate::manifest::hex(value.as_bytes())
                 );
                 let line = Secret::from(line);
-                run(p, &["-i"], Some(&line), self.timeout)?
+                run(p, &["-i"], Some(&line), self.timeout, self.prepare.as_ref())?
             }
         };
         if out.code != 0 {
@@ -212,6 +248,7 @@ impl Store for Keyring {
 /// A password manager command. It is only read.
 pub struct CommandStore {
     pub cmd: Vec<String>,
+    pub prepare: Option<Prepare>,
 }
 
 impl Store for CommandStore {
@@ -230,7 +267,12 @@ impl Store for CommandStore {
         let Some(prog) = self.cmd.first() else {
             return Err(StoreError::Unavailable("no command".into()));
         };
-        crate::credentials::run_command(&self.cmd).map_err(|e| {
+        let none = |_: &mut Command| {};
+        let prepare: &dyn Fn(&mut Command) = match &self.prepare {
+            Some(p) => p.as_ref(),
+            None => &none,
+        };
+        crate::credentials::run_command(&self.cmd, prepare).map_err(|e| {
             let msg = format!("{e:#}");
             if msg.starts_with("cannot run") {
                 StoreError::Unavailable(format!("{msg}: is {prog} installed and on PATH?"))
@@ -298,8 +340,12 @@ fn run(
     args: &[&str],
     input: Option<&Secret>,
     timeout: Duration,
+    prepare: Option<&Prepare>,
 ) -> Result<Output, StoreError> {
     let mut cmd = Command::new(prog);
+    if let Some(p) = prepare {
+        p(&mut cmd);
+    }
     cmd.args(args)
         .env("LC_ALL", "C")
         .stdin(if input.is_some() {
@@ -521,6 +567,7 @@ esac
     fn a_command_store_reads_and_refuses_to_write() {
         let c = CommandStore {
             cmd: vec!["printf".into(), "fake-from-manager".into()],
+            prepare: None,
         };
         assert_eq!(c.get("A").unwrap().as_str(), "fake-from-manager");
         assert!(!c.writable());
@@ -531,6 +578,7 @@ esac
             .contains("password manager"));
         let gone = CommandStore {
             cmd: vec!["/no/such/manager".into()],
+            prepare: None,
         };
         assert!(matches!(
             gone.get("A").unwrap_err(),
@@ -538,6 +586,7 @@ esac
         ));
         let empty = CommandStore {
             cmd: vec!["true".into()],
+            prepare: None,
         };
         assert_eq!(empty.get("A").unwrap_err(), StoreError::Missing);
     }

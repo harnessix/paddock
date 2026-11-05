@@ -3,7 +3,7 @@ use clap::Subcommand;
 use paddock::env::HostEnv;
 use paddock::tack::proto::{Answer, Launch, Request, Verdict};
 use paddock::tack::service::{self, Paths};
-use paddock::tack::{audit, client, config, import, report, status, store};
+use paddock::tack::{audit, client, config, import, report, status, store, tackshims};
 use std::path::PathBuf;
 
 #[derive(Subcommand)]
@@ -32,12 +32,15 @@ pub(crate) enum TackCmd {
         #[arg(long)]
         json: bool,
     },
-    /// Install tackd, the system service that decides which program
-    /// receives which secret, or update it to this paddock. Run it with
-    /// sudo, and again after each paddock update.
+    /// Without sudo: put a stand-in for each allowlisted program on PATH
+    /// (login shells, environment.d, sandboxes). With sudo: install tackd,
+    /// the system service that decides and starts the programs, or update
+    /// it to this paddock, and the stand-ins of the user who ran sudo. Run
+    /// it again after each paddock update and after you change [tack].
     Setup,
-    /// Stop tackd and delete its service, binary, socket and audit log.
-    /// Run it with sudo.
+    /// Without sudo: delete your stand-ins and their PATH lines. With sudo:
+    /// stop tackd and delete its service, binary, socket and audit log, and
+    /// the stand-ins of the user who ran sudo.
     Remove {
         /// Keep the audit log.
         #[arg(long)]
@@ -67,6 +70,23 @@ pub(crate) enum TackCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Start a program through tackd, with the secrets that its allowlist
+    /// gives it. The stand-ins on PATH run this. Exit code: the program's;
+    /// 77 when tackd refuses, 69 when tackd is installed but does not
+    /// answer or cannot start it, 70 when tackd went away while it ran.
+    Run {
+        /// Run as the stand-in of the program: skip the stand-in folder
+        /// when looking for the program, and say nothing for a program that
+        /// no allowlist names.
+        #[arg(long, hide = true)]
+        shim: bool,
+        /// The secret names of the program, for a stand-in in a sandbox.
+        #[arg(long, hide = true)]
+        secrets: Option<String>,
+        /// The program and its arguments.
+        #[arg(required = true, trailing_var_arg = true, allow_hyphen_values = true)]
+        command: Vec<String>,
+    },
     /// tackd itself, as the system service runs it.
     #[command(hide = true)]
     Serve,
@@ -81,6 +101,11 @@ pub(crate) fn run(env: &HostEnv, cmd: TackCmd) -> Result<i32> {
         TackCmd::Audit { lines, json } => audit_cmd(lines, json),
         TackCmd::Check { command, json } => check(env, command, json),
         TackCmd::Serve => paddock::tack::daemon::main(&Paths::system()),
+        TackCmd::Run {
+            shim,
+            secrets,
+            command,
+        } => paddock::tack::standin::run(env, shim, secrets.as_deref(), &command),
         TackCmd::Import {
             names,
             files,
@@ -197,7 +222,84 @@ fn need_root(env: &HostEnv, what: &str) -> Result<()> {
     Ok(())
 }
 
+fn is_root() -> bool {
+    // SAFETY: geteuid cannot fail.
+    unsafe { libc::geteuid() == 0 }
+}
+
+/// The user part of setup: the stand-ins and PATH.
+fn setup_user(env: &HostEnv) -> Result<i32> {
+    paddock::update::refuse_in_sandbox(env, "paddock tack setup")?;
+    let cfg = config::load(env)?;
+    let me = paddock::update::current_binary()?;
+    let names = tackshims::names(&cfg);
+    for l in tackshims::install(env, &cfg, &me)? {
+        println!("{l}");
+    }
+    if names.is_empty() {
+        println!("No program is allowlisted in [tack] yet: no stand-in to write. Run paddock tack setup again after you add one.");
+    } else {
+        println!(
+            "Stand-ins for {} are in {}, first on PATH in new login shells and in the systemd user session.",
+            names.join(", "),
+            paddock::tack::show(env, &tackshims::dir(env))
+        );
+        println!("Log in again (or start a new login shell) so that they are used. paddock doctor shows what is not covered.");
+    }
+    let installed = service::ours(&Paths::system().unit);
+    if !installed && cfg!(target_os = "linux") {
+        println!("tackd is not installed: the stand-ins run the programs with the references until you run sudo paddock tack setup.");
+    }
+    Ok(0)
+}
+
+/// Run the user part as the user who ran sudo, when there is one.
+fn as_sudo_user(what: &str) -> Result<()> {
+    let uid = std::env::var("SUDO_UID")
+        .ok()
+        .and_then(|u| u.parse::<u32>().ok());
+    let gid = std::env::var("SUDO_GID")
+        .ok()
+        .and_then(|u| u.parse::<u32>().ok());
+    let (Some(uid), Some(gid)) = (uid, gid) else {
+        return Ok(());
+    };
+    if uid == 0 {
+        return Ok(());
+    }
+    let Some((user, home)) = paddock::tack::daemon::passwd(uid) else {
+        return Ok(());
+    };
+    let me = paddock::update::current_binary()?;
+    use std::os::unix::process::CommandExt;
+    println!(
+        "
+For {user}:"
+    );
+    let st = std::process::Command::new(&me)
+        .args(["tack", what])
+        .uid(uid)
+        .gid(gid)
+        .env_clear()
+        .env("HOME", &home)
+        .env("USER", &user)
+        .env("LOGNAME", &user)
+        .env("PATH", "/usr/local/bin:/usr/bin:/bin")
+        .current_dir(&home)
+        .status()
+        .with_context(|| format!("cannot run paddock tack {what} as {user}"))?;
+    if !st.success() {
+        eprintln!(
+            "paddock tack {what} as {user} failed ({st}): run paddock tack {what} without sudo"
+        );
+    }
+    Ok(())
+}
+
 fn setup(env: &HostEnv) -> Result<i32> {
+    if !is_root() {
+        return setup_user(env);
+    }
     need_root(env, "paddock tack setup")?;
     if cfg!(target_os = "linux") && !std::path::Path::new("/run/systemd/system").is_dir() {
         anyhow::bail!("tackd needs systemd as the system manager, and this host does not run it. tack stays in rootless mode");
@@ -235,10 +337,25 @@ fn setup(env: &HostEnv) -> Result<i32> {
     }
     println!("\ntackd reads the [tack] table of each user from ~/.config/paddock/config.toml. Run sudo paddock tack setup again after each paddock update.");
     println!("Note: {}.", report::PHASE_NOTE);
+    as_sudo_user("setup")?;
     Ok(0)
 }
 
 fn remove(env: &HostEnv, keep_audit: bool) -> Result<i32> {
+    if !is_root() {
+        paddock::update::refuse_in_sandbox(env, "paddock tack remove")?;
+        let out = tackshims::remove(env)?;
+        if out.is_empty() {
+            println!("No stand-ins are set up for you: nothing to remove.");
+        }
+        for l in out {
+            println!("{l}");
+        }
+        if service::ours(&Paths::system().unit) {
+            println!("tackd stays installed: sudo paddock tack remove removes it.");
+        }
+        return Ok(0);
+    }
     need_root(env, "paddock tack remove")?;
     let out = service::remove(&Paths::system(), keep_audit, &service::System)?;
     if out.is_empty() {
@@ -247,6 +364,7 @@ fn remove(env: &HostEnv, keep_audit: bool) -> Result<i32> {
     for l in out {
         println!("{l}");
     }
+    as_sudo_user("remove")?;
     Ok(0)
 }
 

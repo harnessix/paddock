@@ -2,7 +2,7 @@
 894 src/backend/docker.rs
 1137 src/borrow.rs
 1625 src/build.rs
-1397 src/credentials.rs
+1348 src/credentials.rs
 993 src/credentials/gateway.rs
 850 src/detect.rs
 803 src/devices/blocking.rs

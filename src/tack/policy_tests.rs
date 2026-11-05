@@ -43,7 +43,7 @@ fn launch(program: &Path, args: &[&str]) -> Launch {
     Launch {
         program: program.display().to_string(),
         args: args.iter().map(|s| s.to_string()).collect(),
-        cwd: "/home/u/p".into(),
+        cwd: "/home/demo/p".into(),
         caller_pid: PID,
     }
 }
@@ -191,7 +191,7 @@ fn a_sandbox_or_agent_among_the_callers_is_refused_by_default() {
         d.reason
     );
     assert!(d.chain.iter().any(|c| c.contains("(sandbox)")));
-    let agent = terminal().add(600, 500, "/home/u/.local/bin/claude", &["claude"]);
+    let agent = terminal().add(600, 500, "/home/demo/.local/bin/claude", &["claude"]);
     let d = run(&allow_gh(&w, ""), &agent, &launch(&w.gh, &[]), false);
     assert_eq!(d.verdict, Verdict::Deny);
     assert!(d.reason.contains("coding agent claude"), "{}", d.reason);

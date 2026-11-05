@@ -468,7 +468,7 @@ mod tests {
             .add(
                 20,
                 1,
-                "/home/u/.local/share/claude/local/claude",
+                "/home/demo/.local/share/claude/local/claude",
                 &["claude"],
             )
             .add(21, 20, "/bin/zsh", &["zsh"]);
