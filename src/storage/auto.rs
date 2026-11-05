@@ -13,9 +13,12 @@
 //! - the build output of the other worktrees that were not used for
 //!   `[storage] worktree_cache_days` (storage/buildout.rs);
 //! - snapshots and undo trash folders older than `snapshot_days`;
-//! - homes whose project is gone and that were not used for
-//!   `orphan_home_days`, but never a desktop app home (its login);
 //! - the trash, leftovers and oldest bases of the build caches.
+//!
+//! It never removes a home: a home holds the user's conversations with the
+//! harness (transcripts, history), which are the user's own data. Only the
+//! scratch homes of `paddock doctor --escape` runs go. `paddock gc --homes`
+//! removes other homes, on request.
 //!
 //! It never touches the home, worktree or snapshot of a running sandbox:
 //! the plan skips them, and `apply` reads the running sandboxes again just
@@ -295,6 +298,17 @@ fn days_ago(now: u64, t: u64) -> u64 {
 
 /// What the pass removes. Pure: the inventory holds the facts, and
 /// `build_dirs` names the droppable build output of a worktree.
+/// A home of the user's harness work (any home but the scratch home of an
+/// escape run): the automatic pass never removes it.
+fn is_user_home(inv: &Inventory, i: &Item) -> bool {
+    let Action::Path { path } = &i.action else {
+        return false;
+    };
+    inv.homes
+        .iter()
+        .any(|h| h.harness != DOCTOR_HARNESS && (path == &h.path || path.starts_with(&h.path)))
+}
+
 pub fn plan_auto(
     inv: &Inventory,
     s: &Settings,
@@ -310,6 +324,7 @@ pub fn plan_auto(
         .into_iter()
         .filter(|i| i.selected() && i.tier == Tier::Auto)
         .filter(|i| !matches!(i.action, Action::Image { .. } | Action::BuildCache { .. }))
+        .filter(|i| !is_user_home(inv, i))
         .collect();
     let mut seen: BTreeSet<PathBuf> = items
         .iter()
@@ -408,33 +423,7 @@ pub fn plan_auto(
             ));
         }
     }
-    if s.orphan_home_days > 0 {
-        let old = now.saturating_sub(s.orphan_home_days * DAY);
-        for h in &inv.homes {
-            if h.running || h.app || h.harness == DOCTOR_HARNESS {
-                continue;
-            }
-            if h.project_exists != Some(false) || h.last_active() >= old {
-                continue;
-            }
-            if !seen.insert(h.path.clone()) {
-                continue;
-            }
-            let p = h.project.as_ref().map(|p| p.display().to_string());
-            items.push(auto(
-                format!("home {}", h.path.display()),
-                format!(
-                    "its project {} is gone, and it was not used for {} days",
-                    p.unwrap_or_default(),
-                    days_ago(now, h.last_active())
-                ),
-                Some(h.loses.clone()),
-                Action::Path {
-                    path: h.path.clone(),
-                },
-            ));
-        }
-    }
+
     items
 }
 

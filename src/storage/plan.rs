@@ -273,13 +273,14 @@ fn plan_homes(items: &mut Vec<Item>, inv: &Inventory, o: &GcOptions, now: u64, o
                 "a leftover of an escape test (paddock doctor --escape)".to_string(),
             )
         } else if !h.profile {
+            // A home holds the user's conversations with the harness: it is
+            // removed only on request, even when its profile is gone.
+            need(&mut needs, o.homes, "--homes");
             if h.app {
-                need(&mut needs, o.homes, "--homes");
                 need(&mut needs, o.include_app_logins, "--include-app-logins");
             }
-            let tier = if h.app { Tier::Consent } else { Tier::Auto };
             (
-                tier,
+                Tier::Consent,
                 format!("the harness profile '{}' no longer exists", h.harness),
             )
         } else if h.project_exists == Some(false) {
@@ -307,12 +308,19 @@ fn plan_homes(items: &mut Vec<Item>, inv: &Inventory, o: &GcOptions, now: u64, o
         } else {
             continue;
         };
+        // What is lost: the conversations (transcripts, history) of the
+        // harness in this home, and an app's login.
+        let warning = if h.harness == DOCTOR_HARNESS {
+            login
+        } else {
+            Some(login.unwrap_or_else(|| h.loses.clone()))
+        };
         items.push(Item {
             what: home_label(h),
             tier,
             bytes: h.bytes,
             reason,
-            warning: login,
+            warning,
             needs,
             action: Action::Path {
                 path: h.path.clone(),

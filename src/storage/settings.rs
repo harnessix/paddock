@@ -37,8 +37,6 @@ pub struct Settings {
     pub worktree_cache_days: u64,
     /// Snapshots and undo trash folders older than this go.
     pub snapshot_days: u64,
-    /// A home whose project is gone goes after this many days without use.
-    pub orphan_home_days: u64,
     pub hard: Floor,
     pub soft: Floor,
     /// The per-project cargo build cache of worktree runs.
@@ -53,7 +51,6 @@ impl Default for Settings {
             auto_gc: true,
             worktree_cache_days: 2,
             snapshot_days: 30,
-            orphan_home_days: 30,
             hard: Floor {
                 gib: 15,
                 percent: 5,
@@ -110,7 +107,6 @@ impl Settings {
         };
         number("worktree_cache_days", &mut s.worktree_cache_days, 3650);
         number("snapshot_days", &mut s.snapshot_days, 3650);
-        number("orphan_home_days", &mut s.orphan_home_days, 3650);
         number("hard_floor_gib", &mut s.hard.gib, 1 << 20);
         number("hard_floor_percent", &mut s.hard.percent, 100);
         number("soft_floor_gib", &mut s.soft.gib, 1 << 20);

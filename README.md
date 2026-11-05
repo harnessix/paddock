@@ -451,7 +451,8 @@ paddock cleans up by itself, so its folders do not fill the disk:
 - When a `--worktree` run or a spawned worker ends without a commit and without uncommitted changes, paddock removes its worktree and its branch at once. There is nothing to review.
 - Each `paddock run` starts a cleanup in the background, at most once an hour. The start does not wait for it. It removes the worktrees whose work is merged and that have no uncommitted changes, and their `paddock/` branches. If a local branch outside `paddock/` has a commit, the commit counts as merged. A commit with the same patch counts too, for example after a cherry-pick or a rebase.
 - A worktree with unmerged work stays. When it is not used for `worktree_cache_days`, paddock deletes its build output: folders with a `CACHEDIR.TAG` file, such as cargo's `target/`, that git ignores and that hold no tracked file. paddock never deletes a tracked file, or an untracked file that git does not ignore.
-- The same cleanup removes snapshots and undo trash folders older than `snapshot_days`. It also removes homes whose project is gone and that were not used for `orphan_home_days`. It never removes the home of a desktop app, because the app's login is in it.
+- The same cleanup removes snapshots and undo trash folders older than `snapshot_days`.
+- It never removes a sandbox home. A home holds your conversations with the harness (transcripts and history) and an app's login. Only `paddock gc --homes` removes homes, when you ask, and it names what is lost.
 - It also does what `paddock gc --yes` does, except for images.
 
 The cleanup never touches the home, worktree or snapshot of a running sandbox. `paddock doctor` shows when it last ran, what it removed, and its errors. `paddock gc-auto --now` runs it at once.
@@ -488,7 +489,6 @@ Set these in `~/.config/paddock/config.toml`. The values here are the defaults. 
 auto_gc = true               # the automatic cleanup; PADDOCK_AUTO_GC=0 also turns it off
 worktree_cache_days = 2      # delete the build output of a kept worktree after this many days without use
 snapshot_days = 30           # delete snapshots and undo trash folders older than this
-orphan_home_days = 30        # delete a home whose project is gone after this many days without use
 hard_floor_gib = 15          # do not start a sandbox below the smaller of these two
 hard_floor_percent = 5
 soft_floor_gib = 50          # warn below the smaller of these two

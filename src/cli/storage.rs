@@ -25,10 +25,12 @@ harnesses whose profile no longer exists, and old shared caches (mise-installs).
 
 The automatic cleanup at the start of `paddock run` (at most once an hour) also removes merged
 worktrees without uncommitted changes, the build output of worktrees not used for
-[storage] worktree_cache_days, snapshots older than snapshot_days, and homes of gone projects
-(not app logins) not used for orphan_home_days. [storage] auto_gc = false turns it off.
+[storage] worktree_cache_days, and snapshots older than snapshot_days. It never removes a home:
+a home holds your conversations with the harness. [storage] auto_gc = false turns it off.
 
---homes adds homes whose project is gone or that were not used for --older-than days (90).
+--homes adds homes whose project or harness profile is gone or that were not used for
+--older-than days (90). A home holds the conversations (transcripts, history) of its harness:
+they are lost with it.
 A desktop app keeps its login in its home: those homes also need --include-app-logins.
 --worktrees adds paddock worktrees. A worktree with unmerged commits or uncommitted changes
 also needs --force, and paddock keeps its branch.

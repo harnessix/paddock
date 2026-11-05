@@ -98,7 +98,7 @@ fn merged_clean_worktrees_go_and_the_others_lose_only_idle_build_output() {
 }
 
 #[test]
-fn old_snapshots_and_homes_of_gone_projects_go_but_not_logins_or_running_ones() {
+fn old_snapshots_go_and_no_home_ever_goes() {
     let s = Settings::default();
     let mut inv = inventory(vec![]);
     let snap = |p: &str, started: u64, trash: bool| SnapshotDir {
@@ -135,29 +135,28 @@ fn old_snapshots_and_homes_of_gone_projects_go_but_not_logins_or_running_ones() 
     };
     let mut busy = home("/h/busy", false, false, NOW - 40 * DAY);
     busy.running = true;
+    // A home whose profile is gone is still the user's conversations.
+    let mut no_profile = home("/h/no-profile", true, false, NOW - 400 * DAY);
+    no_profile.profile = false;
     inv.homes = vec![
         home("/h/gone-old", false, false, NOW - 40 * DAY),
         home("/h/gone-new", false, false, NOW - 5 * DAY),
         home("/h/app", false, true, NOW - 40 * DAY),
         home("/h/live", true, false, NOW - 400 * DAY),
+        no_profile,
         busy,
     ];
     let items = plan_auto(&inv, &s, NOW, &target);
     let k = kinds(&items);
     assert_eq!(
         k,
-        vec![
-            "path /s/repo/claude-old",
-            "path /t/trash-1",
-            "path /h/gone-old",
-        ],
+        vec!["path /s/repo/claude-old", "path /t/trash-1"],
         "{k:?}"
     );
     assert!(items[1].warning.as_deref().unwrap().contains("undo"));
-    // 0 turns each rule off.
+    // 0 turns the rule off.
     let off = Settings {
         snapshot_days: 0,
-        orphan_home_days: 0,
         ..Settings::default()
     };
     assert!(plan_auto(&inv, &off, NOW, &target).is_empty());
