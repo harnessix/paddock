@@ -1596,6 +1596,7 @@ fn run_child(env: &HostEnv, job: &Job, prompt: Vec<u8>, result: &mut ChildResult
         .oneshot
         .clone()
         .with_context(|| format!("the {} profile has no [oneshot] command", job.harness))?;
+    crate::storage::guard::before_run(env, Some(&c.repo), true)?;
     let opts = crate::build::Options {
         harness: job.harness.clone(),
         project: Some(c.repo.clone()),
@@ -1679,6 +1680,15 @@ fn run_child(env: &HostEnv, job: &Job, prompt: Vec<u8>, result: &mut ChildResult
             })
             .unwrap_or_default();
         result.stat = tail(&stat, MAX_STAT).0;
+        // Nothing to review: the worktree and the branch go at once.
+        if commits == 0 && uncommitted == Some(0) {
+            if let Err(e) = crate::worktree::reclaim_if_empty(env, w) {
+                log::warn!(
+                    "cannot remove the empty worktree {}: {e:#}",
+                    w.path.display()
+                );
+            }
+        }
     }
     let o = outcome?;
     result.exit_code = Some(o.code);

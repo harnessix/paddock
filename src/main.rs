@@ -157,6 +157,7 @@ fn real_main() -> Result<i32> {
             json,
         ),
         Cmd::DedupeHome { home } => cli::storage::dedupe_home(&env, &home),
+        Cmd::GcAuto { now, build_cache } => cli::storage::gc_auto(&env, now, build_cache),
         Cmd::PromoteCaches {
             project,
             crates_index,

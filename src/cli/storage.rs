@@ -23,6 +23,11 @@ passwords whose home is gone, session records that ended more than 30 days ago, 
 harnesses whose profile no longer exists, and old shared caches (mise-installs). paddock also does this after it builds a new image
 (PADDOCK_GC_AFTER_BUILD=0 turns that off).
 
+The automatic cleanup at the start of `paddock run` (at most once an hour) also removes merged
+worktrees without uncommitted changes, the build output of worktrees not used for
+[storage] worktree_cache_days, snapshots older than snapshot_days, and homes of gone projects
+(not app logins) not used for orphan_home_days. [storage] auto_gc = false turns it off.
+
 --homes adds homes whose project is gone or that were not used for --older-than days (90).
 A desktop app keeps its login in its home: those homes also need --include-app-logins.
 --worktrees adds paddock worktrees. A worktree with unmerged commits or uncommitted changes
@@ -72,6 +77,7 @@ pub(crate) fn gc_cmd(env: &HostEnv, o: &paddock::storage::GcOptions, json: bool)
     let mut inv = storage::scan(env, &host, false);
     let mut items = storage::plan(&inv, o, state::now());
     storage::measure_plan(&mut inv, &mut items);
+    items.extend(paddock::storage::auto::build_cache_items(env));
     items.extend(paddock::borrow::gc_items(env));
     items.extend(paddock::view::gc_items(env, state::now()));
     match paddock::kv::gc_items(env, state::now()) {
@@ -367,6 +373,35 @@ pub(crate) fn dedupe_home(env: &HostEnv, home: &Path) -> Result<i32> {
     paddock::storage::dedupe::be_idle();
     let r = paddock::storage::dedupe::home(env, home, paddock::storage::dedupe::AFTER_RUN)?;
     log::info!("dedupe after the run: {r:?}");
+    Ok(0)
+}
+
+/// `paddock gc-auto`: the automatic cleanup, in the background.
+pub(crate) fn gc_auto(env: &HostEnv, now: bool, build_cache: bool) -> Result<i32> {
+    use paddock::storage::{auto, settings::Settings};
+    paddock::storage::dedupe::be_idle();
+    let (s, _) = Settings::load(env);
+    if build_cache {
+        let st = auto::build_cache_pass(env, &s);
+        log::info!("build cache cleanup: {st:?}");
+        return Ok(0);
+    }
+    match auto::pass(env, &s, now, None) {
+        auto::Outcome::Skipped(why) => println!("paddock gc-auto: skipped: {why}"),
+        auto::Outcome::Done(st) => {
+            for r in &st.removed {
+                println!("removed {r}");
+            }
+            for e in &st.errors {
+                eprintln!("paddock: {e}");
+            }
+            println!(
+                "paddock gc-auto: {} removed, {} came back.",
+                st.removed.len(),
+                paddock::storage::human(st.freed)
+            );
+        }
+    }
     Ok(0)
 }
 

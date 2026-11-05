@@ -51,6 +51,8 @@ fn images_sessions_keyrings_and_worktrees() {
         branch: Some("paddock/x".into()),
         unmerged,
         dirty,
+        merged: None,
+        last_used: 0,
         bytes: 1,
         running: false,
     };

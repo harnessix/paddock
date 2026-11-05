@@ -188,7 +188,7 @@ fn worktree_facts(
     repo: &Path,
     listed: &ListedWorktree,
     branch: Option<&str>,
-) -> (Option<usize>, Option<bool>) {
+) -> (Option<usize>, Option<bool>, Option<bool>) {
     // The commits of the branch, else of the worktree's HEAD.
     let head = match branch {
         Some(b) => Some(format!("refs/heads/{b}")),
@@ -206,17 +206,36 @@ fn worktree_facts(
     // The work tree holds what a sandbox wrote, so `git status` runs in a
     // sandbox of its own. The layout check also confirms that this worktree
     // is one the repository registered. None means "not known".
-    let common = crate::hostgit::Layout::discover(repo)
-        .ok()
-        .flatten()
-        .map(|l| l.common_dir);
+    let repo_layout = crate::hostgit::Layout::discover(repo).ok().flatten();
+    let common = repo_layout.as_ref().map(|l| l.common_dir.clone());
     let dirty = crate::hostgit::Layout::discover(&listed.path)
         .ok()
         .flatten()
         .filter(|l| Some(&l.common_dir) == common.as_ref())
         .and_then(|l| l.status(env, "normal").ok().flatten())
         .map(|lines| lines.iter().any(|l| !l.trim().is_empty()));
-    (unmerged, dirty)
+    let merged = repo_layout
+        .as_ref()
+        .and_then(|l| super::merged::worktree_merged(l, branch, listed.head.as_deref()));
+    (unmerged, dirty, merged)
+}
+
+/// The newest sign of use of a worktree: the end of a run in it, a change
+/// of its index or HEAD (a commit, a checkout), or a change at its top.
+fn worktree_last_used(path: &Path, sessions: &BTreeMap<PathBuf, u64>) -> u64 {
+    let git_dir = crate::hostgit::Layout::discover(path)
+        .ok()
+        .flatten()
+        .filter(|l| l.linked)
+        .map(|l| l.git_dir);
+    let files = git_dir
+        .iter()
+        .flat_map(|g| ["index", "HEAD", "logs/HEAD"].map(|f| g.join(f)));
+    files
+        .map(|f| mtime(&f))
+        .chain([mtime(path), sessions.get(path).copied().unwrap_or(0)])
+        .max()
+        .unwrap_or(0)
 }
 
 /// The worktrees that paddock made (`--worktree` runs and apps), without
@@ -249,16 +268,25 @@ fn scan_worktrees(
     }
     let mut listed: BTreeMap<PathBuf, Vec<ListedWorktree>> = BTreeMap::new();
     let mut worktrees = Vec::new();
+    let mut sessions: BTreeMap<PathBuf, u64> = BTreeMap::new();
+    for s in Session::all(env) {
+        let t = s.ended.unwrap_or(s.started).max(s.started);
+        let e = sessions.entry(s.project).or_insert(0);
+        *e = (*e).max(t);
+    }
     for sdir in subdirs(&worktrees_root(env)) {
         let repo = repos.get(&name(&sdir)).cloned();
         for path in subdirs(&sdir) {
             let mut w = Worktree {
-                running: crate::paths::any_same(running_projects.iter().copied(), &path),
+                running: crate::paths::any_same(running_projects.iter().copied(), &path)
+                    || super::apply::worktree_in_use(env, &path),
                 path: path.clone(),
                 repo: None,
                 branch: None,
                 unmerged: None,
                 dirty: None,
+                merged: None,
+                last_used: worktree_last_used(&path, &sessions),
                 bytes: 0,
             };
             if let Some(repo) = &repo {
@@ -276,11 +304,12 @@ fn scan_worktrees(
                         .map(|_| b),
                         None => l.branch.clone().filter(|b| b.starts_with("paddock/")),
                     };
-                    let (unmerged, dirty) = worktree_facts(env, repo, l, branch.as_deref());
+                    let (unmerged, dirty, merged) = worktree_facts(env, repo, l, branch.as_deref());
                     w.repo = Some(repo.clone());
                     w.branch = branch;
                     w.unmerged = unmerged;
                     w.dirty = dirty;
+                    w.merged = merged;
                 }
             }
             worktrees.push(w);
@@ -490,6 +519,7 @@ pub fn scan(env: &HostEnv, host: &Host, with_sizes: bool) -> Inventory {
         tmpfs_caches: caches::enabled(env),
         classes: vec![],
         layers: layers::scan(env),
+        build_caches: super::buildcache::scan(env),
     };
     if with_sizes {
         measure(&mut inv, |_| true);
@@ -555,6 +585,7 @@ pub(super) fn measure(inv: &mut Inventory, want: impl Fn(&Path) -> bool) {
         .chain(inv.old_caches.iter().map(|c| &c.path))
         .chain(inv.layers.iter().map(|c| &c.path))
         .chain(inv.scratch.iter().map(|c| &c.path))
+        .chain(inv.build_caches.iter().map(|c| &c.path))
         .filter(|p| want(p))
         .cloned()
         .collect();
@@ -582,6 +613,11 @@ pub(super) fn measure(inv: &mut Inventory, want: impl Fn(&Path) -> bool) {
         }
     }
     for c in &mut inv.layers {
+        if let Some(b) = by.get(&c.path) {
+            c.bytes = *b;
+        }
+    }
+    for c in &mut inv.build_caches {
         if let Some(b) = by.get(&c.path) {
             c.bytes = *b;
         }

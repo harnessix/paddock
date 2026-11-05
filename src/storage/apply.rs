@@ -33,6 +33,82 @@ pub fn record_worktree_branch(env: &HostEnv, path: &Path, branch: &str) {
     if let Err(e) = r {
         log::warn!("cannot record the branch of {}: {e}", path.display());
     }
+    if let Err(e) = lease_worktree(env, path) {
+        log::warn!("cannot lease {}: {e:#}", path.display());
+    }
+}
+
+/// The lease of a worktree: a file that the process which made the
+/// worktree holds with a shared flock until it exits. The cleanup leaves a
+/// worktree alone while another process holds it, also before the sandbox
+/// registers as running. A crash releases it. The folder is on tmpfs, so a
+/// reboot clears it.
+fn lease_file(env: &HostEnv, path: &Path) -> Option<PathBuf> {
+    let rel = path.strip_prefix(worktrees_root(env)).ok()?;
+    let parts: Vec<String> = rel
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    (parts.len() == 2).then(|| {
+        env.paddock_run()
+            .join("worktree-leases")
+            .join(parts.join("--"))
+    })
+}
+
+/// The leases this process holds, until it exits.
+type Leases = Vec<(PathBuf, std::fs::File)>;
+static LEASES: std::sync::Mutex<Leases> = std::sync::Mutex::new(Vec::new());
+
+fn leased_here(f: &Path) -> bool {
+    let held = LEASES.lock().unwrap_or_else(|e| e.into_inner());
+    held.iter().any(|(p, _)| p == f)
+}
+
+fn lease_worktree(env: &HostEnv, path: &Path) -> Result<()> {
+    use std::os::fd::AsRawFd;
+    let f = lease_file(env, path).context("not a paddock worktree")?;
+    crate::privfs::dir(f.parent().context("no parent")?)?;
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&f)?;
+    // SAFETY: flock on a file descriptor that this function owns.
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_SH) } != 0 {
+        bail!("cannot lock {}", f.display());
+    }
+    LEASES
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push((f, file));
+    Ok(())
+}
+
+/// Drop the leases of this process, as its exit does.
+#[cfg(test)]
+pub fn drop_leases_for_test(env: &HostEnv, path: &Path) {
+    let f = lease_file(env, path);
+    let mut held = LEASES.lock().unwrap_or_else(|e| e.into_inner());
+    held.retain(|(p, _)| Some(p) != f.as_ref());
+}
+
+/// Another process that made the worktree still runs. The lease of this
+/// process does not count: it ends its own run.
+pub fn worktree_in_use(env: &HostEnv, path: &Path) -> bool {
+    use std::os::fd::AsRawFd;
+    let Some(f) = lease_file(env, path) else {
+        return false;
+    };
+    if leased_here(&f) {
+        return false;
+    }
+    let Ok(file) = std::fs::OpenOptions::new().write(true).open(&f) else {
+        return false;
+    };
+    // SAFETY: flock on a file descriptor that this function owns; closing
+    // it drops the lock again.
+    unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) != 0 }
 }
 
 pub(super) fn recorded_worktree_branch(env: &HostEnv, path: &Path) -> Option<String> {
@@ -42,6 +118,9 @@ pub(super) fn recorded_worktree_branch(env: &HostEnv, path: &Path) -> Option<Str
 }
 
 fn forget_worktree_branch(env: &HostEnv, path: &Path) {
+    if let Some(l) = lease_file(env, path) {
+        let _ = std::fs::remove_file(l);
+    }
     if let Some(f) = worktree_branch_file(env, path) {
         let _ = std::fs::remove_file(&f);
         if let Some(parent) = f.parent() {
@@ -257,12 +336,27 @@ pub fn apply(env: &HostEnv, containers: &dyn Containers, items: &[Item]) -> Vec<
                 }
                 Ok(())
             })(),
+            Action::Worktree { path, .. } | Action::BuildOutput { worktree: path, .. }
+                if running.iter().any(|r| r.project == *path) || worktree_in_use(env, path) =>
+            {
+                Err(anyhow::anyhow!("a sandbox started in it; skipped"))
+            }
+            Action::BuildOutput { worktree, folders } => (|| {
+                let (root, rel) = check_removable(env, worktree)?;
+                let root = crate::safefs::Root::open(&root)?;
+                for f in folders {
+                    // Checked again: the folder must still say it is a cache.
+                    if !super::buildout::has_tag(&worktree.join(f)) {
+                        continue;
+                    }
+                    root.remove_tree(&rel.join(f))
+                        .with_context(|| format!("remove {}", worktree.join(f).display()))?;
+                }
+                Ok(())
+            })(),
             Action::View { id } => crate::view::remove(env, id),
             Action::Kv { sandboxes } => {
                 crate::kv::gc_apply(env, sandboxes, state::now()).map(|_| ())
-            }
-            Action::Worktree { path, .. } if running.iter().any(|r| r.project == *path) => {
-                Err(anyhow::anyhow!("a sandbox started in it; skipped"))
             }
             Action::Worktree {
                 path,

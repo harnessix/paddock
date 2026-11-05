@@ -67,6 +67,12 @@ pub enum Action {
         home: PathBuf,
         folders: Vec<PathBuf>,
     },
+    /// Build output in a worktree that is kept: folders with a
+    /// `CACHEDIR.TAG` that git ignores, relative to it (storage/buildout.rs).
+    BuildOutput {
+        worktree: PathBuf,
+        folders: Vec<PathBuf>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -503,7 +509,11 @@ pub fn measure_plan(inv: &mut Inventory, items: &mut [Item]) {
     let cache_paths: Vec<PathBuf> = items
         .iter()
         .flat_map(|i| match &i.action {
-            Action::Caches { home, folders } => folders.iter().map(|f| home.join(f)).collect(),
+            Action::Caches { home, folders }
+            | Action::BuildOutput {
+                worktree: home,
+                folders,
+            } => folders.iter().map(|f| home.join(f)).collect(),
             _ => vec![],
         })
         .collect();
@@ -511,7 +521,8 @@ pub fn measure_plan(inv: &mut Inventory, items: &mut [Item]) {
         let (v, _) = sizes(&cache_paths);
         let mut it = v.into_iter();
         for i in items.iter_mut() {
-            if let Action::Caches { folders, .. } = &i.action {
+            if let Action::Caches { folders, .. } | Action::BuildOutput { folders, .. } = &i.action
+            {
                 i.bytes = it.by_ref().take(folders.len()).sum();
             }
         }

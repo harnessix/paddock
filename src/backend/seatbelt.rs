@@ -690,7 +690,7 @@ pub fn run_app(env: &HostEnv, o: &crate::app::AppOptions) -> Result<i32> {
     crate::sockpath::remove_run_sockets(&env.paddock_run(), env.uid, &spec.id);
     let _ = std::fs::remove_dir_all(&tmp);
     if let Some(w) = &built.worktree {
-        eprintln!("\n{}", build::worktree_report(env, w));
+        eprintln!("\n{}", crate::worktree::finish(env, w).0);
     }
     Ok(status.code().unwrap_or(1))
 }
