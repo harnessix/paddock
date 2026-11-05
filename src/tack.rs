@@ -21,12 +21,22 @@
 //! identity and `store::open` for the value. Nothing here starts a
 //! program with a value yet.
 
+pub mod audit;
+pub mod client;
 pub mod config;
+pub mod daemon;
+pub mod ident;
 pub mod import;
 pub mod lines;
+pub mod peer;
+pub mod policy;
+pub mod procs;
 pub mod program;
+pub mod proto;
 pub mod reference;
 pub mod report;
+pub mod service;
+pub mod status;
 pub mod store;
 
 pub use reference::Reference;

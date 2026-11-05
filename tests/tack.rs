@@ -260,3 +260,53 @@ fn doctor_has_a_tack_block() {
     }
     assert!(!out.contains(VALUE), "{out}");
 }
+
+#[test]
+fn setup_and_remove_need_root_and_the_host() {
+    let w = World::new("ok");
+    if unsafe { libc::geteuid() } == 0 {
+        return;
+    }
+    for cmd in ["setup", "remove"] {
+        let o = w.paddock(&["tack", cmd], &[]);
+        assert!(!o.status.success());
+        assert!(
+            text(&o).contains(&format!("sudo paddock tack {cmd}")),
+            "{}",
+            text(&o)
+        );
+        // In a sandbox it says that first.
+        let o = w.paddock(&["tack", cmd], &[("PADDOCK", "1")]);
+        assert!(text(&o).contains("runs on the host only"), "{}", text(&o));
+    }
+    let o = w.paddock(&["tack", "serve"], &[]);
+    assert!(!o.status.success());
+    assert!(text(&o).contains("tackd runs as root"), "{}", text(&o));
+}
+
+#[test]
+fn status_names_the_mode_and_json_has_its_fields() {
+    let w = World::new("ok");
+    let o = w.paddock(&["tack", "status"], &[]);
+    let t = text(&o);
+    // Either tackd is installed on this host, or the rootless mode is said.
+    assert!(t.contains("rootless mode") || t.contains("tackd"), "{t}");
+    let o = w.paddock(&["tack", "status", "--json"], &[]);
+    let v: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
+    for k in ["paddock", "installed", "binary", "socket", "tackd"] {
+        assert!(v.get(k).is_some(), "{k}: {v}");
+    }
+    assert_eq!(v["paddock"], env!("CARGO_PKG_VERSION"));
+}
+
+#[test]
+fn check_names_a_program_that_is_not_on_path() {
+    let w = World::new("ok");
+    let o = w.paddock(&["tack", "check", "no-such-program-xyz", "--flag"], &[]);
+    assert!(!o.status.success());
+    assert!(
+        text(&o).contains("no-such-program-xyz is not a program on PATH"),
+        "{}",
+        text(&o)
+    );
+}

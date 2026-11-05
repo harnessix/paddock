@@ -54,6 +54,13 @@ fn real_main() -> Result<i32> {
     {
         return cli::run::relay(listen, socket, forward, ready_file.as_deref());
     }
+    // tackd: root, started by the service manager, before HostEnv::detect.
+    if let Cmd::Tack {
+        cmd: cli::tack::TackCmd::Serve,
+    } = &cli.cmd
+    {
+        return paddock::tack::daemon::main(&paddock::tack::service::Paths::system());
+    }
     // In the guest: before HostEnv::detect, as root without a home.
     let cmd = match cli.cmd {
         Cmd::VmAgent(a) => return cli::vm_run::vm_agent(a),

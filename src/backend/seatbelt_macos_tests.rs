@@ -121,3 +121,96 @@ fn bundle_detection_on_this_mac() {
         );
     }
 }
+
+// tackd on macOS: the kernel facts that tack reads. The maintainer runs
+// these on a Mac.
+
+#[test]
+fn tack_reads_this_process_from_the_kernel() {
+    let me = std::process::id();
+    let p = crate::tack::procs::macos::get(me).expect("proc_pidinfo for this process");
+    assert_eq!(p.pid, me);
+    assert_eq!(p.uid, unsafe { libc::getuid() });
+    assert_eq!(p.ppid, std::os::unix::process::parent_id());
+    let exe = p.exe.expect("proc_pidpath");
+    assert_eq!(
+        std::fs::canonicalize(&exe).unwrap(),
+        std::fs::canonicalize(std::env::current_exe().unwrap()).unwrap()
+    );
+    assert!(!p.contained, "a test run outside Seatbelt is not sandboxed");
+    let c = crate::tack::procs::chain(&crate::tack::procs::Kernel::new(), me, &[]).unwrap();
+    assert!(c.links.len() >= 2, "{:?}", c.summary());
+    assert_eq!(c.links.last().unwrap().proc.pid, 1, "{:?}", c.summary());
+}
+
+#[test]
+fn tack_marks_a_process_under_seatbelt_as_contained() {
+    let t = tempfile::tempdir().unwrap();
+    let f = t.path().join("p.sb");
+    std::fs::write(&f, "(version 1)\n(allow default)\n").unwrap();
+    let mut child = Command::new(SANDBOX_EXEC)
+        .arg("-f")
+        .arg(&f)
+        .args(["/bin/sleep", "5"])
+        .spawn()
+        .unwrap();
+    // sandbox-exec applies the profile, then execs sleep in the same pid.
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let p = crate::tack::procs::macos::get(child.id()).unwrap();
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(
+        p.contained,
+        "sandbox_check did not report the Seatbelt profile: {p:?}"
+    );
+    assert_eq!(p.exe.as_deref(), Some(std::path::Path::new("/bin/sleep")));
+}
+
+#[test]
+fn tack_peer_credentials_name_this_process() {
+    let (a, _b) = std::os::unix::net::UnixStream::pair().unwrap();
+    let c = crate::tack::peer::of(&a).unwrap();
+    assert_eq!(c.uid, unsafe { libc::geteuid() });
+    assert_eq!(c.pid, std::process::id());
+}
+
+#[test]
+fn tack_reads_the_signer_of_a_system_program() {
+    // Apple's own programs are signed by "Software Signing".
+    assert_eq!(
+        crate::tack::ident::signer(std::path::Path::new("/bin/ls")).as_deref(),
+        Some("Software Signing")
+    );
+    // An unsigned file has none.
+    let t = tempfile::tempdir().unwrap();
+    let f = t.path().join("tool");
+    std::fs::write(&f, "#!/bin/sh\n").unwrap();
+    assert_eq!(crate::tack::ident::signer(&f), None);
+}
+
+#[test]
+fn tack_service_paths_and_plist_are_the_macos_ones() {
+    let p = crate::tack::service::Paths::system();
+    assert_eq!(
+        p.binary,
+        std::path::Path::new("/Library/PrivilegedHelperTools/io.paddock.tackd")
+    );
+    assert_eq!(
+        p.unit,
+        std::path::Path::new("/Library/LaunchDaemons/io.paddock.tackd.plist")
+    );
+    assert_eq!(
+        p.socket,
+        std::path::Path::new("/var/run/paddock-tackd/tackd.sock")
+    );
+    // plutil checks that the plist is valid.
+    let t = tempfile::tempdir().unwrap();
+    let f = t.path().join("tackd.plist");
+    std::fs::write(&f, crate::tack::service::service_text(&p)).unwrap();
+    let ok = Command::new("/usr/bin/plutil")
+        .arg("-lint")
+        .arg(&f)
+        .status()
+        .unwrap();
+    assert!(ok.success());
+}

@@ -9,11 +9,15 @@
 //! program = "/usr/bin/gh"
 //! sha256 = "..."                   # optional: the content of the program
 //! signer = "Developer ID ..."      # optional, macOS: the signing identity
+//! args = ["api **", "pr *"]        # optional: the allowed argument shapes
 //!
 //! [[tack.secrets.GH_TOKEN.callers]]
 //! kind = "sandbox"                 # or "agent", or program = "/path"
-//! action = "refuse"                # or "ask"
+//! action = "refuse"                # or "ask", or "allow"
 //! ```
+//!
+//! Without a rule for a kind, a paddock sandbox or a coding agent among the
+//! callers is refused. A rule with `action = "allow"` lifts that.
 //!
 //! Only the user configuration has this table. A project `paddock.toml`
 //! that names it is refused (manifest.rs), because a project file is inside
@@ -88,6 +92,11 @@ pub struct Allow {
     /// macOS: the signing identity of the program (`codesign -dv`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub signer: Option<String>,
+    /// The allowed argument shapes, word by word as for host tools
+    /// (`*` one word, `**` the rest; neither matches a word that starts
+    /// with `-`). Empty: any arguments.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -105,6 +114,18 @@ pub enum Action {
     #[default]
     Refuse,
     Ask,
+    /// Only for a kind: a sandbox or an agent among the callers is fine.
+    Allow,
+}
+
+impl Action {
+    pub fn name(self) -> &'static str {
+        match self {
+            Action::Refuse => "refuse",
+            Action::Ask => "ask",
+            Action::Allow => "allow",
+        }
+    }
 }
 
 /// One rule on the chain of processes that starts an allowlisted program.
@@ -208,6 +229,11 @@ pub fn check(t: &Tack) -> Vec<String> {
             if a.signer.as_deref().is_some_and(|s| s.trim().is_empty()) {
                 out.push(format!("{at}: signer is empty"));
             }
+            for shape in &a.args {
+                if let Some(why) = bad_shape(shape) {
+                    out.push(format!("{at}: args {shape:?}: {why}"));
+                }
+            }
             if seen.contains(&p) {
                 out.push(format!("{at}: {} is in the list twice", p.display()));
             }
@@ -223,6 +249,9 @@ pub fn check(t: &Tack) -> Vec<String> {
                     "{at}: program '{}' must be an absolute path",
                     p.display()
                 )),
+                (None, Some(_)) if c.action == Action::Allow => out.push(format!(
+                    "{at}: action = \"allow\" is only for a kind; a caller program is allowed when no rule names it"
+                )),
                 _ => {}
             }
         }
@@ -235,6 +264,23 @@ pub fn check(t: &Tack) -> Vec<String> {
         }
     }
     out
+}
+
+/// Why an argument shape is invalid, or None. The same words as host tools.
+pub fn bad_shape(shape: &str) -> Option<&'static str> {
+    let words: Vec<&str> = shape.split_whitespace().collect();
+    if let Some(i) = words.iter().position(|w| *w == "**") {
+        if i + 1 != words.len() {
+            return Some("** is allowed only as the last word");
+        }
+    }
+    if words
+        .iter()
+        .any(|w| w.contains('*') && *w != "*" && *w != "**")
+    {
+        return Some("* and ** stand alone as whole words");
+    }
+    None
 }
 
 /// HOST, HOST:PORT, or `*.DOMAIN` for every host under DOMAIN.
@@ -331,14 +377,21 @@ program = "/usr/bin/gh"
 sha256 = "ABC"
 [[tack.secrets.A.allow]]
 program = "/usr/bin/gh"
+args = ["a ** b", "x*"]
 [[tack.secrets.A.callers]]
 kind = "sandbox"
 program = "/usr/bin/x"
+[[tack.secrets.A.callers]]
+program = "/usr/bin/y"
+action = "allow"
 [tack.secrets.B]
 command = ["x"]
 "#);
         for want in [
-            "9 problems",
+            "12 problems",
+            "allow entry 3: args \"a ** b\": ** is allowed only as the last word",
+            "allow entry 3: args \"x*\": * and ** stand alone",
+            "callers entry 2: action = \"allow\" is only for a kind",
             "[tack.secrets.A]: backend = \"command\" needs command",
             "allow entry 1: program 'gh' must be an absolute path",
             "allow entry 2: sha256 must be 64",

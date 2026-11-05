@@ -802,7 +802,7 @@ For every way:
 
 tack keeps a secret such as `GH_TOKEN` out of your shell startup files and out of the environment of your processes. A process sees a reference, `tack://GH_TOKEN`, in place of the value. The reference holds only the name. It holds no part of the value and no hash of it. tack works on the host, inside and outside a sandbox.
 
-This version has the first part of tack. It stores the values, writes the references, and checks the configuration. It does not give a value to any program yet. After an import, every process, `gh` too, sees the reference and not the value. A later version starts the allowlisted programs with the real value. Until then, import a secret only if no program that you use needs it from the environment.
+This version stores the values, writes the references, and checks the configuration. With the service tackd installed, it also decides which program may receive which secret, and keeps an audit log of each decision (see [tackd](#tackd-the-service-that-decides)). It does not give a value to any program yet. After an import, every process, `gh` too, sees the reference and not the value. A later version starts the allowlisted programs with the real value. Until then, import a secret only if no program that you use needs it from the environment.
 
 The values stay in the stores that you already have:
 
@@ -819,17 +819,18 @@ hosts = ["api.github.com", "github.com"]   # optional
 program = "/usr/bin/gh"
 sha256 = "..."      # optional: sha256sum /usr/bin/gh
 # signer = "..."    # optional, macOS: the signing identity
+# args = ["pr *", "api **"]   # optional: the allowed argument shapes
 
 [[tack.secrets.GH_TOKEN.callers]]
 kind = "sandbox"    # or "agent", or program = "/path"
-action = "refuse"   # or "ask"
+action = "refuse"   # or "ask"; for a kind also "allow"
 
 [tack.secrets.OPENAI_API_KEY]
 backend = "command"
 command = ["op", "read", "op://Private/OpenAI/key"]
 ```
 
-An allowlist entry names a program by its absolute path. paddock refuses shells, interpreters (`python`, `node` and others), `env`, `printenv` and `sudo`, also through a symbolic link: they run any command that they get, so they would give the value to that command. `callers` and `hosts` are checked and kept. The version that starts programs with the value enforces them.
+An allowlist entry names a program by its absolute path. paddock refuses shells, interpreters (`python`, `node` and others), `env`, `printenv` and `sudo`, also through a symbolic link: they run any command that they get, so they would give the value to that command. `args` lists the argument shapes that the program may get, word by word, as for host tools: `*` is one word, `**` as the last word is the rest, and neither matches a word that starts with `-`. Without `args`, any arguments are fine. tackd checks `args` and `callers`. It records `hosts` with each decision; the version that starts programs with the value enforces them.
 
 To move a value out of your files, name the variable:
 
@@ -847,6 +848,39 @@ paddock tack import GH_TOKEN --file ~/src/app/.env --yes
 - No output and no log line holds a value.
 
 `paddock tack list` shows the secrets, their store, their reference and their programs. `paddock explain` shows what the sandbox sees for each secret. `paddock doctor` has a block for tack. The block shows if the store is reachable or locked, the plain values that are still in your files or in the current environment, and the allowlisted programs that are missing or whose content changed since you wrote their `sha256`.
+
+#### tackd: the service that decides
+
+tackd is a system service that runs as root. It answers one question: may this program, started by these processes, receive which secrets? It starts no program yet, and it reads no value to decide. Install it once, and again after each paddock update:
+
+```sh
+sudo paddock tack setup     # install, or update to this paddock, and start
+paddock tack status         # installed, running, version, socket
+paddock tack check gh pr list   # what tackd would decide here; starts nothing
+paddock tack audit          # your decisions, newest last
+sudo paddock tack remove    # stop it and delete every file it made
+```
+
+How tackd decides:
+
+- The kernel tells tackd which user and which process asks. tackd reads only the `[tack]` table in `~/.config/paddock/config.toml` of that user, and only if that user owns the file. It never decides for one user with the configuration of another, and it gives nothing to root.
+- The program counts by its real path, after every symbolic link. tackd computes its SHA-256 and compares it with `sha256`. On macOS it can also check the `signer`. If an entry has neither, the program must be a file that only root can change, in folders that only root can change. A program under your home or under Homebrew needs a `sha256`, because any process of yours could replace it. The message gives the hash to write.
+- tackd walks the parent processes up to the first one. If a paddock sandbox (another pid namespace or root folder, bwrap, or Seatbelt) or a coding agent that paddock knows is among them, tackd refuses, unless a `callers` rule for that kind says `ask` or `allow`. A rule with a caller `program` applies when that program is among the parents. The strictest rule wins. The sandbox mark comes from the kernel, so a process cannot remove it. The agent mark uses program names: a process that detaches from its parents leaves that chain.
+- `ask` comes back as its own answer. This version cannot ask you yet, so a start that needs asking is refused.
+- A program on no allowlist gets the same answer whether it exists or not, and tackd does not read it.
+
+The audit log has one line per decision: the time, the user and process, the program with its real path and hash, the parent processes, the names of the secrets, the decision and the reason. It never holds a value or an argument. It is root's file, `/var/log/paddock/tackd.log`, mode 0600. It rotates at 4 MiB and keeps four old files. `paddock tack audit` shows your own lines through tackd. If tackd cannot write the log, it allows nothing, and `paddock tack status` says so.
+
+The service:
+
+- On Linux it is the systemd unit `/etc/systemd/system/paddock-tackd.service`. It runs `/usr/local/libexec/paddock/tackd`, a copy of paddock that only root can change: root never runs a file that your user could replace. The unit keeps two capabilities, to read files and to read the process table of all users. It has no network, and it sees the file system read-only except for its socket folder and its log folder. The unit file explains each option.
+- On macOS it is the LaunchDaemon `/Library/LaunchDaemons/io.paddock.tackd.plist`, which runs `/Library/PrivilegedHelperTools/io.paddock.tackd`. Its error output goes to `/var/log/paddock/tackd.err`.
+- The socket is `/run/paddock-tackd/tackd.sock` (macOS: `/var/run/paddock-tackd/tackd.sock`). Every user can connect to it. tackd takes the user from the kernel and not from the request.
+- `setup` refuses a service file that paddock did not write, and folders that a user other than root can write. It checks that the new copy runs and reports this version before it replaces the old one. If the check fails, the old tackd stays. After `paddock update`, `paddock tack status` and `paddock doctor` show `CHECK` until you run `sudo paddock tack setup` again.
+- `remove` deletes the service file, the binary, the socket and the audit log (`--keep-audit` keeps the log), and the folders when they are empty.
+- A client has 5 seconds to send its request. tackd serves 32 connections at once, and at most 6 of one user, so one user cannot block the others. A slow, too large or malformed request gets an error, and the other clients are still served. After a crash, the service manager starts tackd again within seconds.
+
+Without tackd, tack works in rootless mode. Values stay out of shells, startup files and agent environments. A program that gets a value is not protected from other processes of your user. `paddock doctor` and `paddock tack status` say which mode you have.
 
 ## Privacy defaults
 
@@ -1870,6 +1904,7 @@ The limits:
   - `--profile default`, the private keyring, login ports and links into the sandbox
   - credentials that go through the gateway
 - `paddock doctor --escape` is for the Linux backends. The Seatbelt checks run with `cargo test` on a Mac.
+- tackd on macOS reads the parent processes by their program path only, not by their command line. An agent that runs as a script of `node` counts as an agent only if its path has the agent's name. It is not measured yet whether other processes of your user can read the environment of a program that tackd starts on macOS.
 
 New terminals (ptys) come from paddock. Some agents open a pty for their shell tool, for example Codex's unified exec. paddock opens each pty on the host and sends both ends into the sandbox over a Unix socket. A small library asks for them in place of `openpty`, `forkpty` and `posix_openpt`. paddock loads it into the agent with `DYLD_INSERT_LIBRARIES`. This works only when the agent's program takes the library:
 

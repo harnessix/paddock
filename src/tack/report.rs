@@ -255,6 +255,10 @@ pub fn print_doctor(env: &HostEnv) {
     for l in doctor_lines(env) {
         println!("{l}");
     }
+    println!("\ntackd (the tack service):");
+    for l in super::status::doctor_lines(env) {
+        println!("{l}");
+    }
 }
 
 #[cfg(test)]
