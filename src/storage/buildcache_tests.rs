@@ -56,6 +56,19 @@ fn config(env: &HostEnv, text: &str) {
     std::fs::write(env.paddock_config().join("config.toml"), text).unwrap();
 }
 
+#[cfg(target_os = "macos")]
+#[test]
+fn macos_gets_no_build_cache() {
+    let t = tmp();
+    let env = env_in(t.path());
+    let on = SetupCfg::default();
+    let (repo, mut spec) = rust_project(&env, "app", "claude-1");
+    apply(&env, &repo, true, &on, &mut spec).unwrap();
+    assert!(mounted(&spec).is_none());
+}
+
+// The build cache is off on macOS (see apply).
+#[cfg(not(target_os = "macos"))]
 #[test]
 fn only_worktree_runs_of_rust_projects_get_a_target_folder() {
     let t = tmp();
@@ -94,6 +107,8 @@ fn only_worktree_runs_of_rust_projects_get_a_target_folder() {
     assert_eq!(named, repo.display().to_string());
 }
 
+// The build cache is off on macOS (see apply).
+#[cfg(not(target_os = "macos"))]
 #[test]
 fn a_project_never_sees_the_cache_of_another() {
     let t = tmp();
@@ -123,6 +138,8 @@ fn a_project_never_sees_the_cache_of_another() {
     }
 }
 
+// The build cache is off on macOS (see apply).
+#[cfg(not(target_os = "macos"))]
 #[test]
 fn a_sandbox_starts_from_the_base_and_leaves_its_folder_as_the_next_base() {
     let t = tmp();
@@ -177,6 +194,8 @@ fn a_sandbox_starts_from_the_base_and_leaves_its_folder_as_the_next_base() {
     }
 }
 
+// The build cache is off on macOS (see apply).
+#[cfg(not(target_os = "macos"))]
 #[test]
 fn two_sandboxes_that_end_at_once_both_leave_a_whole_folder() {
     let t = tmp();
@@ -276,6 +295,8 @@ fn the_gc_takes_the_trash_leftovers_gone_repositories_and_the_oldest_bases() {
     crate::storage::remove_path(&env, &old.join("trash/base-1")).unwrap();
 }
 
+// The build cache is off on macOS (see apply).
+#[cfg(not(target_os = "macos"))]
 #[test]
 fn a_folder_with_a_planted_git_directory_never_becomes_a_seed() {
     let t = tmp();

@@ -354,10 +354,15 @@ fn a_worktree_that_another_process_leases_is_left_alone() {
         name(&w.path)
     ));
     assert!(lease.is_file(), "{}", lease.display());
-    let mut holder = std::process::Command::new("flock")
-        .args(["-s", "-o"])
+    // perl holds a shared flock(2) on Linux and macOS alike (macOS has no
+    // flock(1)).
+    let mut holder = std::process::Command::new("perl")
+        .args([
+            "-MFcntl=:flock",
+            "-e",
+            "open(my $f, '<', $ARGV[0]) or die; flock($f, LOCK_SH) or die; sleep 30",
+        ])
         .arg(&lease)
-        .args(["sleep", "30"])
         .spawn()
         .unwrap();
     // The lease of this process is dropped by hand, as at its exit.
