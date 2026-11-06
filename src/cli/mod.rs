@@ -508,6 +508,17 @@ pub(crate) enum Cmd {
     /// with the other homes, within a time limit. paddock starts this.
     #[command(hide = true)]
     DedupeHome { home: PathBuf },
+    /// The automatic cleanup: merged worktrees, idle build output, old
+    /// snapshots and build caches. `paddock run` starts this.
+    #[command(hide = true)]
+    GcAuto {
+        /// Run even when the last pass started less than an hour ago.
+        #[arg(long)]
+        now: bool,
+        /// Only the build caches, after a sandbox ended.
+        #[arg(long)]
+        build_cache: bool,
+    },
     /// After a bwrap sandbox ends: copy the verified new packages of the
     /// project's cache layers into the shared layers. paddock starts this.
     #[command(hide = true)]

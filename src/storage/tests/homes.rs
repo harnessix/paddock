@@ -139,6 +139,7 @@ fn home_tiers() {
     app_old.modified = now - 200 * DAY;
     let mut orphan = home("/d/homes/porttest/shared/o-1", "porttest");
     orphan.profile = false;
+    orphan.loses = "transcripts, history and settings of this project".into();
     let mut orphan_app = home("/d/homes/oldapp/shared/o-2", "oldapp");
     orphan_app.profile = false;
     orphan_app.app = true;
@@ -155,8 +156,12 @@ fn home_tiers() {
     assert!(it("fresh-1").is_none());
     assert!(it("touched-1").is_none());
     assert!(it("run-1").is_none(), "a running sandbox is never listed");
-    assert_eq!(it("o-1").unwrap().tier, Tier::Auto);
-    assert!(it("o-1").unwrap().selected());
+    // A home whose profile is gone still holds the conversations.
+    let o = it("o-1").unwrap();
+    assert_eq!(o.tier, Tier::Consent);
+    assert_eq!(o.needs, ["--homes"]);
+    assert!(!o.selected());
+    assert!(o.warning.as_ref().unwrap().contains("transcripts"));
     let oa = it("o-2").unwrap();
     assert_eq!(oa.tier, Tier::Consent);
     assert_eq!(oa.needs, ["--homes", "--include-app-logins"]);

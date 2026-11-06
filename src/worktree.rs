@@ -126,6 +126,77 @@ pub fn remove(env: &HostEnv, w: &Worktree, force: bool) -> Result<String> {
     })
 }
 
+/// At the end of a run: what the sandbox left in its worktree, and when it
+/// left nothing (no commit after the base, nothing uncommitted, its HEAD
+/// still at the base), the worktree and its branch are removed at once.
+/// Gives back the report and whether paddock removed the worktree.
+pub fn finish(env: &HostEnv, w: &crate::build::Worktree) -> (String, bool) {
+    let mut report = crate::build::worktree_report(env, w);
+    match reclaim_if_empty(env, w) {
+        Ok(true) => {
+            report.push_str(&format!(
+                " paddock removed the worktree and the branch {}: there is nothing to review.",
+                w.branch
+            ));
+            (report, true)
+        }
+        Ok(false) => (report, false),
+        Err(e) => {
+            log::warn!(
+                "cannot remove the empty worktree {}: {e:#}",
+                w.path.display()
+            );
+            report.push_str(&format!(
+                "\npaddock: cannot remove the empty worktree: {e:#}"
+            ));
+            (report, false)
+        }
+    }
+}
+
+/// Remove the worktree of a run that left nothing in it. Ok(false) when it
+/// has work, when its state is unknown, or when a sandbox runs in it.
+pub fn reclaim_if_empty(env: &HostEnv, w: &crate::build::Worktree) -> Result<bool> {
+    reclaim_with(env, w, &|p| crate::build::worktree_status(env, p))
+}
+
+type Status<'a> = &'a dyn Fn(&Path) -> Result<Option<Vec<String>>>;
+
+/// The same, with the work-tree state from `status` (tests fake it).
+fn reclaim_with(env: &HostEnv, w: &crate::build::Worktree, status: Status) -> Result<bool> {
+    let repo = crate::hostgit::Layout::discover(&w.repo)?
+        .with_context(|| format!("{} is not a git repository", w.repo.display()))?;
+    if crate::storage::merged::commits_beyond(&repo, &w.base, &w.branch) != Some(0) {
+        return Ok(false);
+    }
+    // The sandbox may have moved HEAD: to another branch, or detached with
+    // commits of its own.
+    let at = |l: &crate::hostgit::Layout, rev: &str| {
+        l.try_query(&["rev-parse", "--verify", "-q", &format!("{rev}^{{commit}}")])
+            .map(|s| s.trim().to_string())
+    };
+    let Some(wt) = crate::hostgit::Layout::discover(&w.path)?.filter(|l| l.linked) else {
+        return Ok(false);
+    };
+    let head_ref = wt.try_query(&["symbolic-ref", "-q", "HEAD"]);
+    let on_branch = head_ref.as_deref().map(str::trim) == Some(&format!("refs/heads/{}", w.branch));
+    if !on_branch || at(&wt, "HEAD").is_none() || at(&wt, "HEAD") != at(&repo, &w.base) {
+        return Ok(false);
+    }
+    match status(&w.path)? {
+        Some(lines) if lines.iter().all(|l| l.trim().is_empty()) => {}
+        _ => return Ok(false),
+    }
+    if crate::state::Running::list(env)
+        .iter()
+        .any(|r| crate::paths::same_file(&r.project, &w.path) || r.project == w.path)
+    {
+        return Ok(false);
+    }
+    crate::storage::remove_worktree(env, &w.path, Some(&w.repo), Some(&w.branch), true, false)?;
+    Ok(true)
+}
+
 fn repo_and_branch(w: &Worktree) -> Result<(&Path, &str)> {
     let repo = w
         .repo
@@ -176,12 +247,27 @@ fn identity(env: &HostEnv, co: &Checkout) -> Option<(String, String)> {
     Some(("paddock".into(), "paddock@localhost".into()))
 }
 
+/// Fill in the size of each worktree. It can take a while for large build
+/// folders.
+pub fn measure(all: &mut [Worktree]) {
+    let paths: Vec<std::path::PathBuf> = all.iter().map(|w| w.path.clone()).collect();
+    let (sizes, _) = crate::storage::sizes(&paths);
+    for (w, b) in all.iter_mut().zip(sizes) {
+        w.bytes = b;
+    }
+}
+
 /// `paddock worktree list` as text.
-pub fn render(all: &[Worktree]) -> String {
+pub fn render(all: &[Worktree], now: u64) -> String {
     if all.is_empty() {
         return "No paddock worktrees.\n".into();
     }
-    let mut t = String::new();
+    let total: u64 = all.iter().map(|w| w.bytes).sum();
+    let mut t = format!(
+        "{} worktrees, {} in all.\n",
+        all.len(),
+        crate::storage::human(total)
+    );
     for w in all {
         let commits = match w.unmerged {
             Some(n) => format!("{n} unmerged commits"),
@@ -192,10 +278,18 @@ pub fn render(all: &[Worktree]) -> String {
             Some(false) => "clean",
             None => "state unknown",
         };
+        let days = now.saturating_sub(w.last_used) / 86_400;
         t.push_str(&format!(
-            "{}\n  branch {}, {commits}, {dirty}{}\n",
+            "{}\n  {}, last used {}, branch {}, {}, {commits}, {dirty}{}\n",
             w.path.display(),
+            crate::storage::human(w.bytes),
+            match days {
+                0 => "today".to_string(),
+                1 => "yesterday".to_string(),
+                n => format!("{n} days ago"),
+            },
             w.branch.as_deref().unwrap_or("unknown"),
+            crate::storage::merged_word(w),
             if w.running { ", a sandbox uses it" } else { "" }
         ));
         if let Some(r) = &w.repo {
@@ -263,7 +357,12 @@ mod tests {
         assert_eq!(w.branch.as_deref(), Some(wt.branch.as_str()));
         assert_eq!(w.unmerged, Some(1));
         assert!(!w.running);
-        assert!(render(&all).contains("1 unmerged commits"));
+        let text = render(&all, crate::state::now());
+        assert!(text.contains("1 unmerged commits"), "{text}");
+        assert!(
+            text.contains("not merged") && text.contains("today"),
+            "{text}"
+        );
         assert_eq!(find(&all, &wt.branch).unwrap().path, wt.path);
         let short = wt.branch.strip_prefix("paddock/").unwrap();
         assert_eq!(find(&all, short).unwrap().path, wt.path);
@@ -353,5 +452,62 @@ mod tests {
         w.running = false;
         remove(&env, &w, false).unwrap();
         assert!(!wt.path.exists());
+    }
+
+    fn clean(_: &Path) -> Result<Option<Vec<String>>> {
+        Ok(Some(vec![]))
+    }
+
+    #[test]
+    fn an_empty_run_loses_its_worktree_and_branch_at_once() {
+        let (_t, env, repo) = setup();
+        let wt = crate::build::create_worktree(&env, &repo, None).unwrap();
+        assert!(reclaim_with(&env, &wt, &clean).unwrap());
+        assert!(!wt.path.exists());
+        let branches = git(&repo, &["branch", "--format=%(refname:short)"]);
+        assert!(!branches.contains(&wt.branch), "{branches}");
+        assert!(list(&env).is_empty());
+    }
+
+    #[test]
+    fn a_run_with_work_or_an_unknown_state_keeps_its_worktree() {
+        let (_t, env, repo) = setup();
+        // A commit: something to review.
+        let wt = crate::build::create_worktree(&env, &repo, None).unwrap();
+        git(&wt.path, &["commit", "-q", "--allow-empty", "-m", "b"]);
+        assert!(!reclaim_with(&env, &wt, &clean).unwrap());
+        assert!(wt.path.exists());
+        // Uncommitted or untracked files, or a state that paddock cannot read.
+        let wt = crate::build::create_worktree(&env, &repo, None).unwrap();
+        let dirty = |_: &Path| Ok(Some(vec!["?? new.txt".to_string()]));
+        assert!(!reclaim_with(&env, &wt, &dirty).unwrap());
+        let unknown = |_: &Path| Ok(None);
+        assert!(!reclaim_with(&env, &wt, &unknown).unwrap());
+        assert!(wt.path.exists());
+        // HEAD on another branch with a commit of its own.
+        let wt = crate::build::create_worktree(&env, &repo, None).unwrap();
+        git(&wt.path, &["switch", "-q", "-c", "side"]);
+        git(&wt.path, &["commit", "-q", "--allow-empty", "-m", "s"]);
+        assert!(!reclaim_with(&env, &wt, &clean).unwrap());
+        // HEAD detached at the base: still not the run's branch.
+        let wt = crate::build::create_worktree(&env, &repo, None).unwrap();
+        git(&wt.path, &["switch", "-q", "--detach"]);
+        assert!(!reclaim_with(&env, &wt, &clean).unwrap());
+        assert_eq!(list(&env).len(), 4);
+    }
+
+    #[test]
+    fn a_running_sandbox_keeps_an_empty_worktree() {
+        let (_t, env, repo) = setup();
+        let wt = crate::build::create_worktree(&env, &repo, None).unwrap();
+        let r: crate::state::Running = serde_json::from_value(serde_json::json!({
+            "id": "claude-1", "harness": "claude", "project": wt.path, "backend": "bwrap",
+            "network": "egress", "gui": "off", "pid": std::process::id(),
+            "started": crate::state::now(), "auth": "shared",
+        }))
+        .unwrap();
+        r.register(&env).unwrap();
+        assert!(!reclaim_with(&env, &wt, &clean).unwrap());
+        assert!(wt.path.exists());
     }
 }

@@ -4,7 +4,7 @@ use paddock::env::HostEnv;
 
 #[derive(Subcommand)]
 pub(crate) enum WorktreeCmd {
-    /// List the worktrees with their branch, unmerged commits and state.
+    /// List the worktrees with their size, last use, branch, merged state and changes.
     List {
         #[arg(long)]
         json: bool,
@@ -26,13 +26,18 @@ pub(crate) enum WorktreeCmd {
 
 pub(crate) fn worktree_cmd(env: &HostEnv, cmd: WorktreeCmd) -> Result<i32> {
     use paddock::worktree;
-    let all = worktree::list(env);
+    let mut all = worktree::list(env);
+    if matches!(cmd, WorktreeCmd::List { .. }) {
+        worktree::measure(&mut all);
+    }
     match cmd {
         WorktreeCmd::List { json: true } => println!(
             "{}",
             serde_json::json!({ "api_version": "paddock.worktrees/v1", "worktrees": all })
         ),
-        WorktreeCmd::List { json: false } => print!("{}", worktree::render(&all)),
+        WorktreeCmd::List { json: false } => {
+            print!("{}", worktree::render(&all, paddock::state::now()))
+        }
         WorktreeCmd::Merge { target } => {
             println!("{}", worktree::merge(env, &worktree::find(&all, &target)?)?)
         }

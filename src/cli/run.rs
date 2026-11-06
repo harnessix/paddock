@@ -171,6 +171,8 @@ fn start_with(
     let horse = !shell && (a.horse || paddock::horse::live::settings(env)?.enabled);
     let mut opts = a.options(env, shell)?;
     opts.detach = detach.as_ref().map(|(id, _)| id.clone());
+    let project = build::resolve_project(opts.project.as_deref()).ok();
+    paddock::storage::guard::before_run(env, project.as_deref(), false)?;
     let mut built = build::build(env, &opts)?;
     built.horse = horse;
     // The VM backend starts the same run with paddock in the guest.
@@ -219,7 +221,7 @@ fn start_built(env: &HostEnv, opts: &Options, built: build::Built, shell: bool) 
     let wt = built.worktree.clone();
     let code = run::run(env, built, backend.as_ref(), false, false)?.code;
     if let Some(w) = wt {
-        eprintln!("\n{}", build::worktree_report(env, &w));
+        eprintln!("\n{}", paddock::worktree::finish(env, &w).0);
     }
     Ok(code)
 }

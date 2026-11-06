@@ -403,7 +403,8 @@ Each harness gets its own home in each project, so the homes grow with the numbe
 
 - Each sandbox home: harness, login, project, size, last use, and what you lose when you delete it.
 - The paddock images of docker and podman, and whether each is current or in use.
-- The worktrees that `--worktree` created, with their unmerged commits.
+- The worktrees that `--worktree` created, with their total size, last use, unmerged commits and merged state.
+- The build caches of worktree runs.
 - The session records of `paddock files`, and the keyring passwords of app homes.
 - The project snapshots and the undo trash of `paddock undo`.
 - The caches in the homes, by class (see [Caches](#caches)).
@@ -442,6 +443,61 @@ The other items need a flag that names them:
 - `--scratch` adds scratch projects that were not used for `--older-than` days. An agent from `omarchy-agent` works in one when it starts in the home folder (see [Only the agents that Omarchy starts](#only-the-agents-that-omarchy-starts)). Its files are lost.
 
 paddock never removes the home or worktree of a running sandbox. It deletes only inside its own directories. It never follows a symlink, so a link in a sandbox home cannot point it at your files. A sandbox can edit the `.paddock-origin` file in its home, which records the project. paddock uses that file only when it matches the folder name of the home, which contains a hash of the project path.
+
+### Automatic cleanup
+
+paddock cleans up by itself, so its folders do not fill the disk:
+
+- When a `--worktree` run or a spawned worker ends without a commit and without uncommitted changes, paddock removes its worktree and its branch at once. There is nothing to review.
+- Each `paddock run` starts a cleanup in the background, at most once an hour. The start does not wait for it. It removes the worktrees whose work is merged and that have no uncommitted changes, and their `paddock/` branches. If a local branch outside `paddock/` has a commit, the commit counts as merged. A commit with the same patch counts too, for example after a cherry-pick or a rebase.
+- A worktree with unmerged work stays. When it is not used for `worktree_cache_days`, paddock deletes its build output: folders with a `CACHEDIR.TAG` file, such as cargo's `target/`, that git ignores and that hold no tracked file. paddock never deletes a tracked file, or an untracked file that git does not ignore.
+- The same cleanup removes snapshots and undo trash folders older than `snapshot_days`.
+- It never removes a sandbox home. A home holds your conversations with the harness (transcripts and history) and an app's login. Only `paddock gc --homes` removes homes, when you ask, and it names what is lost.
+- It also does what `paddock gc --yes` does, except for images.
+
+The cleanup never touches the home, worktree or snapshot of a running sandbox. `paddock doctor` shows when it last ran, what it removed, and its errors. `paddock gc-auto --now` runs it at once.
+
+### Free space
+
+Before a sandbox starts, paddock checks the free space on the disks of the project, the worktrees, the homes and the build cache:
+
+- Below the hard floor, paddock first runs the cleanup, for at most two minutes. If the space is still below the floor, the sandbox does not start. The message gives the numbers and the commands that free more space.
+- Below the soft floor, the sandbox starts with one warning line, and a desktop notification at most once an hour.
+- While sandboxes run, paddock checks every five minutes. At the hard floor it sends a notification. It does not stop a running sandbox.
+
+Each floor is the smaller of its two numbers, so it fits both small and large disks. The defaults are 15 GB or 5% for the hard floor, and 50 GB or 10% for the soft floor. `paddock doctor` shows the free space and the floors.
+
+### Build cache of worktree runs
+
+A `--worktree` run or a worker of a Rust project does not build into `target/` of its worktree. Its cargo target folder (`CARGO_TARGET_DIR`) is in `~/.cache/paddock/build/<repository>/`. At the start, paddock copies the newest target folder of the same repository with copy-on-write, so the worker does not compile the project from nothing. When the worker ends, its folder becomes the newest one. Each worker has its own copy. Two workers that build different commits do not wait for each other, and they do not see each other's output. A project never sees the build cache of another project.
+
+On btrfs and xfs the copy takes almost no space. On ext4 and other file systems without copy-on-write, each worker starts with an empty folder, and paddock deletes it when the worker ends. On macOS the build cache is off. The cleanup keeps the build caches of all repositories under `build_cache_gib` and removes the least recently used first.
+
+A script that reads `target/` directly does not find the build output. For such a project, set this in its `paddock.toml`:
+
+```toml
+[setup]
+shared_build_cache = false
+```
+
+### Cleanup settings
+
+Set these in `~/.config/paddock/config.toml`. The values here are the defaults. 0 turns a rule or a floor off.
+
+```toml
+[storage]
+auto_gc = true               # the automatic cleanup; PADDOCK_AUTO_GC=0 also turns it off
+worktree_cache_days = 2      # delete the build output of a kept worktree after this many days without use
+snapshot_days = 30           # delete snapshots and undo trash folders older than this
+hard_floor_gib = 15          # do not start a sandbox below the smaller of these two
+hard_floor_percent = 5
+soft_floor_gib = 50          # warn below the smaller of these two
+soft_floor_percent = 10
+build_cache = true           # the build cache of worktree runs
+build_cache_gib = 40         # the size of all build caches together
+```
+
+If a value is wrong, paddock uses the default, and the run and `paddock doctor` print a warning.
 
 ### Caches
 
@@ -1057,7 +1113,7 @@ paddock-host wait <id> --timeout 600
 paddock-host kill <id>
 ```
 
-The child runs the harness once, without a terminal (`claude -p`, `codex exec`, `opencode run`, `copilot -p`, `agy --print` or `grok --prompt-file`), and stops when the task is done. It works in a new worktree on the branch `paddock/spawn-<harness>-<id>`, from the commit that the parent has checked out. The worktree uses the same repository, so the child's commits are in the parent's repository at once. `wait` and `status` give the branch name and the exit status. The parent reads the branch with git, for example `git diff main...paddock/spawn-codex-<id>`, and merges what it wants. paddock also writes a short summary to `.paddock/inbox/spawn-<id>/`: `result.json` with the state, the exit code, the branch, the commit count and a diff summary, and `output.txt` with the end of the child's final output. When the child ends, paddock also writes `result:<id>` into the `tree` scope of [paddock kv](#shared-state-paddock-kv), with `status`, `summary` and `ref` (the branch). So the parent can run `paddock-host kv watch --prefix result: --scope tree` instead of polling several children.
+The child runs the harness once, without a terminal (`claude -p`, `codex exec`, `opencode run`, `copilot -p`, `agy --print` or `grok --prompt-file`), and stops when the task is done. It works in a new worktree on the branch `paddock/spawn-<harness>-<id>`, from the commit that the parent has checked out. The worktree uses the same repository, so the child's commits are in the parent's repository at once. `wait` and `status` give the branch name and the exit status. The parent reads the branch with git, for example `git diff main...paddock/spawn-codex-<id>`, and merges what it wants. If the child made no commit and left no change, paddock removes its worktree and its branch when it ends. paddock also writes a short summary to `.paddock/inbox/spawn-<id>/`: `result.json` with the state, the exit code, the branch, the commit count and a diff summary, and `output.txt` with the end of the child's final output. When the child ends, paddock also writes `result:<id>` into the `tree` scope of [paddock kv](#shared-state-paddock-kv), with `status`, `summary` and `ref` (the branch). So the parent can run `paddock-host kv watch --prefix result: --scope tree` instead of polling several children.
 
 With `--from-head`, the child starts from the parent's files as they are now. paddock first makes a commit of them, with uncommitted and new files but without ignored ones. It uses a private index file, so the parent's files, index and branches do not change. The host git call is the hardened one that paddock uses for worktrees: it refuses a repository configuration that can start a program.
 
@@ -1843,14 +1899,14 @@ paddock app run vscode --worktree ~/src/api
 
 To use a worktree on every start, set `worktree = true` in `[apps.NAME]` of `~/.config/paddock/config.toml`. When you start an app from the menu without saved folders, the folder dialog asks whether to open a git repository in a new worktree. "New worktree" is the default button.
 
-When the app exits, paddock prints the commits and the uncommitted changes in the worktree, and the commands to review, merge or remove it. If no terminal shows that text, for example after a start from the menu, a notification gives the branch and the number of commits and changes, with a Merge and a Remove button where the notification server supports buttons. paddock never removes a worktree without your action.
+When the app exits, paddock prints the commits and the uncommitted changes in the worktree, and the commands to review, merge or remove it. If no terminal shows that text, for example after a start from the menu, a notification gives the branch and the number of commits and changes, with a Merge and a Remove button where the notification server supports buttons. If the app made no commit and left no change, paddock removes the worktree and the branch at once. A worktree with work stays until you remove it, or until its work is merged (see [Automatic cleanup](#automatic-cleanup)).
 
 Flatpak apps use worktrees too. paddock gives the app the worktree folder and the repository's `.git` folder read-write, so git in the app can commit there. The `.git` file of the worktree, the `config`, `config.worktree`, `commondir`, `gitdir` and `hooks` of the repository and of the worktree stay read-only.
 
 Later, the commands and the "Worktrees" row of the bar panel do the same:
 
 ```sh
-paddock worktree list                       # branch, unmerged commits, uncommitted changes, in use
+paddock worktree list                       # size, last use, branch, merged state, uncommitted changes, in use
 paddock worktree merge paddock/vscode-20261102-1a2b
 paddock worktree remove ~/.local/share/paddock/worktrees/api/wt-api-1a2b3c [--force]
 ```
