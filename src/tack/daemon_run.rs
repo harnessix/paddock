@@ -17,7 +17,7 @@ impl Server {
     ) -> io::Result<Option<Box<dyn Program>>> {
         let fail = |msg: String| -> io::Result<Option<Box<dyn Program>>> {
             self.counts.errors.fetch_add(1, Ordering::Relaxed);
-            self.audit_start(peer, &req.program, &d, "failed", msg.clone());
+            self.audit_start(peer, &req.program, &d, "failed", msg.clone(), None);
             let mut w = conn;
             proto::write_frame(&mut w, &proto::envelope(Answer::Failed { message: msg }))?;
             Ok(None)
@@ -51,12 +51,14 @@ impl Server {
             Ok(p) => {
                 self.counts.started.fetch_add(1, Ordering::Relaxed);
                 let note = p.note();
+                let runs_as = p.runs_as();
                 self.audit_start(
                     peer,
                     &req.program,
                     &d,
                     "started",
                     format!("pid {}; {note}", p.pid()),
+                    runs_as.as_ref(),
                 );
                 let mut w = conn;
                 proto::write_frame(
@@ -64,7 +66,9 @@ impl Server {
                     &proto::envelope(Answer::Started {
                         pid: p.pid(),
                         decision: d,
-                        protection: crate::tack::UNPROTECTED.to_string(),
+                        protection: runs_as
+                            .map(|r| r.text)
+                            .unwrap_or_else(|| "protect = refs".into()),
                     }),
                 )?;
                 Ok(Some(p))
@@ -163,6 +167,6 @@ impl Server {
             ),
             _ => format!("pid {} ended", p.pid()),
         };
-        self.audit_start(peer, &req.program, d, "ended", how);
+        self.audit_start(peer, &req.program, d, "ended", how, p.runs_as().as_ref());
     }
 }

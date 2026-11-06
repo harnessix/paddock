@@ -18,10 +18,14 @@
 //!
 //! The service (tackd, `daemon`) decides with `policy`, from `procs` and
 //! `ident`, and on Linux starts the program with its values (`start`,
-//! `caller`, `launchenv`). The client side is `standin` (`paddock tack
+//! `caller`, `launchenv`), at the level of protection of its entry
+//! (`protect`: the helper accounts of `accounts`, the ACLs of `acl`, the
+//! exec wrapper of `wrap`, and `start_uid`). The client side is `standin` (`paddock tack
 //! run`), which the stand-ins on PATH run (`tackshims`); `fdpass` hands
 //! it the caller's standard streams.
 
+pub mod accounts;
+pub mod acl;
 pub mod audit;
 pub mod caller;
 pub mod client;
@@ -36,6 +40,10 @@ pub mod peer;
 pub mod policy;
 pub mod procs;
 pub mod program;
+pub mod protect;
+pub mod protect_report;
+#[cfg(target_os = "linux")]
+pub mod protect_setup;
 pub mod proto;
 pub mod reference;
 pub mod report;
@@ -43,15 +51,18 @@ pub mod service;
 pub mod standin;
 #[cfg(target_os = "linux")]
 pub mod start;
+#[cfg(target_os = "linux")]
+pub mod start_uid;
 pub mod status;
 pub mod store;
 pub mod tackshims;
+pub mod wrap;
 
 pub use reference::Reference;
 
-/// How a program that tackd starts is protected from the other processes
-/// of its user, in this version: not yet. Phase 4 adds the protection.
-pub const UNPROTECTED: &str = "unprotected (phase 4)";
+/// tackd's state folder on a host: the helper registry, the ACL ledger,
+/// the helpers' homes and the exec wrapper folders (`protect`).
+pub const STATE_DIR: &str = "/var/lib/paddock-tackd";
 
 use crate::env::HostEnv;
 use std::path::PathBuf;

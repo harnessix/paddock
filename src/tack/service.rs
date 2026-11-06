@@ -96,6 +96,10 @@ pub fn unit_text(p: &Paths) -> String {
 # private file system view, no private network or /tmp, and no system call
 # filter: the program must see and reach what it would from your shell.
 # tackd's own limits are its capabilities and NoNewPrivileges below.
+#
+# A program at protect = \"uid\" runs as the helper account of its user,
+# which setup makes; tackd keeps their registry, the ACL ledger, their
+# homes and the exec wrapper folders in /var/lib/paddock-tackd.
 
 [Unit]
 Description=paddock tackd: secrets for allowlisted programs

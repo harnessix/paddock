@@ -20,9 +20,10 @@
 //! prepared in tackd first: the child only makes system calls that are
 //! safe after `fork` in a process with threads.
 //!
-//! What phase 4 adds, protection of the program's memory and environment
-//! from other processes of the same user, is not here: the audit line
-//! says `unprotected (phase 4)`.
+//! At `protect = "uid"` the program runs as the user's helper account
+//! instead, with only the helper's group, the helper's home, the exec
+//! wrapper first on PATH and an ACL on the working folder
+//! (`start_uid`, `protect`). Everything else above stays the caller's.
 
 use super::caller::{self, Caller};
 use super::config::Tack;
@@ -39,8 +40,6 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
-
-use super::UNPROTECTED as PROTECTION;
 
 /// Where tackd gets the values: the user's store, run as that user.
 pub trait Values: Send + Sync {
@@ -70,6 +69,8 @@ pub struct Linux {
     pub proc: PathBuf,
     /// `/sys/fs/cgroup`.
     pub cgroups: PathBuf,
+    /// `protect = "uid"`: the helpers, the wrapper and the ACLs.
+    pub protect: super::start_uid::Protection,
 }
 
 impl Linux {
@@ -79,6 +80,7 @@ impl Linux {
             cache: Arc::new(HashCache::default()),
             proc: PathBuf::from("/proc"),
             cgroups: PathBuf::from("/sys/fs/cgroup"),
+            protect: super::start_uid::Protection::system(PathBuf::from(super::STATE_DIR)),
         }
     }
 }
@@ -257,6 +259,21 @@ fn passwd(uid: u32) -> (String, PathBuf) {
     super::daemon::passwd(uid).unwrap_or_else(|| (uid.to_string(), PathBuf::from("/")))
 }
 
+/// The owner of a helper, as the store tools run: the owner's uid and
+/// group from the passwd database, with the caller's umask and limits.
+fn owner_caller(owner: u32, helper: &Caller) -> Caller {
+    let gid = super::accounts::by_uid(owner)
+        .map(|p| p.gid)
+        .unwrap_or(owner);
+    Caller {
+        uid: owner,
+        gid,
+        groups: vec![gid],
+        cgroup: None,
+        ..helper.clone()
+    }
+}
+
 /// Whether the child must change its user: always as root; a test that
 /// runs as the caller's own user cannot and need not.
 fn must_drop(uid: u32) -> bool {
@@ -287,19 +304,31 @@ impl Starter for Linux {
             return Err("tackd starts nothing as root".into());
         }
         let c = caller::read(&self.proc, peer.pid, peer.uid)?;
-        let (user, home) = passwd(peer.uid);
-        let drop_user = must_drop(peer.uid);
+        let reg = self.protect.registry();
+        // A program at protect = uid that starts an allowlisted program:
+        // the store and the configuration are its owner's.
+        let owner = reg
+            .as_ref()
+            .ok()
+            .and_then(|r| r.of_helper(peer.uid))
+            .map(|h| h.owner);
+        let store_caller = match owner {
+            Some(o) => owner_caller(o, &c),
+            None => c.clone(),
+        };
+        let (plan, notes) = self.protect.prepare(peer.uid, &c, req, d, cfg, &reg)?;
+        let (user, home) = passwd(store_caller.uid);
         let who = Who {
-            caller: &c,
+            caller: &store_caller,
             home,
             user,
-            env: pairs(&req.env),
-            drop_user,
+            env: pairs(&super::protect::unwrap_env(&req.env)),
+            drop_user: must_drop(store_caller.uid),
         };
         let values = self.values.fetch(&who, cfg, &d.secrets)?;
         let (fd, script) = open_program(d, &self.cache)?;
         let real = &d.program.as_ref().expect("checked by open_program").real;
-        let (env, dropped) = super::launchenv::build(&req.env, &values);
+        let (env, dropped) = super::launchenv::build(&plan.env, &values);
         drop(values);
         let mut argv = vec![cstr(&req.argv0, "argv0")?];
         for a in &req.args {
@@ -321,14 +350,14 @@ impl Starter for Linux {
             _env: env,
             envp,
             cwd: cstr(&req.cwd, "the working folder")?,
-            uid: peer.uid,
-            gid: c.gid,
-            groups: c.groups.clone(),
+            uid: plan.uid,
+            gid: plan.gid,
+            groups: plan.groups.clone(),
             umask: c.umask as libc::mode_t,
             limits: limits(&c),
             nice: c.nice,
             cgroup: cgroup_file(&self.cgroups, &c),
-            drop_user,
+            drop_user: must_drop(plan.uid),
         });
         let mut fds = fds.into_iter();
         let mut stdio = |present: bool| -> Stdio {
@@ -348,13 +377,14 @@ impl Starter for Linux {
         unsafe {
             cmd.pre_exec(move || become_program(&xc));
         }
+        let at_uid = plan.level == super::protect::Level::Uid;
         let child = crate::env::spawn_retrying(&mut cmd).map_err(|e| {
             format!(
                 "cannot start {real}{}: {e}",
-                if e.raw_os_error() == Some(libc::ENOENT) {
-                    " (the working folder or the program's interpreter is missing)"
-                } else {
-                    ""
+                match e.raw_os_error() {
+                    Some(libc::ENOENT) => " (the working folder or the program's interpreter is missing)",
+                    Some(libc::EACCES) if at_uid => " as your helper account (protect = \"uid\"): the helper must be able to run the program and enter the working folder. Put the program where every user can run it, such as /usr/local/bin, or set protect = \"refs\" in its entry",
+                    _ => "",
                 }
             )
         })?;
@@ -366,7 +396,13 @@ impl Starter for Linux {
         let cgroup = std::fs::read_to_string(self.proc.join(pid.to_string()).join("cgroup"))
             .ok()
             .and_then(|t| caller::parse_cgroup(&t));
-        let mut note = vec![PROTECTION.to_string()];
+        let runs_as = super::protect::RunsAs {
+            level: plan.level,
+            uid: plan.uid,
+            text: super::protect::describe(&plan),
+        };
+        let mut note = vec![runs_as.text.clone()];
+        note.extend(notes);
         note.push(match (&c.cgroup, &cgroup) {
             (Some(want), Some(got)) if want == got => "in the caller's cgroup".into(),
             (Some(_), _) => "not in the caller's cgroup (tackd's instead)".into(),
@@ -382,6 +418,7 @@ impl Starter for Linux {
             pid: pid as libc::pid_t,
             reaped: Mutex::new(false),
             note: note.join("; "),
+            runs_as: Some(runs_as),
         }))
     }
 }
@@ -394,6 +431,7 @@ pub struct Child {
     /// sent under the lock reaches the program or nothing.
     reaped: Mutex<bool>,
     note: String,
+    runs_as: Option<super::protect::RunsAs>,
 }
 
 impl Child {
@@ -403,6 +441,7 @@ impl Child {
             pid: pid as libc::pid_t,
             reaped: Mutex::new(false),
             note: String::new(),
+            runs_as: None,
         }
     }
 
@@ -429,6 +468,10 @@ impl Program for Child {
 
     fn note(&self) -> String {
         self.note.clone()
+    }
+
+    fn runs_as(&self) -> Option<super::protect::RunsAs> {
+        self.runs_as.clone()
     }
 
     fn next(&self) -> Event {

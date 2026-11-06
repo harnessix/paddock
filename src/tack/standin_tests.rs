@@ -96,6 +96,8 @@ fn tackd_with(body: Option<&str>, copy: Option<&str>, listed: bool) -> Tackd {
     l.cache = server.cache.clone();
     // No cgroup moves in tests.
     l.cgroups = t.path().join("no-cgroups");
+    l.protect.state = t.path().join("state");
+    l.protect.owner = me();
     server.starter = Some(Box::new(l));
     let server = Arc::new(server);
     let sock = t.path().join("run/tackd.sock");
@@ -202,7 +204,9 @@ fn the_program_gets_the_value_arguments_folder_and_its_exit_code() {
     let kinds: Vec<&str> = recs.iter().map(|r| r.decision.as_str()).collect();
     assert_eq!(kinds, ["allow", "started", "ended"], "{recs:?}");
     assert!(
-        recs[1].reason.contains("unprotected (phase 4)"),
+        recs[1].reason.contains("protect = refs: runs as uid")
+            && recs[1].protect.as_deref() == Some("refs")
+            && recs[1].run_uid == Some(me()),
         "{:?}",
         recs[1]
     );
@@ -465,7 +469,11 @@ fn a_stand_in_that_dies_takes_the_program_with_it() {
     else {
         panic!("{a:?}")
     };
-    assert_eq!(protection, "unprotected (phase 4)");
+    assert!(
+        protection.starts_with("protect = refs: runs as uid")
+            && protection.contains("can still read this program's environment"),
+        "{protection}"
+    );
     // Wait for the program to run, then go away as a SIGKILL would.
     let pidfile = t.t.path().join("pid");
     for _ in 0..200 {

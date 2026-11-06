@@ -42,6 +42,16 @@ pub struct Record {
     pub secrets: Vec<String>,
     pub decision: String,
     pub reason: String,
+    /// A start: its level of protection (`uid` or `refs`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protect: Option<String>,
+    /// A start: the uid that the program runs as.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_uid: Option<u32>,
+    /// The uid of the caller when it is not `uid`: a helper account of
+    /// `uid`, whose program started another one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub caller_uid: Option<u32>,
 }
 
 impl Record {
@@ -62,6 +72,9 @@ impl Record {
             secrets: d.secrets.clone(),
             decision: d.verdict.name().to_string(),
             reason: d.reason.clone(),
+            protect: None,
+            run_uid: None,
+            caller_uid: None,
         }
     }
 
@@ -99,6 +112,12 @@ impl Record {
         );
         if let Some(h) = &self.sha256 {
             s.push_str(&format!("  sha256 {}", &h[..h.len().min(16)]));
+        }
+        if let (Some(l), Some(u)) = (&self.protect, self.run_uid) {
+            s.push_str(&format!("  protect {l}  uid {u}"));
+        }
+        if let Some(c) = self.caller_uid {
+            s.push_str(&format!("  from uid {c}"));
         }
         s.push_str(&format!("\n    {}", self.reason));
         if !self.chain.is_empty() {
@@ -284,7 +303,37 @@ mod tests {
             secrets: vec!["GH_TOKEN".into()],
             decision: "allow".into(),
             reason: reason.into(),
+            protect: None,
+            run_uid: None,
+            caller_uid: None,
         }
+    }
+
+    #[test]
+    fn a_start_line_says_its_level_and_uid() {
+        let mut r = rec(1000, "pid 7; protect = uid: runs as _tack_alice (uid 981); processes of your user cannot read this program's environment or memory");
+        r.decision = "started".into();
+        r.protect = Some("uid".into());
+        r.run_uid = Some(981);
+        let s = r.show();
+        assert!(
+            s.lines().next().unwrap().contains("protect uid  uid 981"),
+            "{s}"
+        );
+        assert!(s.contains("runs as _tack_alice (uid 981)"), "{s}");
+        let v: serde_json::Value = serde_json::to_value(&r).unwrap();
+        assert_eq!(v["protect"], "uid");
+        assert_eq!(v["run_uid"], 981);
+        assert!(v.get("caller_uid").is_none());
+        // A start from a program at uid: under the owner, from the helper.
+        r.protect = Some("refs".into());
+        r.run_uid = Some(1000);
+        r.caller_uid = Some(981);
+        assert!(r.show().contains("protect refs  uid 1000  from uid 981"));
+        // An old line without the fields still reads.
+        let old = r#"{"time":1,"uid":1,"pid":2,"program":"/x","chain":[],"secrets":[],"decision":"started","reason":"pid 3; unprotected (phase 4)"}"#;
+        let o: Record = serde_json::from_str(old).unwrap();
+        assert_eq!(o.protect, None);
     }
 
     fn me() -> u32 {

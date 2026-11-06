@@ -71,6 +71,10 @@ pub trait Program: Send + Sync {
     /// Wait for what happens next. `Exited` and `Killed` are the last.
     fn next(&self) -> Event;
     fn signal(&self, sig: i32, group: bool) -> Result<(), String>;
+    /// Its level of protection and the uid it runs as.
+    fn runs_as(&self) -> Option<super::protect::RunsAs> {
+        None
+    }
 }
 
 /// Where tackd finds a user's configuration.
@@ -187,6 +191,10 @@ pub struct Server {
     pub starter: Option<Box<dyn Starter>>,
     pub agents: Vec<String>,
     pub signer: fn(&Path) -> Option<String>,
+    /// The user that a helper account of `protect = "uid"` belongs to: a
+    /// request from a program at `uid` is decided with its owner's
+    /// configuration.
+    pub owner_of: Box<dyn Fn(u32) -> Option<u32> + Send + Sync>,
     pub started: u64,
     /// The time a client has to send its request.
     pub deadline: Duration,
@@ -247,6 +255,7 @@ impl Server {
             starter: None,
             agents: procs::agent_names(),
             signer: ident::signer,
+            owner_of: Box::new(|_| None),
             started: crate::state::now(),
             deadline: FRAME_DEADLINE,
             max_conns: MAX_CONNS,
@@ -272,12 +281,13 @@ impl Server {
         alive: &dyn Fn() -> bool,
         req: &proto::Launch,
     ) -> (Decision, Option<Tack>) {
-        let cfg = self.users.config(peer.uid);
+        let owner = self.owner(peer.uid);
+        let cfg = self.users.config(owner);
         let chain = procs::chain(self.table.as_ref(), peer.pid, &self.agents);
         let path = Path::new(&req.program);
         let ident = match &cfg {
             Ok(c) if peer.uid != 0 && policy::listed(c, path) => {
-                ident::identify(path, peer.uid, &self.cache)
+                ident::identify(path, owner, &self.cache)
             }
             _ => Err(ident::IdentError::NotFound),
         };
@@ -294,7 +304,7 @@ impl Server {
         if d.verdict != Verdict::Deny && !alive() {
             d = refuse(d, "the calling process ended while tackd read it".into());
         }
-        let rec = Record::from_decision(crate::state::now(), peer, &req.program, &d);
+        let rec = self.record(peer, &req.program, &d);
         if let Err(e) = self.audit.write(&rec) {
             eprintln!(
                 "tackd: cannot write the audit log {}: {e}",
@@ -314,11 +324,41 @@ impl Server {
         (d, cfg.ok())
     }
 
-    /// An audit line about a start: `event` is started, ended or failed.
-    fn audit_start(&self, peer: Peer, program: &str, d: &Decision, event: &str, reason: String) {
+    /// The uid whose configuration decides for `uid`: its owner when it is
+    /// a helper account, itself otherwise.
+    fn owner(&self, uid: u32) -> u32 {
+        (self.owner_of)(uid).filter(|o| *o != 0).unwrap_or(uid)
+    }
+
+    /// The audit record of a decision: under the owner's uid, so that the
+    /// owner reads it, with the helper as the caller.
+    fn record(&self, peer: Peer, program: &str, d: &Decision) -> Record {
         let mut rec = Record::from_decision(crate::state::now(), peer, program, d);
+        let owner = self.owner(peer.uid);
+        if owner != peer.uid {
+            rec.uid = owner;
+            rec.caller_uid = Some(peer.uid);
+        }
+        rec
+    }
+
+    /// An audit line about a start: `event` is started, ended or failed.
+    fn audit_start(
+        &self,
+        peer: Peer,
+        program: &str,
+        d: &Decision,
+        event: &str,
+        reason: String,
+        runs_as: Option<&super::protect::RunsAs>,
+    ) {
+        let mut rec = self.record(peer, program, d);
         rec.decision = event.to_string();
         rec.reason = reason;
+        if let Some(r) = runs_as {
+            rec.protect = Some(r.level.name().to_string());
+            rec.run_uid = Some(r.uid);
+        }
         if let Err(e) = self.audit.write(&rec) {
             eprintln!(
                 "tackd: cannot write the audit log {}: {e}",
@@ -375,7 +415,9 @@ impl Server {
             Request::Launch(l) => Answer::Decision(self.launch(peer, alive, &l)),
             Request::Status {} => Answer::Status(self.status()),
             Request::Audit { lines } => Answer::Audit {
-                lines: self.audit.read((peer.uid != 0).then_some(peer.uid), lines),
+                lines: self
+                    .audit
+                    .read((peer.uid != 0).then(|| self.owner(peer.uid)), lines),
             },
             Request::Start(s) => {
                 let (d, cfg) = self.decide(peer, alive, &s.launch());
@@ -625,7 +667,13 @@ pub fn main(paths: &super::service::Paths) -> anyhow::Result<i32> {
             paths.audit.display()
         );
     }
-    let server = Server::new(Box::new(procs::Kernel::new()), Box::new(Passwd), audit);
+    let mut server = Server::new(Box::new(procs::Kernel::new()), Box::new(Passwd), audit);
+    let state = PathBuf::from(super::STATE_DIR);
+    server.owner_of = Box::new(move |uid| {
+        let r = super::protect::Registry::load(&state, 0).ok()?;
+        let h = r.of_helper(uid)?;
+        super::accounts::check(h).ok().map(|_| h.owner)
+    });
     #[cfg(target_os = "linux")]
     let server = {
         let mut server = server;

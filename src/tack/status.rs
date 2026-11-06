@@ -72,10 +72,8 @@ pub fn lines(s: &State, ours: &str) -> Vec<String> {
             ));
             if cfg!(target_os = "linux") {
                 out.push(format!(
-                    "  ok       {} programs started with their secrets, {} running; {}",
-                    st.started_programs,
-                    st.running,
-                    super::UNPROTECTED
+                    "  ok       {} programs started with their secrets, {} running",
+                    st.started_programs, st.running,
                 ));
             }
             if st.version != ours {
@@ -117,6 +115,7 @@ pub fn lines(s: &State, ours: &str) -> Vec<String> {
 /// tackd reads it.
 pub fn lines_for(env: &crate::env::HostEnv, s: &State, ours: &str) -> Vec<String> {
     let mut out = lines(s, ours);
+    out.extend(super::protect_report::lines_for(env));
     if s.installed && env.paddock_config() != env.home.join(".config/paddock") {
         out.push(format!(
             "  note     your configuration is in {} (XDG_CONFIG_HOME); tackd reads ~/.config/paddock/config.toml: link that file there",

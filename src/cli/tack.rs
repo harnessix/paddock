@@ -90,6 +90,11 @@ pub(crate) enum TackCmd {
     /// tackd itself, as the system service runs it.
     #[command(hide = true)]
     Serve,
+    /// tackd runs this as you before a program at protect = "uid" starts:
+    /// it lets the helper account reach the working folder (an ACL). The
+    /// grant comes on standard input.
+    #[command(hide = true)]
+    AclGrant,
 }
 
 pub(crate) fn run(env: &HostEnv, cmd: TackCmd) -> Result<i32> {
@@ -101,6 +106,7 @@ pub(crate) fn run(env: &HostEnv, cmd: TackCmd) -> Result<i32> {
         TackCmd::Audit { lines, json } => audit_cmd(lines, json),
         TackCmd::Check { command, json } => check(env, command, json),
         TackCmd::Serve => paddock::tack::daemon::main(&Paths::system()),
+        TackCmd::AclGrant => acl_grant(),
         TackCmd::Run {
             shim,
             secrets,
@@ -336,9 +342,56 @@ fn setup(env: &HostEnv) -> Result<i32> {
         return Ok(1);
     }
     println!("\ntackd reads the [tack] table of each user from ~/.config/paddock/config.toml. Run sudo paddock tack setup again after each paddock update.");
+    let helpers_ok = setup_helpers()?;
     println!("Note: {}.", report::PHASE_NOTE);
     as_sudo_user("setup")?;
-    Ok(0)
+    Ok(if helpers_ok { 0 } else { 1 })
+}
+
+/// The helper accounts of protect = "uid", for every user whose
+/// configuration has an entry at that level (Linux). Returns whether each
+/// one is ready.
+fn setup_helpers() -> Result<bool> {
+    #[cfg(target_os = "linux")]
+    {
+        use paddock::tack::{daemon, protect_setup};
+        let passwd = std::fs::read_to_string("/etc/passwd").unwrap_or_default();
+        let mut people = paddock::tack::accounts::people(&passwd);
+        let sudo = std::env::var("SUDO_UID")
+            .ok()
+            .and_then(|u| u.parse::<u32>().ok());
+        if let Some(pw) = sudo
+            .filter(|u| *u != 0)
+            .and_then(paddock::tack::accounts::by_uid)
+        {
+            if !people.iter().any(|(_, u)| *u == pw.uid) {
+                people.push((pw.name, pw.uid));
+            }
+        }
+        let config = |uid: u32| {
+            let home =
+                daemon::home_of(uid).ok_or_else(|| format!("uid {uid} has no home folder"))?;
+            daemon::read_config(&daemon::config_file(&home), uid)
+        };
+        let (users, problems) = protect_setup::wanted(&people, &config);
+        println!("\nHelper accounts for protect = \"uid\":");
+        for p in problems {
+            println!("  note      {p}");
+        }
+        let state = std::path::Path::new(paddock::tack::STATE_DIR);
+        let (lines, ok) = protect_setup::setup(state, &users, &service::System)?;
+        for l in lines {
+            println!("  {l}");
+        }
+        Ok(ok)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        println!(
+            "\nprotect = \"uid\" is for Linux only in this version: no helper account is made."
+        );
+        Ok(true)
+    }
 }
 
 fn remove(env: &HostEnv, keep_audit: bool) -> Result<i32> {
@@ -357,7 +410,18 @@ fn remove(env: &HostEnv, keep_audit: bool) -> Result<i32> {
         return Ok(0);
     }
     need_root(env, "paddock tack remove")?;
-    let out = service::remove(&Paths::system(), keep_audit, &service::System)?;
+    #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
+    let mut out = service::remove(&Paths::system(), keep_audit, &service::System)?;
+    #[cfg(target_os = "linux")]
+    {
+        // tackd is stopped: no start grants anything while this runs.
+        let passwd = std::fs::read_to_string("/etc/passwd").unwrap_or_default();
+        out.extend(paddock::tack::protect_setup::remove(
+            std::path::Path::new(paddock::tack::STATE_DIR),
+            &passwd,
+            &service::System,
+        ));
+    }
     if out.is_empty() {
         println!("tackd is not installed: nothing to remove.");
     }
@@ -387,6 +451,7 @@ fn status_cmd(env: &HostEnv, json: bool) -> Result<i32> {
                 "binary": st.binary,
                 "socket": st.socket,
                 "tackd": running,
+                "protect": protect_json(env),
             }))?
         );
         return Ok(0);
@@ -399,6 +464,29 @@ fn status_cmd(env: &HostEnv, json: bool) -> Result<i32> {
     } else {
         0
     })
+}
+
+/// The level of each allowlist entry, for `paddock tack status --json`.
+fn protect_json(env: &HostEnv) -> serde_json::Value {
+    let Ok(cfg) = config::load(env) else {
+        return serde_json::Value::Null;
+    };
+    let rows: Vec<serde_json::Value> = cfg
+        .secrets
+        .iter()
+        .flat_map(|(name, s)| {
+            s.allow.iter().map(move |a| {
+                serde_json::json!({
+                    "secret": name,
+                    "program": a.program,
+                    "level": a.level().name(),
+                    "source": paddock::tack::protect::source(a),
+                    "write": a.write,
+                })
+            })
+        })
+        .collect();
+    serde_json::Value::Array(rows)
 }
 
 fn audit_cmd(lines: usize, json: bool) -> Result<i32> {
@@ -456,6 +544,32 @@ fn check(env: &HostEnv, command: Vec<String>, json: bool) -> Result<i32> {
         }
         if let Some(p) = &d.program {
             println!("  program  {} sha256 {}", p.real, p.sha256);
+            if d.verdict != Verdict::Deny {
+                if let Ok(cfg) = config::load(env) {
+                    let e = paddock::tack::protect::effective(
+                        &cfg,
+                        &d.secrets,
+                        std::path::Path::new(&p.path),
+                        std::path::Path::new(&p.real),
+                    );
+                    println!(
+                        "  protect  {}",
+                        match e.level {
+                            paddock::tack::protect::Level::Uid => format!(
+                                "uid{}: runs as your helper account; {}",
+                                if e.write {
+                                    ", may write the working folder"
+                                } else {
+                                    ", reads the working folder"
+                                },
+                                paddock::tack::protect::UID_GAIN
+                            ),
+                            paddock::tack::protect::Level::Refs =>
+                                format!("refs: runs as you; {}", paddock::tack::protect::REFS_LIMIT),
+                        }
+                    );
+                }
+            }
         }
         if !d.chain.is_empty() {
             println!("  callers  {}", d.chain.join(" < "));
@@ -472,4 +586,33 @@ fn check(env: &HostEnv, command: Vec<String>, json: bool) -> Result<i32> {
         Verdict::Deny => 1,
         Verdict::Ask => 3,
     })
+}
+
+/// `paddock tack acl-grant`: the grant on standard input, the report as
+/// JSON on standard output.
+pub(crate) fn acl_grant() -> Result<i32> {
+    #[cfg(target_os = "linux")]
+    {
+        use std::io::Read;
+        let mut text = String::new();
+        std::io::stdin().take(64 * 1024).read_to_string(&mut text)?;
+        let g: paddock::tack::protect::Grant =
+            serde_json::from_str(&text).context("the grant on standard input is not valid")?;
+        // SAFETY: getuid cannot fail.
+        let me = unsafe { libc::getuid() };
+        match paddock::tack::acl::grant(&g, me, paddock::tack::acl::MAX_FILES) {
+            Ok(rep) => {
+                println!("{}", serde_json::to_string(&rep)?);
+                Ok(0)
+            }
+            Err(e) => {
+                eprintln!("{e}");
+                Ok(1)
+            }
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        anyhow::bail!("protect = \"uid\" is for Linux only in this version")
+    }
 }

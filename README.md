@@ -802,7 +802,7 @@ For every way:
 
 tack keeps a secret such as `GH_TOKEN` out of your shell startup files and out of the environment of your processes. A process sees a reference, `tack://GH_TOKEN`, in place of the value. The reference holds only the name. It holds no part of the value and no hash of it. tack works on the host, inside and outside a sandbox.
 
-This version stores the values, writes the references, and checks the configuration. With the service tackd installed on Linux, it also starts the allowlisted programs with the real values: `gh` gets the value of `GH_TOKEN` when you type `gh`, and every other process sees the reference (see [tackd](#tackd-the-service-that-decides) and [starting programs](#starting-allowlisted-programs-with-their-secrets)). tackd keeps an audit log of each decision and each start. A program that gets a value is not yet protected from other processes of your user: a later version adds that. Without tackd, and on macOS for now, every process, `gh` too, sees the reference and not the value.
+This version stores the values, writes the references, and checks the configuration. With the service tackd installed on Linux, it also starts the allowlisted programs with the real values: `gh` gets the value of `GH_TOKEN` when you type `gh`, and every other process sees the reference (see [tackd](#tackd-the-service-that-decides) and [starting programs](#starting-allowlisted-programs-with-their-secrets)). tackd keeps an audit log of each decision and each start. Each allowlist entry has a level of protection (see [protection levels](#protection-levels-uid-and-refs)). At `protect = "uid"`, the program runs as a helper account of your user, and your other processes cannot read its environment or memory. At `protect = "refs"`, the program runs as you, and the only promise is that shells, startup files and other programs see references: other processes of your user can still read the program's environment while it runs. Without tackd, and on macOS for now, every process, `gh` too, sees the reference and not the value.
 
 The values stay in the stores that you already have:
 
@@ -820,6 +820,8 @@ program = "/usr/bin/gh"
 sha256 = "..."      # optional: sha256sum /usr/bin/gh
 # signer = "..."    # optional, macOS: the signing identity
 # args = ["pr *", "api **"]   # optional: the allowed argument shapes
+# protect = "uid"   # or "refs"; gh and the git credential helpers default to "uid"
+# write = true      # protect = "uid" only: the program may write the working folder
 
 [[tack.secrets.GH_TOKEN.callers]]
 kind = "sandbox"    # or "agent", or program = "/path"
@@ -870,7 +872,7 @@ How tackd decides:
 - `ask` comes back as its own answer. This version cannot ask you yet, so a start that needs asking is refused.
 - A program on no allowlist gets the same answer whether it exists or not, and tackd does not read it.
 
-The audit log has one line per decision: the time, the user and process, the program with its real path and hash, the parent processes, the names of the secrets, the decision and the reason. A start adds a line when the program starts (`started`, with its pid, `unprotected (phase 4)`, its cgroup, and the names of the variables that tackd dropped), a line when it ends (`ended`, with its exit code or signal), or a line when it could not start (`failed`). It never holds a value or an argument. It is root's file, `/var/log/paddock/tackd.log`, mode 0600. It rotates at 4 MiB and keeps four old files. `paddock tack audit` shows your own lines through tackd. If tackd cannot write the log, it allows nothing, and `paddock tack status` says so.
+The audit log has one line per decision: the time, the user and process, the program with its real path and hash, the parent processes, the names of the secrets, the decision and the reason. A start adds a line when the program starts (`started`, with its pid, its level of protection and the uid that it runs as, its cgroup, the ACL that tackd added, and the names of the variables that tackd dropped; `paddock tack audit --json` has the level and the uid as the fields `protect` and `run_uid`), a line when it ends (`ended`, with its exit code or signal), or a line when it could not start (`failed`). It never holds a value or an argument. It is root's file, `/var/log/paddock/tackd.log`, mode 0600. It rotates at 4 MiB and keeps four old files. `paddock tack audit` shows your own lines through tackd. If tackd cannot write the log, it allows nothing, and `paddock tack status` says so.
 
 The service:
 
@@ -878,7 +880,7 @@ The service:
 - On macOS it is the LaunchDaemon `/Library/LaunchDaemons/io.paddock.tackd.plist`, which runs `/Library/PrivilegedHelperTools/io.paddock.tackd`. Its error output goes to `/var/log/paddock/tackd.err`.
 - The socket is `/run/paddock-tackd/tackd.sock` (macOS: `/var/run/paddock-tackd/tackd.sock`). Every user can connect to it. tackd takes the user from the kernel and not from the request.
 - `setup` refuses a service file that paddock did not write, and folders that a user other than root can write. It checks that the new copy runs and reports this version before it replaces the old one. If the check fails, the old tackd stays. After `paddock update`, `paddock tack status` and `paddock doctor` show `CHECK` until you run `sudo paddock tack setup` again.
-- `remove` deletes the service file, the binary, the socket and the audit log (`--keep-audit` keeps the log), and the folders when they are empty.
+- `remove` deletes the service file, the binary, the socket and the audit log (`--keep-audit` keeps the log), and the folders when they are empty. On Linux it also removes every ACL that tackd added, gives the files that a helper account wrote to their user, ends the programs that still run as a helper account, deletes the helper accounts and their groups, and deletes `/var/lib/paddock-tackd`.
 - A client has 5 seconds to send its request. tackd serves 32 connections at once, and at most 6 of one user, so one user cannot block the others. A slow, too large or malformed request gets an error, and the other clients are still served. After a crash, the service manager starts tackd again within seconds.
 
 Without tackd, tack works in rootless mode. Values stay out of shells, startup files and agent environments. A program that gets a value is not protected from other processes of your user. `paddock doctor` and `paddock tack status` say which mode you have.
@@ -900,8 +902,42 @@ paddock tack remove         # as you: delete the stand-ins and the PATH lines
 - Exit codes of the stand-in itself: 77 when tackd refuses (it prints the reason once), 69 when tackd is installed but does not answer or cannot start the program (a locked keyring, a program that changed), 70 when tackd went away while the program ran.
 - Without tackd, in a sandbox, and on macOS for now, the stand-in runs the program itself with the references, and says so once in each shell session. A session whose first process is gone, such as a terminal that was closed while a program still runs, stays one session: the note does not come again. When paddock is gone, the stand-in script runs the next program of that name itself.
 - Not covered: a program that something starts by its absolute path (`/usr/bin/gh`), a process with its own PATH, and a folder that comes before the stand-ins on PATH (a version manager that puts its folder first at each prompt). These get the references only. `paddock doctor` shows whether each allowlisted name reaches its stand-in in your shell; `paddock tack run PROGRAM` starts a program through tackd in every case.
-- A program that tackd starts has no controlling terminal: it reads and writes yours through the descriptors, but cannot open `/dev/tty`, and a program that you send to the background with `bg` can still read the terminal. It cannot gain privileges through `sudo` or another setuid program. The programs that it starts (its pager, its editor, `git`) get the values in their environment, as they would from a shell.
+- A program that tackd starts has no controlling terminal: it reads and writes yours through the descriptors, but cannot open `/dev/tty`, and a program that you send to the background with `bg` can still read the terminal. It cannot gain privileges through `sudo` or another setuid program. At `protect = "refs"`, the programs that it starts (its pager, its editor, `git`) get the values in their environment, as they would from a shell. At `protect = "uid"`, they get the references (see below).
 - Why a PATH stand-in: every shell finds programs through PATH, so it works the same in bash, zsh, fish and the others, needs no root to set up, and touches no other process. The other ways reach further and break more: a `binfmt_misc` handler changes how every program of every user (root too) starts; an `LD_PRELOAD` hook misses static programs (`gh` is one) and any process that clears its environment, and loads into every process; a FUSE view of the program folders needs a mount for each user and blocks every start when it hangs.
+
+#### Protection levels: uid and refs
+
+Each allowlist entry has a level, `protect = "uid"` or `protect = "refs"`. `paddock tack status`, `paddock doctor` and `paddock explain` show the level of each entry and where it comes from. `paddock tack check` shows the level of one start.
+
+- `protect = "uid"`: tackd runs the program as a helper account of your user. On Linux, a process cannot read the environment or the memory of a process of another uid, so your shell, your editor and your other programs cannot read the value from the program while it runs. This is the default of the built-in profiles for `gh` and the git credential helpers (`git-credential-*`): they talk to the network and write no project files.
+- `protect = "refs"`: tackd runs the program as you. This is the default for every other program. The only promise is that shells, startup files and other programs see references, never values. Other processes of your user can still read the program's environment and memory while it runs (`/proc/PID/environ`, a debugger).
+
+`sudo paddock tack setup` makes one helper account for each user whose configuration has an entry at `protect = "uid"`: `_tack_<user>` (or `_tack_u<uid>` for a long name), a system account with its own group, no password, no login shell, and a home of its own in `/var/lib/paddock-tackd/home`. Run it again after you add such an entry: until then, the start fails with a message that says so. The list of helper accounts is `/var/lib/paddock-tackd/helpers.json`.
+
+What a program at `protect = "uid"` can reach:
+
+- Your working folder, through a POSIX ACL that tackd adds when the program starts. tackd adds it as you, so it changes only files that you own. The helper account can read the folder and every file and folder in it on the same file system. With `write = true` in the entry, it can also write there. The folders above get "enter" (`x`) for the helper account when others cannot enter them already. A folder that you do not own and that others cannot enter stops the start, with a message.
+- Files that the helper account creates in the folder get your user in their ACL (from a default ACL), so you can read them and, as far as the program's file mode allows, write them. `sudo paddock tack remove` gives them to you.
+- Its own home folder, the network, and the files that every user can read. It gets your standard streams, your terminal, your limits and your cgroup, as at `refs`.
+
+The program file itself must be one that every user can run, such as a program in `/usr/bin` or `/usr/local/bin`. A program under your home folder is not, when others cannot enter your home: the start fails with a message that says so.
+
+What it cannot reach:
+
+- Your home folder and its settings (`~/.config/gh`, `~/.gitconfig`, `~/.ssh`), your keyring, your ssh agent, your session bus and your other folders. `HOME` is the helper's home. tackd removes `XDG_CONFIG_HOME`, `XDG_RUNTIME_DIR`, `SSH_AUTH_SOCK` and similar variables from its environment. The value of the secret is what the program uses to sign in.
+- A working folder without `write = true`: `gh pr checkout`, `gh repo clone` and other commands that write files fail there. Set `write = true` for such a program.
+
+More details:
+
+- tackd adds the ACL to every file once. A start in the same folder later finds the ACL on the folder and does not walk it again. New files inherit the ACL. A file that you move into the folder keeps its own ACL. One grant changes at most 200,000 files and takes at most 100 seconds. The ACLs of a folder are the sum of the grants: after a program with `write = true` ran there, every program at `protect = "uid"` can write there.
+- git refuses a repository that another uid owns. tackd adds `safe.directory = *` to the git configuration of the program's command line (`GIT_CONFIG_COUNT`). That covers only what the ACLs let the helper account read.
+- A file system without POSIX ACLs (some network and FUSE file systems) cannot give the folder to the helper account. `paddock doctor` tries ACLs in your paddock state folder and says if they work.
+- tackd records each grant in `/var/lib/paddock-tackd/acl.jsonl` before it starts the grant. `sudo paddock tack remove` uses this file to remove the ACLs, also after a crash.
+
+The programs that a program at `protect = "uid"` starts get references, not values. tackd puts a folder first on the program's PATH, with one link for each program name on your PATH. When the program runs `git`, the link runs paddock, which puts the references back in the environment and then runs the real `git`. When the name is on your allowlist, such as `gh` that git runs as its credential helper, paddock asks tackd to start it, as a stand-in does. tackd decides with your configuration and runs that program as the same helper account, at `uid`. The limits:
+
+- A program that starts another program by its absolute path (`/usr/bin/git`), or that gives a child its own copy of the environment from before, does not pass the link. That child gets the values.
+- A child runs as the same helper account. It could read the program's memory if it tried. The link keeps the values out of the environment of children such as a pager or a hook that prints it, not out of a child that means harm.
 
 ## Privacy defaults
 
@@ -1926,7 +1962,7 @@ The limits:
   - credentials that go through the gateway
 - `paddock doctor --escape` is for the Linux backends. The Seatbelt checks run with `cargo test` on a Mac.
 - tackd on macOS reads the parent processes by their program path only, not by their command line. An agent that runs as a script of `node` counts as an agent only if its path has the agent's name.
-- tackd on macOS decides but starts no program yet. The stand-ins that `paddock tack setup` puts on PATH run the program with the references, and say so once in each shell session. macOS has no `/proc`, so a session id that the system gives again to a new session counts as the old one, and that new session gets no note. A start request to tackd on macOS gets a refusal that says so.
+- tackd on macOS decides but starts no program yet, and `protect = "uid"` is for Linux only: setup makes no helper account on macOS, and `paddock tack status` says so for each entry at that level. The stand-ins that `paddock tack setup` puts on PATH run the program with the references, and say so once in each shell session. macOS has no `/proc`, so a session id that the system gives again to a new session counts as the old one, and that new session gets no note. A start request to tackd on macOS gets a refusal that says so.
 
 New terminals (ptys) come from paddock. Some agents open a pty for their shell tool, for example Codex's unified exec. paddock opens each pty on the host and sends both ends into the sandbox over a Unix socket. A small library asks for them in place of `openpty`, `forkpty` and `posix_openpt`. paddock loads it into the agent with `DYLD_INSERT_LIBRARIES`. This works only when the agent's program takes the library:
 

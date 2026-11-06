@@ -16,7 +16,7 @@ use std::time::Duration;
 const DOCTOR_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Who gets the values in this version, said once in each report.
-pub const PHASE_NOTE: &str = "with tackd on Linux, an allowlisted program that starts through its stand-in on PATH (paddock tack setup) or through paddock tack run gets the values, not yet protected from other processes of your user; every other process sees the reference, such as tack://NAME (README \"tack\")";
+pub const PHASE_NOTE: &str = "with tackd on Linux, an allowlisted program that starts through its stand-in on PATH (paddock tack setup) or through paddock tack run gets the values: at protect = \"uid\" it runs as your helper account, out of reach of your other processes; at protect = \"refs\" it runs as you, and your other processes can still read its environment. Every other process sees the reference, such as tack://NAME (README \"tack\")";
 
 /// One secret for `paddock tack list`.
 #[derive(Debug, Serialize)]
@@ -110,6 +110,7 @@ pub fn explain(env: &HostEnv, vars: &BTreeMap<String, crate::spec::EnvVar>) -> V
         out.push(line);
     }
     if !out.is_empty() {
+        out.extend(super::protect_report::entry_lines(&cfg, None));
         out.push(format!("  note     {PHASE_NOTE}"));
     }
     out

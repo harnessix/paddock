@@ -10,6 +10,9 @@
 //! sha256 = "..."                   # optional: the content of the program
 //! signer = "Developer ID ..."      # optional, macOS: the signing identity
 //! args = ["api **", "pr *"]        # optional: the allowed argument shapes
+//! protect = "uid"                  # or "refs"; the default comes from the
+//!                                  # built-in profile (protect.rs)
+//! write = true                     # protect = "uid": may write the folder
 //!
 //! [[tack.secrets.GH_TOKEN.callers]]
 //! kind = "sandbox"                 # or "agent", or program = "/path"
@@ -97,6 +100,25 @@ pub struct Allow {
     /// with `-`). Empty: any arguments.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<String>,
+    /// How tackd protects the program from the other processes of the
+    /// user. None: the default of its built-in profile
+    /// (`super::protect::default_level`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protect: Option<Level>,
+    /// protect = "uid": the program may write in the working folder, not
+    /// only read it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub write: bool,
+}
+
+pub use super::protect::Level;
+
+impl Allow {
+    /// The protection level of this entry: its own, or its default.
+    pub fn level(&self) -> Level {
+        self.protect
+            .unwrap_or_else(|| super::protect::default_level(&self.program))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -234,6 +256,12 @@ pub fn check(t: &Tack) -> Vec<String> {
                     out.push(format!("{at}: args {shape:?}: {why}"));
                 }
             }
+            if a.write && a.level() != Level::Uid {
+                out.push(format!(
+                    "{at}: write = true is only for protect = \"uid\" (a program at protect = \"{}\" runs as you and writes what you can)",
+                    a.level().name()
+                ));
+            }
             if seen.contains(&p) {
                 out.push(format!("{at}: {} is in the list twice", p.display()));
             }
@@ -263,6 +291,7 @@ pub fn check(t: &Tack) -> Vec<String> {
             }
         }
     }
+    out.extend(super::protect::conflicts(t));
     out
 }
 

@@ -328,3 +328,30 @@ fn tack_a_start_request_gets_a_clear_answer_from_a_macos_tackd() {
     assert!(crate::tack::standin::from_terminal(libc::SIGINT, 0));
     assert!(!crate::tack::standin::from_terminal(libc::SIGTERM, 0));
 }
+
+#[test]
+fn tack_passwd_lookups_and_protect_status_on_macos() {
+    // getpwuid_r and getpwnam_r through the helper-account code.
+    let me = unsafe { libc::getuid() };
+    let pw = crate::tack::accounts::by_uid(me).expect("a passwd entry for this user");
+    assert_eq!(pw.uid, me);
+    assert!(pw.home.is_absolute(), "{pw:?}");
+    assert_eq!(
+        crate::tack::accounts::by_name(&pw.name).map(|p| p.uid),
+        Some(me)
+    );
+    // protect = "uid" is Linux only: status says so instead of checking a
+    // helper account or ACLs.
+    let cfg = crate::tack::config::parse(
+        "[tack.secrets.GH_TOKEN]\n[[tack.secrets.GH_TOKEN.allow]]\nprogram = \"/opt/homebrew/bin/gh\"\n",
+    )
+    .unwrap();
+    let t = tempfile::tempdir().unwrap();
+    let h = crate::tack::protect_report::host(t.path(), me, t.path(), "x".into());
+    assert!(!h.supported);
+    let l = crate::tack::protect_report::lines(&cfg, &h).join("\n");
+    assert!(
+        l.contains("protect = \"uid\"") && l.contains("Linux only"),
+        "{l}"
+    );
+}
