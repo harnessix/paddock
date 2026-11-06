@@ -9,6 +9,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+#[cfg(target_os = "linux")]
 const VALUE: &str = "fake-token-for-the-tack-test";
 
 struct World {
@@ -89,6 +90,7 @@ esac
         c
     }
 
+    #[cfg(target_os = "linux")]
     fn stored(&self, name: &str) -> Option<String> {
         std::fs::read_to_string(self.root.join("items").join(format!("paddock-tack-{name}"))).ok()
     }
@@ -106,6 +108,9 @@ fn read(p: &Path) -> String {
     std::fs::read_to_string(p).unwrap()
 }
 
+// The fake store is secret-tool. On macOS the store is the login
+// keychain through security, which a test must never touch.
+#[cfg(target_os = "linux")]
 #[test]
 fn import_moves_the_value_into_the_keyring_and_leaves_a_reference() {
     let w = World::new("ok");
@@ -187,6 +192,9 @@ fn import_moves_the_value_into_the_keyring_and_leaves_a_reference() {
     );
 }
 
+// The fake store is secret-tool. On macOS the store is the login
+// keychain through security, which a test must never touch.
+#[cfg(target_os = "linux")]
 #[test]
 fn a_locked_keyring_changes_no_file() {
     let w = World::new("locked");
@@ -204,6 +212,9 @@ fn a_locked_keyring_changes_no_file() {
     assert_eq!(read(&rc), before);
 }
 
+// The fake store is secret-tool. On macOS the store is the login
+// keychain through security, which a test must never touch.
+#[cfg(target_os = "linux")]
 #[test]
 fn without_a_keyring_tool_the_message_says_what_to_install() {
     let w = World::new("none");
@@ -239,6 +250,9 @@ fn the_configuration_refuses_a_shell_on_the_allowlist() {
     assert!(!o.status.success());
 }
 
+// The fake store is secret-tool. On macOS the store is the login
+// keychain through security, which a test must never touch.
+#[cfg(target_os = "linux")]
 #[test]
 fn doctor_has_a_tack_block() {
     let w = World::new("ok");
