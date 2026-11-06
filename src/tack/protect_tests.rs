@@ -135,7 +135,7 @@ fn helper() -> Helper {
         name: "_tack_alice".into(),
         uid: 981,
         gid: 977,
-        home: "/var/lib/paddock-tackd/home/_tack_alice".into(),
+        home: "/var/lib/paddock-tackd/homes/_tack_alice".into(),
     }
 }
 
@@ -149,9 +149,9 @@ fn ids() -> Ids {
 
 fn env() -> Vec<String> {
     [
-        "PATH=/home/alice/.local/share/paddock/tack/bin:/usr/bin:/bin",
-        "HOME=/home/alice",
-        "XDG_CONFIG_HOME=/home/alice/.config",
+        "PATH=/home/demo/.local/share/paddock/tack/bin:/usr/bin:/bin",
+        "HOME=/home/demo",
+        "XDG_CONFIG_HOME=/home/demo/.config",
         "XDG_RUNTIME_DIR=/run/user/1000",
         "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus",
         "SSH_AUTH_SOCK=/run/user/1000/ssh",
@@ -181,7 +181,7 @@ fn input<'a>(
         caller: ids,
         helper: h,
         nested,
-        cwd: Path::new("/home/alice/src/app"),
+        cwd: Path::new("/home/demo/src/app"),
         env,
         wrap: Some(Path::new("/var/lib/paddock-tackd/wrap/abc")),
         names: NAMES.get_or_init(|| vec!["GH_TOKEN".into(), "NPM_TOKEN".into()]),
@@ -203,7 +203,7 @@ fn a_plan_at_uid_runs_as_the_helper_with_its_group_home_acl_and_wrapper() {
     assert_eq!(
         p.grant,
         Some(Grant {
-            folder: "/home/alice/src/app".into(),
+            folder: "/home/demo/src/app".into(),
             owner: 1000,
             helper: 981,
             write: false
@@ -212,7 +212,7 @@ fn a_plan_at_uid_runs_as_the_helper_with_its_group_home_acl_and_wrapper() {
     let e = &p.env;
     assert_eq!(
         val(e, "HOME"),
-        Some("/var/lib/paddock-tackd/home/_tack_alice")
+        Some("/var/lib/paddock-tackd/homes/_tack_alice")
     );
     for gone in [
         "XDG_CONFIG_HOME",
@@ -230,12 +230,12 @@ fn a_plan_at_uid_runs_as_the_helper_with_its_group_home_acl_and_wrapper() {
     );
     assert_eq!(
         val(e, "PATH"),
-        Some("/var/lib/paddock-tackd/wrap/abc:/home/alice/.local/share/paddock/tack/bin:/usr/bin:/bin")
+        Some("/var/lib/paddock-tackd/wrap/abc:/home/demo/.local/share/paddock/tack/bin:/usr/bin:/bin")
     );
     assert_eq!(val(e, WRAP_DIR), Some("/var/lib/paddock-tackd/wrap/abc"));
     assert_eq!(
         val(e, WRAP_PATH),
-        Some("/home/alice/.local/share/paddock/tack/bin:/usr/bin:/bin")
+        Some("/home/demo/.local/share/paddock/tack/bin:/usr/bin:/bin")
     );
     assert_eq!(val(e, WRAP_SECRETS), Some("GH_TOKEN,NPM_TOKEN"));
     assert_eq!(

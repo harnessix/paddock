@@ -148,7 +148,7 @@ mod tests {
             name: "_tack_alice".into(),
             uid: 981,
             gid: 981,
-            home: "/var/lib/paddock-tackd/home/_tack_alice".into(),
+            home: "/var/lib/paddock-tackd/homes/_tack_alice".into(),
         }
     }
 

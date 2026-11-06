@@ -4,7 +4,7 @@
 //!
 //! A helper account is a system account (`useradd --system`) with its own
 //! group, no password (locked), no login shell, and a home of its own in
-//! tackd's state folder (`/var/lib/paddock-tackd/home/NAME`, 0700, the
+//! tackd's state folder (`/var/lib/paddock-tackd/homes/NAME`, 0700, the
 //! helper's). Its comment says whose it is (`protect::comment`): setup
 //! adopts an account of that name only when the comment is paddock's, and
 //! remove deletes only such an account.
@@ -115,7 +115,7 @@ pub fn check(h: &Helper) -> Result<(), String> {
 
 /// The folder of the helpers' homes in tackd's state folder.
 pub fn homes(state: &Path) -> PathBuf {
-    state.join("home")
+    state.join("homes")
 }
 
 /// The shell of a helper: one that refuses a login.
@@ -332,19 +332,19 @@ mod tests {
     #[test]
     fn people_are_login_users_in_the_normal_uid_range() {
         let p = "root:x:0:0:root:/root:/bin/bash\n\
-                 alice:x:1000:1000:Alice:/home/alice:/bin/zsh\n\
+                 alice:x:1000:1000:Alice:/home/demo:/bin/zsh\n\
                  svc:x:1001:1001::/var/svc:/usr/sbin/nologin\n\
-                 bob:x:1002:1002::/home/bob:/bin/false\n\
+                 bob:x:1002:1002::/home/demo:/bin/false\n\
                  nobody:x:65534:65534::/:/bin/sh\n\
                  # a comment\n\
-                 carol:x:2000:2000::/home/carol:/usr/bin/fish\n";
+                 carol:x:2000:2000::/home/demo:/usr/bin/fish\n";
         assert_eq!(people(p), [("alice".into(), 1000), ("carol".into(), 2000)]);
     }
 
     #[test]
     fn our_accounts_are_found_by_their_comment() {
         let p = format!(
-            "alice:x:1000:1000::/home/alice:/bin/zsh\n_tack_alice:x:981:981:{}:/var/lib/paddock-tackd/home/_tack_alice:/usr/sbin/nologin\n_tack_x:x:982:982:someone else:/:/bin/false\n",
+            "alice:x:1000:1000::/home/demo:/bin/zsh\n_tack_alice:x:981:981:{}:/var/lib/paddock-tackd/homes/_tack_alice:/usr/sbin/nologin\n_tack_x:x:982:982:someone else:/:/bin/false\n",
             protect::comment("alice", 1000)
         );
         assert_eq!(ours_in(&p), [("_tack_alice".to_string(), 981, 1000)]);

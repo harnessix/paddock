@@ -9,7 +9,7 @@
 //!   the program (the kernel checks the uid for `/proc/PID/environ`,
 //!   `/proc/PID/mem` and ptrace). The program reaches the working folder
 //!   through a POSIX ACL (`acl`), and its home is its own folder under
-//!   `/var/lib/paddock-tackd/home`. The programs that it starts go through
+//!   `/var/lib/paddock-tackd/homes`. The programs that it starts go through
 //!   an exec wrapper (`wrap`) that puts the references back.
 //! - `protect = "refs"`: the program runs as the user. The only guarantee
 //!   is that shells, startup files and the other programs see references.

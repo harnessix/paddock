@@ -250,7 +250,7 @@ fn the_ledger_keeps_each_grant_once_and_skips_a_cut_line() {
     let l = Ledger::new(t.path());
     assert!(l.all().is_empty());
     let g = Grant {
-        folder: "/home/a/p".into(),
+        folder: "/home/demo/p".into(),
         owner: 1000,
         helper: 981,
         write: false,

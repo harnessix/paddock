@@ -141,7 +141,7 @@ fn start(r: &Run) -> (Answer, String) {
         env: vec![
             "PATH=/usr/bin:/bin".into(),
             "GH_TOKEN=tack://GH_TOKEN".into(),
-            "HOME=/home/someone".into(),
+            "HOME=/home/demo".into(),
         ],
         stdio: [true, true, true],
     };
