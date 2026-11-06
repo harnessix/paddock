@@ -140,7 +140,14 @@ fn tack_reads_this_process_from_the_kernel() {
     assert!(!p.contained, "a test run outside Seatbelt is not sandboxed");
     let c = crate::tack::procs::chain(&crate::tack::procs::Kernel::new(), me, &[]).unwrap();
     assert!(c.links.len() >= 2, "{:?}", c.summary());
-    assert_eq!(c.links.last().unwrap().proc.pid, 1, "{:?}", c.summary());
+    // The chain ends at launchd, or earlier where the parent is not ours
+    // to read (a CI runner starts tests under processes of another user).
+    let last = &c.links.last().unwrap().proc;
+    assert!(
+        last.pid == 1 || crate::tack::procs::macos::get(last.ppid).is_none(),
+        "{:?}",
+        c.summary()
+    );
 }
 
 #[test]
@@ -176,10 +183,15 @@ fn tack_peer_credentials_name_this_process() {
 
 #[test]
 fn tack_reads_the_signer_of_a_system_program() {
-    // Apple's own programs are signed by "Software Signing".
-    assert_eq!(
-        crate::tack::ident::signer(std::path::Path::new("/bin/ls")).as_deref(),
-        Some("Software Signing")
+    // Apple's own programs are signed by "Software Signing", called
+    // "macOS Software Signing" from macOS 27 on.
+    let s = crate::tack::ident::signer(std::path::Path::new("/bin/ls"));
+    assert!(
+        matches!(
+            s.as_deref(),
+            Some("Software Signing" | "macOS Software Signing")
+        ),
+        "{s:?}"
     );
     // An unsigned file has none.
     let t = tempfile::tempdir().unwrap();

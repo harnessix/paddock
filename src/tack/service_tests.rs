@@ -81,6 +81,8 @@ fn every_unit_option_is_explained_by_a_comment_above_it() {
     }
 }
 
+// The systemd unit is Linux only; macOS uses a launchd plist.
+#[cfg(target_os = "linux")]
 #[test]
 fn the_unit_runs_the_root_copy_with_least_privilege() {
     let p = Paths::system();

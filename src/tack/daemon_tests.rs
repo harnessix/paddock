@@ -240,7 +240,10 @@ fn hostile_frames_get_an_error_and_tackd_keeps_serving() {
     drop(UnixStream::connect(&r.sock).unwrap());
     let d = decision(client::ask(&r.sock, launch(&r, &[]), T).unwrap());
     assert_eq!(d.verdict, Verdict::Allow);
-    assert_eq!(r.server.status().errors, 4);
+    // The three frames count as errors. Linux also counts the hang-up;
+    // macOS may drop that connection before tackd reads from it.
+    let errors = r.server.status().errors;
+    assert!((3..=4).contains(&errors), "{errors}");
 }
 
 #[test]
