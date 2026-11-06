@@ -1,5 +1,6 @@
 use super::*;
 use crate::manifest::SetupCfg;
+#[cfg(not(target_os = "macos"))]
 use crate::storage::subdirs;
 
 /// A temporary folder on the file system of the build folder, which on a
@@ -51,6 +52,7 @@ fn mounted(spec: &SandboxSpec) -> Option<PathBuf> {
         .and_then(|m| m.src.clone())
 }
 
+#[cfg(not(target_os = "macos"))]
 fn config(env: &HostEnv, text: &str) {
     std::fs::create_dir_all(env.paddock_config()).unwrap();
     std::fs::write(env.paddock_config().join("config.toml"), text).unwrap();

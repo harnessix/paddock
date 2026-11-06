@@ -274,13 +274,26 @@ fn the_pass_runs_once_an_hour_records_its_status_and_waits_for_the_lock() {
     // Forced: it runs again.
     assert!(matches!(pass(&env, &s, true, None), Outcome::Done(_)));
     // Another pass holds the lock: skipped, also when forced.
-    let lock = try_lock(&env.paddock_state().join("storage-auto.lock")).unwrap();
+    let lock = lock_soon(&env.paddock_state().join("storage-auto.lock"));
     match pass(&env, &s, true, None) {
         Outcome::Skipped(w) => assert!(w.contains("another cleanup"), "{w}"),
         Outcome::Done(_) => panic!("ran beside another pass"),
     }
     drop(lock);
+    drop(lock_soon(&env.paddock_state().join("storage-auto.lock")));
     assert!(matches!(pass(&env, &s, true, None), Outcome::Done(_)));
+}
+
+/// The lock, once free. A process that another test thread forks in the
+/// moment holds a copy of the lock until it execs.
+fn lock_soon(path: &Path) -> std::fs::File {
+    for _ in 0..100 {
+        if let Some(f) = try_lock(path) {
+            return f;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    panic!("the lock stayed taken");
 }
 
 #[test]
