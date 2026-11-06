@@ -20,6 +20,7 @@ use std::time::Duration;
 mod approval;
 mod audit;
 mod capture;
+mod channel;
 mod compacted;
 mod describe;
 mod fetch;
@@ -29,6 +30,7 @@ pub mod notify;
 mod policy;
 mod prepare;
 mod protocol;
+mod registry;
 mod spawn;
 mod spec;
 
@@ -138,6 +140,7 @@ pub struct Broker {
     /// The kv service of this sandbox, for the compaction record. Set once
     /// the store runs; it starts after the broker.
     pub kv: std::sync::OnceLock<Arc<crate::kv::Service>>,
+    pub horse: std::sync::OnceLock<crate::horse::device::Access>,
     /// Capabilities that the backend of this run cannot give, with the
     /// reason. They are off, never asked (a Seatbelt run has no borrow).
     pub refused: Vec<(&'static str, &'static str)>,
@@ -164,6 +167,7 @@ impl Broker {
             detach: None,
             run: Default::default(),
             kv: std::sync::OnceLock::new(),
+            horse: std::sync::OnceLock::new(),
             refused: Vec::new(),
             grants: Mutex::new(Vec::new()),
             denials: Mutex::new(Vec::new()),
@@ -233,10 +237,21 @@ impl Broker {
         if req.v != PROTOCOL {
             return Response::new(Status::Invalid, "unsupported protocol version");
         }
+        let text = describe::arg_str(req, "text").unwrap_or("");
+        // A hitched child: its result goes to the parent's session now.
+        let hitched = self.horse.get().is_some_and(|access| {
+            let status = describe::arg_str(req, "status").unwrap_or("ok");
+            crate::horse::hitch::wire::report_done(access, status, text)
+        });
         let Some(ctl) = &self.detach else {
             // A worker of a Spec Kit task reports into its task record.
             if let Some(r) = self.report_task(req) {
                 return r;
+            }
+            if hitched {
+                return Response::done(serde_json::json!({
+                    "message": "the result goes to the parent's session at its next safe point"
+                }));
             }
             return Response::new(
                 Status::Disabled,
@@ -247,7 +262,6 @@ impl Broker {
             Ok(s) => s,
             Err(e) => return Response::new(Status::Invalid, format!("{e:#}")),
         };
-        let text = describe::arg_str(req, "text").unwrap_or("");
         log::info!("sandbox {}: the agent says the task is done", self.ctx.id);
         match ctl.done(status, text) {
             Ok(msg) => Response::done(serde_json::json!({ "message": msg })),
@@ -256,6 +270,52 @@ impl Broker {
     }
 
     pub fn handle(&self, req: &Request) -> Response {
+        if let Some(r) = self.handle_horse_live(req) {
+            return r;
+        }
+        if req.cap == "horse"
+            && req
+                .args
+                .get("op")
+                .and_then(|v| v.as_str())
+                .is_some_and(crate::horse::device::registry::is_registry_op)
+        {
+            return self.handle_registry(req);
+        }
+        if req.cap == "horse" {
+            let response = crate::horse::device::handle(self.horse.get(), req);
+            if response.status == Status::Done {
+                let op = req.args.get("op").and_then(|v| v.as_str()).unwrap_or("");
+                if op != "put" {
+                    let path = match op {
+                        "sessions" => "self/sessions".to_string(),
+                        "lineage" => "self/lineage".to_string(),
+                        _ => format!(
+                            "self/sessions/{}/{op}",
+                            req.args
+                                .get("session")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                        ),
+                    };
+                    let project = self.ctx.project.to_string_lossy();
+                    let payer = crate::devices::ledger::Payer {
+                        sandbox: &self.ctx.id,
+                        root: crate::devices::ledger::root_of(&self.ctx.id, &self.ctx.chain),
+                        project: &project,
+                        device: "horse",
+                    };
+                    if let Err(e) = crate::devices::ledger::Ledger::open(
+                        &crate::devices::ledger::path(&self.env),
+                    )
+                    .and_then(|l| l.record_read(&payer, &path))
+                    {
+                        log::warn!("horse ledger: {e:#}");
+                    }
+                }
+            }
+            return response;
+        }
         if req.cap == "capabilities" {
             return self.handle_capabilities();
         }

@@ -72,6 +72,7 @@ fn world() -> World {
 
 fn ceiling(parent: &str, project: &Path) -> Ceiling {
     Ceiling {
+        horse: false,
         parent: parent.into(),
         parent_harness: "claude".into(),
         chain: vec![parent.into()],

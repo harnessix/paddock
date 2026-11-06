@@ -119,6 +119,7 @@ pub fn push_settings(
             append: s.append,
             codex_trust: None,
             no_pty: s.when == Some(crate::profile::When::NoPty),
+            chain: false,
         });
     }
     Ok(())
@@ -236,7 +237,14 @@ fn toml_value(v: &serde_json::Value) -> Result<toml_edit::Value> {
             Some(i) => i.into(),
             None => n.as_f64().unwrap_or_default().into(),
         },
-        _ => bail!("only strings, numbers and booleans are supported"),
+        serde_json::Value::Array(a) => {
+            let mut out = toml_edit::Array::new();
+            for x in a {
+                out.push(toml_value(x)?);
+            }
+            out.into()
+        }
+        _ => bail!("only strings, numbers, booleans and lists are supported"),
     })
 }
 
@@ -256,7 +264,17 @@ pub(crate) fn set_toml(text: &str, entries: &[&HomeSetting]) -> Result<String> {
                 .as_table_mut()
                 .with_context(|| format!("{k} is not a table"))?;
         }
-        table.insert(last, toml_edit::value(toml_value(&e.value)?));
+        let value = if e.chain {
+            let had = table.get(last).and_then(|i| i.as_array()).map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect::<Vec<_>>()
+            });
+            serde_json::json!(crate::horse::codex::notify::chain(&e.value, had))
+        } else {
+            e.value.clone()
+        };
+        table.insert(last, toml_edit::value(toml_value(&value)?));
     }
     Ok(doc.to_string())
 }
@@ -362,6 +380,7 @@ mod tests {
             append: false,
             codex_trust: None,
             no_pty: false,
+            chain: false,
         }
     }
 

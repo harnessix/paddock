@@ -7,10 +7,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 mod approval;
 mod borrow;
+mod channel;
 #[path = "forge.rs"]
 mod forge_run;
 #[path = "git.rs"]
 mod push;
+mod registry;
 mod tools;
 
 pub(in crate::broker::tests) struct Fixed {

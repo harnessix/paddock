@@ -1,0 +1,1 @@
+- Fix: (experimental) A dsh run in horse mode with no input (for example, stdin from `/dev/null`) no longer hangs. When the input ends, paddock asks dsh to end at the next safe point, and an idle session is a safe point at once. Until dsh ends, paddock still delivers the inbox entries at each safe point, for example a DNA hot-load or a graft.

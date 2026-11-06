@@ -67,11 +67,18 @@ impl std::fmt::Display for Hash {
     }
 }
 
+/// The `kind` of a node that paddock built from a live channel of a
+/// harness, not read from a native file of it. Such a node is no native
+/// original, so no codec projects a chain that holds one.
+pub const LIVE: &str = "live";
+
 /// The metadata line of an object. The field order is fixed, so the same
 /// object always has the same bytes.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Meta {
-    /// `native` for a row of a harness, `blob` for other content.
+    /// `native` for a row of a harness that paddock read from its native
+    /// file, [`LIVE`] for a row that paddock built from a live channel,
+    /// `blob` for other content.
     pub kind: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub harness: Option<String>,
@@ -100,6 +107,13 @@ pub struct Node {
     pub raw: Vec<u8>,
 }
 
+impl Node {
+    /// paddock built the node from a live channel ([`LIVE`]).
+    pub fn is_live(&self) -> bool {
+        self.meta.kind == LIVE
+    }
+}
+
 /// Where a native row comes from.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Origin<'a> {
@@ -115,8 +129,9 @@ pub struct Store {
 }
 
 /// The writer lock of the store. It is released on drop.
-pub struct Lock {
+pub struct Lock<'a> {
     _file: File,
+    pub(crate) store: &'a Store,
 }
 
 impl Store {
@@ -157,7 +172,7 @@ impl Store {
 
     /// Take the writer lock. Writers of sessions and horses hold it while
     /// they read, change and write them.
-    pub fn lock(&self) -> Result<Lock> {
+    pub fn lock(&self) -> Result<Lock<'_>> {
         let f = OpenOptions::new()
             .create(true)
             .truncate(false)
@@ -170,7 +185,10 @@ impl Store {
                 std::io::Error::last_os_error()
             );
         }
-        Ok(Lock { _file: f })
+        Ok(Lock {
+            _file: f,
+            store: self,
+        })
     }
 
     fn object_path(&self, h: &Hash) -> PathBuf {
@@ -202,9 +220,7 @@ impl Store {
     /// Add an object. An object with the same bytes is there already when
     /// the hash is known: the store keeps one copy.
     pub fn put(&self, meta: &Meta, raw: &[u8]) -> Result<Hash> {
-        let mut bytes = serde_json::to_vec(meta)?;
-        bytes.push(b'\n');
-        bytes.extend_from_slice(raw);
+        let bytes = object_bytes(meta, raw)?;
         let h = Hash::of(&bytes);
         let path = self.object_path(&h);
         if path.exists() {
@@ -243,18 +259,31 @@ impl Store {
         self.put(&meta, raw)
     }
 
-    /// Add a blob, for example a DNA or a native session header.
-    pub fn put_blob(&self, media: &str, raw: &[u8]) -> Result<Hash> {
+    /// Add a row that paddock built from a live channel of the harness
+    /// of `origin`, in the row format of its container, with its parent
+    /// node. The node is marked [`LIVE`]: it is no native original.
+    pub fn put_live(
+        &self,
+        origin: &Origin,
+        parent: Option<&Hash>,
+        key: &str,
+        raw: &[u8],
+    ) -> Result<Hash> {
         let meta = Meta {
-            kind: "blob".into(),
-            harness: None,
-            container: None,
-            version: None,
-            parent: None,
-            key: None,
-            media: Some(media.into()),
+            kind: LIVE.into(),
+            harness: Some(origin.harness.into()),
+            container: Some(origin.container.into()),
+            version: Some(origin.version.into()),
+            parent: parent.cloned(),
+            key: Some(key.into()),
+            media: None,
         };
         self.put(&meta, raw)
+    }
+
+    /// Add a blob, for example a DNA or a native session header.
+    pub fn put_blob(&self, media: &str, raw: &[u8]) -> Result<Hash> {
+        self.put(&blob_meta(media), raw)
     }
 
     /// Read an object and check its hash. A damaged object is an error.
@@ -294,6 +323,20 @@ impl Store {
         Ok(out)
     }
 
+    /// The nodes from the root to `head` for a projection: every node must
+    /// be a native original. A node that paddock built from a live channel
+    /// is refused, because the harness never wrote it.
+    pub fn native_chain(&self, head: Option<&Hash>) -> Result<Vec<Node>> {
+        let nodes = self.chain(head)?;
+        if let Some(n) = nodes.iter().find(|n| n.is_live()) {
+            bail!(
+                "node {} is not a native original; persist it with the harness first",
+                n.hash.short()
+            );
+        }
+        Ok(nodes)
+    }
+
     /// Write a mutable file (`sessions/x.json`) atomically: a synced
     /// temporary file, a rename, and a synced folder.
     pub(crate) fn write_ref(&self, rel: &str, bytes: &[u8]) -> Result<()> {
@@ -316,6 +359,16 @@ impl Store {
         }
     }
 
+    /// Remove a mutable file. A missing file is no error.
+    pub(crate) fn remove_ref(&self, rel: &str) -> Result<()> {
+        match std::fs::remove_file(self.root.join(rel)) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
+                Err(e).with_context(|| format!("cannot remove {rel} in the horse store"))
+            }
+            _ => Ok(()),
+        }
+    }
+
     /// The names of the files in a folder of the store, sorted.
     pub(crate) fn list_refs(&self, dir: &str) -> Result<Vec<String>> {
         let mut out: Vec<String> = std::fs::read_dir(self.root.join(dir))?
@@ -324,6 +377,31 @@ impl Store {
             .collect();
         out.sort();
         Ok(out)
+    }
+}
+
+/// The bytes of an object: the metadata line, a newline and the body.
+fn object_bytes(meta: &Meta, raw: &[u8]) -> Result<Vec<u8>> {
+    let mut bytes = serde_json::to_vec(meta)?;
+    bytes.push(b'\n');
+    bytes.extend_from_slice(raw);
+    Ok(bytes)
+}
+
+/// The hash that `put_blob(media, raw)` gives, without a write.
+pub fn blob_hash(media: &str, raw: &[u8]) -> Result<Hash> {
+    Ok(Hash::of(&object_bytes(&blob_meta(media), raw)?))
+}
+
+fn blob_meta(media: &str) -> Meta {
+    Meta {
+        kind: "blob".into(),
+        harness: None,
+        container: None,
+        version: None,
+        parent: None,
+        key: None,
+        media: Some(media.into()),
     }
 }
 
@@ -439,6 +517,31 @@ mod tests {
         std::fs::write(&p, bytes).unwrap();
         let err = s.get(&h).unwrap_err().to_string();
         assert!(err.contains("damaged"), "{err}");
+    }
+
+    #[test]
+    fn a_chain_with_a_live_node_is_no_native_chain() {
+        let t = tempfile::tempdir().unwrap();
+        let s = Store::open(t.path()).unwrap();
+        let a = s.put_native(&O, None, "seq:0", b"a").unwrap();
+        assert_eq!(s.native_chain(Some(&a)).unwrap().len(), 1);
+        let b = s.put_live(&O, Some(&a), "seq:1", b"b").unwrap();
+        // The same bytes as a native row are another node.
+        assert_ne!(b, s.put_native(&O, Some(&a), "seq:1", b"b").unwrap());
+        let chain = s.chain(Some(&b)).unwrap();
+        assert!(!chain[0].is_live());
+        assert!(chain[1].is_live());
+        assert_eq!(chain[1].meta.kind, LIVE);
+        assert_eq!(chain[1].raw, b"b");
+        let c = s.put_native(&O, Some(&b), "seq:2", b"c").unwrap();
+        let err = s.native_chain(Some(&c)).unwrap_err().to_string();
+        assert_eq!(
+            err,
+            format!(
+                "node {} is not a native original; persist it with the harness first",
+                b.short()
+            )
+        );
     }
 
     #[test]

@@ -1,5 +1,4 @@
 //! Launch a built spec, wait for it, and clean up.
-
 use crate::backend::{self, Backend, Launch};
 use crate::build::Built;
 use crate::env::HostEnv;
@@ -10,7 +9,6 @@ use crate::state::{self, AuthSync, Running, SyncStep};
 use anyhow::{bail, Context, Result};
 use sha2::{Digest, Sha256};
 use std::io::{IsTerminal, Read};
-
 mod capped;
 mod host_tools;
 use capped::read_capped;
@@ -18,7 +16,6 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
-
 pub fn write_files(launch: &Launch) -> Result<()> {
     for (path, text, mode) in &launch.files {
         gui::write_file(path, text, *mode)?;
@@ -594,14 +591,8 @@ pub fn run(
     // history copies, and session record to finish.
     // Before launch, paddock notes the signal and stops. After launch it
     // forwards the signal and waits. A frozen sandbox is thawed first.
-    // The old handlers come back when `run` returns.
     crate::loft::push::start_notice(env, &built);
     let forwarding = Forward::install();
-    // Without Hyprland, any terminal counts as watched.
-    let tty = !capture && std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
-    let term = crate::relay::plan(tty, crate::relay::this_terminal_is_watched, built.detach);
-    let (caller_terminal, relay_on, terminal_watched) = (tty, term.relay, term.watched);
-    let interactive = caller_terminal;
     let mut end = EndOfRun {
         env,
         id: built.spec.id.clone(),
@@ -631,8 +622,15 @@ pub fn run(
             }
         }
     }
-    // App mode: a restricted Wayland socket and a portal-only session bus,
-    // both alive until the sandbox exits.
+    let _horse_lifecycle = crate::horse::lifecycle::start(env, &mut built)?;
+    let (horse, _) = crate::horse::live::take_hooks();
+    let horse_access = _horse_lifecycle.as_ref().map(|l| l.access()).transpose()?;
+    let tty = horse.is_none() && !capture && std::io::stdin().is_terminal();
+    let tty = tty && std::io::stdout().is_terminal();
+    let term = crate::relay::plan(tty, crate::relay::this_terminal_is_watched, built.detach);
+    let (caller_terminal, relay_on, terminal_watched) = (tty, term.relay, term.watched);
+    let interactive = caller_terminal;
+    // App mode: a restricted Wayland socket and a portal-only session bus.
     let _app = if built.spec.gui.mode == GuiMode::App {
         Some(crate::app::start_session(
             env,
@@ -651,6 +649,9 @@ pub fn run(
     };
     backend.prepare(env, &built.spec, interactive)?;
     let (repo, spawner, broker) = host_tools::broker(env, &mut built, interactive, backend.name())?;
+    if let (Some(b), Some(access)) = (&broker, &horse_access) {
+        let _ = b.horse.set(access.clone());
+    }
     // paddock kv and the devices. Each one is optional: when it cannot start,
     // the sandbox starts without it and a notice says why.
     let kv_approver: std::sync::Arc<dyn crate::broker::Approver> = built
@@ -712,6 +713,7 @@ pub fn run(
             .clone()
             .map(|b| -> crate::gateway::Handler { std::sync::Arc::new(move |r| b.handle(&r)) }),
         secrets.clone(),
+        horse_access,
     );
     // Terminal harnesses that log in through a browser and a localhost callback.
     let _login = if built.profile.launch.login_callback && built.spec.gui.mode != GuiMode::App {
@@ -938,7 +940,7 @@ pub fn run(
         term.unwatched,
         built.detach,
     );
-    let tap = crate::relay::Taps::of(gate.clone(), screens);
+    let tap = crate::relay::Taps::of(gate.clone(), screens, crate::horse::live::take_pty_tap());
     // The live view of a run without a terminal (view.rs). paddock copies
     // each stream that is not a terminal to the caller and to the run log.
     // A watched terminal stays the harness's own. An invisible terminal is
@@ -1009,9 +1011,13 @@ pub fn run(
             }
         }
     }
+    if horse.is_some() {
+        cmd.stdin(Stdio::piped()).stdout(Stdio::piped());
+    }
     let mut child = cmd
         .spawn()
         .with_context(|| format!("cannot start {}", launch.program.display()))?;
+    crate::horse::live::handoff(horse, &mut child);
     if let Some(r) = relay.as_mut() {
         r.close_slave();
     }
@@ -1151,7 +1157,7 @@ pub fn run(
     let old_quit = unsafe { libc::signal(libc::SIGQUIT, libc::SIG_IGN) };
     let mut out = None;
     if capture && view.is_none() {
-        out = Some(read_capped(child.stdout.take().unwrap()));
+        out = child.stdout.take().map(read_capped);
     }
     let sandbox_id = spec.id.clone();
     let seam = crate::spawn::HostSeam(env.clone());
@@ -1245,6 +1251,7 @@ pub fn run(
             }
         }
     }
+    let out = crate::horse::lifecycle::end(_horse_lifecycle, code, out);
     // Copy the verified new packages of this project's cache layers into
     // the shared layers, in the background.
     crate::storage::layers::promote::spawn_after_run(env, spec, backend.name());
@@ -1267,7 +1274,7 @@ pub fn run(
     // background too: the exit does not wait for it.
     crate::storage::dedupe::spawn_after_run(env, &spec.home_src);
     if !quiet {
-        recovery_notice(env, &spec.id, &spec.home_src, running.started);
+        crate::recover::notice(env, &spec.id, &spec.home_src, running.started);
     }
     Ok(Outcome { code, stdout: out })
 }
@@ -1281,38 +1288,6 @@ impl Drop for ShadowRun {
             log::warn!("{e:#}");
         }
     }
-}
-
-/// Quick Recovery at exit: the files left in the recovery folders, and how to copy them.
-fn recovery_notice(env: &HostEnv, id: &str, home: &Path, started: u64) {
-    let id = crate::ids::short(id);
-    let cfg = match crate::recover::RecoveryCfg::load(env) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("paddock: warning: {e:#}");
-            return;
-        }
-    };
-    let items: Vec<_> = crate::recover::scan(env, &cfg, home, started)
-        .into_iter()
-        .filter(|i| i.new)
-        .collect();
-    if items.is_empty() {
-        return;
-    }
-    eprintln!(
-        "paddock: the sandbox saved {} file(s) outside the project. They stay in the sandbox until you recover them:",
-        items.len()
-    );
-    for i in items.iter().take(10) {
-        eprintln!("  {}", i.path);
-    }
-    if items.len() > 10 {
-        eprintln!("  ... and {} more", items.len() - 10);
-    }
-    eprintln!(
-        "paddock: list them with `paddock files {id}`, copy them with `paddock recover {id} PATH`"
-    );
 }
 
 pub fn select_backend(env: &HostEnv, built: &Built) -> Result<Box<dyn Backend>> {

@@ -148,6 +148,9 @@ fn read_until(fd: RawFd, needle: &[u8], timeout: Duration) -> Vec<u8> {
 
 #[test]
 fn the_relay_copies_bytes_size_exit_code_and_the_log() {
+    let _only = super::winch::TEST_SIGNAL
+        .write()
+        .unwrap_or_else(|e| e.into_inner());
     let (caller_m, caller_s) = caller_pty();
     set_size(caller_m, 24, 80);
     let dir = tempfile::tempdir().unwrap();
@@ -232,6 +235,9 @@ fn wait_child(child: &mut std::process::Child, timeout: Duration) -> std::proces
 /// the Codex hooks review screen and waits for one key.
 #[test]
 fn the_screen_watcher_answers_through_the_relay() {
+    let _relay = super::winch::TEST_SIGNAL
+        .read()
+        .unwrap_or_else(|e| e.into_inner());
     let (caller_m, caller_s) = caller_pty();
     set_size(caller_m, 24, 100);
     let profile: crate::profile::Profile =
@@ -244,7 +250,7 @@ fn the_screen_watcher_answers_through_the_relay() {
         caller_s,
         caller_s,
         move |data| l.lock().unwrap().extend_from_slice(data),
-        Taps::of(None, Some(w.clone())),
+        Taps::of(None, Some(w.clone()), None),
     )
     .unwrap();
     let script = "printf '  Hooks need review\\n  1 hook is new or changed.\\n  Hooks can run outside the sandbox after you trust them.\\n› 1. Review hooks\\n  2. Trust all and continue\\n  3. Continue without trusting (hooks won'\\''t run)\\n  enter confirm · esc skip\\n'; \
@@ -295,6 +301,9 @@ fn the_screen_watcher_answers_through_the_relay() {
 /// user key, so the watcher still answers the screen after a slow start.
 #[test]
 fn a_detached_run_in_a_tmux_pane_still_answers_the_start_screen() {
+    let _relay = super::winch::TEST_SIGNAL
+        .read()
+        .unwrap_or_else(|e| e.into_inner());
     let server = anc(4242, "tmux: server");
     let chain = [anc(4300, "paddock"), server.clone()];
     let watched = || terminal_watched(Some(&[100]), Some(&server), &chain);
@@ -315,8 +324,13 @@ fn a_detached_run_in_a_tmux_pane_still_answers_the_start_screen() {
     let (caller_m, caller_s) = caller_pty();
     set_size(caller_m, 24, 100);
     let w = crate::screens::live::Watcher::new(rules, || false, |_| {});
-    let mut relay =
-        Relay::start(caller_s, caller_s, |_| {}, Taps::of(None, Some(w.clone()))).unwrap();
+    let mut relay = Relay::start(
+        caller_s,
+        caller_s,
+        |_| {},
+        Taps::of(None, Some(w.clone()), None),
+    )
+    .unwrap();
     let script = "stty -icanon -echo min 1; printf '\\033[6n'; r=$(dd bs=1 count=6 2>/dev/null); \
                   printf 'starting MCP servers\\n'; sleep 1; \
                   printf '\\033[2J\\033[H  Hooks need review\\n  12 hooks are new or changed.\\n  Hooks can run outside the sandbox after you trust them.\\n› 1. Review hooks\\n  2. Trust all and continue\\n  3. Continue without trusting (hooks won'\\''t run)\\n  enter confirm · esc skip\\n'; \

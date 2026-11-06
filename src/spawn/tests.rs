@@ -1,5 +1,4 @@
 //! Tests for the spawn rules: limits, inheritance, approvals and privacy.
-
 use super::*;
 use crate::broker::{
     Answer, Approver, Broker, Context, HostPolicy, Pending, Request, Status as RStatus, PROTOCOL,
@@ -9,7 +8,7 @@ use crate::profile::{Harness, Profile};
 use crate::spec::Mount;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-const SECRET_TASK: &str = "TASK-TEXT-7f3a: refactor the parser";
+pub(super) const SECRET_TASK: &str = "TASK-TEXT-7f3a: refactor the parser";
 
 fn env_in(tmp: &Path) -> HostEnv {
     let mut vars = BTreeMap::new();
@@ -458,14 +457,14 @@ prompt = \"file\"
 }
 
 /// Records every question; answers with a fixed answer.
-struct Recorder {
+pub(super) struct Recorder {
     answer: Answer,
     asked: AtomicUsize,
     seen: Mutex<Vec<Pending>>,
 }
 
 impl Recorder {
-    fn new(answer: Answer) -> Arc<Self> {
+    pub(super) fn new(answer: Answer) -> Arc<Self> {
         Arc::new(Self {
             answer,
             asked: AtomicUsize::new(0),
@@ -482,8 +481,9 @@ impl Approver for Recorder {
     }
 }
 
-fn ceiling(parent: &str, depth: u32, project: &Path) -> Ceiling {
+pub(super) fn ceiling(parent: &str, depth: u32, project: &Path) -> Ceiling {
     Ceiling {
+        horse: false,
         parent: parent.into(),
         parent_harness: "claude".into(),
         chain: vec![parent.into()],
@@ -505,13 +505,13 @@ fn ceiling(parent: &str, depth: u32, project: &Path) -> Ceiling {
     }
 }
 
-struct Setup {
+pub(super) struct Setup {
     _tmp: tempfile::TempDir,
-    env: HostEnv,
-    project: PathBuf,
+    pub(super) env: HostEnv,
+    pub(super) project: PathBuf,
 }
 
-fn setup() -> Setup {
+pub(super) fn setup() -> Setup {
     let tmp = tempfile::tempdir().unwrap();
     let env = env_in(tmp.path());
     let project = tmp.path().join("work/app");
@@ -524,7 +524,7 @@ fn setup() -> Setup {
     }
 }
 
-fn broker(
+pub(super) fn broker(
     s: &Setup,
     id: &str,
     chain: Vec<String>,
@@ -560,7 +560,7 @@ fn broker(
     b
 }
 
-fn req(args: serde_json::Value) -> Request {
+pub(super) fn req(args: serde_json::Value) -> Request {
     Request {
         v: PROTOCOL,
         cap: "spawn".into(),
@@ -574,11 +574,11 @@ fn req(args: serde_json::Value) -> Request {
     }
 }
 
-fn start(harness: &str) -> Request {
+pub(super) fn start(harness: &str) -> Request {
     req(serde_json::json!({ "action": "start", "harness": harness, "prompt_file": "task.md" }))
 }
 
-fn cfg(harnesses: &[&str], max_running: u32) -> SpawnCfg {
+pub(super) fn cfg(harnesses: &[&str], max_running: u32) -> SpawnCfg {
     SpawnCfg {
         harnesses: harnesses.iter().map(|h| h.to_string()).collect(),
         max_running,
@@ -1343,7 +1343,7 @@ impl TimeoutSeam for FakeSeam {
 }
 
 /// A child program that runs `secs` seconds and then writes a result.
-fn child_that_runs(secs: &str) -> Vec<OsString> {
+pub(super) fn child_that_runs(secs: &str) -> Vec<OsString> {
     let script = format!(
         "sleep {secs}; printf '{{\"exit_code\":0,\"branch\":\"b\",\"base\":\"\",\"commits\":0,\"stat\":\"\",\"output\":\"\",\"output_truncated\":false,\"started\":0,\"ended\":0}}' > \"$(dirname \"$1\")/result.json\""
     );

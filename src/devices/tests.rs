@@ -364,3 +364,73 @@ fn hold_a_mount() {
     let _m = mount(Path::new(&dir), fs).unwrap();
     std::thread::sleep(Duration::from_secs(secs));
 }
+
+#[test]
+fn horse_mount_reads_views_and_writes_memory() {
+    use crate::horse::{self as hs, live::fake};
+    let env = HostEnv::detect().unwrap();
+    if let Err(why) = fuse_available(&env) {
+        eprintln!("skipped: {why}");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let env = HostEnv::from_parts(
+        tmp.path().into(),
+        env.user,
+        env.uid,
+        env.gid,
+        Default::default(),
+    );
+    let store = hs::Store::open(&tmp.path().join("store")).unwrap();
+    let h = store.new_default_horse().unwrap();
+    let root = tmp.path().join("sessions");
+    fake::write_file(&root, "session-a", &fake::turn_rows(0, 1, "hello", "msg-a"));
+    let dir = hs::dsh::session_dir(&root, Some(fake::CWD), "session-a");
+    let session = hs::dsh::ingest(&store, &dir, hs::dsh::VERSION, Some(&h.id))
+        .unwrap()
+        .session;
+    let setup = crate::horse::device::Access {
+        store: store.clone(),
+        horse: h.id.clone(),
+        session: session.clone(),
+    };
+    let ctx = DeviceCtx {
+        env,
+        sandbox: "test".into(),
+        harness: "fake".into(),
+        project: tmp.path().into(),
+        started_by: vec![],
+        approver: Arc::new(crate::broker::HostApprover),
+    };
+    let fs = DeviceFs::new("test", vec![]).with_horse(Some(setup), ctx);
+    let mount_path = tmp.path().join("mount");
+    let Ok(_mounted) = mount(&mount_path, fs) else {
+        eprintln!("skipped: FUSE mount failed");
+        return;
+    };
+    let path = mount_path.join(format!("horse/self/sessions/{session}/log"));
+    assert!(std::fs::read_to_string(path)
+        .unwrap()
+        .contains("user hello"));
+    std::fs::write(mount_path.join("horse/self/memory/note"), b"hello memory").unwrap();
+    assert_eq!(
+        std::fs::read(mount_path.join("horse/self/memory/note")).unwrap(),
+        b"hello memory"
+    );
+    assert!(std::fs::write(mount_path.join("horse/self/id"), b"bad").is_err());
+    // dna.toml: a whole write hot-loads at close, an invalid one is EINVAL.
+    let dna = mount_path.join("horse/self/dna.toml");
+    std::fs::write(&dna, b"[traits]\nstyle = \"careful\"\n").unwrap();
+    assert!(std::fs::read_to_string(&dna).unwrap().contains("careful"));
+    let before = store.horse(&h.id).unwrap().dna;
+    // The error comes from close(2), which a dropped File ignores.
+    let mut f = std::fs::File::create(&dna).unwrap();
+    std::io::Write::write_all(&mut f, b"not = [toml").unwrap();
+    let fd = std::os::fd::IntoRawFd::into_raw_fd(f);
+    assert_eq!(unsafe { libc::close(fd) }, -1);
+    assert_eq!(
+        std::io::Error::last_os_error().raw_os_error(),
+        Some(libc::EINVAL)
+    );
+    assert_eq!(store.horse(&h.id).unwrap().dna, before);
+}

@@ -6,6 +6,8 @@ unverified = [
   "state.auth .codex/.credentials.json: the file store for MCP OAuth tokens",
   "compaction: the trusted hash of paddock's hook, from the source of codex 0.166.0",
   "state.settings features.unified_exec_tty: shell commands without a pty on macOS, from the source of codex 0.166.0",
+  "horse.pty: the input row, its dim placeholder and the busy text of the codex 0.166.0 TUI, from the source, not from a recorded screen",
+  "horse notify: the JSON argument of the notify program (agent-turn-complete, thread-id), from the Codex documentation of the configuration",
 ]
 
 [locate]
@@ -161,3 +163,20 @@ rows = [
   "3. Continue without trusting (hooks won't run)",
   "enter confirm · esc skip",
 ]
+
+# Horse mode (src/horse/live/pty.rs). Codex has no push path into its TUI,
+# so paddock types a queued entry into the pty of the run. It does so only
+# when Codex's notify program said that the turn is done, and the screen
+# shows the input row with no text of the user in it (the placeholder is
+# dim), no row shows the busy text, and the screen did not change for
+# quiet_ms. An urgent entry first gets the interrupt key. A codex version
+# other than this one gets no pty delivery: its entries stay queued.
+[horse.pty]
+version = "0.166.0"
+prompt = "›"
+empty_input = true
+busy = ["esc to interrupt"]
+quiet_ms = 1500
+interrupt_key = "escape"
+submit_key = "enter"
+bracketed_paste = true

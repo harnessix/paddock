@@ -1249,6 +1249,7 @@ dependencies = [
  "objc2-quartz-core",
  "objc2-virtualization",
  "rcgen",
+ "ring",
  "rpassword",
  "rusqlite",
  "rustls",

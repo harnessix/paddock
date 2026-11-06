@@ -207,6 +207,7 @@ pub fn trust(home: &crate::safefs::Root, s: &crate::spec::HomeSetting) -> Result
             append: false,
             codex_trust: None,
             no_pty: false,
+            chain: false,
         })
         .collect();
     let refs: Vec<&crate::spec::HomeSetting> = values.iter().collect();

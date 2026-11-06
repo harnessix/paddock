@@ -1,0 +1,1 @@
+- (experimental) New: an interactive Codex run in horse mode now says so once, with the `pty.no_stop` ledger line and a warning in the log, when its screen looks idle and entries wait but Codex's `notify` program never told the host that a turn ended. Before, the entries stayed queued with no sign of the cause.

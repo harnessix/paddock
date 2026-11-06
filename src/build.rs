@@ -271,6 +271,7 @@ pub fn worktree_counts(env: &HostEnv, w: &Worktree) -> (usize, Option<usize>) {
 }
 
 pub struct Built {
+    pub horse: bool,
     /// A detached run (`paddock run --detach`): `paddock-host done` ends it.
     pub detach: bool,
     /// For a child sandbox: where it came from. Its broker takes the depth
@@ -286,16 +287,14 @@ pub struct Built {
     /// Who answers host passthrough requests. None means the user, through
     /// the panel, a notification or `paddock approvals`.
     pub approver: Option<std::sync::Arc<dyn crate::broker::Approver>>,
-    /// The sandbox that started this one, for the `parent` scope of paddock
-    /// kv. None for a sandbox that the user started. The spawn child build
-    /// sets it from the job that the parent's paddock wrote.
+    /// The parent for the `parent` scope of paddock kv.
+    /// None for a sandbox that the user started; spawn supplies it.
     pub parent: Option<String>,
     /// For a spawned sandbox: the devices of its parent. It gets no other.
     pub device_ceiling: Option<Vec<String>>,
     /// The run shares session history with the host (`paddock wrap` starts).
     pub shared_history: bool,
-    /// Serve the built-in `echo` device whatever the user configuration says.
-    /// `paddock doctor --escape` tests the device mount with it.
+    /// Serve the echo device for `paddock doctor --escape`.
     pub test_devices: bool,
     /// Show the run in a live view when it has no terminal (view.rs).
     /// Off for the escape probe and app windows.
@@ -998,6 +997,7 @@ pub fn build_with(env: &HostEnv, opts: &Options, harness: Harness) -> Result<Bui
         .or(m.backend.clone())
         .unwrap_or_else(|| "auto".into());
     Ok(Built {
+        horse: false,
         spawn: None,
         stdin: None,
         home_key,

@@ -16,20 +16,12 @@ mod fd;
 mod reply;
 mod tap;
 mod watched;
+pub(crate) mod winch;
 use fd::{cloexec, dup_fd, pipe, set_nonblock};
 pub use reply::only_replies;
 pub use tap::{Log, Tap, Taps};
 pub use watched::*;
-
-static WINCH: AtomicBool = AtomicBool::new(false);
-
-extern "C" fn on_winch(_: libc::c_int) {
-    WINCH.store(true, Ordering::Relaxed);
-}
-
-fn take_winch() -> bool {
-    WINCH.swap(false, Ordering::Relaxed)
-}
+use winch::{install_winch, take_winch};
 
 /// Make the slave on fd 0 the controlling terminal of this process.
 /// Called from `pre_exec`, after fork and before exec.
@@ -77,6 +69,8 @@ impl Relay {
         let (master, slave) = open_pty().context("cannot open a terminal for the harness")?;
         let _ = cloexec(master);
         let _ = cloexec(slave);
+        // A size change from now on reaches the harness.
+        let seen = winch::seen();
         copy_winsize(caller_in, master);
         let log: Log = Arc::new(log);
         if let Some(g) = &gate {
@@ -105,7 +99,7 @@ impl Relay {
         let stop_in = stop.clone();
         let input = std::thread::Builder::new()
             .name("paddock-relay-in".into())
-            .spawn(move || copy_in(caller_in, master, wake_r, stop_in, gate_in))
+            .spawn(move || copy_in(caller_in, master, wake_r, stop_in, gate_in, seen))
             .context("cannot start the relay")?;
         let stop_out = stop.clone();
         let output = std::thread::Builder::new()
@@ -255,19 +249,6 @@ fn enter_raw(fd: RawFd) -> io::Result<libc::termios> {
     }
 }
 
-fn install_winch() -> libc::sigaction {
-    // SAFETY: installs a handler that only stores an atomic flag.
-    unsafe {
-        let mut old: libc::sigaction = std::mem::zeroed();
-        let mut action: libc::sigaction = std::mem::zeroed();
-        action.sa_sigaction = on_winch as *const () as libc::sighandler_t;
-        action.sa_flags = libc::SA_RESTART;
-        libc::sigemptyset(&mut action.sa_mask);
-        libc::sigaction(libc::SIGWINCH, &action, &mut old);
-        old
-    }
-}
-
 fn copy_winsize(from: RawFd, to: RawFd) {
     // SAFETY: TIOCGWINSZ and TIOCSWINSZ on the two terminals of this relay.
     unsafe {
@@ -326,10 +307,11 @@ fn copy_in(
     wake: RawFd,
     stop: Arc<AtomicBool>,
     gate: Option<Arc<dyn Tap>>,
+    mut seen: u64,
 ) {
     let mut buf = [0u8; 8192];
-    let winch = |gate: &Option<Arc<dyn Tap>>| {
-        if take_winch() {
+    let mut winch = |gate: &Option<Arc<dyn Tap>>| {
+        if take_winch(&mut seen) {
             if let Some(g) = gate {
                 g.resize();
             }

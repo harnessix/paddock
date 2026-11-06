@@ -436,6 +436,23 @@ pub fn parse_since(s: &str) -> Result<u64> {
         .with_context(|| format!("{s:?} is too long"))
 }
 
+impl Ledger {
+    /// Record a free device read without a budget reservation.
+    pub fn record_read(&self, p: &Payer, path: &str) -> Result<()> {
+        self.record(p, &format!("read {path}"))
+    }
+
+    /// Record a free device request with its status text, for example
+    /// `registry.fetch denied <ref>`.
+    pub fn record(&self, p: &Payer, status: &str) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO requests (time, sandbox, root, project, device, cost, status) VALUES (?1, ?2, ?3, ?4, ?5, 0, ?6)",
+            params![crate::state::now() as i64, p.sandbox, p.root, p.project, p.device, status],
+        )?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

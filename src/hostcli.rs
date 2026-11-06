@@ -12,6 +12,8 @@ pub(crate) mod credential;
 pub mod device;
 pub mod forage;
 mod git;
+#[path = "hostcli/horse.rs"]
+pub(crate) mod horse;
 pub mod kv;
 pub mod pasture;
 mod spawn;
@@ -431,6 +433,16 @@ fn usage(msg: &str) -> i32 {
     EXIT_USAGE
 }
 
+/// 0 when the child ended with exit code 0, else 1.
+pub fn wait_exit_code(status: &serde_json::Value) -> i32 {
+    let ok = status["state"] == "exited" && status["exit_code"] == 0;
+    if ok {
+        0
+    } else {
+        1
+    }
+}
+
 /// The entry point. Returns the process exit code.
 pub fn main(args: &[String]) -> i32 {
     let Some(cmd) = args.first().map(String::as_str) else {
@@ -438,28 +450,8 @@ pub fn main(args: &[String]) -> i32 {
         return EXIT_USAGE;
     };
     let rest = &args[1..];
-    match cmd {
-        "git" => return git::git_main(rest),
-        "git-remote-helper" => return git::remote_helper(rest),
-        "gh" => return git::gh_main(rest),
-        "kv" => return kv::main(rest),
-        "timer" => return timer::main(rest),
-        "pasture" => return pasture::main(rest),
-        "forage" => return forage::main(rest),
-        "status" => return status::main(rest),
-        "compacted" => return compacted::main(rest),
-        "spec" => return spec::main(rest),
-        "device" => return device::main(rest),
-        "credential" => return credential::main(rest),
-        "tea" | "glab" => return git::forge_main(cmd, rest),
-        "forge"
-            if rest
-                .first()
-                .is_some_and(|t| crate::broker::forge::tool(t).is_some()) =>
-        {
-            return git::forge_main(&rest[0], &rest[1..])
-        }
-        _ => {}
+    if let Some(code) = horse::dispatch(cmd, rest) {
+        return code;
     }
     if matches!(cmd, "-h" | "--help" | "help") {
         match rest.first() {
@@ -717,16 +709,6 @@ pub fn main(args: &[String]) -> i32 {
         return wait_exit_code(&resp.result);
     }
     resp.status.exit_code()
-}
-
-/// 0 when the child ended with exit code 0, else 1.
-pub fn wait_exit_code(status: &serde_json::Value) -> i32 {
-    let ok = status["state"] == "exited" && status["exit_code"] == 0;
-    if ok {
-        0
-    } else {
-        1
-    }
 }
 
 fn print_child(c: &serde_json::Value) {
