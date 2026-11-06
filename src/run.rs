@@ -1136,9 +1136,9 @@ pub fn run(
         let _ = state::record_recent(env, &home_key, &spec.harness);
     }
 
-    // pasta hides the host addresses that exist at start. Watch for new ones
-    // (a VPN that comes up later) and report them: they stay reachable until
-    // the next start.
+    // pasta hides the host addresses that exist at start. Watch for new ones (a VPN
+    // that comes up later) and report them: they stay reachable until the next start.
+    let _space = crate::storage::guard::Watch::start(env, &spec.project);
     let new_addrs = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
     let monitor = (backend.name() == "bwrap" && spec.network == Network::Egress)
         .then(|| EgressAddrMonitor::start(env.clone(), running.clone(), new_addrs.clone()));
@@ -1245,9 +1245,9 @@ pub fn run(
             }
         }
     }
-    // Copy the verified new packages of this project's cache layers into
-    // the shared layers, in the background.
+    // Verified new packages go to the shared layers; the build cache keeps the target folder.
     crate::storage::layers::promote::spawn_after_run(env, spec, backend.name());
+    crate::storage::buildcache::after_run(env, spec);
     if let (Some(p), Some(base)) = (&spec.shadow, &shadow_base) {
         if !quiet {
             let skip: Vec<PathBuf> = spec

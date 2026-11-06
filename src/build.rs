@@ -221,12 +221,7 @@ pub fn worktree_report(env: &HostEnv, w: &Worktree) -> String {
         w.branch
     );
     if commits.is_empty() && dirty.is_empty() {
-        t.push_str(&format!(
-            "paddock: it made no changes. Remove the worktree:\n  git -C {} worktree remove {} && git -C {0} branch -D {}",
-            w.repo.display(),
-            w.path.display(),
-            w.branch
-        ));
+        t.push_str("paddock: it made no changes.");
         return t;
     }
     if !commits.is_empty() {
@@ -761,6 +756,7 @@ pub fn build_with(env: &HostEnv, opts: &Options, harness: Harness) -> Result<Bui
             .with_context(|| format!("detector {}", d.name()))?;
     }
     detect::npm_harness(env, &harness, &mut spec)?;
+    crate::storage::buildcache::apply(env, &home_key, pending.wt.is_some(), &m.setup, &mut spec)?;
     crate::storage::caches::mount(env, &profile, &mut spec);
     spec.setup.extend(m.setup.run.iter().cloned());
     spec.lan = m.network.lan == Some(true);

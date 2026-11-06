@@ -230,6 +230,9 @@ pub struct DockerCfg {
 pub struct SetupCfg {
     /// Run `mise install` inside the sandbox when the project has a mise file.
     pub mise_install: Option<bool>,
+    /// A `--worktree` run or a worker of a Rust project builds in its own
+    /// copy of the repository's cargo build cache (storage/buildcache.rs).
+    pub shared_build_cache: Option<bool>,
     /// Extra shell lines to run inside the sandbox before the harness.
     #[serde(default)]
     pub run: Vec<String>,
@@ -373,6 +376,9 @@ impl Manifest {
         self.docker.packages.extend(o.docker.packages);
         if o.setup.mise_install.is_some() {
             self.setup.mise_install = o.setup.mise_install;
+        }
+        if o.setup.shared_build_cache.is_some() {
+            self.setup.shared_build_cache = o.setup.shared_build_cache;
         }
         self.setup.run.extend(o.setup.run);
     }
@@ -532,6 +538,7 @@ pub const TEMPLATE: &str = r#"# paddock.toml: sandbox settings for this project.
 
 [setup]
 # mise_install = true
+# shared_build_cache = true   # worktree runs build in a cargo cache outside the worktree
 # run = []
 
 [docker]

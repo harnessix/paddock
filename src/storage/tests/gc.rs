@@ -47,8 +47,13 @@ fn gc_yes_removes_only_the_automatic_tier_and_spares_running_homes() {
     let inv = scan(&env, &h, false);
     let items = plan(&inv, &o, state::now());
     let removed = apply(&env, &c, &items);
-    assert_eq!(removed.len(), 1, "{removed:?}");
-    assert!(!orphan.exists());
+    // A home is the user's conversations: without --homes none goes, not
+    // even one whose harness profile is gone.
+    assert!(removed.is_empty(), "{removed:?}");
+    assert!(
+        orphan.exists(),
+        "a home whose profile is gone needs --homes"
+    );
     assert!(busy.exists(), "a running sandbox keeps its home");
     assert!(gone.exists(), "a home of a gone project needs --homes");
 
@@ -60,6 +65,7 @@ fn gc_yes_removes_only_the_automatic_tier_and_spares_running_homes() {
     let items = plan(&scan(&env, &h, false), &o, state::now());
     apply(&env, &c, &items);
     assert!(!gone.exists());
+    assert!(!orphan.exists());
     assert!(busy.exists());
 }
 

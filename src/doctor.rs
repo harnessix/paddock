@@ -333,9 +333,9 @@ fn report_rest(env: &HostEnv, os: crate::onboard::Os) -> Result<()> {
             .iter()
             .for_each(|l| println!("{l}"));
     }
-
     println!("\nUpdates:");
-    for l in crate::update::doctor_lines(env) {
+    let space = crate::storage::guard::doctor_lines(env);
+    for l in crate::update::doctor_lines(env).into_iter().chain(space) {
         println!("{l}");
     }
     Ok(())

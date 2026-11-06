@@ -72,7 +72,8 @@ pub fn render_du(env: &HostEnv, inv: &Inventory, now: u64) -> String {
     render_du_snapshots(&mut t, &home, inv, now);
     render_du_images(&mut t, inv);
     render_du_build_cache(&mut t, inv);
-    render_du_worktrees(&mut t, &home, inv);
+    render_du_worktrees(&mut t, &home, inv, now);
+    render_du_build_caches(&mut t, &home, inv);
     render_du_sessions(&mut t, inv, now);
     render_du_layers(&mut t, &home, inv);
     render_du_old_caches(&mut t, &home, inv);
@@ -234,7 +235,39 @@ fn render_du_build_cache(t: &mut String, inv: &Inventory) {
     }
 }
 
-fn render_du_worktrees(t: &mut String, home: &str, inv: &Inventory) {
+fn render_du_build_caches(t: &mut String, home: &str, inv: &Inventory) {
+    if inv.build_caches.is_empty() {
+        return;
+    }
+    t.push_str(&format!(
+        "\nCargo build caches of worktree runs: {}\n",
+        human(inv.build_caches.iter().map(|c| c.bytes).sum())
+    ));
+    for c in &inv.build_caches {
+        let project = c
+            .project
+            .as_ref()
+            .map(|p| tilde(home, p))
+            .unwrap_or_else(|| "unknown".into());
+        t.push_str(&format!(
+            "  {:>9}  {}  ({project}{})\n",
+            human(c.bytes),
+            tilde(home, &c.path),
+            if c.orphan { ", gone" } else { "" }
+        ));
+    }
+}
+
+/// The merged state of a worktree in a few words.
+pub fn merged_word(w: &Worktree) -> &'static str {
+    match w.merged {
+        Some(true) => "merged",
+        Some(false) => "not merged",
+        None => "merged state unknown",
+    }
+}
+
+fn render_du_worktrees(t: &mut String, home: &str, inv: &Inventory, now: u64) {
     let total_wt: u64 = inv.worktrees.iter().map(|w| w.bytes).sum();
     t.push_str(&format!(
         "\nWorktrees: {} in {}\n",
@@ -253,13 +286,15 @@ fn render_du_worktrees(t: &mut String, home: &str, inv: &Inventory) {
         };
         let running = if w.running { " [running]" } else { "" };
         t.push_str(&format!(
-            "  {:>9}  {}  {}{commits}{dirty}{running}\n",
+            "  {:>9}  {:<12}  {}  {}{commits}, {}{dirty}{running}\n",
             human(w.bytes),
+            ago(now, w.last_used),
             tilde(home, &w.path),
             w.branch
                 .as_ref()
                 .map(|b| format!("{b}, "))
                 .unwrap_or_default(),
+            merged_word(w),
         ));
     }
 }
