@@ -62,6 +62,9 @@ struct Run {
 /// The fake dialog behind the relay and a gate with the shipped agy rule.
 /// `user` writes into the caller terminal once the dialog shows.
 fn run_fake(first: &str, user: Option<&[u8]>) -> Run {
+    let _relay = crate::relay::winch::TEST_SIGNAL
+        .read()
+        .unwrap_or_else(|e| e.into_inner());
     let dir = tempfile::tempdir().unwrap();
     screens::write_screens(dir.path());
     let (cm, cs) = caller_pty(40, 100);

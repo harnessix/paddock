@@ -1,6 +1,11 @@
 name = "claude"
 description = "Anthropic Claude Code"
 
+# Entries that come from documentation, not from a test. paddock doctor lists them.
+unverified = [
+  "horse.pty: the input row, its placeholder and the busy text of the Claude Code TUI, from the code of Claude Code 2.1.318 (the version after 2.1.317), not from a recorded screen",
+]
+
 [locate]
 mise = "claude"
 commands = ["claude"]
@@ -125,3 +130,22 @@ value = { matcher = "compact", hooks = [{ type = "command", command = "paddock-h
 [hooks]
 files = [".claude/settings.json"]
 into = ".claude/settings.json"
+
+# Horse mode (src/horse/live/pty/claude.rs). A Claude Code version with no
+# checked channel path gets its queued entries through the pty of the run:
+# paddock types an entry only when no Stop or UserPromptSubmit hook and no
+# row of the transcript says that a turn runs, the screen shows the input
+# row with no text of the user in it, no row shows the busy text, and the
+# screen did not change for quiet_ms. Claude Code draws its own cursor:
+# the first letter of the empty placeholder is inverse, the rest is dim.
+# An urgent entry first gets the interrupt key. A claude version other
+# than this one gets no pty delivery: its entries stay queued.
+[horse.pty]
+version = "2.1.317"
+prompt = "❯"
+empty_input = true
+busy = ["esc to interrupt"]
+quiet_ms = 1500
+interrupt_key = "escape"
+submit_key = "enter"
+bracketed_paste = true

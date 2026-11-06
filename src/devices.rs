@@ -584,6 +584,7 @@ pub fn start(
     started_by: &[String],
     gateway: Option<crate::gateway::Handler>,
     secrets: Arc<SecretFiles>,
+    horse_setup: Option<crate::horse::device::Access>,
 ) -> Option<Devices> {
     let cfg = match DevicesCfg::load(env) {
         Ok(c) => c,
@@ -632,7 +633,7 @@ pub fn start(
         return None;
     }
     let dir = mount_dir(env, backend, &spec.id);
-    let fs = DeviceFs::with_secrets(&spec.id, devices, secrets);
+    let fs = DeviceFs::with_secrets(&spec.id, devices, secrets).with_horse(horse_setup, ctx);
     let mut out = Devices {
         dir: dir.clone(),
         mounted: Arc::new(Mutex::new(None)),

@@ -10,7 +10,19 @@
 //!
 //! The store folder is 0700 and is never mounted into a sandbox.
 
+pub mod claude;
+pub mod codex;
+pub mod device;
+pub mod dna;
 pub mod dsh;
+pub mod guard;
+pub mod hitch;
+pub mod inbox;
+pub mod lifecycle;
+pub mod lineage;
+pub mod live;
+pub mod registry;
+pub mod run;
 pub mod session;
 pub mod store;
 
@@ -26,10 +38,6 @@ use std::path::PathBuf;
 pub fn root(env: &HostEnv) -> PathBuf {
     env.paddock_data().join("horse")
 }
-
-/// The DNA of a horse that a run makes when nothing else is chosen.
-pub const DEFAULT_DNA: &str =
-    "# horse DNA\norigin = \"paddock run\"\n\n[traits]\n\n[capabilities]\n\n[policies]\n";
 
 /// Random bytes from the kernel.
 pub(crate) fn random_bytes<const N: usize>() -> Result<[u8; N]> {

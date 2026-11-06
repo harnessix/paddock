@@ -706,6 +706,15 @@ pub(crate) struct RunArgs {
     #[arg(long, value_name = "TEXT", requires = "detach")]
     #[serde(skip)]
     prompt: Option<String>,
+    /// Record this run in a new horse (dsh, Claude, or Codex).
+    /// Also enabled by `[horse] enabled`.
+    #[arg(long)]
+    #[serde(default)]
+    horse: bool,
+    /// Continuing an existing horse is not supported by the run lifecycle.
+    #[arg(long, value_name = "ID")]
+    #[serde(default)]
+    horse_id: Option<String>,
     /// Arguments for the harness, after `--`.
     #[arg(last = true)]
     args: Vec<String>,

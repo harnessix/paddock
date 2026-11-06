@@ -777,5 +777,8 @@ pub fn discard(cfg: &RecoveryCfg, home: &Path, rel: &str) -> Result<String> {
     Ok(src.rel)
 }
 
+mod notice;
+pub use notice::notice;
+
 #[cfg(test)]
 mod tests;

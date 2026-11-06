@@ -1474,6 +1474,144 @@ store = "external"   # default: "repo", where Spec Kit puts them
 
 Then run `paddock spec adopt` once in the repository. It asks, then moves both folders to the loft, `~/.local/share/paddock/loft/<repository key>/tree/`. A store of an earlier paddock moves there by itself. Every sandbox of the repository sees them at `.specify/` and `specs/`, also each `--worktree` sandbox and each worker, with the same content. paddock adds both paths to `.git/info/exclude`, which git does not track, so `git status` does not show them. If the files were committed, adopt tells you how to remove them from the index, and how to remove them from the history. It does not change the history itself.
 
+## horse (experimental)
+
+In horse mode, paddock keeps the sessions of a run in its own store, outside the sandbox. You start it with a dsh run only, and it is off by default. A Claude Code or Codex child that such a run spawns with a task is held too (see below). Turn it on for one run, or for every dsh run in the user configuration:
+
+```sh
+paddock run dsh --horse                 # a new horse
+paddock run dsh --horse-id h-1a2b3c4d5e6f  # continue a horse, resume its newest session
+```
+
+```toml
+[horse]
+enabled = true
+# dsh_model = "deepseek-flash"
+# dsh_provider = "deepseek-official"
+# dsh_effort = "high"
+```
+
+paddock starts `dsh --profile sdk` instead of `dsh web`, so there is no browser page. You type your prompts in the terminal, and paddock prints the answers. A prompt that you type during a reply waits until the reply is complete. Every event of the run goes into the store as dsh commits it. Ctrl-D ends the run after the running turn.
+
+On the host:
+
+```sh
+paddock horse status                                   # live sessions, heads, inboxes, guard verdicts
+paddock horse append s-1a2b3c4d5e6f --role note --text "The tests pass on main now."
+paddock horse guard s-1a2b3c4d5e6f --model deepseek-v4-pro   # does this keep the cache?
+paddock horse fork s-1a2b3c4d5e6f --at seq:17
+```
+
+An append waits in the inbox of the session. paddock delivers it when the session is idle, after the reply is complete, as the newest message. A role other than `user` is named in a short tag, because dsh takes user messages only. paddock never cuts a running turn: the SDK of dsh has no cancel.
+
+A Claude Code child of `paddock-host spawn` from a run in horse mode is held the same way. paddock starts it as `claude -p` over stream-json with a session id that paddock picks, and the task is the first message after the DNA entry. An append to the session of the child goes in after the running turn ends. The child ends when its inbox is empty after a turn. An interactive Claude Code run in horse mode gets its entries through a channel or through the pty relay (see below).
+
+A Codex child that a run in horse mode spawns with a task (`paddock-host spawn codex --prompt-file task.md`) is held too: paddock starts it as `codex app-server`. The task is the first message after the DNA entry. The run ends when the thread is idle and its inbox is empty. For both harnesses, the lines of the custody are the output of the child run, and an empty task fails before paddock writes to the store. An interactive Codex run gets its entries through the pty relay (see below). The `run.end` event of each live custody has its counts, `added` (the nodes that the final ingest added, 0 when the custody read every turn), and `error` if the custody did not start or failed.
+
+The prefix guard compares what the model sees before and after an operation. It warns when a fork, an append before the end, a model, tool or cwd change, or a long pause loses the cached prompt prefix, and it shows the size of the lost part. Where an append can do the same, it shows the append form.
+
+Codex keys its prompt cache by the thread id, so a fork under a new id starts cold. To continue a Codex session at another branch, swap it under the same id:
+
+```sh
+paddock horse swap s-1a2b3c4d5e6f 3f9a2c1b7d4e            # a node, or a session whose head is the branch
+paddock horse swap s-1a2b3c4d5e6f 3f9a2c1b7d4e --interrupt
+paddock horse swap s-1a2b3c4d5e6f s-7e6d5c4b3a21 --codex-home ~/old-sandbox-home/.codex
+```
+
+If a run holds the session, the swap waits until no turn runs (`--interrupt` stops the running turn first). Then paddock replaces the rollout file with the branch, and Codex loads the thread again from the file. The prompt up to the fork point stays cached. The old head stays in the store as a session of its own. If no run holds the session, give the Codex home of its rollout with `--codex-home`. If the guard says that the swap loses cached tokens, add `--yes`.
+
+A warm side branch is a fork of a held Codex session that keeps the cache key. paddock asks Codex for an ephemeral fork of the live thread at its head. Codex writes no rollout file for an ephemeral fork:
+
+```sh
+paddock horse fork s-1a2b3c4d5e6f --warm      # prints the new session, for example s-9c8b7a6d5e4f
+paddock horse append s-9c8b7a6d5e4f --text "Try the other approach."
+paddock horse fork s-9c8b7a6d5e4f --close     # or the run ends
+```
+
+The side branch is a session of its own, in the custody of the same run. It gets inbox entries and interrupts like the parent. The parent session waits until the side branch closes, and its entries stay in its inbox. paddock stores the turns of the side branch from the live channel and marks them `live` in `paddock horse log`. No codec projects a session with a live node, because Codex never wrote that node. The nodes stay in the store after the close.
+
+### Published DNA (registry)
+
+A DNA is the set of traits of a horse. You can publish a DNA to an index and use it in other horses. An index is a folder on the host, or a git checkout of one. Its reference has the form `registry://org/name@version`. You keep the signing key, the trusted keys and the index list on the host only, in `~/.local/state/paddock/registry/`. The folder is 0700 and each file is 0600.
+
+```sh
+paddock horse registry key new                          # make the signing key, print its public key
+paddock horse registry trust add acme 3f9a...e1 --name release   # trust this key for the org acme
+paddock horse registry index add team /srv/dna-index    # add an index after the local one
+paddock horse registry publish h-1a2b3c4d5e6f registry://acme/review@1.0.0
+paddock horse registry resolve registry://acme/review@latest     # manifest, verdict, hash; no import
+paddock horse dna use h-6f5e4d3c2b1a registry://acme/review@1.0.0
+paddock horse registry sync team                        # git pull --ff-only, for a git checkout only
+```
+
+A publish signs with the key of the host. If there is no key, run `paddock horse registry key new` first, or publish with `--unsigned`. By default, the trust policy refuses an unsigned manifest and a manifest that an untrusted key signed. `resolve` prints the verdict and exits 1 when the policy refuses the reference.
+
+A sandbox in horse mode can ask for published DNA, but each request goes to you first:
+
+```sh
+paddock-host horse registry fetch registry://acme/review@1.0.0 --use
+paddock-host horse registry sync team
+```
+
+The approval card shows the reference and the horse. If you deny the request, nothing is written, and the command exits 1 with `fetch of <ref> was not approved`. If you approve it, the host resolves the reference with its own indexes and trust policy. With `--use`, the host grafts the DNA into the horse, and the session gets the new traits at its next safe point. A reference `@sha256:HASH` that the store already holds comes from the store. The device ledger and the audit log get one line for each request. The answer to the sandbox holds the reference, the hash, the manifest fields and the verdict. It never holds a path, a key, an index name or the trust list. `sync` is the only network path of the registry, and it runs only after your approval. On macOS, the same commands go through the same broker.
+
+An interactive Claude Code in horse mode gets the inbox entries of its session through a channel. A channel is an MCP server that pushes messages into a running session. paddock gives that server as `paddock-host channel`, and it runs inside the sandbox. The hooks of the session tell the host when a reply is complete and when a turn starts:
+
+```sh
+paddock-host horse safe-point stop     # the reply is complete: entries can go out
+paddock-host horse safe-point prompt   # a turn starts: entries wait
+```
+
+The host releases entries only after a `stop`, and only the entries of the calling run's own session. Each released entry is recorded as a delivery in the store and as one `channel.release <entry id>` line in the device ledger. The host keeps the state of the TUI in its memory. A new host process waits for the next `stop`. If the channel server cannot write a push, it exits, and the entry stays recorded but not landed in the transcript. On macOS, the same requests go through the same broker, and nothing in them depends on Linux.
+
+paddock starts an interactive Claude Code in horse mode with that channel only for a Claude Code version whose channel was checked in the binary. Today that is 2.1.318. The run also needs the version that the horse codec reads, which is 2.1.317 today. On a version with no checked channel, Claude Code gets its entries through the pty relay instead (see below).
+
+On a version with the channel, paddock picks the session id and adds these arguments to the claude command:
+
+- `--channels=server:paddock` and `--dangerously-load-development-channels=server:paddock`. Because of the second one, Claude Code asks you to confirm the channel at the start.
+- The `paddock` server (`paddock-host channel`) in `--mcp-config`.
+- The two hooks in `--settings`. Your own hooks and the status hooks stay.
+
+Nothing is written into the sandbox home. A claude command that sets `--resume`, `--continue`, `--session-id` or its own channels runs without the channel and says why.
+
+The host tails the transcript, ingests after every turn and every 5 seconds of a long turn, and marks an entry landed when its user row is in the transcript. A complete reply that is unchanged for 2 seconds counts as the end of a turn when the `Stop` hook did not come. If an entry does not arrive while Claude Code is idle for 60 seconds, it goes back into the inbox once, with a `channel.retry` ledger line. After a second miss, it stays recorded but not landed, and `paddock horse status` shows each delivery of the run as landed or not landed. The `run.end` event has `custody` "channel". The custody runs on the host, so it is the same on macOS.
+
+An interactive Codex in horse mode has no push path into its TUI. paddock relays the terminal of the run through a pty that it owns (the pty relay), and types the entries of the inbox into it. In horse mode only, paddock sets Codex's `notify` program in the sandbox copy of `~/.codex/config.toml`. The command line of the run stays as it is:
+
+```toml
+notify = ["paddock-host", "horse", "safe-point", "stop"]
+```
+
+Codex runs this program after each turn with one JSON argument that names the thread and the turn. The host binds the session of the run to the thread of the first such call that has a rollout file, and it ignores the calls of other threads. If your configuration has its own `notify`, it stays: paddock puts it after `--then`, and paddock's program runs it afterwards with the same JSON argument. The host copy of `config.toml` does not change. A codex command that sets `notify` itself (`-c notify=...`) runs without the safe points and says why.
+
+paddock types an entry only when all three of these are true:
+
+- The `notify` call of the turn came, and no newer user row is in the rollout file.
+- The screen shows the input row of the Codex TUI with no text of yours in it, and no row shows `esc to interrupt`.
+- The screen did not change for 1.5 seconds.
+
+The patterns come from the `[horse.pty]` table of the Codex profile, for Codex 0.166.0. paddock sends each entry as one bracketed paste, then the Enter key. Control characters in an entry are removed, so an entry cannot send keys of its own. While paddock types, your keys wait, and they go to Codex right after the Enter key. `paddock horse append --interrupt` marks an entry as urgent: paddock sends Esc to stop the running turn, and types the entry when the turn ends as aborted. Each typed entry is one `pty.deliver <entry id>` line in the device ledger. paddock tails the rollout file and marks an entry landed when its user row is there. A turn end in the file with no `notify` call within 2 seconds counts as the call. If no `notify` call ever named the thread of the run, and the screen looks idle for 30 seconds while entries wait, paddock writes one `pty.no_stop` line in the device ledger and one warning in its log. The entries stay queued, because a screen alone is never a safe point. The retry rule is the same as for Claude Code, with the ledger lines `pty.retry` and `pty.lost`. `paddock horse swap` refuses the session while the run holds it, because the TUI cannot load its thread again while it runs. The `run.end` event has `custody` "pty" and the thread id. A run with no terminal, or a Codex version without a `[horse.pty]` table, says this on stderr and holds the entries in the inbox:
+
+```text
+horse: no safe-point delivery for codex 0.166.0 in the TUI (horse: no pty delivery pattern for codex 0.166.0); entries stay queued
+```
+
+On macOS, the relay, the `notify` program and the host requests are the same, so the Codex TUI gets its entries the same way. The released Codex builds do not take paddock's pty library, but the pty relay does not need it: paddock opens the pty of the relay on the host.
+
+An interactive Claude Code on a version with no checked channel gets its entries through the same pty relay. paddock picks the session id and adds `--session-id` and the two hooks of the channel path (`stop` and `prompt`) to the claude command. It adds no channel and no MCP server, so Claude Code asks no question at the start. paddock types an entry only when all three of these are true:
+
+- No hook and no row of the transcript says that a turn runs. After a `prompt`, paddock waits for the next `stop`.
+- The screen shows the input row of Claude Code (`❯`) with no text of yours in it, and no row shows `esc to interrupt`. Claude Code draws its own cursor on the first letter of the empty placeholder, and that letter does not count as your text.
+- The screen did not change for 1.5 seconds.
+
+The patterns come from the `[horse.pty]` table of the Claude Code profile, for Claude Code 2.1.317. They were taken from the code of Claude Code 2.1.318, not from a recorded screen, so `paddock doctor` lists them as unverified. A new host process starts busy, so the first entry goes out after the first `stop`. Typing, the Esc key for an urgent entry, landing, the 60 second retry and the ledger lines `pty.deliver`, `pty.interrupt`, `pty.retry` and `pty.lost` work as for Codex. Claude Code runs no `Stop` hook after Esc: its interrupt row in the transcript, unchanged for 2 seconds, counts as the end of the turn. If Claude Code puts the stopped prompt back into the input row, paddock waits until you clear it. The `run.end` event has `custody` "pty" and `relay_lost` true if the relay ended while the run went on. A claude command that sets `--resume`, `--continue` or `--session-id`, a run with no terminal, or a Claude Code version without a `[horse.pty]` table says why on stderr and holds the entries in the inbox:
+
+```text
+horse: no safe-point delivery for claude 2.1.317 in the TUI (horse: no pty delivery pattern for claude 2.1.317); entries stay queued
+```
+
+At a safe point, paddock delivers an urgent entry before older entries that are not urgent, for every custody, because the interrupt was for that entry. On macOS, the relay, the hooks and the host requests are the same, so the Claude Code TUI gets its entries the same way.
+
 ## Timers
 
 An agent loses its sense of time with its context. After a compaction, or when another agent takes over, it no longer knows how long it has worked on a bug or when the task must end. A paddock timer lives on the host, in paddock kv, so it outlasts every context, and the agent that it times cannot change it.

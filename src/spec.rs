@@ -167,6 +167,10 @@ pub struct HomeSetting {
     /// otherwise.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub no_pty: bool,
+    /// A command list (Codex's `notify`) that goes before the one that the
+    /// file has at `path`: that one runs afterwards (horse/codex/notify.rs).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub chain: bool,
 }
 
 /// Where Codex keeps the trust of a hook that paddock adds.

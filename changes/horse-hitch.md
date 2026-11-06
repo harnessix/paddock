@@ -1,0 +1,1 @@
+- New: (experimental) hitch mode. `paddock-host spawn HARNESS --hitch` starts a child that joins the horse of this run as a new session. The child's result is appended to the parent's session at its next safe point, once: from the child's `paddock-host done` or from its end, whichever comes first. `--hitch` without horse mode is refused. Plain spawn is unchanged.

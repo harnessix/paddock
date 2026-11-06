@@ -6,6 +6,8 @@
 //! store) and a namespace with its sessions. A new paddock run gets a new
 //! horse by default.
 
+mod locked;
+
 use super::store::{Hash, Node, Store};
 use anyhow::{bail, Context as _, Result};
 use serde::{Deserialize, Serialize};
@@ -28,6 +30,9 @@ pub struct LineageStep {
     pub horse: String,
     pub dna: Hash,
     pub since_ms: u64,
+    /// The session left the horse (`paddock horse move`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub until_ms: Option<u64>,
 }
 
 /// Where a fork comes from.
@@ -75,21 +80,14 @@ fn check_id(id: &str) -> Result<()> {
 }
 
 impl Store {
-    /// Make a horse with this DNA. The DNA must be TOML.
-    pub fn new_horse(&self, dna: &str) -> Result<Horse> {
-        dna.parse::<toml::Table>().context("the DNA is not TOML")?;
-        let h = Horse {
-            id: super::new_id("h")?,
-            dna: self.put_blob("toml", dna.as_bytes())?,
-            sessions: Vec::new(),
-            created_ms: super::now_ms(),
-        };
-        let _l = self.lock()?;
-        self.save_horse(&h)?;
-        Ok(h)
+    /// Make a horse with this DNA, the hash of a DNA in the store.
+    pub fn new_horse(&self, dna: &Hash) -> Result<Horse> {
+        self.lock()?.new_horse(dna)
     }
+}
 
-    fn save_horse(&self, h: &Horse) -> Result<()> {
+impl Store {
+    pub(super) fn save_horse(&self, h: &Horse) -> Result<()> {
         check_id(&h.id)?;
         self.write_ref(
             &format!("horses/{}.json", h.id),
@@ -97,7 +95,7 @@ impl Store {
         )
     }
 
-    fn save_session(&self, s: &Session) -> Result<()> {
+    pub(super) fn save_session(&self, s: &Session) -> Result<()> {
         check_id(&s.id)?;
         self.write_ref(
             &format!("sessions/{}.json", s.id),
@@ -139,44 +137,29 @@ impl Store {
 
     /// The session bound to this native id of a harness.
     pub fn session_by_native(&self, harness: &str, native_id: &str) -> Result<Option<Session>> {
-        Ok(self.sessions()?.into_iter().find(|s| {
+        let mut matches = self.sessions()?.into_iter().filter(|s| {
             s.binding.harness == harness && s.binding.native_id.as_deref() == Some(native_id)
-        }))
+        });
+        let first = matches.next();
+        anyhow::ensure!(
+            matches.next().is_none(),
+            "native id belongs to multiple horses; select a session explicitly"
+        );
+        Ok(first)
     }
 
     /// Make a session in a horse. It joins the namespace of the horse.
     pub fn new_session(&self, horse: &str, binding: Binding) -> Result<Session> {
-        let _l = self.lock()?;
-        let mut h = self.horse(horse)?;
-        let s = Session {
-            id: super::new_id("s")?,
-            horse: h.id.clone(),
-            head: None,
-            binding,
-            native_header: None,
-            fork_of: None,
-            lineage: vec![LineageStep {
-                horse: h.id.clone(),
-                dna: h.dna.clone(),
-                since_ms: super::now_ms(),
-            }],
-            created_ms: super::now_ms(),
-        };
-        self.save_session(&s)?;
-        h.sessions.push(s.id.clone());
-        self.save_horse(&h)?;
-        Ok(s)
+        self.lock()?.new_session(horse, binding)
     }
 
     /// Change a session under the writer lock.
     pub fn update_session(&self, id: &str, f: impl FnOnce(&mut Session)) -> Result<Session> {
-        let _l = self.lock()?;
-        let mut s = self.session(id)?;
-        f(&mut s);
-        self.save_session(&s)?;
-        Ok(s)
+        self.lock()?.update_session(id, f)
     }
+}
 
+impl Store {
     /// The nodes of a session, root first.
     pub fn session_nodes(&self, s: &Session) -> Result<Vec<Node>> {
         self.chain(s.head.as_ref())
@@ -222,6 +205,7 @@ impl Store {
                 horse: h.id.clone(),
                 dna: h.dna.clone(),
                 since_ms: super::now_ms(),
+                until_ms: None,
             });
         }
         let s = Session {
@@ -278,16 +262,16 @@ mod tests {
     fn a_session_lives_in_the_namespace_of_its_horse() {
         let t = tempfile::tempdir().unwrap();
         let st = Store::open(t.path()).unwrap();
-        let h = st.new_horse(super::super::DEFAULT_DNA).unwrap();
+        let h = st.new_default_horse().unwrap();
         let s = st.new_session(&h.id, binding()).unwrap();
         let h = st.horse(&h.id).unwrap();
         assert_eq!(h.sessions, vec![s.id.clone()]);
         assert_eq!(s.lineage.len(), 1);
         assert_eq!(s.lineage[0].dna, h.dna);
-        assert_eq!(
-            st.get(&h.dna).unwrap().raw,
-            super::super::DEFAULT_DNA.as_bytes()
-        );
+        assert!(super::super::dna::get(&st, &h.dna)
+            .unwrap()
+            .traits
+            .is_empty());
         assert_eq!(
             st.session_by_native("dsh", "session-1")
                 .unwrap()
@@ -300,17 +284,18 @@ mod tests {
             .unwrap()
             .is_none());
         // A new run gets a new horse.
-        let h2 = st.new_horse(super::super::DEFAULT_DNA).unwrap();
+        let h2 = st.new_default_horse().unwrap();
         assert_ne!(h.id, h2.id);
-        assert_eq!(h.dna, h2.dna);
-        assert!(st.new_horse("not = [toml").is_err());
+        // A horse needs a DNA object: another blob is refused.
+        let text = st.put_blob("text/plain", b"not = [toml").unwrap();
+        assert!(st.new_horse(&text).is_err());
     }
 
     #[test]
     fn fork_at_a_node_keeps_the_source_and_records_lineage() {
         let t = tempfile::tempdir().unwrap();
         let st = Store::open(t.path()).unwrap();
-        let h = st.new_horse("origin = \"a\"\n").unwrap();
+        let h = st.new_default_horse().unwrap();
         let rows = three_rows(&st);
         let s = st.new_session(&h.id, binding()).unwrap();
         let s = st
@@ -334,7 +319,7 @@ mod tests {
         assert_eq!(st.session(&s.id).unwrap().head.as_ref(), Some(&rows[2]));
 
         // Into another horse: the lineage gets the new horse and its DNA.
-        let h2 = st.new_horse("origin = \"b\"\n").unwrap();
+        let h2 = st.new_default_horse().unwrap();
         let g = st.fork(&f.id, &rows[0], Some(&h2.id)).unwrap();
         assert_eq!(g.lineage.len(), 2);
         assert_eq!(g.lineage[1].horse, h2.id);

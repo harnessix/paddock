@@ -1,0 +1,94 @@
+#!/bin/sh
+# A fake Claude Code 2.1.317. It contacts nothing.
+#
+# `--version` prints the version, `--help` the flags that paddock checks. With `--input-format stream-json` it is
+# the headless child of a horse-mode spawn: it speaks stream-json on its
+# stdin and stdout and writes its transcript as Claude Code does. Without
+# it, it is the parent run: it spawns a claude child and waits for it.
+#
+# Turn 1 does not end until the inbox of the session holds the entry of
+# the test (in the sandbox: the /dev/paddock/horse inbox view; outside a
+# sandbox: the file $HOME/go). Then the fake checks for one second that
+# nothing came on stdin during the turn, and ends the turn with a result.
+set -eu
+version=2.1.317
+if [ "${1:-}" = "--version" ]; then
+    echo "$version (Claude Code)"
+    exit 0
+fi
+if [ "${1:-}" = "--help" ]; then
+    # The flags that paddock's one-shot check looks for.
+    echo "  -p, --print                       Print the response and exit"
+    echo "  --dangerously-skip-permissions    Bypass all permission checks"
+    echo "  --input-format <format>           text or stream-json"
+    echo "  --output-format <format>          text, json or stream-json"
+    exit 0
+fi
+case " $* " in
+*" --input-format stream-json "*) ;;
+*)
+    id=$(paddock-host spawn claude --prompt-file task.md --reason test) || exit 11
+    paddock-host wait "$id" --timeout 100 > wait.txt || exit 12
+    exit 0
+    ;;
+esac
+native=
+while [ $# -gt 0 ]; do
+    case "$1" in
+    --session-id) native=$2; shift ;;
+    --output-format) [ "$2" = stream-json ] || exit 21; shift ;;
+    esac
+    shift
+done
+test -n "$native" || exit 22
+dir="$HOME/.claude/projects/$(printf '%s' "$PWD" | sed 's/[^A-Za-z0-9]/-/g')"
+mkdir -p "$dir"
+file="$dir/$native.jsonl"
+device=/dev/paddock/horse/self
+sid=
+if [ -d "$device" ]; then
+    sid=$(paddock-host horse sessions | head -n 1)
+    test -n "$sid" || exit 23
+fi
+row() {
+    if [ -n "$parent" ]; then p="\"$parent\""; else p=null; fi
+    printf '{"parentUuid":%s,"isSidechain":false,"type":"%s","message":%s,"uuid":"%s","timestamp":"2026-11-06T10:00:00.000Z","userType":"external","entrypoint":"sdk-cli","cwd":"%s","sessionId":"%s","version":"%s","gitBranch":"main"}\n' \
+        "$p" "$1" "$2" "$3" "$PWD" "$native" "$version" >> "$file"
+    parent=$3
+}
+wait_for_entry() {
+    i=0
+    while [ "$i" -lt 1200 ]; do
+        if [ -n "$sid" ]; then
+            grep -q 'from the test' "$device/sessions/$sid/inbox" 2>/dev/null && return 0
+        else
+            [ -e "$HOME/go" ] && return 0
+        fi
+        i=$((i + 1))
+        sleep 0.05
+    done
+    exit 24
+}
+parent=
+n=0
+while IFS= read -r line; do
+    n=$((n + 1))
+    message=$(printf '%s' "$line" | sed -n 's/^{"type":"user","message":\(.*\),"parent_tool_use_id":null,"session_id":"[^"]*"}$/\1/p')
+    test -n "$message" || exit 25
+    printf '{"type":"system","subtype":"init","cwd":"%s","session_id":"%s","tools":[],"mcp_servers":[],"model":"claude-opus-5-5","permissionMode":"default","apiKeySource":"none","claude_code_version":"%s","uuid":"init-%s"}\n' \
+        "$PWD" "$native" "$version" "$n"
+    row user "$message" "u$n"
+    reply="{\"id\":\"msg_$n\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-opus-5-5\",\"content\":[{\"type\":\"text\",\"text\":\"turn $n done\"}],\"stop_reason\":\"end_turn\",\"usage\":{\"input_tokens\":4,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"output_tokens\":2}}"
+    printf '{"type":"assistant","message":%s,"parent_tool_use_id":null,"session_id":"%s","uuid":"a%s"}\n' "$reply" "$native" "$n"
+    row assistant "$reply" "a$n"
+    if [ "$n" -eq 1 ]; then
+        wait_for_entry
+        early=$(timeout 1 dd bs=1 count=1 2>/dev/null || true)
+        if [ -n "$early" ]; then
+            echo "EARLY" > "$HOME/early"
+            exit 26
+        fi
+    fi
+    printf '{"type":"result","subtype":"success","is_error":false,"duration_ms":10,"num_turns":1,"session_id":"%s","total_cost_usd":0,"usage":{"input_tokens":4,"output_tokens":2}}\n' "$native"
+done
+exit 0

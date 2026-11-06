@@ -224,6 +224,58 @@ pub fn harness_args(env: &crate::env::HostEnv, harness: &str) -> Vec<String> {
     vec!["--settings".into(), settings.to_string()]
 }
 
+/// Add command hooks (`(event, command)`) to the `--settings` JSON of a
+/// `claude` command, after the hooks that it has: paddock's own status
+/// hooks and the user's stay as they are. Without `--settings`, one is
+/// added after the executable. A `--settings` that names a file is not
+/// changed: that is an error.
+pub fn add_hooks(command: &mut Vec<String>, hooks: &[(&str, String)]) -> anyhow::Result<()> {
+    use serde_json::{json, Value};
+    let at = command
+        .iter()
+        .skip(1)
+        .position(|a| a == "--settings" || a.starts_with("--settings="));
+    let (index, inline) = match at.map(|i| i + 1) {
+        Some(i) if command[i] == "--settings" => {
+            anyhow::ensure!(
+                i + 1 < command.len(),
+                "the claude command has --settings without a value"
+            );
+            (i + 1, false)
+        }
+        Some(i) => (i, true),
+        None => {
+            command.splice(1..1, ["--settings".to_string(), "{}".to_string()]);
+            (2, false)
+        }
+    };
+    let raw = if inline {
+        &command[index]["--settings=".len()..]
+    } else {
+        &command[index]
+    };
+    let mut doc: Value = match serde_json::from_str(raw) {
+        Ok(v @ Value::Object(_)) => v,
+        _ => anyhow::bail!("horse mode adds its hooks to the --settings of the claude command, but that names a file and not JSON; remove --settings from the claude arguments"),
+    };
+    if !doc["hooks"].is_object() {
+        doc["hooks"] = json!({});
+    }
+    for (event, cmd) in hooks {
+        let group = json!({"hooks": [{"type": "command", "command": cmd, "timeout": 10}]});
+        match doc["hooks"][*event].as_array_mut() {
+            Some(list) => list.push(group),
+            None => doc["hooks"][*event] = json!([group]),
+        }
+    }
+    command[index] = if inline {
+        format!("--settings={doc}")
+    } else {
+        doc.to_string()
+    };
+    Ok(())
+}
+
 /// `[status] hooks = false` in the user configuration turns the hooks off.
 pub fn enabled(env: &crate::env::HostEnv) -> bool {
     let file = env.paddock_config().join("config.toml");
@@ -318,5 +370,52 @@ mod tests {
         std::fs::create_dir_all(&cfg).unwrap();
         std::fs::write(cfg.join("config.toml"), "[status]\nhooks = false\n").unwrap();
         assert!(harness_args(&env, "claude").is_empty());
+    }
+
+    #[test]
+    fn horse_hooks_go_after_the_status_hooks() {
+        let t = tempfile::tempdir().unwrap();
+        let env = crate::env::HostEnv::from_parts(
+            t.path().join("home"),
+            "t".into(),
+            1000,
+            1000,
+            Default::default(),
+        );
+        let mut c = vec!["claude".to_string()];
+        c.extend(harness_args(&env, "claude"));
+        c.push("--model".into());
+        let before: serde_json::Value = serde_json::from_str(&c[2]).unwrap();
+        add_hooks(
+            &mut c,
+            &[("Stop", "s".into()), ("UserPromptSubmit", "p".into())],
+        )
+        .unwrap();
+        assert_eq!(
+            (c.len(), c[1].as_str(), c[3].as_str()),
+            (4, "--settings", "--model")
+        );
+        let v: serde_json::Value = serde_json::from_str(&c[2]).unwrap();
+        assert_eq!(v["hooks"]["SessionStart"], before["hooks"]["SessionStart"]);
+        let prompt = v["hooks"]["UserPromptSubmit"].as_array().unwrap();
+        assert_eq!(prompt[0], before["hooks"]["UserPromptSubmit"][0]);
+        assert_eq!(prompt[1]["hooks"][0]["command"], "p");
+        assert_eq!(v["hooks"]["Stop"][0]["hooks"][0]["command"], "s");
+        // No --settings yet: one comes after the executable.
+        let mut c = vec!["claude".to_string(), "x".to_string()];
+        add_hooks(&mut c, &[("Stop", "s".into())]).unwrap();
+        assert_eq!(c[1], "--settings");
+        assert_eq!(c[3], "x");
+        // The = form stays the = form; a settings file is refused.
+        let mut c = vec!["claude".to_string(), "--settings={}".to_string()];
+        add_hooks(&mut c, &[("Stop", "s".into())]).unwrap();
+        assert!(c[1].starts_with("--settings={"), "{c:?}");
+        let mut c = vec![
+            "claude".to_string(),
+            "--settings".to_string(),
+            "s.json".to_string(),
+        ];
+        assert!(add_hooks(&mut c, &[("Stop", "s".into())]).is_err());
+        assert_eq!(c[2], "s.json");
     }
 }

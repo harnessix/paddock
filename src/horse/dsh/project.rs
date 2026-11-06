@@ -68,7 +68,8 @@ pub fn project(store: &Store, session: &str, root: &Path, created_ms: u64) -> Re
         .raw;
     let header = Header::parse(&header_raw)?;
     let rows: Vec<Vec<u8>> = store
-        .session_nodes(&s)?
+        .native_chain(s.head.as_ref())
+        .with_context(|| format!("session {} cannot be projected", s.id))?
         .into_iter()
         .map(|n| n.raw)
         .collect();

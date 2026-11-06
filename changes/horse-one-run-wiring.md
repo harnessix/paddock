@@ -1,0 +1,3 @@
+- Changed: (experimental) In horse mode, one run wiring picks the custody for dsh, Claude Code and Codex. A headless Claude Code or Codex child ends the same way: paddock delivers what waits in its inbox, and closes its input when the session is idle and the inbox is empty. An empty task now fails before the store for both harnesses.
+- Changed: (experimental) The output of the custody of a headless Codex child is now the output of the run, as for Claude Code. Before, it went to the standard error of the host process.
+- Changed: (experimental) The `run.end` event of every live custody, dsh included, has the counts of the custody and `added`, the nodes that the final ingest added. If the custody did not start or failed, the event has `error`.

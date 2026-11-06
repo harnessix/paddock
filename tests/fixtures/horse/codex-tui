@@ -1,0 +1,86 @@
+#!/bin/bash
+# fake-codex-tui: a fake interactive Codex 0.166.0. It contacts nothing.
+#
+# `--version` prints the version. Else it is a TUI on its terminal: it
+# shows a busy row while it "thinks", writes the rows of the turn to its
+# rollout file, runs the `notify` program of ~/.codex/config.toml with the
+# JSON argument that Codex passes (agent-turn-complete, thread and turn
+# id), and then shows the idle input row with a dim placeholder. Turn 1 is
+# "hi" and thinks for 3 s; each line that comes on the terminal is the
+# user row of the next turn, which thinks for 1 s. Each event goes into
+# the file `tui.log` of its working folder (the project).
+#
+# It ends when the file `done` appears in its working folder, or after
+# 120 seconds.
+set -u
+version=0.166.0
+if [ "${1:-}" = "--version" ]; then
+    echo "codex-cli $version"
+    exit 0
+fi
+thread=019a5f00-0000-7000-8000-00000000c0de
+dir="$HOME/.codex/sessions/2026/11/06"
+mkdir -p "$dir"
+file="$dir/rollout-2026-11-06T10-00-00-$thread.jsonl"
+log="$PWD/tui.log"
+: > "$log"
+stty -echo 2>/dev/null
+# The text as a JSON string body.
+json() {
+    printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/\t/\\t/g' | sed -e ':a;N;$!ba;s/\n/\\n/g'
+}
+row() {
+    printf '{"timestamp":"2026-11-06T10:00:00.000Z","type":"%s","payload":%s}\n' "$1" "$2" >> "$file"
+}
+row session_meta "{\"id\":\"$thread\",\"timestamp\":\"2026-11-06T10:00:00.000Z\",\"cwd\":\"$PWD\",\"originator\":\"codex_cli_rs\",\"cli_version\":\"$version\",\"source\":\"cli\"}"
+# The notify command of the configuration, one word per element.
+notify=()
+line=$(grep -E '^notify *=' "$HOME/.codex/config.toml" 2>/dev/null)
+if [ -n "$line" ]; then
+    list=$(printf '%s' "$line" | sed 's/^notify *= *\[//; s/\] *$//')
+    while IFS= read -r w; do
+        w=$(printf '%s' "$w" | sed 's/^ *"//; s/" *$//')
+        [ -n "$w" ] && notify+=("$w")
+    done < <(printf '%s\n' "$list" | tr ',' '\n')
+fi
+busy() { printf '\033[2J\033[H\xe2\x80\xa2 Working (%ss \xe2\x80\xa2 esc to interrupt)\r\n\r\n\xe2\x80\xba \033[2mAsk Codex to do anything\033[0m' "$1"; }
+idle() { printf '\033[2J\033[H\xe2\x80\xba \033[2mAsk Codex to do anything\033[0m\r\n\r\n  100%% context left'; }
+turn() {
+    n=$1 text=$(json "$2") think=$3
+    busy 0
+    row event_msg "{\"type\":\"task_started\",\"turn_id\":\"t$n\"}"
+    row response_item "{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"$text\"}]}"
+    row event_msg "{\"type\":\"user_message\",\"message\":\"$text\"}"
+    for s in $(seq "$think"); do sleep 1; busy "$s"; done
+    row response_item "{\"type\":\"message\",\"role\":\"assistant\",\"id\":\"msg_$n\",\"content\":[{\"type\":\"output_text\",\"text\":\"turn $n done\"}]}"
+    row event_msg "{\"type\":\"task_complete\",\"turn_id\":\"t$n\"}"
+    echo "end $n" >> "$log"
+    if [ ${#notify[@]} -gt 0 ]; then
+        "${notify[@]}" "{\"type\":\"agent-turn-complete\",\"thread-id\":\"$thread\",\"turn-id\":\"t$n\",\"cwd\":\"$PWD\",\"input-messages\":[\"$text\"],\"last-assistant-message\":\"turn $n done\"}" >/dev/null 2>&1
+        echo "notify $n" >> "$log"
+    fi
+    idle
+}
+turn 1 hi 3
+n=1
+for _ in $(seq 120); do
+    # Whole seconds: bash 3.2 has no fractional timeout.
+    [ -e done ] && exit 0
+    if IFS= read -r -t 1 got; then
+        # A bracketed paste is one input, also over more than one line.
+        case "$got" in
+        $'\e[200~'*)
+            while [[ "$got" != *$'\e[201~'* ]]; do
+                IFS= read -r -t 5 more || break
+                got="$got"$'\n'"$more"
+            done
+            got=${got#$'\e[200~'}
+            got=${got%$'\e[201~'*}
+            ;;
+        esac
+        n=$((n + 1))
+        echo "got $n $got" >> "$log"
+        turn "$n" "$got" 1
+    fi
+done
+exit 0

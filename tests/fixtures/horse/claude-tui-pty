@@ -1,0 +1,98 @@
+#!/bin/bash
+# fake-claude-tui-pty: a fake interactive Claude Code 2.1.317 with no
+# channel. It contacts nothing.
+#
+# `--version` prints the version. Else it is a TUI on its terminal: for
+# each turn it runs the UserPromptSubmit hook of its --settings, shows a
+# busy row while it "thinks", writes a user row and an assistant row to
+# its transcript, runs the Stop hook, and shows the idle input row: the
+# prompt, the first letter of the placeholder inverse, the rest dim.
+# Turn 1 is "hi" and thinks for 3 s; each line that comes on the terminal
+# is the user row of the next turn, which thinks for 1 s. Each event goes
+# into the file `tui.log` of its working folder (the project).
+#
+# It ends when the file `done` appears in its working folder, or after
+# 120 seconds.
+set -u
+version=2.1.317
+if [ "${1:-}" = "--version" ]; then
+    echo "$version (Claude Code)"
+    exit 0
+fi
+native= settings=
+while [ $# -gt 0 ]; do
+    case "$1" in
+    --session-id=*) native=${1#--session-id=} ;;
+    --settings) settings=$2; shift ;;
+    esac
+    shift
+done
+test -n "$native" || exit 30
+dir="$HOME/.claude/projects/$(printf '%s' "$PWD" | sed 's/[^A-Za-z0-9]/-/g')"
+mkdir -p "$dir"
+file="$dir/$native.jsonl"
+log="$PWD/tui.log"
+: > "$log"
+stty -echo 2>/dev/null
+parent=
+# The text as a JSON string body. awk, not GNU sed: the fixture also runs
+# on macOS (bash 3.2, BSD tools).
+json() {
+    printf '%s\n' "$1" | awk 'BEGIN { ORS = "" } {
+        gsub(/\\/, "\\\\"); gsub(/"/, "\\\""); gsub(/\t/, "\\t")
+        if (NR > 1) print "\\n"
+        print
+    }'
+}
+row() {
+    if [ -n "$parent" ]; then p="\"$parent\""; else p=null; fi
+    printf '{"parentUuid":%s,"isSidechain":false,"type":"%s","message":%s,"uuid":"%s","timestamp":"2026-11-06T10:00:00.000Z","userType":"external","entrypoint":"cli","cwd":"%s","sessionId":"%s","version":"%s","gitBranch":"main"}\n' \
+        "$p" "$1" "$2" "$3" "$PWD" "$native" "$version" >> "$file"
+    parent=$3
+}
+# The command of the horse hook of an event, as the --settings JSON holds
+# it: Stop says stop, UserPromptSubmit says prompt.
+hook() {
+    case "$1" in Stop) kind=stop ;; UserPromptSubmit) kind=prompt ;; esac
+    cmd=$(printf '%s' "$settings" | grep -o "\"command\":\"paddock-host horse safe-point $kind[^\"]*\"" | sed 's/^"command":"//; s/"$//')
+    test -n "$cmd" || exit 31
+    echo '{}' | sh -c "$cmd" >/dev/null 2>&1 || exit 32
+}
+rule=$'\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80\xe2\x94\x80'
+busy() { printf '\033[2J\033[H\xe2\x9c\xbb Thinking\xe2\x80\xa6 (%ss \xc2\xb7 esc to interrupt)\r\n%s\r\n\xe2\x9d\xaf \033[7m \033[0m\r\n%s' "$1" "$rule" "$rule"; }
+idle() { printf '\033[2J\033[H%s\r\n\xe2\x9d\xaf \033[7mT\033[0m\033[2mry "fix lint errors"\033[0m\r\n%s\r\n  ? for shortcuts' "$rule" "$rule"; }
+turn() {
+    n=$1 text=$(json "$2") think=$3
+    hook UserPromptSubmit
+    busy 0
+    row user "{\"role\":\"user\",\"content\":[{\"type\":\"text\",\"text\":\"$text\"}]}" "u$n"
+    for s in $(seq "$think"); do sleep 1; busy "$s"; done
+    row assistant "{\"id\":\"msg_$n\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-opus-5-5\",\"content\":[{\"type\":\"text\",\"text\":\"turn $n done\"}],\"stop_reason\":\"end_turn\",\"usage\":{\"input_tokens\":4,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"output_tokens\":2}}" "a$n"
+    echo "end $n" >> "$log"
+    hook Stop
+    echo "stop $n" >> "$log"
+    idle
+}
+turn 1 hi 3
+n=1
+for _ in $(seq 120); do
+    [ -e done ] && exit 0
+    # Whole seconds: bash 3.2 has no fractional timeout.
+    if IFS= read -r -t 1 got; then
+        # A bracketed paste is one input, also over more than one line.
+        case "$got" in
+        $'\e[200~'*)
+            while [[ "$got" != *$'\e[201~'* ]]; do
+                IFS= read -r -t 5 more || break
+                got="$got"$'\n'"$more"
+            done
+            got=${got#$'\e[200~'}
+            got=${got%$'\e[201~'*}
+            ;;
+        esac
+        n=$((n + 1))
+        echo "got $n $got" >> "$log"
+        turn "$n" "$got" 1
+    fi
+done
+exit 0

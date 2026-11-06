@@ -165,11 +165,16 @@ fn start_with(
     shell: bool,
     detach: Option<(String, Vec<u8>)>,
 ) -> Result<i32> {
+    if a.horse_id.is_some() {
+        bail!("continuing a horse is not supported by the run lifecycle yet");
+    }
+    let horse = !shell && (a.horse || paddock::horse::live::settings(env)?.enabled);
     let mut opts = a.options(env, shell)?;
     opts.detach = detach.as_ref().map(|(id, _)| id.clone());
     let project = build::resolve_project(opts.project.as_deref()).ok();
     paddock::storage::guard::before_run(env, project.as_deref(), false)?;
     let mut built = build::build(env, &opts)?;
+    built.horse = horse;
     // The VM backend starts the same run with paddock in the guest.
     built.spec.intent = paddock::spec::Intent {
         shell,
@@ -386,8 +391,41 @@ pub(crate) fn explain(env: &HostEnv, a: &RunArgs, json: bool) -> Result<()> {
     for w in &s.warnings {
         println!("warning   {w}");
     }
+    if built.horse {
+        println!("\n{}", horse_block(env, &built));
+    }
     cleanup();
     Ok(())
+}
+
+/// The horse of a run in horse mode, for `paddock explain`.
+fn horse_block(env: &HostEnv, built: &build::Built) -> String {
+    use paddock::horse::{dna::explain, run::by_sandbox, Store};
+    let explained = |horse: &str| {
+        Store::open(&paddock::horse::root(env))
+            .and_then(|st| explain::explain(&st, horse))
+            .unwrap_or_else(|e| format!("cannot explain horse {horse}: {e:#}"))
+    };
+    let spawn = built.spawn.as_ref();
+    if let Some(h) = spawn.and_then(|c| c.hitch.as_ref()) {
+        let horse = h.run().horse;
+        return format!(
+            "horse mode: this run joins horse {horse} (hitched)\n{}",
+            explained(&horse)
+        );
+    }
+    let parent = spawn.and_then(|c| {
+        let st = Store::open(&paddock::horse::root(env)).ok()?;
+        by_sandbox::find(&st, &c.parent).ok().flatten()
+    });
+    match parent {
+        Some(p) => format!(
+            "horse mode: this run gets a child horse of {} that inherits its DNA\n{}",
+            p.horse,
+            explained(&p.horse)
+        ),
+        None => "horse mode: this run gets a new horse with the default DNA (no traits)".into(),
+    }
 }
 
 pub(crate) fn run(env: &HostEnv, a: RunArgs) -> Result<i32> {
