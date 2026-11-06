@@ -333,7 +333,7 @@ fn report_rest(env: &HostEnv, os: crate::onboard::Os) -> Result<()> {
             .iter()
             .for_each(|l| println!("{l}"));
     }
-
+    crate::tack::report::print_doctor(env);
     println!("\nUpdates:");
     for l in crate::update::doctor_lines(env) {
         println!("{l}");
