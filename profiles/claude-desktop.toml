@@ -16,11 +16,27 @@ display_name = "Claude"
 icon = "claude-desktop"
 schemes = ["claude"]
 
-# On macOS paddock runs the app bundle with Seatbelt. It is an Electron app
-# without App Sandbox.
+# On macOS the default route is paddock's own macOS guest; `--backend
+# seatbelt` runs the app bundle with Seatbelt instead. It is an Electron app
+# without App Sandbox. An App Store copy (Contents/_MASReceipt) is refused
+# by the guest route, which has no Apple ID: use Anthropic's download.
 [app.macos]
 bundles = ["/Applications/Claude.app", "~/Applications/Claude.app"]
 user_data = "Library/Application Support/Claude"
+# The hosts of a plain login and of the app itself, which the firewall of
+# paddock's macOS guest allows with by = "profile".
+# "*.x.y" is every name under x.y, not x.y itself. The last two are Apple's
+# Gatekeeper check.
+seed_hosts = [
+  "claude.ai",
+  "*.claude.ai",
+  "*.anthropic.com",
+  "api.anthropic.com",
+  "statsig.anthropic.com",
+  "challenges.cloudflare.com",
+  "api.apple-cloudkit.com",
+  "ocsp2.apple.com",
+]
 
 # Anthropic documents no telemetry setting for the desktop app.
 # https://code.claude.com/docs/en/data-usage

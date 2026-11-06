@@ -1,0 +1,1 @@
+- Fix: two sandboxes that start at the same time could leave one of them with an empty `/dev/paddock`. The start of a sandbox sweeps the device mounts of killed paddock processes, and it took the mount of a sandbox that was not registered yet for one of those. The sweep now asks each mount whether its process is there and only unmounts one that answers that it is gone.

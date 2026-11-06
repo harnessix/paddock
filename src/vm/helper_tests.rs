@@ -6,7 +6,35 @@ fn parse(args: &[&str]) -> Result<StartArgs, clap::Error> {
     argv.extend_from_slice(args);
     Cli::try_parse_from(argv).map(|c| match c.cmd {
         Cmd::Start(a) => a,
+        Cmd::MacvmSetup(_) | Cmd::App(_) | Cmd::Install(_) => unreachable!("a start command"),
     })
+}
+
+#[test]
+fn macvm_setup_args_parse() {
+    let c = Cli::try_parse_from([
+        "paddock-vm",
+        "macvm-setup",
+        "--dir",
+        "/d/macvm",
+        "--ipsw",
+        "/i/x.ipsw",
+        "--yes",
+        "--new",
+    ])
+    .unwrap();
+    match c.cmd {
+        Cmd::MacvmSetup(a) => {
+            assert_eq!(a.dir, PathBuf::from("/d/macvm"));
+            assert_eq!(a.ipsw.as_deref(), Some(Path::new("/i/x.ipsw")));
+            assert!(a.yes && a.new && a.agent.is_none());
+        }
+        Cmd::Start(_) | Cmd::App(_) | Cmd::Install(_) => panic!("not a setup"),
+    }
+    assert!(
+        Cli::try_parse_from(["paddock-vm", "macvm-setup"]).is_err(),
+        "--dir is required"
+    );
 }
 
 /// A fake home with a project, the assets and a state folder.
@@ -302,4 +330,151 @@ fn machine_id_refuses_a_damaged_file() {
         .contains("damaged"));
     std::fs::write(&s.machine_id, vec![0u8; 5000]).unwrap();
     assert!(s.read_machine_id().is_err());
+}
+
+fn parse_app(args: &[&str]) -> Result<AppArgs, clap::Error> {
+    parse_app_in("/p/app/home", "/g", args)
+}
+
+fn parse_app_in(profile: &str, golden: &str, args: &[&str]) -> Result<AppArgs, clap::Error> {
+    let mut argv = vec![
+        "paddock-vm",
+        "app",
+        "--profile",
+        profile,
+        "--golden",
+        golden,
+        "--app",
+        "chatgpt-desktop",
+        "--token-fd",
+        "3",
+        "--display",
+        "2560x1600@2",
+    ];
+    argv.extend_from_slice(args);
+    Cli::try_parse_from(argv).map(|c| match c.cmd {
+        Cmd::App(a) => a,
+        Cmd::Start(_) | Cmd::MacvmSetup(_) | Cmd::Install(_) => unreachable!(),
+    })
+}
+
+#[test]
+fn app_args_refuses_other_forwards() {
+    let a = parse_app(&["--forward", "guest-proxy=/tmp/p.sock"]).unwrap();
+    assert_eq!(
+        a.forwards,
+        vec![(ports::GUEST_PROXY, PathBuf::from("/tmp/p.sock"))]
+    );
+    assert_eq!(
+        parse_app(&["--forward", "1031=/tmp/p.sock"])
+            .unwrap()
+            .forwards
+            .len(),
+        1
+    );
+    for other in [
+        "broker",
+        "proxy",
+        "pty",
+        "control",
+        "guest-control",
+        "guest-files",
+        "1032",
+    ] {
+        let e = parse_app(&["--forward", &format!("{other}=/tmp/p.sock")]).unwrap_err();
+        assert!(
+            e.to_string().contains("only the guest-proxy port (1031)"),
+            "{other}: {e}"
+        );
+    }
+    let e = parse_app(&["--forward", "guest-proxy=relative.sock"]).unwrap_err();
+    assert!(e.to_string().contains("absolute"), "{e}");
+    assert!(parse_app(&["--forward", "22=/tmp/p.sock"]).is_err());
+}
+
+#[test]
+fn app_args_parse_display_and_shares() {
+    let a = parse_app(&[]).unwrap();
+    assert_eq!(a.display.to_string(), "2560x1600@2");
+    assert!(a.save);
+    assert_eq!((a.cpus, a.memory, a.stop_timeout), (4, 4096, 30));
+    assert_eq!(a.input_source, "");
+    let a = parse_app(&[
+        "--share",
+        "src=/home/demo/src",
+        "--share",
+        "notes=/home/demo/notes:ro",
+        "--no-save",
+        "--input-source",
+        "com.apple.keylayout.US",
+        "--agent",
+        "/a",
+        "--record",
+        "/r.json",
+    ])
+    .unwrap();
+    assert_eq!(
+        a.shares,
+        vec![
+            ShareArg {
+                name: "src".into(),
+                path: "/home/demo/src".into(),
+                read_only: false
+            },
+            ShareArg {
+                name: "notes".into(),
+                path: "/home/demo/notes".into(),
+                read_only: true
+            }
+        ]
+    );
+    assert!(!a.save);
+    assert_eq!(a.input_source, "com.apple.keylayout.US");
+    for bad in ["2560x1600", "0x0@1", "2560x1600@9", "wide"] {
+        let e = parse_app(&["--display", bad]).unwrap_err().to_string();
+        assert!(
+            e.contains("WxH@S") || e.contains("640 to 16384"),
+            "{bad}: {e}"
+        );
+    }
+    for bad in ["src", "=/x", "a/b=/x", "..=/x", "src=relative"] {
+        assert!(parse_app(&["--share", bad]).is_err(), "{bad}");
+    }
+    // The plan adds the agent share read-only and refuses a share inside
+    // the profile.
+    let t = tempfile::tempdir().unwrap();
+    let golden = t.path().join("golden");
+    std::fs::create_dir_all(&golden).unwrap();
+    let g = golden.to_str().unwrap();
+    let p = t.path().join("profiles/app/home");
+    let p = p.to_str().unwrap();
+    let a = parse_app_in(p, g, &["--agent", g, "--control", "/tmp/c.sock"]).unwrap();
+    let plan = plan_app(&a).unwrap();
+    assert_eq!(plan.shares.len(), 1);
+    assert_eq!(plan.shares[0].name, "agent");
+    assert!(plan.shares[0].read_only);
+    assert_eq!(plan.memory_bytes, 4096 << 20);
+    assert_eq!(plan.proxy_socket, None);
+    assert_eq!(plan.control, PathBuf::from("/tmp/c.sock"));
+    // The profile's own shares pass (the host shares them every start);
+    // any other folder inside the profile does not.
+    for own in ["apps", "downloads", "drop"] {
+        let share = format!("{own}={p}/{own}");
+        let a = parse_app_in(p, g, &["--share", &share]).unwrap();
+        assert!(plan_app(&a).is_ok(), "{own}");
+    }
+    for inside in ["data", "logs", "apps/x.app"] {
+        let share = format!("x={p}/{inside}");
+        let a = parse_app_in(p, g, &["--share", &share]).unwrap();
+        let e = plan_app(&a).unwrap_err().to_string();
+        assert!(e.contains("inside the profile folder"), "{inside}: {e}");
+    }
+    let a = parse_app_in(g, g, &[]).unwrap();
+    assert!(plan_app(&a)
+        .unwrap_err()
+        .to_string()
+        .contains("contain each other"));
+    let mut a = parse_app_in(p, g, &[]).unwrap();
+    a.app = "bad name".into();
+    assert!(plan_app(&a).is_err());
 }

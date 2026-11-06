@@ -1,0 +1,12 @@
+{"v": 1, "kind": "setup", "step": "download", "bytes": 0, "total": 13100000000, "rate": 30000000, "paused": false, "time": "2026-11-06T10:00:00Z"}
+{"v": 1, "kind": "setup", "step": "download", "bytes": 300000000, "total": 13100000000, "rate": 30000000, "paused": false, "time": "2026-11-06T10:00:10Z"}
+{"v": 1, "kind": "setup", "step": "download", "bytes": 600000000, "total": 13100000000, "rate": 30000000, "paused": false, "time": "2026-11-06T10:00:20Z"}
+{"v": 1, "kind": "setup", "step": "download", "bytes": 870000000, "total": 13100000000, "rate": 30000000, "paused": false, "time": "2026-11-06T10:00:29Z"}
+{"v": 1, "kind": "setup", "step": "download", "bytes": 930000000, "total": 13100000000, "rate": 30000000, "paused": false, "time": "2026-11-06T10:00:31Z"}
+{"v": 1, "kind": "setup", "step": "download", "bytes": 1200000000, "total": 13100000000, "rate": 30000000, "paused": false, "time": "2026-11-06T10:00:40Z"}
+{"v": 1, "kind": "setup", "step": "download", "bytes": 1200000000, "total": 13100000000, "rate": 0, "paused": true, "time": "2026-11-06T10:00:50Z"}
+{"v": 1, "kind": "setup", "step": "download", "bytes": 1200000000, "total": 13100000000, "rate": 30000000, "paused": false, "time": "2026-11-06T10:01:00Z"}
+{"v": 1, "kind": "setup", "step": "download", "bytes": 13100000000, "total": 13100000000, "rate": 30000000, "paused": false, "time": "2026-11-06T10:02:00Z"}
+{"v": 1, "kind": "setup", "step": "install", "time": "2026-11-06T10:02:01Z"}
+{"v": 1, "kind": "setup", "step": "guided", "time": "2026-11-06T10:10:00Z"}
+{"v": 1, "kind": "setup", "step": "seal", "time": "2026-11-06T10:15:00Z"}

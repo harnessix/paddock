@@ -260,6 +260,7 @@ fn an_answer_comes_from_standard_input() {
         session_allowed: false,
         started_by: vec![],
         choices: vec![],
+        connect: None,
     };
     paddock::broker::write_pending(&env, &p).unwrap();
     let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_paddock"))

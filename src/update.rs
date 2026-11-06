@@ -488,13 +488,10 @@ pub fn package_hint(owner: &str, version: &str) -> String {
 
 /// Run `bin --version` and check that it names `version`.
 pub fn check_version(bin: &Path, version: &str) -> Result<()> {
-    let mut child = Command::new(bin)
-        .arg("--version")
-        .env_clear()
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
+    let mut cmd = Command::new(bin);
+    cmd.arg("--version").env_clear().stdin(Stdio::null());
+    cmd.stdout(Stdio::piped()).stderr(Stdio::null());
+    let mut child = crate::busy::spawn(&mut cmd)
         .with_context(|| format!("cannot run the downloaded {}", bin.display()))?;
     let start = Instant::now();
     loop {

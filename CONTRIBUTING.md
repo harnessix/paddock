@@ -58,7 +58,7 @@ To report a bug, use the issue form. It asks for the output of `paddock doctor -
 - `skills/` holds the `paddock` and `paddock-host` skills for agents.
 - `tests/` is the integration tests.
 
-A tracked `.rs` or `.qml` file must stay at or under 800 lines, unless it is listed in `.github/file-size-baseline`. A listed file must not grow past the size in that list. Split a file that is too long. Change the baseline only in a separate pull request, with a reason.
+A tracked `.rs`, `.qml` or `.swift` file must stay at or under 800 lines, unless it is listed in `.github/file-size-baseline`. A listed file must not grow past the size in that list. Split a file that is too long. Change the baseline only in a separate pull request, with a reason.
 
 ## Tests
 

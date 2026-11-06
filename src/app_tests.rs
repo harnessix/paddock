@@ -455,3 +455,185 @@ fn bwrap_app_extra_folders_are_protected_like_the_first() {
     assert_eq!(kind(b.join(".git/config")), Some(MountKind::Ro));
     assert_eq!(kind(b.join(".git/hooks")), Some(MountKind::Ro));
 }
+
+/// `--backend auto` on macOS picks the guest once the golden is sealed,
+/// and `--backend seatbelt` keeps the old route.
+#[test]
+fn backend_auto_cases() {
+    use crate::macvm::golden::State;
+    // No golden: the refusal that names the one-time setup and its
+    // command.
+    let e = mac_route(None, "ChatGPT", None).unwrap_err().to_string();
+    assert!(e.contains("paddock macvm setup"), "{e}");
+    assert!(e.contains("ChatGPT runs in paddock's macOS guest"), "{e}");
+    assert!(
+        e.contains("15 GB download") && e.contains("25 GB on disk"),
+        "{e}"
+    );
+    assert!(e.contains("30 minutes"), "{e}");
+    assert_eq!(
+        mac_route(Some("auto"), "ChatGPT", None)
+            .unwrap_err()
+            .to_string(),
+        e
+    );
+
+    // A golden that is not sealed: the setup stopped half way.
+    for half in State::ALL.into_iter().filter(|s| *s != State::Sealed) {
+        let e = mac_route(None, "ChatGPT", Some(half))
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("did not finish"), "{half:?}: {e}");
+        assert!(e.contains("paddock macvm setup"), "{half:?}: {e}");
+    }
+
+    // Sealed: the guest, with and without the flag.
+    for asked in [None, Some("auto"), Some("macvm")] {
+        assert_eq!(
+            mac_route(asked, "ChatGPT", Some(State::Sealed)).unwrap(),
+            MacRoute::Guest,
+            "{asked:?}"
+        );
+    }
+    // --backend macvm does not need a sealed golden here: the route
+    // itself prints the setup line.
+    assert_eq!(
+        mac_route(Some("macvm"), "ChatGPT", None).unwrap(),
+        MacRoute::Guest
+    );
+
+    // --backend seatbelt stays on Seatbelt whatever the golden is.
+    for golden in [None, Some(State::Sealed)] {
+        assert_eq!(
+            mac_route(Some("seatbelt"), "ChatGPT", golden).unwrap(),
+            MacRoute::Seatbelt
+        );
+    }
+    // A Linux backend goes to the Seatbelt route, which refuses it by name.
+    for b in ["bwrap", "docker", "podman", "srt"] {
+        assert_eq!(
+            mac_route(Some(b), "ChatGPT", Some(State::Sealed)).unwrap(),
+            MacRoute::Seatbelt,
+            "{b}"
+        );
+    }
+
+    // The label of the refusal comes from the profile's display name.
+    let p = crate::profile::builtin("chatgpt-desktop").unwrap();
+    assert_eq!(app_label(&p), "ChatGPT");
+    let vscode = crate::profile::builtin("vscode").unwrap();
+    assert_eq!(app_label(&vscode), "Visual Studio Code");
+}
+
+/// The profile slug of a bundle dropped on the drag target.
+#[test]
+fn slug_cases() {
+    use crate::macvm::appcopy::slug;
+    let none: Vec<String> = vec![];
+    assert_eq!(slug("ChatGPT", &none), "chatgpt");
+    assert_eq!(slug("Visual Studio Code", &none), "visual-studio-code");
+    assert_eq!(slug("Claude", &none), "claude");
+    // A collision takes the next number, and so does a second one.
+    let taken = vec!["claude".to_string()];
+    assert_eq!(slug("Claude", &taken), "claude-2");
+    let taken = vec!["claude".to_string(), "claude-2".to_string()];
+    assert_eq!(slug("Claude", &taken), "claude-3");
+    // Only letters, digits and dashes survive, and no dash sits at an end.
+    assert_eq!(slug("IINA+", &none), "iina");
+    assert_eq!(slug("  Zoom.us  ", &none), "zoom-us");
+    assert_eq!(slug("Day One 2", &none), "day-one-2");
+    assert_eq!(slug("Café", &none), "caf");
+    assert_eq!(slug("日本語", &none), "app");
+    assert_eq!(slug("", &none), "app");
+    let out = slug("Visual Studio Code", &none);
+    assert!(
+        out.bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'),
+        "{out}"
+    );
+    // A slug is a valid profile folder name.
+    assert!(crate::macvm::host::valid_name(&slug(
+        "Visual Studio Code",
+        &none
+    )));
+}
+
+/// The start lines of a session for a `Fresh`, a `Repair`, a
+/// `Stale(GoldenChanged)` and a `Warm` profile, each with its seconds.
+/// `macvm::start::tests` covers the other kinds and the predictor.
+#[test]
+fn start_lines_per_start_kind() {
+    use crate::macvm::session::{Display, Reason, Start};
+    use crate::macvm::start::{self, Plan};
+    use crate::macvm::text::{Share, StartKind};
+    let web = PathBuf::from("/home/demo/src/web");
+    let dl = PathBuf::from("/d/downloads");
+    let plan = |s: Start| Plan {
+        app: "chatgpt-desktop",
+        golden: "15.2 (24C101)",
+        memory_mib: 4096,
+        display: Display {
+            w: 3024,
+            h: 1964,
+            scale: 2,
+        },
+        mixed_scale: false,
+        shares: vec![Share {
+            path: &web,
+            writable: true,
+        }],
+        downloads: &dl,
+        network: "ask",
+        start: s,
+        copy: Some(("ChatGPT", 20)),
+    };
+    let cases = [
+        (Start::Fresh, 60, "the first start of this profile"),
+        (Start::Repair, 60, "the profile was rebuilt"),
+        (
+            Start::Stale(Reason::GoldenChanged),
+            60,
+            "the guest image changed",
+        ),
+    ];
+    for (kind, secs, why) in cases {
+        assert_eq!(start::kind(kind), StartKind::Cold, "{kind:?}");
+        assert_eq!(start::seconds(kind), secs, "{kind:?}");
+        let out = start::lines(&plan(kind));
+        let text = out.join("\n");
+        assert!(
+            text.contains(&format!("cold start, about {secs} s ({why})")),
+            "{kind:?} start line:\n{text}"
+        );
+        // The whole block of step 5, in order.
+        let heads: Vec<&str> = out
+            .iter()
+            .filter_map(|l| l.split_whitespace().next())
+            .collect();
+        assert_eq!(
+            heads,
+            [
+                "backend",
+                "memory",
+                "display",
+                "shares",
+                "downloads",
+                "network",
+                "start",
+                "copy",
+                "the"
+            ],
+            "{kind:?}"
+        );
+        assert!(text.contains("about 20 s, once per version"), "{text}");
+        assert!(
+            text.contains("the session continues after this terminal closes"),
+            "{text}"
+        );
+    }
+    // Warm: six seconds and no reason.
+    assert_eq!(start::kind(Start::Warm), StartKind::Warm);
+    assert_eq!(start::seconds(Start::Warm), 6);
+    let warm = start::lines(&plan(Start::Warm)).join("\n");
+    assert!(warm.contains("start     warm start, about 6 s\n"), "{warm}");
+}

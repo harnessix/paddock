@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Written from the documented output form of the tool, not recorded on a Mac. packaging/macos/checks/macvm-offline.sh prints the real output to compare. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Containers</key>
+	<array>
+		<dict>
+			<key>APFSContainerUUID</key>
+			<string>1B2C3D4E-0000-0000-0000-000000000001</string>
+			<key>CapacityCeiling</key>
+			<integer>500000000000</integer>
+			<key>ContainerReference</key>
+			<string>disk3</string>
+			<key>Volumes</key>
+			<array>
+				<dict>
+					<key>DeviceIdentifier</key>
+					<string>disk3s5</string>
+					<key>Name</key>
+					<string>Data</string>
+					<key>Roles</key>
+					<array>
+						<string>Data</string>
+					</array>
+				</dict>
+			</array>
+		</dict>
+		<dict>
+			<key>ContainerReference</key>
+			<string>disk5</string>
+			<key>Volumes</key>
+			<array>
+				<dict>
+					<key>DeviceIdentifier</key>
+					<string>disk5s1</string>
+					<key>Name</key>
+					<string>Macintosh HD</string>
+					<key>Roles</key>
+					<array>
+						<string>System</string>
+					</array>
+				</dict>
+				<dict>
+					<key>DeviceIdentifier</key>
+					<string>disk5s2</string>
+					<key>Name</key>
+					<string>Data</string>
+					<key>Roles</key>
+					<array>
+						<string>Data</string>
+					</array>
+				</dict>
+				<dict>
+					<key>DeviceIdentifier</key>
+					<string>disk5s3</string>
+					<key>Name</key>
+					<string>Preboot</string>
+					<key>Roles</key>
+					<array>
+						<string>Preboot</string>
+					</array>
+				</dict>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

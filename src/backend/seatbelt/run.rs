@@ -8,11 +8,12 @@
 //! sandbox home are writable, the system is read-only, and everything else,
 //! the real home too, is denied.
 //!
-//! Seatbelt only allows or denies network. In network modes egress and api
-//! the profile allows connections to a few localhost ports only: a relay to
-//! paddock's proxy (proxy.rs) and the host ports that the spec allows. The
-//! proxy does the rest: the host proxy, the LAN rule and, in mode api, the
-//! list of hosts.
+//! Seatbelt only allows or denies network. In network modes egress, api and
+//! allowlist the profile allows connections to a few localhost ports only: a
+//! relay to paddock's proxy (proxy.rs) and the host ports that the spec
+//! allows. The proxy does the rest: the host proxy, the LAN rule and, in
+//! modes api and allowlist, the list of hosts. Network mode host allows the
+//! whole network of the Mac, with the host proxy variables, as on Linux.
 //!
 //! A spec feature that Seatbelt cannot give is refused (`refuse`), never left
 //! out in silence. Most of this file is plain code, tested on every platform.
@@ -28,18 +29,23 @@ use std::path::{Path, PathBuf};
 
 pub struct SeatbeltRun;
 
-/// Host requests that need a mount at a fixed path in the sandbox. The
-/// broker refuses them for a Seatbelt run, with this reason.
-pub const BROKER_REFUSALS: &[(&str, &str)] = &[
-    (
-        "borrow",
-        "borrow is not there yet on macOS: a Seatbelt run cannot get the borrow folder at /run/paddock/borrow",
-    ),
-    (
-        "return",
-        "return is not there yet on macOS: a Seatbelt run has no borrow folder",
-    ),
-];
+/// The borrow folder of the run on the host, at its real path: Seatbelt
+/// cannot mount it at `borrow::MOUNT`, so the profile allows it read-write
+/// where it is and `PADDOCK_BORROW_DIR` names it. None without the folder.
+pub fn borrow_dir(spec: &SandboxSpec) -> Option<PathBuf> {
+    spec.mounts
+        .iter()
+        .find(|m| m.dst == Path::new(crate::borrow::MOUNT))
+        .and_then(|m| m.src.as_deref())
+        .map(real)
+}
+
+/// Where a run of `backend` sees its borrow folder: for a Seatbelt run
+/// `borrow_dir`, else `borrow::MOUNT`.
+pub fn borrow_seen(backend: &str, spec: &SandboxSpec) -> PathBuf {
+    let dir = (backend == NAME).then(|| borrow_dir(spec)).flatten();
+    crate::borrow::in_sandbox(dir.as_deref().map(Path::as_os_str))
+}
 
 /// The host paths that the sandbox finds through a variable instead of a
 /// mount (see `host_path_env`).
@@ -92,7 +98,9 @@ pub fn parse_range(s: &str) -> Result<(u16, u16)> {
 /// The line that `paddock run` prints at the start when a range is set.
 pub fn range_line(range: (u16, u16), network: Network) -> String {
     let (a, b) = range;
-    if network == Network::Egress {
+    if network == Network::Host {
+        format!("[macos] localhost_ports ({a}-{b}) is for network mode egress: this run in mode host reaches every port already")
+    } else if network == Network::Egress {
         format!("localhost ports {a}-{b} are open in the sandbox ([macos] localhost_ports): it can listen on them and connect to them, also to the services of this Mac on these ports")
     } else {
         format!(
@@ -101,6 +109,9 @@ pub fn range_line(range: (u16, u16), network: Network) -> String {
         )
     }
 }
+
+/// The warning of network mode host at the start of a Seatbelt run.
+pub const HOST_WARNING: &str = "network mode host: the sandbox shares the network of this Mac. It reaches every service on localhost and on the LAN, and its servers are open to the LAN";
 
 /// The private temporary folder of a run, in the sandbox home.
 pub fn private_tmp(spec: &SandboxSpec) -> PathBuf {
@@ -113,12 +124,9 @@ pub fn net(mode: Network) -> Result<Net> {
     match mode {
         Network::None => Ok(Net::None),
         Network::Egress | Network::Api => Ok(Net::Localhost),
-        Network::Host => bail!(
-            "network mode 'host' is not there yet for Seatbelt runs on macOS: use egress (default), api or none"
-        ),
-        Network::Allowlist => bail!(
-            "network mode 'allowlist' needs the srt backend, which is Linux only: on macOS use --network api with --allow"
-        ),
+        Network::Host => Ok(Net::Host),
+        // In mode allowlist, paddock's proxy enforces the list, as in api.
+        Network::Allowlist => Ok(Net::Localhost),
     }
 }
 
@@ -126,19 +134,10 @@ pub fn net(mode: Network) -> Result<Net> {
 /// one line, so nothing is left out in silence.
 pub fn refuse(spec: &SandboxSpec) -> Result<()> {
     net(spec.network)?;
-    if spec.shadow.is_some() {
-        bail!("--profile default needs an overlay at the sandbox home, which Seatbelt cannot give: it runs on the bwrap backend only");
-    }
     if spec.gui.mode != GuiMode::Off {
         bail!(
             "display mode '{}' is Linux only: a Seatbelt run on macOS has no display. Use --gui off, or paddock app run for a desktop app",
             format!("{:?}", spec.gui.mode).to_lowercase()
-        );
-    }
-    if let Some(dir) = &spec.devices {
-        bail!(
-            "the devices of /dev/paddock ({}) are not there yet on macOS. Turn them off for this start ([devices] enabled = [])",
-            dir.display()
         );
     }
     if spec
@@ -168,7 +167,8 @@ pub fn refuse(spec: &SandboxSpec) -> Result<()> {
 /// not get. Mounts that move a host path to another place (shared caches)
 /// cannot be expressed: the sandbox home keeps its own copy instead.
 pub fn policy(env: &HostEnv, spec: &SandboxSpec, tmp: &Path) -> Result<(Policy, Vec<String>)> {
-    // Network mode api reaches the proxy only, as on Linux.
+    // Network mode api reaches the proxy only, as on Linux. Mode allowlist
+    // keeps the allowed host ports, as srt does.
     let ports = spec
         .host_ports
         .iter()
@@ -214,6 +214,7 @@ pub fn policy(env: &HostEnv, spec: &SandboxSpec, tmp: &Path) -> Result<(Policy, 
         (&spec.host_socket, "the host request broker (paddock-host)"),
         (&spec.kv_socket, "paddock kv"),
         (&spec.ssh_agent_socket, "the filtering ssh agent"),
+        (&spec.device_socket, "the devices of /dev/paddock (socket)"),
     ] {
         if let Some(s) = sock {
             p.add_file(real(s), Access::Connect, why);
@@ -253,11 +254,25 @@ pub fn policy(env: &HostEnv, spec: &SandboxSpec, tmp: &Path) -> Result<(Policy, 
                 m.dst.display(),
                 m.origin
             ),
-            // The home comes from home_src above. The borrow folder: the
-            // broker refuses borrow and return (BROKER_REFUSALS).
-            MountKind::Ro | MountKind::Rw
-                if m.src.as_deref() == Some(spec.home_src.as_path())
-                    || m.dst == Path::new(crate::borrow::MOUNT) => {}
+            // The home comes from home_src above.
+            MountKind::Ro | MountKind::Rw if m.src.as_deref() == Some(spec.home_src.as_path()) => {}
+            // The borrow folder at its own path. The sandbox changes the
+            // copies in it, but cannot remove or replace the folder itself:
+            // the host opens it by its path.
+            MountKind::Ro | MountKind::Rw if m.dst == Path::new(crate::borrow::MOUNT) => {
+                let dir = real(src);
+                let access = if m.kind == MountKind::Rw {
+                    Access::ReadWrite
+                } else {
+                    Access::ReadOnly
+                };
+                p.add(&dir, access, "the borrow folder (PADDOCK_BORROW_DIR)");
+                p.add_file(
+                    dir,
+                    Access::ReadOnly,
+                    "the borrow folder itself: the sandbox cannot remove or replace it",
+                );
+            }
             MountKind::Ro | MountKind::Rw => {
                 moved.push(format!("{} ({})", m.dst.display(), m.origin))
             }
@@ -324,6 +339,9 @@ pub fn run_env(env: &HostEnv, spec: &SandboxSpec, tmp: &Path) -> BTreeMap<String
         }
     }
     host_path_env(spec, &mut vars);
+    if let Some(dir) = borrow_dir(spec) {
+        vars.insert(crate::borrow::ENV.into(), dir.display().to_string());
+    }
     // Host paths, not moved into the sandbox home.
     for k in [
         crate::ptybroker::SOCKET_VAR,
@@ -469,24 +487,24 @@ pub fn start_pty(env: &HostEnv, spec: &mut SandboxSpec) -> Result<bool> {
     Ok(true)
 }
 
-/// paddock's proxy for network modes egress and api, and a relay on a free
-/// localhost port. The port goes into `host_ports`, which the profile
-/// allows, and into the proxy variables.
+/// paddock's proxy for network modes egress, api and allowlist, and a relay
+/// on a free localhost port. The port goes into `host_ports`, which the
+/// profile allows, and into the proxy variables. In modes api and allowlist
+/// the proxy lets through only the hosts of `allow_domains`.
 pub fn start_proxy(env: &HostEnv, spec: &mut SandboxSpec) -> Result<()> {
-    if !matches!(spec.network, Network::Egress | Network::Api) {
+    if !matches!(
+        spec.network,
+        Network::Egress | Network::Api | Network::Allowlist
+    ) {
         return Ok(());
     }
     let sock = crate::sockpath::named(env, &spec.id, "proxy.sock")?;
     let mut cfg = crate::backend::host_proxy_cfg(env, spec);
     if spec.network == Network::Api {
-        let (list, _) = crate::proxy::allow::Allowlist::parse(&spec.allow_domains);
         // The api proxy reaches no host loopback port, as on Linux.
         cfg.allow_loopback = Vec::new();
-        cfg.api = Some(crate::proxy::allow::ApiPolicy {
-            list,
-            refusals: Some(crate::backend::api_refusals(env, spec)),
-        });
     }
+    cfg.api = crate::backend::listed_policy(spec, Some(crate::backend::api_refusals(env, spec)));
     crate::proxy::serve(&sock, cfg)?;
     let port = super::tcp_relay(&sock)?;
     set_proxy(spec, port);
@@ -534,6 +552,9 @@ impl Backend for SeatbeltRun {
             log::warn!("{n}");
         }
         log::info!("the real home is denied, not absent: names stay visible");
+        if spec.network == Network::Host {
+            log::warn!("{HOST_WARNING}");
+        }
         if let Some(r) = localhost_ports(env)? {
             log::warn!("{}", range_line(r, spec.network));
         }
@@ -564,8 +585,8 @@ impl Backend for SeatbeltRun {
 #[path = "run_tests.rs"]
 mod tests;
 
-/// Terminal runs with `sandbox-exec` and a fake harness. The maintainer
-/// runs them on a Mac.
+/// Terminal runs with `sandbox-exec` and a fake harness. They run only
+/// on macOS.
 #[cfg(all(test, target_os = "macos"))]
 #[path = "run_macos_tests.rs"]
 mod macos_tests;

@@ -51,27 +51,31 @@
 //! `Service::ns` is the one place that maps a scope to a namespace, and
 //! `Identity` is the one place that holds who calls.
 
+mod devices;
 pub mod escape;
 pub mod host;
 pub mod principal;
 mod served;
 pub mod shard;
 pub mod store;
+mod util;
 
 use crate::broker::{Answer, Approver, Mode, Pending};
 use crate::env::HostEnv;
 use anyhow::{Context as _, Result};
+pub use devices::DeviceControl;
 use serde::{Deserialize, Serialize};
 pub use served::Served;
 use shard::Ns;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::os::fd::AsRawFd;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use store::{Quota, Store, WriteError, Writer};
+pub(crate) use util::request_id;
+use util::{entry_json, peer_gone, write_error};
 
 pub const PROTOCOL: u32 = 1;
 /// Where the socket appears inside the sandbox.
@@ -465,6 +469,10 @@ pub struct Service {
     /// The one-shot command that answers questions of other members of the
     /// pasture (pasture/bridge.rs). None: this sandbox answers none.
     bridge: Option<crate::pasture::bridge::Command>,
+    /// `paddock device stop|restart NAME --sandbox ID` reaches the device
+    /// instances of this run here (devices/sandbox.rs). Set after the
+    /// devices started.
+    devices: Mutex<Option<DeviceControl>>,
 }
 
 impl Service {
@@ -488,6 +496,7 @@ impl Service {
             asking: Mutex::new(()),
             connections: AtomicUsize::new(0),
             bridge: None,
+            devices: Mutex::new(None),
         }
     }
 
@@ -601,12 +610,11 @@ impl Service {
                 started.map(|t| format!("{t} ")).unwrap_or_default(),
                 if WRITE_OPS.contains(&req.op.as_str()) { "write to" } else { "read" }
             ),
-            reason: String::new(),
             created: crate::state::now(),
             expires: crate::state::now() + self.wait.as_secs(),
             session_allowed: true,
-            choices: Vec::new(),
             started_by: self.id.chain.clone(),
+            ..Default::default()
         };
         let verdict = self.approver.ask_verdict(&self.env, &p, self.wait);
         let note = verdict.as_ref().and_then(|v| v.note.clone());
@@ -780,6 +788,9 @@ impl Service {
         }
         if req.op == "workbench" {
             return crate::pasture::workbench::join(&self.env, &self.id);
+        }
+        if req.op == "devices" {
+            return self.devices_op(req);
         }
         if !OPS.contains(&req.op.as_str()) {
             return invalid(format!(
@@ -1233,8 +1244,8 @@ impl Service {
                         created: now,
                         expires: now + self.wait.as_secs(),
                         session_allowed: false,
-                        choices: Vec::new(),
                         started_by: self.id.chain.clone(),
+                        ..Default::default()
                     };
                     match self.approver.ask_verdict(&self.env, &p, self.wait) {
                         Some(v) if v.answer.denies() => {
@@ -1500,39 +1511,6 @@ impl Service {
         writeln!(w, "{}", serde_json::to_string(&resp)?)?;
         Ok(())
     }
-}
-
-fn entry_json(e: &store::Entry) -> serde_json::Value {
-    serde_json::json!({
-        "key": e.key, "value": e.value, "version": e.version,
-        "writer": e.writer, "writer_harness": e.writer_harness,
-        "updated": e.updated, "expires": e.expires,
-    })
-}
-
-fn write_error(e: WriteError) -> Result<Response> {
-    Ok(match e {
-        WriteError::Conflict { key, current } => Response {
-            status: Status::Conflict,
-            message: format!("{key:?} has version {current}"),
-            result: serde_json::json!({ "key": key, "version": current }),
-        },
-        WriteError::Quota(m) => Response::new(Status::TooLarge, m),
-        WriteError::Missing => Response::new(Status::NotFound, "no such key"),
-        WriteError::Db(e) => return Err(e),
-    })
-}
-
-/// True when the other end closed its side.
-fn peer_gone(conn: &UnixStream) -> bool {
-    crate::platform::peer_gone(conn.as_raw_fd())
-}
-
-pub(crate) fn request_id() -> String {
-    use sha2::{Digest, Sha256};
-    let seed = format!("{:?}-{}-kv", Instant::now(), std::process::id());
-    let h = crate::manifest::hex(&Sha256::digest(seed.as_bytes()));
-    format!("r-{}-{}", crate::state::now(), &h[..8])
 }
 
 /// The paddock process of a sandbox watches the timers that time it: a

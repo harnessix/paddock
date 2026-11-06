@@ -1,0 +1,3 @@
+- New: when both VM slots of the Mac are in use, a new `paddock app run` of the macOS guest saves the least recently used session and frees its slot. The suspended session stays in the Dock; a click on it, or `paddock app run`, resumes it from the saved state. `[macvm] auto_suspend = false` turns this off.
+- New: `paddock app run NAME --instance N` and `--new` run more than one instance of an app in the macOS guest, each with its own disks, data, keychain and firewall rules. The Dock names the instance.
+- New: `paddock du` lists the macOS guest data (golden image, profiles by instance, saved states, app copies, backups), and `paddock gc` removes old app archives and old saved states. A profile goes only with `--homes --include-app-logins`, as a home does.

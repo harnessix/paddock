@@ -14,11 +14,30 @@ icon = "visual-studio-code"
 schemes = ["vscode"]
 open_roots = true
 
-# On macOS paddock runs the app bundle with Seatbelt (README, App mode on
-# macOS). It is an Electron app without App Sandbox.
+# On macOS the default route is paddock's own macOS guest; `--backend
+# seatbelt` runs the app bundle with Seatbelt instead (README, App mode on
+# macOS). It is an Electron app without App Sandbox. An App Store copy
+# (Contents/_MASReceipt) is refused by the guest route, which has no Apple
+# ID: use Microsoft's download.
 [app.macos]
 bundles = ["/Applications/Visual Studio Code.app", "~/Applications/Visual Studio Code.app"]
 user_data = "Library/Application Support/Code"
+# The hosts that the editor and its sign-in need, which the firewall of
+# paddock's macOS guest allows with by = "profile".
+# "*.x.y" is every name under x.y, not x.y itself. The last two are Apple's
+# Gatekeeper check.
+seed_hosts = [
+  "update.code.visualstudio.com",
+  "marketplace.visualstudio.com",
+  "*.vsassets.io",
+  "*.gallerycdn.vsassets.io",
+  "vscode.dev",
+  "*.visualstudio.com",
+  "github.com",
+  "api.github.com",
+  "api.apple-cloudkit.com",
+  "ocsp2.apple.com",
+]
 
 # Usage data, error telemetry and crash reports off. Experiments stop with
 # them, and the second setting turns them off on its own. Extensions keep

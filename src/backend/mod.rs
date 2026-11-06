@@ -49,6 +49,39 @@ pub fn by_name(name: &str) -> Result<Box<dyn Backend>> {
     }
 }
 
+/// The refusal of network mode allowlist on the other backends.
+pub const ALLOWLIST_BACKENDS: &str =
+    "network mode 'allowlist' needs the srt backend on Linux or seatbelt on macOS";
+
+/// The warning for the entries of `allow_domains` that paddock's proxy
+/// ignores (IP addresses), in the modes where the proxy enforces the list:
+/// api, and allowlist on macOS (Seatbelt). srt takes other entries too.
+pub fn ignored_entries(network: Network, domains: &[String], macos: bool) -> Option<String> {
+    if !(network == Network::Api || network == Network::Allowlist && macos) {
+        return None;
+    }
+    let (_, bad) = crate::proxy::allow::Allowlist::parse(domains);
+    (!bad.is_empty()).then(|| {
+        format!(
+            "network mode {} ignores these entries: {} (use host names, not IP addresses)",
+            format!("{network:?}").to_lowercase(),
+            bad.join(", ")
+        )
+    })
+}
+
+/// The backends that `--backend auto` tries, in order. Mode allowlist
+/// needs a filter by host name: srt on Linux, Seatbelt with paddock's proxy
+/// on macOS. macOS has no bubblewrap: Seatbelt comes first there.
+pub fn auto_order(network: Network, macos: bool) -> &'static [&'static str] {
+    match (network, macos) {
+        (Network::Allowlist, false) => &["srt"],
+        (Network::Allowlist, true) => &[seatbelt::NAME],
+        (_, true) => &[seatbelt::NAME, "podman", "docker"],
+        (_, false) => &["bwrap", "podman", "docker"],
+    }
+}
+
 /// Pick the first backend that can run the spec.
 pub fn select(env: &HostEnv, spec: &SandboxSpec, wanted: &str) -> Result<Box<dyn Backend>> {
     if wanted != "auto" {
@@ -57,16 +90,7 @@ pub fn select(env: &HostEnv, spec: &SandboxSpec, wanted: &str) -> Result<Box<dyn
         return Ok(b);
     }
     let mut reasons = Vec::new();
-    // Only srt filters by domain, so allowlist mode picks it. macOS has no
-    // bubblewrap: Seatbelt comes first there.
-    let order: &[&str] = if spec.network == Network::Allowlist {
-        &["srt"]
-    } else if cfg!(target_os = "macos") {
-        &[seatbelt::NAME, "podman", "docker"]
-    } else {
-        &["bwrap", "podman", "docker"]
-    };
-    for &name in order {
+    for &name in auto_order(spec.network, cfg!(target_os = "macos")) {
         let b = by_name(name)?;
         match b.check(env, spec) {
             Ok(()) => return Ok(b),
@@ -190,9 +214,30 @@ pub fn pty_settings(spec: &mut SandboxSpec, ptys: bool) {
     spec.home_settings.retain(|s| !(ptys && s.no_pty));
 }
 
-/// Network mode api: each host that the proxy refuses goes into the audit log.
+/// The policy of paddock's proxy when the proxy enforces the host list:
+/// network mode api on every backend, and mode allowlist on Seatbelt (srt
+/// enforces it on Linux). Only the hosts of `allow_domains` pass, the same
+/// list that srt gets. None for the other modes.
+pub fn listed_policy(
+    spec: &SandboxSpec,
+    refusals: Option<crate::proxy::allow::Refusals>,
+) -> Option<crate::proxy::allow::ApiPolicy> {
+    if !matches!(spec.network, Network::Api | Network::Allowlist) {
+        return None;
+    }
+    let (list, _) = crate::proxy::allow::Allowlist::parse(&spec.allow_domains);
+    Some(crate::proxy::allow::ApiPolicy {
+        list,
+        refusals,
+        allowlist: spec.network == Network::Allowlist,
+    })
+}
+
+/// Network modes api and allowlist: each host that the proxy refuses goes
+/// into the audit log.
 pub fn api_refusals(env: &HostEnv, spec: &SandboxSpec) -> crate::proxy::allow::Refusals {
     let (e1, spec) = (env.clone(), spec.clone());
+    let mode = format!("{:?}", spec.network).to_lowercase();
     crate::proxy::allow::Refusals::new(std::sync::Arc::new(move |host: &str, why: &str| {
         crate::broker::audit_line(
             &e1,
@@ -202,7 +247,7 @@ pub fn api_refusals(env: &HostEnv, spec: &SandboxSpec) -> crate::proxy::allow::R
                 "harness": spec.harness,
                 "project": spec.project,
                 "capability": "network",
-                "detail": format!("api: {host}: {why}"),
+                "detail": format!("{mode}: {host}: {why}"),
                 "decision": "refused",
             }),
         );
@@ -224,6 +269,9 @@ pub fn host_path_env(spec: &SandboxSpec, vars: &mut BTreeMap<String, String>) {
     }
     if let Some(dir) = &spec.devices {
         vars.insert("PADDOCK_DEVICES".into(), s(dir));
+    }
+    if let Some(sock) = &spec.device_socket {
+        vars.insert(crate::hostcli::device::SOCKET_VAR.into(), s(sock));
     }
     for (mount, var) in [
         (crate::pasture::MOUNT, "PADDOCK_PASTURE"),

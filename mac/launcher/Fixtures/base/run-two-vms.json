@@ -1,0 +1,9 @@
+{
+  "v": 1,
+  "ok": false,
+  "code": "two_vms",
+  "running": [
+    "ChatGPT",
+    "Slack"
+  ]
+}

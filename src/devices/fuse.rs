@@ -1,18 +1,26 @@
 //! The FUSE file system that serves `/dev/paddock` on Linux.
 
 use super::{catalog_with, Call, Device, CATALOG, SECRET_DIR};
-use anyhow::{Context, Result};
 use fuser::{
-    Errno, FileAttr, FileHandle, FileType, Filesystem, FopenFlags, INodeNo, LockOwner, MountOption,
-    OpenAccMode, OpenFlags, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory, ReplyEmpty,
-    ReplyEntry, ReplyOpen, ReplyWrite, Request, WriteFlags,
+    Errno, FileAttr, FileHandle, FileType, Filesystem, FopenFlags, INodeNo, LockOwner, OpenAccMode,
+    OpenFlags, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory, ReplyEmpty, ReplyEntry,
+    ReplyOpen, ReplyWrite, Request, WriteFlags,
 };
 use std::collections::HashMap;
 use std::ffi::OsStr;
-use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant, SystemTime};
+
+mod handle;
+mod mount;
+mod stream;
+pub use handle::KEEP;
+use handle::{Handle, Kind, Next, Phase, Stream};
+use mount::fatal_pending;
+pub(super) use mount::lazy_unmount;
+pub use mount::{mount, Mounted};
+use stream::StreamSink;
 
 /// Open device files at the same time, per sandbox.
 const MAX_OPEN: usize = 64;
@@ -27,35 +35,7 @@ const FIRST_DEVICE_INO: u64 = 16;
 const FIRST_SECRET_INO: u64 = 1 << 20;
 const TTL: Duration = Duration::from_secs(1);
 
-enum Phase {
-    /// The client writes the request.
-    Collect,
-    /// The device works on it.
-    Running,
-    Done(Result<Arc<Vec<u8>>, Errno>),
-}
-
-enum Kind {
-    Catalog,
-    Device(usize),
-    /// A secret file: its name and the value, held while the file is open.
-    Secret(String, Arc<crate::credentials::secret::Secret>),
-}
-
-struct Handle {
-    kind: Kind,
-    request: Vec<u8>,
-    phase: Phase,
-    /// Reads that wait for the response: the reply, its size and the
-    /// thread that reads (a host thread id; FUSE translates it).
-    waiting: Vec<(ReplyData, u32, u32)>,
-    /// How much of the response the client has read. The kernel offset
-    /// counts the request bytes too, so the response keeps its own.
-    cursor: usize,
-    cancel: Arc<AtomicBool>,
-}
-
-struct Inner {
+pub(super) struct Inner {
     sandbox: String,
     uid: u32,
     gid: u32,
@@ -65,6 +45,9 @@ struct Inner {
     /// A name keeps its inode after a revoke.
     secret_inos: Mutex<Vec<String>>,
     handles: Mutex<HashMap<u64, Handle>>,
+    /// Wakes a streaming device that waits for the reader to catch up.
+    /// One for every handle: a spurious wake costs one check.
+    space: Condvar,
     next_fh: AtomicU64,
     running: AtomicU64,
     started: SystemTime,
@@ -112,6 +95,7 @@ impl DeviceFs {
                 secrets,
                 secret_inos: Mutex::new(Vec::new()),
                 handles: Mutex::new(HashMap::new()),
+                space: Condvar::new(),
                 next_fh: AtomicU64::new(1),
                 running: AtomicU64::new(0),
                 started: SystemTime::now(),
@@ -223,8 +207,16 @@ impl DeviceFs {
         !handle.waiting.is_empty() && handle.waiting.iter().all(|w| fatal_pending(w.2))
     }
 
-    /// Run the request of `fh` on its own thread, under the deadline.
-    fn dispatch(&self, fh: u64, dev: Arc<dyn Device>, request: Vec<u8>, cancel: Arc<AtomicBool>) {
+    /// Run the request of `fh` on its own thread, under the deadline. A
+    /// streaming device (`stream`) writes to the handle as it goes.
+    fn dispatch(
+        &self,
+        fh: u64,
+        dev: Arc<dyn Device>,
+        request: Vec<u8>,
+        cancel: Arc<AtomicBool>,
+        stream: bool,
+    ) {
         let inner = self.inner.clone();
         let info = dev.info();
         let deadline = Instant::now() + Duration::from_secs(info.limits.deadline_seconds);
@@ -235,12 +227,24 @@ impl DeviceFs {
                 sandbox: inner.sandbox.clone(),
                 deadline,
                 cancel: cancel.clone(),
+                remote: None,
             };
             let (tx, rx) = std::sync::mpsc::channel();
             let worker_dev = dev.clone();
             let req_len = request.len();
+            let mut sink = StreamSink {
+                inner: inner.clone(),
+                fh,
+                cancel: cancel.clone(),
+            };
             std::thread::spawn(move || {
-                let r = worker_dev.call(&call, &request);
+                let r = if stream {
+                    worker_dev
+                        .call_stream(&call, &request, &mut sink)
+                        .map(|()| Vec::new())
+                } else {
+                    worker_dev.call(&call, &request)
+                };
                 let _ = tx.send(r);
             });
             // Wait for the device, the deadline, a close, or the end of every
@@ -267,13 +271,21 @@ impl DeviceFs {
                 }
             };
             inner.running.fetch_sub(1, Ordering::SeqCst);
+            // The device that waits for room wakes and sees the end.
+            inner.space.notify_all();
+            let bytes = if stream {
+                Self::finish_stream(&inner, fh, result.as_ref().map(|_| ()).map_err(|e| *e))
+            } else {
+                result.as_ref().map(|d| d.len()).unwrap_or(0)
+            };
             // Sizes and the outcome only: never the request or the response.
             let outcome = match &result {
-                Ok(d) => format!("{} bytes back", d.len()),
+                Ok(_) if stream => format!("{bytes} bytes streamed"),
+                Ok(_) => format!("{bytes} bytes back"),
                 Err(e) if cancel.load(Ordering::SeqCst) && *e != Errno::ETIMEDOUT => {
-                    "cancelled".into()
+                    format!("cancelled after {bytes} bytes")
                 }
-                Err(e) => format!("error {}", i32::from(*e)),
+                Err(e) => format!("error {} after {bytes} bytes", i32::from(*e)),
             };
             log::info!(
                 "sandbox {}: device {}: request of {req_len} bytes, {outcome}, {} ms",
@@ -281,8 +293,16 @@ impl DeviceFs {
                 dev.name(),
                 start.elapsed().as_millis()
             );
-            Self::finish(&inner, fh, result);
+            if !stream {
+                Self::finish(&inner, fh, result);
+            }
         });
+    }
+
+    /// The running requests of this sandbox.
+    #[cfg(test)]
+    pub(crate) fn running(&self) -> u64 {
+        self.inner.running.load(Ordering::SeqCst)
     }
 }
 
@@ -396,17 +416,7 @@ impl Filesystem for DeviceFs {
             return reply.error(Errno::EBUSY);
         }
         let fh = self.inner.next_fh.fetch_add(1, Ordering::SeqCst);
-        h.insert(
-            fh,
-            Handle {
-                kind,
-                request: Vec::new(),
-                phase: Phase::Collect,
-                waiting: Vec::new(),
-                cursor: 0,
-                cancel: Arc::new(AtomicBool::new(false)),
-            },
-        );
+        h.insert(fh, Handle::new(kind));
         // Direct I/O: every read and write reaches paddock, whatever size
         // the file shows.
         reply.opened(
@@ -480,7 +490,7 @@ impl Filesystem for DeviceFs {
             }
             Kind::Device(i) => *i,
         };
-        match &handle.phase {
+        match &mut handle.phase {
             Phase::Done(Ok(data)) => {
                 let data = data.clone();
                 let r = take(&mut handle.cursor, &data, size);
@@ -494,17 +504,45 @@ impl Filesystem for DeviceFs {
                 }
                 handle.waiting.push((reply, size, req.pid()));
             }
+            Phase::Streaming(s) => {
+                // The kernel offset counts the request bytes. A read below
+                // the dropped front cannot be served: a stream is read once.
+                let pos = (offset as usize).saturating_sub(handle.sent);
+                if pos < s.base() {
+                    return reply.error(Errno::ESPIPE);
+                }
+                match s.next(&mut handle.cursor, size) {
+                    Next::Data(d) => {
+                        drop(h);
+                        self.inner.space.notify_all();
+                        reply.data(&d)
+                    }
+                    Next::Error(e) => reply.error(e),
+                    Next::Wait => {
+                        if handle.waiting.len() >= 4 {
+                            return reply.error(Errno::EBUSY);
+                        }
+                        handle.waiting.push((reply, size, req.pid()));
+                    }
+                }
+            }
             Phase::Collect => {
                 if self.inner.running.load(Ordering::SeqCst) >= MAX_RUNNING as u64 {
                     return reply.error(Errno::EBUSY);
                 }
-                handle.phase = Phase::Running;
+                let dev = self.inner.devices[i].clone();
+                let info = dev.info();
+                handle.phase = if info.stream {
+                    Phase::Streaming(Stream::new(info.limits.max_response))
+                } else {
+                    Phase::Running
+                };
                 handle.waiting.push((reply, size, req.pid()));
                 let request = std::mem::take(&mut handle.request);
+                handle.sent = request.len();
                 let cancel = handle.cancel.clone();
-                let dev = self.inner.devices[i].clone();
                 drop(h);
-                self.dispatch(fh, dev, request, cancel);
+                self.dispatch(fh, dev, request, cancel, info.stream);
             }
         }
     }
@@ -534,6 +572,8 @@ impl Filesystem for DeviceFs {
         let removed = self.inner.handles.lock().unwrap().remove(&u64::from(fh));
         if let Some(handle) = removed {
             handle.cancel.store(true, Ordering::SeqCst);
+            // A streaming device that waits for room sees the cancel now.
+            self.inner.space.notify_all();
             for (r, _, _) in handle.waiting {
                 r.error(Errno::ECANCELED);
             }
@@ -671,83 +711,6 @@ impl Filesystem for DeviceFs {
     }
 }
 
-/// Whether the thread `tid` has a fatal signal pending. The kernel marks
-/// every fatal signal as SIGKILL in the pending set of each thread.
-fn fatal_pending(tid: u32) -> bool {
-    let Ok(text) = std::fs::read_to_string(format!("/proc/{tid}/status")) else {
-        // Gone already.
-        return true;
-    };
-    text.lines()
-        .filter_map(|l| {
-            l.strip_prefix("SigPnd:")
-                .or_else(|| l.strip_prefix("ShdPnd:"))
-        })
-        .filter_map(|v| u64::from_str_radix(v.trim(), 16).ok())
-        .any(|bits| bits & (1 << (libc::SIGKILL - 1)) != 0)
-}
-
-/// A mounted device file system. Dropping it unmounts it.
-pub struct Mounted {
-    pub dir: PathBuf,
-    session: Option<fuser::BackgroundSession>,
-}
-
-impl Mounted {
-    pub fn unmount(mut self) {
-        self.stop();
-    }
-
-    fn stop(&mut self) {
-        let Some(s) = self.session.take() else {
-            return;
-        };
-        if let Err(e) = s.umount_and_join() {
-            log::debug!("cannot unmount {}: {e}", self.dir.display());
-            lazy_unmount(&self.dir);
-        }
-        let _ = std::fs::remove_dir(&self.dir);
-    }
-}
-
-impl Drop for Mounted {
-    fn drop(&mut self) {
-        self.stop();
-    }
-}
-
-pub(super) fn lazy_unmount(dir: &Path) {
-    for helper in ["fusermount3", "fusermount"] {
-        let ok = std::process::Command::new(helper)
-            .args(["-u", "-q", "-z", "--"])
-            .arg(dir)
-            .stdin(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .is_ok_and(|s| s.success());
-        if ok {
-            return;
-        }
-    }
-}
-
-/// Mount `fs` at `dir`, an empty folder that paddock owns.
-pub fn mount(dir: &Path, fs: DeviceFs) -> Result<Mounted> {
-    crate::privfs::dir(dir)?;
-    let mut cfg = fuser::Config::default();
-    cfg.mount_options = vec![
-        MountOption::FSName("paddock".into()),
-        MountOption::Subtype("paddock".into()),
-        MountOption::DefaultPermissions,
-        MountOption::NoSuid,
-        MountOption::NoDev,
-        MountOption::NoExec,
-        MountOption::NoAtime,
-    ];
-    let session = fuser::spawn_mount(fs, dir, &cfg)
-        .with_context(|| format!("cannot mount the devices at {}", dir.display()))?;
-    Ok(Mounted {
-        dir: dir.to_path_buf(),
-        session: Some(session),
-    })
-}
+#[cfg(test)]
+#[path = "fuse_tests.rs"]
+mod tests;

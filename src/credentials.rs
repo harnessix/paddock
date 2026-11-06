@@ -110,7 +110,7 @@ pub enum DeliverAs {
 
 /// Where a `deliver` credential appears in the sandbox, as a file.
 pub fn secret_path(name: &str) -> String {
-    format!("{}/secret/{name}", crate::devices::MOUNT_IN_SANDBOX)
+    secret::fifo::path_on(cfg!(target_os = "macos"), name)
 }
 
 /// One `[credentials.NAME]` table.
@@ -660,12 +660,10 @@ pub fn ask(
         capability: CAPABILITY.into(),
         summary,
         detail,
-        reason: String::new(),
         created: crate::state::now(),
         expires: crate::state::now() + wait.as_secs(),
         session_allowed: false,
-        started_by: Vec::new(),
-        choices: Vec::new(),
+        ..Default::default()
     };
     let first = card(
         "allow",
@@ -1071,8 +1069,8 @@ confirm = "each"
         assert_eq!(all["my-token"].as_, DeliverAs::File);
         assert_eq!(all["DB"].as_, DeliverAs::Env);
         assert_eq!(all["PLAIN"].as_, DeliverAs::Env);
-        assert_eq!(secret_path("my-token"), "/dev/paddock/secret/my-token");
-        assert!(describe("my-token", &all["my-token"]).contains("/dev/paddock/secret/my-token"));
+        assert_eq!(secret::fifo::path_on(false, "T"), "/dev/paddock/secret/T");
+        assert!(describe("my-token", &all["my-token"]).contains(&secret_path("my-token")));
         for bad in [
             "[credentials.x]\nvia = \"deliver\"\nas = \"disk\"\n",
             "[credentials.x]\nvia = \"deliver\"\nas = \"file\"\nenv = \"X\"\n",

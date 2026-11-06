@@ -121,3 +121,82 @@ fn bundle_detection_on_this_mac() {
         );
     }
 }
+
+/// A free port on 127.0.0.1.
+fn free_port() -> u16 {
+    std::net::TcpListener::bind(("127.0.0.1", 0))
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+}
+
+/// Whether `nc -l 127.0.0.1 PORT` under `profile` takes a connection from
+/// the host.
+fn listens_in(profile: &str) -> bool {
+    let t = tempfile::tempdir().unwrap();
+    let f = t.path().join("p.sb");
+    std::fs::write(&f, profile).unwrap();
+    let port = free_port();
+    let mut child = Command::new(SANDBOX_EXEC)
+        .arg("-f")
+        .arg(&f)
+        .args(["/usr/bin/nc", "-l", "127.0.0.1", &port.to_string()])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut ok = false;
+    for _ in 0..50 {
+        if std::net::TcpStream::connect(("127.0.0.1", port)).is_ok() {
+            ok = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    ok
+}
+
+#[test]
+fn login_ports_listen_on_localhost_without_network() {
+    let mut p = Policy::new(Net::None);
+    assert!(!listens_in(&crate::seatbelt::render(&p).unwrap()));
+    p.login_ports = true;
+    assert!(listens_in(&crate::seatbelt::render(&p).unwrap()));
+    // The app scope of egress, api and host listens on localhost anyway.
+    for net in [Net::Localhost, Net::Host] {
+        assert!(listens_in(
+            &crate::seatbelt::render(&Policy::new(net)).unwrap()
+        ));
+    }
+}
+
+#[test]
+fn network_host_reaches_an_outside_address_and_resolves_names() {
+    let l = std::net::TcpListener::bind(("0.0.0.0", 0)).unwrap();
+    let port = l.local_addr().unwrap().port().to_string();
+    std::thread::spawn(move || for _ in l.incoming() {});
+    let host = crate::seatbelt::render(&Policy::new(Net::Host)).unwrap();
+    assert!(run_in(
+        &host,
+        &["/usr/bin/nc", "-z", "-G", "2", "127.0.0.1", &port]
+    ));
+    // Name resolution through mDNSResponder, with no network traffic.
+    assert!(run_in(
+        &host,
+        &["/usr/bin/nc", "-z", "-G", "2", "localhost", &port]
+    ));
+    let out = Command::new("/usr/sbin/ipconfig")
+        .args(["getifaddr", "en0"])
+        .output()
+        .unwrap();
+    let ip = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if ip.is_empty() {
+        eprintln!("no address on en0: the outside check is skipped");
+        return;
+    }
+    assert!(run_in(&host, &["/usr/bin/nc", "-z", "-G", "2", &ip, &port]));
+}

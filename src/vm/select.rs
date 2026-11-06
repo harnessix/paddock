@@ -120,19 +120,13 @@ pub fn user_backend(env: &HostEnv) -> Result<Option<String>> {
 }
 
 /// The Linux-only features of a built run.
-pub fn linux_only(env: &HostEnv, built: &Built) -> Vec<String> {
+/// The devices are not in it: Seatbelt gets them over a socket, and the VM
+/// does not get them yet (`devices::start` says so in a notice).
+pub fn linux_only(built: &Built) -> Vec<String> {
     let s = &built.spec;
     let mut out = Vec::new();
-    if !crate::devices::names_for(env, built.test_devices, built.device_ceiling.as_deref())
-        .is_empty()
-    {
-        out.push("the devices of /dev/paddock".to_string());
-    }
     if s.gui.mode == GuiMode::Window {
         out.push("window mode".into());
-    }
-    if s.shadow.is_some() {
-        out.push("--profile default".into());
     }
     if let Some(m) = s.mounts.iter().find(|m| m.kind == MountKind::Overlay) {
         out.push(format!("an overlay at {}", m.dst.display()));
@@ -165,7 +159,7 @@ pub fn facts(env: &HostEnv, built: &Built) -> Result<Facts> {
     };
     Ok(Facts {
         app: built.spec.gui.mode == GuiMode::App,
-        linux_only: linux_only(env, built),
+        linux_only: linux_only(built),
         needs_pty,
         wants_seatbelt: (mac.backend.as_deref() == Some("seatbelt"))
             .then(|| format!("the {} profile ([macos] backend)", built.profile.name)),

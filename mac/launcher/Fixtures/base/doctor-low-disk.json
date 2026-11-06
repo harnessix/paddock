@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "chip": "apple",
+  "chip_name": "Apple M2",
+  "macos": "15.1",
+  "macos_ok": true,
+  "free_bytes": 12000000000,
+  "need_bytes": 40000000000,
+  "memory_bytes": 17179869184,
+  "vm_entitlement": true,
+  "slots": []
+}

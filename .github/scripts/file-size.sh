@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Check that tracked Rust and QML files stay within their size limits.
+# Check that tracked Rust, QML and Swift files stay within their size limits.
 #
 # A file listed in .github/file-size-baseline (`<lines> <path>`) must
 # not grow past that size. A file that is not listed must not be longer
@@ -62,7 +62,7 @@ while IFS= read -r -d '' file; do
       status=1
     fi
   fi
-done < <(git ls-files -z -- '*.rs' '*.qml')
+done < <(git ls-files -z -- '*.rs' '*.qml' '*.swift')
 
 if [ "$status" = 0 ]; then
   echo "file-size: ok"

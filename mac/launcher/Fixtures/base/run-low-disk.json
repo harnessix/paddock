@@ -1,0 +1,7 @@
+{
+  "v": 1,
+  "ok": false,
+  "code": "low_disk",
+  "need_bytes": 2500000000,
+  "free_bytes": 1100000000
+}

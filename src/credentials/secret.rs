@@ -7,6 +7,9 @@
 //! `SecretFiles` holds the values of `as = "file"` credentials for the
 //! device file system of one sandbox (`/dev/paddock/secret/NAME`).
 
+#[path = "secret_fifo.rs"]
+pub mod fifo;
+
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};

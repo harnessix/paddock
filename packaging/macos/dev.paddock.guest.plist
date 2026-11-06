@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The launchd agent of paddock-guest in the macOS guest. paddock seeds it
+  into /Library/LaunchAgents of the golden image, so it runs at every
+  login, whatever the account is named. It runs the launch script, which
+  starts current/paddock-guest and falls back to prev/ after three fast
+  failures.
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>dev.paddock.guest</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Library/Application Support/paddock/launch</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>KeepAlive</key>
+	<true/>
+	<key>ThrottleInterval</key>
+	<integer>1</integer>
+	<key>ProcessType</key>
+	<string>Interactive</string>
+	<key>LimitLoadToSessionType</key>
+	<string>Aqua</string>
+	<key>StandardErrorPath</key>
+	<string>/tmp/dev.paddock.guest.err</string>
+	<key>StandardOutPath</key>
+	<string>/tmp/dev.paddock.guest.out</string>
+</dict>
+</plist>

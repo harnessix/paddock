@@ -41,6 +41,10 @@ pub struct Mount {
     /// The lower and work folders of an [`MountKind::Overlay`] mount.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub layers: Option<Layers>,
+    /// The size of a [`MountKind::Tmpfs`] mount, in bytes. None: the
+    /// default of the backend.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
 }
 
 impl Mount {
@@ -51,6 +55,7 @@ impl Mount {
             kind: if rw { MountKind::Rw } else { MountKind::Ro },
             origin: origin.to_string(),
             layers: None,
+            size: None,
         }
     }
     pub fn same(path: impl Into<PathBuf>, rw: bool, origin: &str) -> Self {
@@ -64,6 +69,14 @@ impl Mount {
             kind: MountKind::Tmpfs,
             origin: origin.to_string(),
             layers: None,
+            size: None,
+        }
+    }
+    /// An empty tmpfs of `size` bytes at `dst`.
+    pub fn tmpfs_sized(dst: impl Into<PathBuf>, size: u64, origin: &str) -> Self {
+        Self {
+            size: Some(size),
+            ..Self::tmpfs(dst, origin)
         }
     }
     pub fn mask(dst: impl Into<PathBuf>, is_dir: bool, origin: &str) -> Self {
@@ -77,6 +90,7 @@ impl Mount {
             },
             origin: origin.to_string(),
             layers: None,
+            size: None,
         }
     }
     /// An overlay at `dst`: `lower` read-only, writes go to `upper`.
@@ -96,6 +110,7 @@ impl Mount {
                 lower: lower.into(),
                 work: work.into(),
             }),
+            size: None,
         }
     }
     pub fn is_bind(&self) -> bool {
@@ -113,7 +128,8 @@ pub enum Network {
     Egress,
     /// The host network namespace. Host-local services are reachable.
     Host,
-    /// Only the listed domains (srt backend).
+    /// Only the listed domains: srt on Linux, Seatbelt and paddock's proxy
+    /// on macOS.
     Allowlist,
     /// No network, only the host proxy, which lets through TLS to the model
     /// API hosts of the profile and the domains of `--allow`.
@@ -129,6 +145,9 @@ impl std::str::FromStr for Network {
             "host" => Ok(Self::Host),
             "allowlist" => Ok(Self::Allowlist),
             "api" => Ok(Self::Api),
+            // The mode of desktop apps in paddock's macOS guest, which
+            // `paddock app run` takes before this parser sees it.
+            "ask" => anyhow::bail!(crate::macvm::text::ask_mode_elsewhere()),
             _ => anyhow::bail!(
                 "unknown network mode '{s}': use none, api, egress, allowlist or host"
             ),
@@ -337,8 +356,13 @@ pub struct SandboxSpec {
     #[serde(skip)]
     pub identity: crate::identity::MachineIdentity,
     /// The host folder where the device file system of this sandbox is
-    /// mounted (devices.rs). Backends bind it to `/dev/paddock`.
+    /// mounted (devices.rs). Backends bind it to `/dev/paddock`. Seatbelt
+    /// gets the folder of the secret FIFOs instead (`$PADDOCK_DEVICES`).
     pub devices: Option<PathBuf>,
+    /// The device socket of this sandbox on the host (devices/socket.rs),
+    /// for Seatbelt: `PADDOCK_DEVICES_SOCKET` names it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub device_socket: Option<PathBuf>,
     /// Information for the user, printed at start.
     pub notices: Vec<String>,
     /// Denials that the build decided (withheld variables, MCP servers that
@@ -360,7 +384,8 @@ pub struct SandboxSpec {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub uploads: Vec<crate::uploads::Off>,
     /// `--profile default`: the home is an overlay on a private snapshot of
-    /// the harness's host data (shadow.rs). Only bwrap runs it.
+    /// the harness's host data, or a clone of it on macOS (shadow.rs). Only
+    /// bwrap and Seatbelt run it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shadow: Option<crate::shadow::Plan>,
     /// What the user asked for, before paddock turned it into `command`.
@@ -431,6 +456,7 @@ impl SandboxSpec {
             ssh_agent_socket: None,
             identity: Default::default(),
             devices: None,
+            device_socket: None,
             notices: Vec::new(),
             boundary: Vec::new(),
             inherit_path: Vec::new(),
@@ -504,6 +530,9 @@ impl SandboxSpec {
         let mut p = self.clone();
         p.gui = Gui::default();
         p.setup.clear();
+        // The devices are for the harness, not for the install step.
+        p.devices = None;
+        p.device_socket = None;
         p.command = vec![
             "/bin/sh".into(),
             "-c".into(),

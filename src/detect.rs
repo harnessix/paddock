@@ -414,7 +414,7 @@ pub fn is_secret_name(name: &str) -> bool {
             .any(|e| name.ends_with(e))
 }
 
-fn walk_secrets(dir: &Path, depth: usize, left: &mut usize, out: &mut Vec<PathBuf>) {
+pub(crate) fn walk_secrets(dir: &Path, depth: usize, left: &mut usize, out: &mut Vec<PathBuf>) {
     // Breadth first: when a large build folder uses up the budget, the
     // shallow folders next to it are already covered.
     let mut queue = std::collections::VecDeque::from([(dir.to_path_buf(), depth)]);

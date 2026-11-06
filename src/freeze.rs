@@ -10,6 +10,12 @@
 //!   --user freeze`), and only a scope whose name starts with `paddock-`:
 //!   never the terminal's or another program's.
 //! - docker and podman sandboxes are paused with `pause` / `unpause`.
+//! - macOS has no cgroups. A Seatbelt run starts in a process group of its
+//!   own (`own_group`), and `paddock freeze` sends SIGSTOP to that group and
+//!   to every process in the tree under the sandbox process (`signal_run`).
+//!   The thaw sends SIGCONT the same way.
+//! - A session of the macOS guest (`backend = "macvm"`) is paused through
+//!   the control socket of its shim: `pause` and `resume` (`macvm.rs`).
 //! - Only paddock on the host freezes and thaws. Each one goes to the audit
 //!   log with its reason, and paddock kv shows the state of the sandbox
 //!   (`sandbox:<id>` in the project scope).
@@ -22,9 +28,11 @@
 use crate::env::HostEnv;
 use crate::state::Running;
 use anyhow::{bail, Context as _, Result};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 #[cfg(target_os = "linux")]
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 /// What happens to the leases of a sandbox while it is frozen.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -115,6 +123,20 @@ pub fn own_scope() -> Option<String> {
 /// wait until the kernel shows it there.
 #[cfg(target_os = "linux")]
 pub fn move_to_scope(env: &HostEnv, pid: u32, unit: &str, id: &str) -> Result<()> {
+    move_to_scope_limited(env, pid, unit, id, None, None)
+}
+
+/// `move_to_scope` with `MemoryMax` (bytes) and `CPUQuota` (percent of one
+/// CPU) on the scope, for a device instance with `mem` and `cpus`.
+#[cfg(target_os = "linux")]
+pub fn move_to_scope_limited(
+    env: &HostEnv,
+    pid: u32,
+    unit: &str,
+    id: &str,
+    mem: Option<u64>,
+    cpu_percent: Option<u32>,
+) -> Result<()> {
     use zbus::zvariant::Value;
     let conn = crate::broker::notify::session(env)?;
     let p = zbus::blocking::Proxy::new(
@@ -123,11 +145,18 @@ pub fn move_to_scope(env: &HostEnv, pid: u32, unit: &str, id: &str) -> Result<()
         "/org/freedesktop/systemd1",
         "org.freedesktop.systemd1.Manager",
     )?;
-    let props: Vec<(&str, Value<'_>)> = vec![
+    let mut props: Vec<(&str, Value<'_>)> = vec![
         ("PIDs", Value::from(vec![pid])),
         ("CollectMode", Value::from("inactive-or-failed")),
         ("Description", Value::from(format!("paddock sandbox {id}"))),
     ];
+    if let Some(m) = mem {
+        props.push(("MemoryMax", Value::from(m)));
+    }
+    if let Some(c) = cpu_percent {
+        // CPUQuota=50% is 500000 microseconds per second.
+        props.push(("CPUQuotaPerSecUSec", Value::from(c as u64 * 10_000)));
+    }
     let aux: Vec<(&str, Vec<(&str, Value<'_>)>)> = Vec::new();
     let _: zbus::zvariant::OwnedObjectPath =
         p.call("StartTransientUnit", &(unit, "fail", props, aux))?;
@@ -145,6 +174,29 @@ pub fn move_to_scope(env: &HostEnv, pid: u32, unit: &str, id: &str) -> Result<()
 pub fn move_to_scope(env: &HostEnv, pid: u32, unit: &str, id: &str) -> Result<()> {
     let _ = (env, pid, unit, id);
     Err(crate::platform::unavailable("freeze"))
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn move_to_scope_limited(
+    env: &HostEnv,
+    pid: u32,
+    unit: &str,
+    id: &str,
+    mem: Option<u64>,
+    cpu_percent: Option<u32>,
+) -> Result<()> {
+    let _ = (mem, cpu_percent);
+    move_to_scope(env, pid, unit, id)
+}
+
+/// The scopes of the device instances of a sandbox (devices/sandbox), which
+/// freeze and thaw with it.
+pub fn device_scopes(env: &HostEnv, id: &str) -> Vec<String> {
+    crate::devices::sandbox::state::InstanceState::of_caller(env, id)
+        .into_iter()
+        .filter_map(|s| s.scope)
+        .filter(|u| ours(u))
+        .collect()
 }
 
 /// The first argument of the start stub.
@@ -215,11 +267,11 @@ fn run(cmd: &mut std::process::Command) -> Result<()> {
 /// Freeze or thaw one sandbox.
 #[cfg(target_os = "linux")]
 fn set(env: &HostEnv, r: &Running, freeze: bool) -> Result<()> {
+    if macvm::is_macvm(r) {
+        return macvm::set(env, r, freeze);
+    }
     if r.backend == crate::backend::seatbelt::NAME {
-        bail!(
-            "{} runs with Seatbelt on macOS: freeze is not there yet on macOS",
-            r.id
-        );
+        return signal_run(r, freeze);
     }
     if let Some(cli) = container_cli(env, &r.backend) {
         let verb = if freeze { "pause" } else { "unpause" };
@@ -243,13 +295,199 @@ fn set(env: &HostEnv, r: &Running, freeze: bool) -> Result<()> {
     let method = if freeze { "FreezeUnit" } else { "ThawUnit" };
     p.call::<_, _, ()>(method, &(unit,))
         .with_context(|| format!("{method} {unit}"))?;
+    // The device instances of the sandbox: the same call, the next scope.
+    // One that ended since the state file was read is not an error.
+    for dev in device_scopes(env, &r.id) {
+        if let Err(e) = p.call::<_, _, ()>(method, &(dev.as_str(),)) {
+            log::debug!("{method} {dev}: {e}");
+        }
+    }
     Ok(())
 }
 
 #[cfg(not(target_os = "linux"))]
 fn set(env: &HostEnv, r: &Running, freeze: bool) -> Result<()> {
-    let _ = (env, r, freeze);
+    if macvm::is_macvm(r) {
+        return macvm::set(env, r, freeze);
+    }
+    if r.backend == crate::backend::seatbelt::NAME {
+        return signal_run(r, freeze);
+    }
     Err(crate::platform::unavailable("freeze"))
+}
+
+/// The most passes of one tree walk. A tree that still grows after them
+/// is refused.
+const MAX_PASSES: usize = 64;
+
+/// Send a signal to every process in the tree under `root`. `children`
+/// lists the children of a process, `send` signals one, and `pause` runs
+/// before each pass after the first. A process gets the signal before its
+/// children are listed, and the walk repeats until a pass finds no new
+/// process: a process that forks while the freeze runs cannot get a child
+/// past it. Returns the processes that got the signal, and false when the
+/// tree did not settle within `MAX_PASSES`.
+pub fn signal_tree(
+    root: u32,
+    children: &mut dyn FnMut(u32) -> Vec<u32>,
+    send: &mut dyn FnMut(u32),
+    pause: &mut dyn FnMut(),
+) -> (BTreeSet<u32>, bool) {
+    let mut sent = BTreeSet::new();
+    for pass in 0..MAX_PASSES {
+        if pass > 0 {
+            pause();
+        }
+        let mut new = false;
+        let mut seen = BTreeSet::new();
+        let mut todo = vec![root];
+        while let Some(pid) = todo.pop() {
+            // A pid that is listed twice (a reused pid) is walked once.
+            if pid == 0 || !seen.insert(pid) {
+                continue;
+            }
+            if sent.insert(pid) {
+                send(pid);
+                new = true;
+            }
+            todo.extend(children(pid));
+        }
+        if !new {
+            return (sent, true);
+        }
+    }
+    (sent, false)
+}
+
+/// Freeze or thaw a Seatbelt run: SIGSTOP or SIGCONT to its process group
+/// and to each process in its tree. The group also holds a process that
+/// left the tree (its parent ended); the tree also holds a process that
+/// left the group (`setsid`).
+pub(crate) fn signal_run(r: &Running, freeze: bool) -> Result<()> {
+    if r.gui == "app" {
+        bail!(
+            "{} is a desktop app under Seatbelt: freeze is not there yet for app mode on macOS",
+            r.id
+        );
+    }
+    // The pid in a record can belong to another program by now. The
+    // sandbox process is the child of its paddock process.
+    if r.pid <= 1 || crate::platform::parent_of(r.pid) != Some(r.host_pid) {
+        bail!(
+            "process {} is no longer the sandbox {} (its paddock process is {})",
+            r.pid,
+            r.id,
+            r.host_pid
+        );
+    }
+    let walk = |sig: libc::c_int| {
+        let pid = r.pid as libc::pid_t;
+        // SAFETY: getpgid, killpg and kill with a plain signal. The group is
+        // the sandbox's own: its id is the sandbox pid, never paddock's.
+        unsafe {
+            if libc::getpgid(pid) == pid {
+                libc::killpg(pid, sig);
+            }
+        }
+        signal_tree(
+            r.pid,
+            &mut crate::platform::children_of,
+            // SAFETY: as above.
+            &mut |p| unsafe {
+                libc::kill(p as libc::pid_t, sig);
+            },
+            &mut || std::thread::sleep(Duration::from_millis(10)),
+        )
+        .1
+    };
+    if walk(if freeze { libc::SIGSTOP } else { libc::SIGCONT }) {
+        return Ok(());
+    }
+    if freeze {
+        // Half a freeze is no freeze: let the stopped processes run again.
+        walk(libc::SIGCONT);
+    }
+    bail!(
+        "the processes of {} kept starting new ones: they are not all {}",
+        r.id,
+        if freeze { "stopped" } else { "running" }
+    )
+}
+
+/// In the child of a Seatbelt run, after fork: a process group of its own,
+/// so that `paddock freeze` stops the whole group. When the terminal on
+/// standard input had paddock's group in the foreground, the new group
+/// takes it, so that the harness still reads it and gets Ctrl-C.
+/// `Terminal::take_back` returns it to paddock.
+///
+/// # Safety
+/// Call this after fork and before exec. It only makes async-signal-safe
+/// calls and does not allocate.
+pub unsafe fn own_group() -> std::io::Result<()> {
+    let old = libc::getpgrp();
+    if libc::setpgid(0, 0) != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    if libc::isatty(0) == 1 && libc::tcgetpgrp(0) == old {
+        with_ttou_blocked(|| libc::tcsetpgrp(0, libc::getpid()))?;
+    }
+    Ok(())
+}
+
+/// `f` with SIGTTOU blocked: a process outside the foreground group may
+/// then hand the terminal to another group (tcsetpgrp) without stopping.
+/// The error of `f`, if any. No allocation: it runs after fork.
+unsafe fn with_ttou_blocked(f: impl FnOnce() -> libc::c_int) -> std::io::Result<()> {
+    let mut set: libc::sigset_t = std::mem::zeroed();
+    let mut prev: libc::sigset_t = std::mem::zeroed();
+    libc::sigemptyset(&mut set);
+    libc::sigaddset(&mut set, libc::SIGTTOU);
+    libc::sigprocmask(libc::SIG_BLOCK, &set, &mut prev);
+    let r = match f() {
+        0 => Ok(()),
+        _ => Err(std::io::Error::last_os_error()),
+    };
+    libc::sigprocmask(libc::SIG_SETMASK, &prev, std::ptr::null_mut());
+    r
+}
+
+/// The terminal on standard input, when paddock's process group had it in
+/// the foreground before a Seatbelt run took it (`own_group`).
+pub struct Terminal {
+    ours: bool,
+}
+
+impl Terminal {
+    /// Note whether paddock's group has the terminal now. `group`: the run
+    /// gets a group of its own.
+    pub fn note(group: bool) -> Self {
+        // SAFETY: isatty, tcgetpgrp and getpgrp only read.
+        let ours =
+            group && unsafe { libc::isatty(0) == 1 && libc::tcgetpgrp(0) == libc::getpgrp() };
+        Self { ours }
+    }
+
+    /// Give the terminal back to paddock's group, once the run has ended.
+    /// paddock in the background would stop when it reads the terminal.
+    pub fn take_back(&mut self) {
+        if !std::mem::take(&mut self.ours) {
+            return;
+        }
+        // SAFETY: tcsetpgrp on our own terminal, with SIGTTOU blocked. A
+        // terminal that is gone fails, and there is nothing to give back.
+        unsafe {
+            let me = libc::getpgrp();
+            if libc::tcgetpgrp(0) != me {
+                let _ = with_ttou_blocked(|| libc::tcsetpgrp(0, me));
+            }
+        }
+    }
+}
+
+impl Drop for Terminal {
+    fn drop(&mut self) {
+        self.take_back();
+    }
 }
 
 /// The state of a sandbox in paddock kv, for the other members of its
@@ -425,50 +663,7 @@ pub fn tilde(env: &HostEnv, p: &Path) -> String {
         .replacen(&env.home.display().to_string(), "~", 1)
 }
 
+pub mod macvm;
+
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn only_paddock_scopes_are_frozen() {
-        assert!(ours("paddock-sb-claude-x_1.scope"));
-        assert!(ours("paddock-spawn-abc.scope"));
-        assert!(!ours("app-com.anthropic.Claude-2408241.scope"));
-        assert!(!ours("paddock-sb-x.service"));
-        assert!(!ours("paddock-sb/../x.scope"));
-        assert_eq!(
-            scope_name("claude-repo-8a48be"),
-            "paddock-sb-claude-repo-8a48be.scope"
-        );
-        assert_eq!(scope_name("a b/c"), "paddock-sb-a_b_c.scope");
-    }
-
-    #[test]
-    fn suspend_config_parses_both_lease_rules() {
-        assert_eq!(SuspendCfg::parse("").unwrap().leases, Leases::Keep);
-        assert_eq!(
-            SuspendCfg::parse("[suspend]\n").unwrap().leases,
-            Leases::Keep
-        );
-        assert_eq!(
-            SuspendCfg::parse("[suspend]\nleases = \"keep\"\n")
-                .unwrap()
-                .leases,
-            Leases::Keep
-        );
-        assert_eq!(
-            SuspendCfg::parse("[suspend]\nleases = \"release\"\n")
-                .unwrap()
-                .leases,
-            Leases::Release
-        );
-        assert!(SuspendCfg::parse("[suspend]\nleases = \"drop\"\n").is_err());
-        assert!(SuspendCfg::parse("[suspend]\nother = 1\n").is_err());
-    }
-
-    #[test]
-    fn this_test_runs_outside_a_paddock_scope() {
-        // The terminal's or the test runner's scope is never paddock's.
-        assert_eq!(own_scope(), None);
-    }
-}
+mod tests;

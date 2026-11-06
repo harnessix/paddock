@@ -286,7 +286,7 @@ fn the_pass_runs_once_an_hour_records_its_status_and_waits_for_the_lock() {
 
 /// The lock, once free. A process that another test thread forks in the
 /// moment holds a copy of the lock until it execs.
-fn lock_soon(path: &Path) -> std::fs::File {
+fn lock_soon(path: &Path) -> PassLock {
     for _ in 0..100 {
         if let Some(f) = try_lock(path) {
             return f;

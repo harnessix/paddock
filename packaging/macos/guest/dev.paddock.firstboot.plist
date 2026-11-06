@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The first-boot daemon of the offline seed of paddock macvm setup. The
+  host writes it into /Library/LaunchDaemons of the guest disk before the
+  first boot and sets its owner to root on the disk. launchd runs
+  firstboot.sh once as root at the boot; the script installs the guest
+  agent and then removes this file and itself. The output goes to the
+  serial console (/dev/tty.virtio, as lima does), which the host keeps in
+  console.log of the golden, and firstboot.sh also appends its lines to
+  /Library/Logs/paddock-firstboot.log in the guest.
+-->
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>dev.paddock.firstboot</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/bin/sh</string>
+		<string>/Library/Application Support/paddock-firstboot/firstboot.sh</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>StandardOutPath</key>
+	<string>/dev/tty.virtio</string>
+	<key>StandardErrorPath</key>
+	<string>/dev/tty.virtio</string>
+</dict>
+</plist>

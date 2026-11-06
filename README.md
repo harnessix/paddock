@@ -170,7 +170,7 @@ These parts are Linux only. On macOS, the command refuses with one line, or `pad
 - `paddock launchers` (XDG desktop entries).
 - `paddock shims install --scope omarchy-agent` and the Omarchy bar widget.
 - `paddock update` replaces no binary. It says when a release is out. Then you run `brew upgrade paddock`, or you update the clone and run `cargo install --path .` again.
-- The devices of `/dev/paddock`, and the systemd units of `paddock gateway install`.
+- The devices are not files in `/dev/paddock` on macOS: Seatbelt runs reach them with `paddock-host device` (see [On macOS](#devices-on-macos)).
 
 `paddock setup` names the missing programs with the command that installs them, and installs nothing itself. Notifications use `osascript`. `paddock view` opens a Terminal window when `$TERMINAL` is not set.
 
@@ -377,7 +377,7 @@ The rules:
 - Logins belong to the credential sandbox. The credential files (`[state] auth`) are not part of the snapshot. They come in and sync back exactly as in every sandbox (`--auth`).
 - `--profile default` is never the default mode. Only the command line turns it on. A project `paddock.toml` cannot turn it on or add data roots.
 - With `--worktree`, the project of the run is the worktree. paddock does not tell the harness about the main project.
-- Only the bwrap backend runs it. docker, podman and srt refuse.
+- bwrap runs it on Linux, Seatbelt on macOS. docker, podman, srt and the VM backend refuse.
 
 The data roots are `[state] data` of the profile: `.claude` and `.claude.json` for claude, `.codex` for codex, `.grok` for grok. A harness without data roots refuses `--profile default`. Add roots in `~/.config/paddock/config.toml`:
 
@@ -394,6 +394,8 @@ A data root is a path relative to the home. paddock refuses the home itself, a f
 The snapshot copies folders, regular files and the symlinks that stay inside their root. It skips symlinks that leave the root, sockets, FIFOs and devices, and names how many. On btrfs, xfs and bcachefs each file is a reflink (`FICLONE`), so the snapshot takes almost no space. On other file systems paddock refuses a snapshot above the size cap and prints its size. The run folder must be on the file system of the home.
 
 paddock still binds the project, keeps the network mode, the secret masking, the host passthrough and the shared caches. Inside the data roots, the selective copies are off: no `seed` copies, no `json_import`, no history binds and no copy back. `import_ro` paths outside the roots, such as `~/.agents/skills`, stay. When the harness also runs on the host, paddock prints a notice: the snapshot is private, and nothing goes back. `paddock ps --json` marks such a sandbox with `"profile": "default"`.
+
+On macOS, Seatbelt cannot mount an overlay. So the sandbox home is a writable copy of the data roots in `~/.local/share/paddock/shadow/runs/ID/home`, and the harness writes that copy. On APFS each file is a clone (`clonefileat`), so the copy takes almost no space and no time, and the start line says `(clones)`. On another file system, such as an external HFS+ disk, the start line says `plain copies` and the size cap applies. After its own writes, paddock records the size and the change time of each file. At the end it compares the copy with that record, prints the same summary and removes the run folder. A file that the run rewrote with the same size and the same change time is not in the summary. The other rules are the same as on Linux: nothing goes back to the host. The run uses the keychain of its sandbox login, not your login keychain. Claude Code keeps its login in the Keychain on macOS, so you log in once in the sandbox, and later runs with that login keep it.
 
 ## Disk space
 
@@ -539,6 +541,7 @@ paddock reads only files of at least 4 KiB in the sandbox homes. It groups them 
 | `egress` (default) | Internet access that leaves the same way as host traffic. Host services and the LAN are not reachable. |
 | `none` | No network. |
 | `api` | Only HTTPS to the model API hosts of the harness profile and the domains of `--allow`. Meant for reviewers and agents that need only their model. |
+| `allowlist` | Only the hosts of the list, the same list as `api`. On Linux it runs on the srt backend. On macOS it runs on Seatbelt with paddock's proxy (see [Network mode `allowlist` on macOS](#network-mode-allowlist-on-macos)). |
 | `host` | The host network namespace. Host-local services are reachable. Needs approval in `paddock.toml`. |
 
 Many users depend on a system proxy or a TUN device for a stable exit address, and an account can be flagged when that address changes. So paddock never gives a sandbox a bridged network.
@@ -571,6 +574,12 @@ The proxy lets a connection through only when all of these hold:
 Plain HTTP requests are refused. The proxy connects like a host program, through the host proxy variables or directly, and it still refuses the host itself and the LAN. The audit log (`paddock log`, capability `network`) records each refused host and the reason, at most once per host and minute, never content. `paddock explain HARNESS --network api` lists the allowed hosts and where each one comes from, and `paddock ps --json` shows the mode.
 
 On docker and podman, the container gets the same proxy and the same rules. On srt, mode `api` uses the srt proxy with the same list (`allow_domains`). srt does not check the TLS server name.
+
+### Network mode `allowlist` on macOS
+
+On macOS, `--network allowlist` runs on the Seatbelt backend, and `--backend auto` picks it. The sandbox connects only to localhost, as in mode `api`. paddock's proxy lets through only the hosts of the list. The list is the same one that srt gets on Linux: the `[network] endpoints` of the harness profile, the `[network] allow` entries, and each `--allow`. The rules of mode `api` apply: `CONNECT` only, host names and not IP addresses, a matching TLS server name, and no plain HTTP. paddock ignores IP entries and names them in a warning at the start. Unlike mode `api`, the sandbox also reaches the host ports that `[network] host_ports` allows, as on srt.
+
+As in mode `api`, a refused host goes into the audit log and the boundary log (`paddock boundary`), and the egress monitoring records the allowed hosts. The reason names the mode, for example `network mode allowlist: not on the list`. Terminal runs and app mode both work this way. The VM backend does not have mode `allowlist` yet.
 
 `paddock doctor --escape --network egress --online` checks all of this: DNS and HTTPS work, and the host loopback, the other host addresses, and direct connections that bypass the proxy do not.
 
@@ -652,7 +661,7 @@ paddock monitor unmute ~/src/tunnel-demo
 A program in a sandbox rarely says "permission denied". A path is missing, a socket is gone, or a LAN address times out, and the program falls back to its defaults without a word. paddock knows its own rules, so it writes each denial to a boundary log, `boundary.jsonl` in the run folder of the sandbox. The log is on by default.
 
 - Host requests: each `paddock-host` request that paddock refused or that the user denied, for example a `fetch` of a protected path, an `exec` in `deny` mode, a tool call that matches no shape, or a refused `borrow`. A note of the user stays out of the log.
-- Network: each target that the host proxy refused, with host and port: a private network address, a host loopback port, an address of this host, or a host outside the list in network mode `api`.
+- Network: each target that the host proxy refused, with host and port: a private network address, a host loopback port, an address of this host, or a host outside the list in network mode `api` (or `allowlist` on macOS).
 - Environment: each variable that paddock withheld at the start (secret-looking names, cloud credentials, `paddock env hide`). The log holds the name, never the value.
 - MCP: each MCP server that does not start in the sandbox, with the reason.
 
@@ -805,7 +814,11 @@ command = ["gh", "auth", "token"]
 GH_TOKEN=$(cat /dev/paddock/secret/GH_TOKEN) gh pr list
 ```
 
-The file needs `/dev/paddock` (FUSE on the host). Without it, the sandbox starts without the credential and paddock says so.
+The file needs `/dev/paddock` (FUSE on the host). Without it, the sandbox starts without the credential and paddock says so. On macOS the file is a FIFO at `$PADDOCK_DEVICES/secret/NAME` (see [On macOS](#devices-on-macos)):
+
+```sh
+GH_TOKEN=$(cat "$PADDOCK_DEVICES/secret/GH_TOKEN") gh pr list
+```
 
 `via = "agent"` with `keys` gives the sandbox your ssh keys through your ssh agent. The private keys stay in the ssh agent on your computer (`SSH_AUTH_SOCK` where paddock started). The sandbox gets its own agent socket, and `SSH_AUTH_SOCK` in the sandbox points at it. paddock answers on that socket: a list of keys shows only the keys that you name, and a signature passes only for them. Every other request (add or remove keys, lock, unlock, extensions) fails and never reaches your agent. A message over 256 KiB, or a malformed one, fails too.
 
@@ -980,7 +993,7 @@ Sometimes the agent needs one thing from your computer: a screenshot of the real
 
 A request travels through the gateway device `/dev/paddock/gw`, which every sandbox with `/dev/paddock` has. `paddock-host` writes the request there and reads the result. paddock normalizes each request and names it by a hash of its capability and arguments. The same request sent again while it waits joins the one that waits: you see one card, and the work runs once. A read waits at most 100 seconds (a `timeout` in the request sets 1 to 600); when that passes first, the read fails with `ETIME` ("still waiting"), and `paddock-host` sends the same request again on its own. An agent can also write to the device itself. A sandbox without `/dev/paddock` uses the host socket as before.
 
-The paddock process that runs a sandbox decides and asks you, but it does not run an approved command itself. For `exec`, it signs a grant for exactly that request: a hash of the capability and the arguments, the sandbox, the project, a lifetime of 30 seconds and a random number. It signs with HMAC-SHA256 and a key in `$XDG_RUNTIME_DIR/paddock/gateway.key` (mode 0600). That folder is in memory, so each login gets a new key. A separate process, `paddock gatewayd`, checks the signature, the time, that the grant was not used before, and that it covers this request, and only then runs the command. paddock starts the executor when a request needs it, and the executor stops after two minutes without requests. The command of an approved `exec` runs isolated, in a transient systemd user unit (`systemd-run --user`), or with bwrap where there is no systemd user instance. It sees the system read-only, the project read-write, an empty home folder and its own `/tmp`. It can use the network, but it cannot gain privileges or create namespaces, and it cannot reach your systemd user manager or session bus: the runtime folder (`/run/user`) is hidden from it. Of your environment, only `PATH`, the language, the time zone, `TERM`, `USER` and `LOGNAME` pass: tokens in your environment stay out. `[exec]` in `~/.config/paddock/config.toml` widens this, and a project `paddock.toml` cannot set it:
+The paddock process that runs a sandbox decides and asks you, but it does not run an approved command itself. For `exec`, it signs a grant for exactly that request: a hash of the capability and the arguments, the sandbox, the project, a lifetime of 30 seconds and a random number. It signs with HMAC-SHA256 and a key in `$XDG_RUNTIME_DIR/paddock/gateway.key` (mode 0600; macOS: see below). That folder is in memory, so each login gets a new key. A separate process, `paddock gatewayd`, checks the signature, the time, that the grant was not used before, and that it covers this request, and only then runs the command. paddock starts the executor when a request needs it, and the executor stops after two minutes without requests. The command of an approved `exec` runs isolated, in a transient systemd user unit (`systemd-run --user`), or with bwrap where there is no systemd user instance. It sees the system read-only, the project read-write, an empty home folder and its own `/tmp`. It can use the network, but it cannot gain privileges or create namespaces, and it cannot reach your systemd user manager or session bus: the runtime folder (`/run/user`) is hidden from it. Of your environment, only `PATH`, the language, the time zone, `TERM`, `USER` and `LOGNAME` pass: tokens in your environment stay out. `[exec]` in `~/.config/paddock/config.toml` widens this, and a project `paddock.toml` cannot set it:
 
 ```toml
 [exec]
@@ -991,7 +1004,7 @@ ro_paths = ["/srv/data"]
 env = ["GOPATH"]       # more variables to pass, by name
 ```
 
-`paddock gateway install` lets systemd start it instead, on the first request (socket activation); `paddock gateway remove` turns that off. Every capability except `fetch` and `spawn` now runs in the executor, each with its own limits:
+`paddock gateway install` lets systemd (launchd on macOS) start it instead, on the first request (socket activation). `paddock gateway remove` turns that off. Every capability except `fetch` and `spawn` now runs in the executor, each with its own limits:
 
 | Capability | In the executor |
 | :--- | :--- |
@@ -1000,6 +1013,8 @@ env = ["GOPATH"]       # more variables to pass, by name
 | `screenshot`, `clipboard-read`, `clipboard-write` | no home, no network, of the runtime folder only the Wayland socket and the compositor's sockets; `wl-copy` keeps a copied text in a unit of its own until you copy something else |
 | `open-url` | through the desktop portal (OpenURI), which starts your browser outside paddock; `xdg-open` with only the variables of a browser where there is no portal |
 | `notify` | a message on the session bus |
+
+On macOS, the executor runs an approved command with `sandbox-exec` and a Seatbelt profile. paddock makes the profile from the same `[exec]` configuration. The command sees the system folders read-only, including Homebrew, Nix and the developer tools. It sees the project read-write, an empty home folder and its own `TMPDIR`. It can connect to the network, and it can listen on localhost only. Seatbelt denies the rest of your files. `home = "read-only"` and `home = "full"` show your real home, and `network = false` allows no IP connection. `git-push` and `forge` see your home read-only and can reach the login keychain through `securityd`, so `gh` and git credential helpers keep working. The folder of the `gh` that paddock found on your PATH is read-only in the view too. The command starts in its working folder, and `PWD` names that folder as paddock got it, so `pwd` prints `/tmp/x`, not `/private/tmp/x`. The system keychains stay closed. The signing key is in the temporary folder of your user (`getconf DARWIN_USER_TEMP_DIR`), which macOS empties at each restart. The executor listens on `~/.local/state/paddock/gatewayd.sock`. `paddock gateway install` writes `~/Library/LaunchAgents/com.harnessix.paddock.gatewayd.plist` and loads it. Then launchd owns the socket and starts the executor on the first request, also after a new login. `paddock gateway remove` unloads the agent and deletes the file. `screenshot`, `clipboard-read` and `clipboard-write` are not available on macOS yet.
 
 `fetch` stays in the paddock process: it opens the file before it asks you, so a path that changes during the wait changes nothing, and the executor would add no limit to reading that one file. `spawn` starts a sandbox, which only paddock does. `fetch` never copies paddock's own folders, with the key, into a sandbox.
 
@@ -1033,7 +1048,7 @@ paddock-host borrow /srv/shared-lib --reason "fix the parser bug there"
 paddock-host return shared-lib --reason "the parser fix, tests pass"
 ```
 
-Every sandbox gets an empty folder of its own at `/run/paddock/borrow/` (on the host `$XDG_DATA_HOME/paddock/borrow/<sandbox id>/`). `borrow` opens the path first. Its last part must not be a symlink, and the card shows where the path really leads. paddock refuses the protected paths of `fetch` and every folder that holds one. It copies the folder with reflinks where the file system has them. Without reflinks the limit is `[borrow] max` (default `"1G"`). paddock records the state of the original in a manifest that the sandbox cannot see: path, size and time of each file, and a hash of each file up to 8 MiB. The original does not change.
+Every sandbox gets an empty folder of its own at `/run/paddock/borrow/` (on the host `$XDG_DATA_HOME/paddock/borrow/<sandbox id>/`). A Seatbelt run on macOS sees that host folder at its own path, in `PADDOCK_BORROW_DIR`. `borrow` opens the path first. Its last part must not be a symlink, and the card shows where the path really leads. paddock refuses the protected paths of `fetch` and every folder that holds one. It copies the folder with reflinks where the file system has them. Without reflinks the limit is `[borrow] max` (default `"1G"`). paddock records the state of the original in a manifest that the sandbox cannot see: path, size and time of each file, and a hash of each file up to 8 MiB. The original does not change.
 
 `return` compares the copy with the manifest. The card lists the added, changed and deleted files, at most 30 names per list with "+N more". paddock refuses the return when the original changed after the borrow, so it never overwrites a change of yours or of another agent. It checks again after your answer, just before it writes. A return never writes `.git/config`, the hooks or the other git files that paddock binds read-only in a project, so a folder that holds one cannot become a file. New files get no execute bit. Symlinks that point outside the folder stop the return, also when they get there through other symlinks of the copy. A folder that host programs read or run, for example under `~/.config`, gets a warning on the card. After a return the copy is gone, and a new `borrow` starts again. When the sandbox ends, paddock deletes the copies that were not returned. `paddock du` shows the borrow folders, and `paddock gc` removes the ones of sandboxes that ended without that step. The audit log records the path, the size and the counts of each borrow and return, never the content. A spawned child cannot borrow from its parent yet.
 
@@ -1602,7 +1617,9 @@ One open is one request. The program opens the device for reading and writing, w
 exec 3<>/dev/paddock/echo; printf 'hello' >&3; cat <&3
 ```
 
-All devices are off by default. Turn a device on in `~/.config/paddock/config.toml`. A project `paddock.toml` cannot turn on a device, because the agent can edit that file.
+All devices are off by default. Turn a device on in `~/.config/paddock/config.toml`. A project `paddock.toml` cannot turn on a device, because the agent can edit that file. `paddock-host device NAME` in the sandbox sends one request and turns errors into exit codes. See "Wait without sleep" below.
+
+### The built-in devices
 
 | Device | What it does |
 | :--- | :--- |
@@ -1617,11 +1634,57 @@ ask = true
 mount = true   # false: no /dev/paddock at all
 ```
 
-`paddock-host device NAME` in the sandbox sends one request and turns errors into exit codes. See "Wait without sleep" below.
+### Your own devices
 
-### Your own devices: a loopback service or a host command
+A device is a program of yours that a sandbox reaches as a file. You declare it once in `~/.config/paddock/config.toml` and say who sees it. A project `paddock.toml` cannot define or turn on a device, because the agent can edit that file.
 
-A sandbox cannot reach a service on the host loopback address, for example a local model server or the HTTP API of a dev database. `--network host` opens much more than that one service. An `http` device opens one address and port. A `command` device runs one fixed host command with the request on its standard input. Define them in `~/.config/paddock/config.toml` only. A project `paddock.toml` cannot define or turn on a device.
+```toml
+[devices.mac]
+shape = "exec"                  # exec | serve. kind = "command" of 0.2.1 means shape = "exec"
+run = "sandbox"                 # sandbox | host | remote
+command = ["~/.config/paddock/devices/mac/build.sh"]
+enabled = true                  # off: the file exists and answers "disabled"
+grant = ["pasture:workers", "project:~/src/app", "harness:claude"]
+mode = "ask"                    # ask (default) | allow: no first-request card
+scope = "run"                   # run (default) | shared
+start = "first-request"         # first-request (default) | with-sandbox
+stream = true                   # the response comes as the program writes it
+max_request = "4M"              # 1M by default, 64M at most
+max_response = "16M"
+timeout = 900                   # seconds per request, 30 by default
+concurrency = 1                 # requests at the same time, 1 to 16
+cost = 0                        # see "Paid devices"
+
+[devices.mac.sandbox]           # the device sandbox: see below
+network = "none"
+connect = ["2222:mac.local:22"]
+ro = ["~/.ssh/known_hosts_mac"]
+credentials = ["mac-ssh"]
+caller = ["project:ro"]
+```
+
+| Key | Values | What it means |
+| :--- | :--- | :--- |
+| `shape` | `exec`, `serve` | `exec`: the command runs once per request, the request on its standard input, the response on its standard output. `serve`: the command runs once and serves HTTP/1.1 on the Unix socket `$PADDOCK_DEVICE_SOCKET`. `kind = "http"` is the loopback proxy, as before. |
+| `run` | `sandbox`, `host`, `remote` | Where the program runs. `sandbox` (default): a paddock sandbox of its own, with the profile of `[devices.NAME.sandbox]`. `host`: on the host as you, with your home, your keys and your network. `remote`: a device of another paddock (`target`, `device`). |
+| `command` | a list | The program and its fixed arguments. The request never adds an argument. A program path that starts with `~/` is your home. |
+| `enabled` | `true`, `false` | Off by default. An off device is still a file that answers "disabled". |
+| `grant` | `pasture:NAME`, `project:PATH`, `harness:NAME`, `all` | Who sees the device. Without the key, every sandbox sees it. |
+| `mode` | `ask`, `allow` | `ask`: the first request of a sandbox puts a card on the host. `allow`: no card, and the audit line names the grant. Refused for `run = "host"`. |
+| `scope` | `run`, `shared` | One instance per sandbox, or one per user for all sandboxes. See "Shared devices" below. |
+| `start` | `first-request`, `with-sandbox` | When the instance starts. |
+| `stream` | `true`, `false` | With `true`, a read returns bytes as the program writes them. See "Streaming" below. |
+| `max_request`, `max_response` | a size, 1 byte to 64M | `max_body` of 0.2.1 sets both. |
+| `timeout` | 1 to 3600 seconds | Per request. |
+| `concurrency` | 1 to 16 | Requests of one instance at the same time. |
+| `idle` | 1 to 86400 seconds | A `shared` instance stops after this long without a request and with no run that uses it. 300 by default. |
+| `ready` | 1 to 300 seconds | How long the start waits for the health check of a `serve` program. |
+
+Who sees a device, in this order. First `paddock run HARNESS --device NAME`, or `paddock-host spawn ... --device NAME` from a sandbox that has it. Then `[pastures.NAME] devices = ["mac"]` for the members of a pasture. Then `grant` of the table. Last, every sandbox when the table has no `grant` key. A project `paddock.toml` can ask with `[devices] use = ["mac"]`. That widens access, so it needs the one-time approval like other widening fields. It never turns a device on. `.catalog` shows how the sandbox got each device as `grant`.
+
+Every key has a parse error that names the table, the key, the allowed values and the fix. An unknown key is an error, so a typo cannot widen or narrow a device.
+
+`kind = "http"` stays the loopback proxy of 0.2.1. The target must be a loopback address (`127.0.0.0/8` or `::1`). The request is the first line `METHOD PATH`, then header lines, an empty line and the body. paddock checks the method and the path prefix, and refuses paths with `..`, `//` or an encoded dot or slash. It drops `Authorization`, `Cookie` and hop-by-hop headers, and sets `Host`, `Content-Length` and `Connection` itself. A `Paddock-Status` header (`disabled`, `refused`, `unreachable` or `no answer`) means that paddock answered itself.
 
 ```toml
 [devices.ollama]
@@ -1632,28 +1695,360 @@ methods = ["GET", "POST"]
 paths = ["/api/"]            # path prefixes
 max_body = "1M"
 timeout = 30                 # seconds, default 30
-
-[devices.jq]
-kind = "command"
-enabled = true
-command = ["jq", "-c", "."]  # fixed arguments
-max_body = "256K"
-timeout = 30
-network = false              # default false
 ```
 
-- Each device is the file `/dev/paddock/NAME`, and `.catalog` shows its format, its limits and whether it is on.
-- A device is off until its table says `enabled = true`. An off device answers with a `disabled` status.
-- The first request of each sandbox puts a card on the host: "allow the device `ollama` for this sandbox". "Allow for this session" lets the later requests of this sandbox through without a card.
-- `http`: the target must be a loopback address (`127.0.0.0/8` or `::1`). paddock refuses any other address when it reads the configuration. The request is the first line `METHOD PATH`, then header lines, an empty line and the body. paddock checks the method and the path prefix and refuses paths with `..`, `//` or an encoded dot or slash. It drops `Authorization`, `Cookie` and hop-by-hop headers, and sets `Host`, `Content-Length` and `Connection` itself. The response is the status line, the headers, an empty line and the body. A `Paddock-Status` header (`disabled`, `refused`, `unreachable` or `no answer`) means that paddock answered itself.
-- `command`: the request goes to the standard input. The command never gets arguments from the request. It runs like an approved `exec`: a clean environment, the `[exec]` view of the system, an empty working folder, and no network unless the device says `network = true`. `timeout` stops it. The response is header lines (`status: exit 0`, `timeout` or `disabled`, and the first five lines of the standard error as `stderr:`), an empty line, then the standard output.
-- A response over `max_body` fails with `EMSGSIZE`. A declined device fails with `EACCES`.
-- The audit log records the device, the method and path (`http`) or the byte counts (`command`), the status and the duration. It never records a body.
+#### The device sandbox
+
+A device program with `run = "sandbox"` runs in a paddock sandbox of its own, without a harness. The baseline is the view of an approved `exec`: the system read-only, an empty home, its own `/tmp`, and no network. Your runtime folders are hidden. The empty home sits at your home path so that `~` in the program's own files resolves. The profile `[devices.NAME.sandbox]` widens it. Nothing else of the host is there. The paddock process of the run starts one instance per sandbox, at the first request or with the sandbox, and ends it with the sandbox.
+
+| Key | Values | What it means |
+| :--- | :--- | :--- |
+| `network` | `none` (default), `egress`, `api` | As for an agent sandbox. `api` takes `allow = [...]`. |
+| `connect` | `["2222:mac.local:22"]` | `127.0.0.1:2222` inside the device sandbox reaches `mac.local:22` from the host. See below. |
+| `ro`, `rw` | host paths | Bound at the same path inside, read-only or read-write. `/` and the home are refused. A single file under a protected folder such as `~/.ssh/known_hosts_mac` passes as `ro`; a folder there does not. |
+| `home` | `hidden` (default), `read-only`, `full` | Your home in the device sandbox. |
+| `env` | a table | Fixed variables for the program. |
+| `env_pass` | names | Host variables passed by name, on top of `HOME`, `PATH`, `TMPDIR`, the locale and `TERM=dumb`. |
+| `credentials` | `[credentials.NAME]` names | An `agent` credential of kind `ssh` gives a filtering ssh agent at `SSH_AUTH_SOCK` that signs with the named keys only; the private key never enters the sandbox. A `deliver` credential with `as = "file"` gives the value as a FIFO at `/run/paddock/device/secret/NAME`, named by `PADDOCK_SECRET_NAME`. `as = "env"`, `gateway` and `intercept` are refused with the fix. No card: you named the credential on the host. |
+| `caller` | `["project:ro"]` | The caller's project, read-only, at `/run/paddock/caller/project`; `PADDOCK_CALLER_MOUNT` names it. See below. |
+| `mem`, `cpus` | `"512M"`, `1` | `MemoryMax` and `CPUQuota` of the systemd scope of the instance. |
+| `tmp` | `"4G"` | The size of the `/tmp` of the device sandbox. 1G by default. |
+
+`connect` reads as the docker `-p` shape with the sandbox side first: `LOCAL_PORT:HOST:PORT`. The direction is the reverse of docker's. The device sandbox has no route to anything. The supervisor inside listens on `127.0.0.1:LOCAL_PORT` and copies each connection to a socket of the broker. The broker connects to `HOST:PORT` from the host, with the host's resolver, routes, VPN and proxy settings. The host must be another machine in the configuration (a loopback or LAN literal is refused). A name that resolves to a LAN address is still connected, and the audit line says `lan`. Every connection gets one audit line with the device, the caller, the host, the port, the bytes in and out and the duration, never content. At most 32 connections per entry. `paddock device stats NAME` sums them.
+
+`caller = ["project:ro"]` binds the caller's project into the device sandbox, read-only, from the start of the instance. A build device reads what is on disk at the moment of the request. If the agent writes files during the request, the device sees a mixed tree. That is the agent's to manage, as with any build that runs beside an editor. A device that produces files answers with bytes, or writes into a folder that you mount with `rw`. Symbolic links in the project resolve inside the device sandbox, where nothing else of the host exists. `project:rw` is refused. Only `scope = "run"` instances can have `caller`.
+
+The lifecycle. An instance is a child of the paddock process of the run, started by bubblewrap with `--die-with-parent`. When the host has a user manager, it runs in a systemd scope `paddock-dev-<sandbox>-<name>`. It ends with the run, with `paddock stop`, with `paddock device stop NAME --sandbox ID`, and when its paddock process dies, even by `kill -9`. `paddock freeze` of the agent sandbox freezes its device instances too. When the supervisor of an instance dies, the next request starts it again after 1 and then 2 seconds. The third death within a minute makes the device `failed`, and `.catalog` says so with `how_to_fix` naming the log command and `paddock device restart`. Each instance has a state file in `~/.local/state/paddock/devices/instances/NAME/ID.json` (written whole, then renamed). Its log is `~/.local/state/paddock/devices/log/NAME/ID.log`: the supervisor's lines and the program's standard error, capped at 10 MiB with one rotation, never a request or a response. Every start removes the state files and folders of instances whose process is gone. `exec` requests run in a fresh empty folder under the `/tmp` of the device sandbox.
+
+`stop` and `restart` reach the paddock process of the run through its kv socket, so the owner of the instance does the work. `paddock ps --json` lists the instances of a sandbox under `devices`. A `kind = "command"` table of 0.2.1 runs this way too: one device sandbox per run instead of one unit per request. The view is the same. The `[exec]` keys of the user configuration are the base of its profile. Each request gets an empty working folder, and there is no network unless the table says so. The envelope, the card and the audit lines are the same. The visible change is speed.
+
+On macOS, a device sandbox runs under Seatbelt (`sandbox-exec`) with a profile built from the same table. The system is read-only, the home and `TMPDIR` are private and empty, `ro` and `rw` sit at their own paths. Your real home is denied unless `home` says else, and there is no IP network. Seatbelt cannot move a path, so the program sees host paths. `caller = ["project:ro"]` gives the caller's project at its own path, which `PADDOCK_CALLER_MOUNT` names. A secret file is a FIFO in the instance folder, named by `PADDOCK_SECRET_NAME` as on Linux. With `connect`, the supervisor listens on `127.0.0.1:LOCAL_PORT` inside the sandbox and the profile opens that port only; the broker connects from the Mac as on Linux. The ssh agent of a credential is a Unix socket that the sandbox can connect to and nothing more. The instance is a plain child of the paddock process of the run, in a process group of its own. The supervisor ends itself within 2 seconds when that process dies, even by `kill -9`. There is no systemd on macOS: `mem` and `cpus` are accepted and ignored, and `paddock doctor` says so for each table that sets them. `paddock freeze` does not reach a device instance there, and `paddock device ls` keeps showing it as running. `paddock ps` and `paddock device check|logs|stop|restart|stats` work as on Linux, and the state file of an instance says `"backend": "seatbelt"`. The catalog entry of such a device has `"platform": "macos"`: the program builds on the tools of the Mac.
+
+#### A device on the host
+
+`run = "host"` runs the program on the host as you, outside every sandbox: with your home, your keys, your environment and your network. Use it for a tool that needs your session, or that must see your files as you see them. A GUI tool, a daemon of your desktop, or a program that reads your keychain are such tools. For everything else, a device sandbox is the better choice: the program gets only what its profile names.
+
+```toml
+[devices.notes]
+shape = "exec"
+run = "host"
+command = ["~/bin/notes-search"]
+cwd = "~/notes"                # the working folder. Default: your home
+env = { EDITOR = "vi" }        # fixed values on top of your environment
+```
+
+The program gets the whole environment that paddock got, so `env_pass` is refused for a host device: it is a key of the sandbox profile. A `[devices.notes.sandbox]` table is refused too. `cwd` must exist when a request comes. If it does not, the request answers `status: error` with `message: cwd ~/notes does not exist`, and the next request works once you made the folder. A command that is not on your PATH answers `message: notes-search is not on the PATH of the host`.
+
+Behind the file is the same supervisor as in a device sandbox, `paddock device-serve`. It starts on the host at the first request of a run and ends with the run. One supervisor per run and device: an `exec` command runs per request in `cwd`, a `serve` program runs once on the socket `dev-NAME.sock` of the run. The envelope, the exit mapping, `timeout`, the kill of the process group, `concurrency` and the log are the ones of the contract below. The log is `~/.local/state/paddock/devices/log/NAME/SANDBOX.log`.
+
+A program that runs on the host is a program that can do what your own shell can do. paddock marks it everywhere, so you cannot miss it:
+
+| Where | The mark |
+| :--- | :--- |
+| the card | "allow the device `notes` for this sandbox: it runs ON THE HOST as you", with the command and `cwd`. `mode = "allow"` is a parse error for a host device: the card shows every session, and "allow for this session" stays available |
+| `.catalog` | `"run": "host"`, and the `request` text begins with "Runs on the host as you, with your home, your keys and your network." |
+| `paddock device ls` | `HOST` in the run column, in capitals |
+| `paddock doctor` | the heading "devices that run on the host as you", one line per device with its command and folder |
+| `paddock ps` | `device notes (host, running 3m, pid 1234)` under the sandbox while the supervisor runs. `--json` has it under `devices` with `run: host` |
+| the audit log | `"run": "host"` on every line of the device |
+
+`paddock device check notes` prints the warning line before it starts anything. Then it starts the supervisor on the host, waits for its health, prints the start time and stops it. A child sandbox gets a host device only when its parent has it, as any device, and its card says which sandbox started it.
+
+#### Shared devices: one instance per user
+
+`scope = "shared"` runs one instance of a device for your whole user, for every sandbox that has the grant. Use it for a program that is expensive to start or that holds a warm state. A model server that takes a minute to load, a cache, or a daemon with an index in memory are such programs. With the default `scope = "run"` each sandbox gets its own instance, which is right for a build script and wrong for a model server.
+
+```toml
+[devices.model]
+shape = "serve"
+enabled = true
+scope = "shared"
+idle = 600                     # stop after this long without a request. 300 by default
+command = ["~/bin/model-server"]
+grant = ["pasture:workers"]
+
+[devices.model.sandbox]
+ro = ["~/models"]
+```
+
+The first broker that needs the device starts the instance. Every broker connects to the one socket `$XDG_RUNTIME_DIR/paddock/devices/NAME.sock`. The instance ends when its last user ended and `idle` seconds passed without a request. A broker that crashes never takes it down. Each run holds one open connection as its lease, and the kernel closes that connection when the run ends, however it ends.
+
+Who starts and owns the instance depends on what your session has, and `paddock device show NAME` prints which one it is:
+
+| Your session | Who owns the instance |
+| :--- | :--- |
+| `paddock device install NAME` was run | systemd owns the socket and starts the instance on the first connection (a `.socket` and a `.service` unit in `~/.config/systemd/user`). On macOS a LaunchAgent with a `Sockets` entry does the same |
+| a systemd user manager, without `install` | the first broker runs `systemd-run --user --unit paddock-device-NAME`, so the instance outlives every run |
+| neither | the first broker starts the instance as a child of its own paddock process. It ends when that run ends, and paddock logs a notice that names the run and `paddock device install NAME`. The next request of another run starts a new one |
 
 ```sh
-paddock-host device ollama "GET /api/tags"
-printf '{"a":1}' | paddock-host device jq -
+paddock device install model     # hand the socket to systemd or launchd
+paddock device uninstall model   # remove the units again
+paddock device stop model        # end the instance now. The next request starts a new one
+paddock device restart model     # end it; with a user manager, start one that reads the table as it is now
+paddock device logs model        # the log of the shared instance
+paddock device check model       # start it if needed, probe it, and report the user count
 ```
+
+The instance reads your user configuration itself, never a project file, and it serves the table that it read at its start. Every request carries your run's view of that table. So an edit of `~/.config/paddock/config.toml` under a running instance cannot be served half old and half new. The request fails with `EIO`, the catalog says "the device was reconfigured", and `paddock device restart NAME` clears it. Where a user manager owns the instance, `restart` also starts the new one at once. Where the first run owns it, `restart` ends the old one and the next request starts the new one. An instance started by that short-lived command would end with it. `paddock device ls` shows `shared, 3 users`. `paddock ps` shows the instance once, at the top, with its user count and its unit. `paddock doctor` gives each shared device one line with who starts it, whether an instance runs and how many runs use it.
+
+A `paddock freeze` of one sandbox does not reach a shared instance, because it serves other runs. `paddock device stop NAME` ends it for everyone, and the open requests of other runs get a `503`.
+
+One instance serves many sandboxes, so a shared device sees many callers. Each request carries `PADDOCK_CALLER` for the sandbox that sent it, and a program that keeps per-caller state must key that state by it. `caller = ["project:ro"]` is a parse error for a shared device, because a mount of one running sandbox cannot serve the others. `run = "host"` with `scope = "shared"` is a parse error too: a host program shows its card per sandbox. Only your user reaches the socket, which lives in your runtime folder with mode 0700.
+
+#### Remote devices
+
+`run = "remote"` forwards each request to a paddock on another machine, which runs the device there. It runs in its own device sandbox, with its own table, its own card and its own audit log. Use it for a tool that lives on another machine, for example Linux tools for an agent in a Seatbelt sandbox. For a build on a Mac from a Linux agent, the worked example below needs no paddock on the Mac.
+
+On the forwarding side, the table names the other paddock and the device there. No command, no shape, no sandbox table: those belong to the table on the other side.
+
+```toml
+[devices.mac-build]
+run = "remote"
+target = "ssh://mac"           # or "unix:/path/to/devices.sock"
+device = "build"               # the device name on the other side
+timeout = 600                  # the whole round trip
+stream = true                  # ask for the output as it comes
+```
+
+On the serving side, the table of the device gets a grant for remote callers. Nothing else grants to a remote caller: not `all`, not a table without a `grant` key.
+
+```toml
+[devices.build]
+shape = "exec"
+command = ["~/bin/build.sh"]
+enabled = true
+grant = ["remote:linuxbox"]    # or remote:any, or the address, for example remote:192.168.1.5
+```
+
+The transport is `ssh HOST paddock device serve-remote`, started on the forwarding host as you, with your ssh configuration and keys, one ssh session per request. ssh runs with `BatchMode=yes`: a login that needs a prompt fails at once with ssh's own text. Use a key that an agent holds, or a `ControlMaster` in your ssh configuration. `paddock` must be on the PATH of a non-interactive shell on the serving machine. The other transport is a Unix socket. `paddock device serve-remote --socket PATH` on the serving side serves many connections on it, in a folder it makes 0700. `target = "unix:PATH"` connects to it. Who can reach the folder can call: that is the whole authentication of a socket. Keep it in a folder of your own, or forward it over ssh yourself.
+
+The identity of a remote caller is its transport, never what it says about itself. For ssh it is the client address that sshd puts into `SSH_CONNECTION`. For a socket it is `local`. `remote:HOST` matches the address, or a name that resolves to it. `remote:any` matches every remote paddock. Each request carries the caller's sandbox id, the name of the forwarding machine and the chain of sandboxes above the caller, as text. The card on the serving side shows it: "allow the device `build` for a remote caller from 192.168.1.5 (sandbox 3f2a on linuxbox)", and says that the text is the other paddock's word. The audit line there has `"sandbox": "remote:192.168.1.5"` and the text in `remote_caller`, `remote_host` and `remote_chain`. The devices of the serving side see the caller as `remote:192.168.1.5`. A remote caller gets no built-in device and no secret file.
+
+"Allow for this session" on the serving side holds for 8 hours per peer and device, in `~/.local/state/paddock/devices/remote-sessions.json`. The ssh transport starts a new `serve-remote` process per request, so the answer must outlive a process. `paddock device serve-remote --forget` forgets every answer. `mode = "allow"` on the serving table skips the card there, as for any device in a device sandbox.
+
+The ssh transport runs a program on the forwarding host as you, so the forward is marked like a host device. The card says "allow the device `mac-build` for this sandbox: it connects to mac with your ssh as you". It has the ssh command in its text, and it shows every session. `mode = "allow"` is a parse error for an ssh target. The `request` text in `.catalog` begins with "Connects to mac with your ssh as you." A socket target is a connection, nothing more: its card is the plain one and takes `mode = "allow"`. `.catalog` has `"run": "remote"`, the `target` and the `device` on the other side. After the first allowed request it also has the other side's own `request` and `response` text, and a `remote` field with its state, shape and platform. A request that does not reach the other side fails with `EIO`, and `last_error` in `.catalog` says why, with ssh's own words when it has them.
+
+The local `timeout` is the whole round trip, and the other side has its own. A cancel (the agent closes the file) closes the transport. The other side cancels as it does for a closed file: the program there is killed. The errors of the other side arrive unchanged: `EINVAL`, `EACCES` when the user there declined, `ETIME` when a device there still waits, `ETIMEDOUT` when its deadline passed. With `stream = true` the forward asks for the output as it comes and each piece reaches the agent as it arrives.
+
+`paddock device check mac-build` reaches the other side as you, reads its catalog and prints the entry of the device there. That is its state, shape, run mode and platform, and its `request` text, or the reason it is off. `paddock device add mac-build --run remote --target ssh://mac --device build` writes the table. `paddock doctor` lists the remote devices with their transport under "devices of another paddock". The VM backend of macOS is the same shape with vsock as the transport, when the devices reach the VM.
+
+#### Streaming
+
+With `stream = true` a read returns bytes as the program writes them, and the end of file comes when the program ends. A build log appears line by line, and a long answer starts at once. A failure after the first byte fails the next read with `EIO`: the agent gets what came, never a silent truncation. Without `stream`, the response comes whole, and a failure is one errno before any byte. Streaming is per device, so an agent reads `stream` in the catalog and knows what to expect.
+
+A stream is read once, in order: the file is not seekable. `max_response` holds for the whole stream, with `EMSGSIZE` at the byte that passes it. paddock keeps about 1 MiB of a stream in memory, whatever its size. A program that writes faster than the agent reads waits. Closing the file ends the program within 300 ms.
+
+`paddock-host device NAME` prints a stream as it comes. It exits with 7 after a late failure, or with 75 when the device says still waiting after some bytes. On macOS the socket carries the same stream in chunks, and an older `paddock-host` gets the response whole.
+
+#### The worked example: build and test on a Mac
+
+Workers in the pasture `workers` build and test their worktree on a Mac at `mac.local`, with the account `me`. The device `mac` runs a script in a device sandbox. The sandbox reaches one host and port, holds the ssh key in a filtering agent, and reads the caller's worktree read-only. The cargo output streams back. One command writes it all:
+
+```sh
+paddock device add --example mac --host mac.local --user me
+```
+
+It writes these tables into `~/.config/paddock/config.toml`, and `~/.config/paddock/devices/mac/build.sh`. It never writes `[pastures]`: it prints the line to add. The `env` value gets your real home path instead of `~`, because a device sandbox on macOS has a private home.
+
+```toml
+[credentials.mac-ssh]
+via = "agent"
+kind = "ssh"
+keys = ["~/.ssh/id_mac.pub"]        # the agent signs with this key only; the key file never enters a sandbox
+
+[devices.mac]
+shape = "exec"
+run = "sandbox"
+command = ["~/.config/paddock/devices/mac/build.sh"]
+enabled = true
+grant = ["pasture:workers"]
+mode = "ask"
+stream = true
+max_request = "4K"
+max_response = "16M"
+timeout = 1200
+concurrency = 1                     # a second request waits for the first
+
+[devices.mac.sandbox]
+network = "none"
+connect = ["2222:mac.local:22"]     # 127.0.0.1:2222 inside reaches mac.local:22 from the host
+ro = ["~/.ssh/known_hosts_mac", "~/.config/paddock/devices/mac"]
+credentials = ["mac-ssh"]
+caller = ["project:ro"]
+env = { SSH = "ssh -p 2222 -o HostKeyAlias=mac.local -o UserKnownHostsFile=~/.ssh/known_hosts_mac -o StrictHostKeyChecking=yes -o BatchMode=yes", MAC = "me@127.0.0.1" }
+mem = "512M"
+
+[pastures.workers]
+members = ["codex", "claude"]
+devices = ["mac"]
+```
+
+`build.sh` reads one line, `test` or `check`, and rejects anything else with exit 65. It copies the worktree with `rsync` to `paddock/<caller>` on the Mac, without `.git`, then runs `cargo test` or `cargo check` there. `HostKeyAlias` makes ssh check the Mac's host key under its name although the connection goes to `127.0.0.1:2222`. `MAC_DIR` in `env` moves the copies to another folder on the Mac.
+
+```sh
+#!/bin/sh
+set -eu
+read -r what || true
+case "$what" in
+  test|check) ;;
+  *) echo "request must be test or check" >&2; exit 65 ;;
+esac
+dest="${MAC_DIR:-paddock}/$PADDOCK_CALLER"
+$SSH "$MAC" "mkdir -p '$dest'"
+rsync -a --delete --exclude .git -e "$SSH" "$PADDOCK_CALLER_MOUNT/" "$MAC:$dest/"
+exec $SSH "$MAC" "PATH=\"\$HOME/.cargo/bin:\$PATH\"; export PATH; cd '$dest' && cargo $what 2>&1"
+```
+
+The Mac side, as the command prints it:
+
+1. On this machine, a key for the Mac in your ssh agent: `ssh-keygen -t ed25519 -f ~/.ssh/id_mac` and `ssh-add ~/.ssh/id_mac`. paddock must start where `SSH_AUTH_SOCK` names that agent.
+2. On the Mac, Remote Login on for the account, and the public key in its `authorized_keys`: `ssh-copy-id -i ~/.ssh/id_mac.pub me@mac.local`.
+3. On this machine, the host key of the Mac under its name: `ssh-keyscan -t ed25519 mac.local >> ~/.ssh/known_hosts_mac`. The command runs `ssh-keyscan` itself and shows the line, so you can compare it with the Mac's own key.
+4. On the Mac, rust. rustup puts cargo in `~/.cargo/bin`, which the script puts on the PATH itself.
+5. The line `devices = ["mac"]` in `[pastures.workers]`.
+6. `paddock device check mac --send check` from a folder with a `Cargo.toml`: the start time, a health line, and the cargo output.
+
+What happens on `printf test | paddock-host device mac -` in a worker:
+
+1. The worker's broker sees the device from the pasture grant. The first request shows the card: "allow the device `mac` for this sandbox", with the command, the connect target, the credential and the caller mount. You allow it for the session.
+2. The broker starts the instance: bubblewrap, no network, the `connect` socket, the filtering ssh agent of `mac-ssh`, the known hosts file, the worktree at `/run/paddock/caller/project`. It waits for the supervisor's health.
+3. The supervisor runs `build.sh` with the request on its standard input. `rsync` and `ssh` connect to `127.0.0.1:2222`, the supervisor copies the bytes to the `connect` socket, and the broker connects to `mac.local:22` on the host. The ssh client signs through the agent. The host key is checked under the alias.
+4. The output streams back: each read of the worker returns the next bytes of the cargo output. A non-zero exit fails the last read with `EIO`, and `paddock-host device` exits with 7 after it printed the output. A wrong request exits with 8.
+5. The audit line: device `mac`, run `sandbox`, the caller, the decision, the exit, the bytes, the duration. One line per ssh connection with the bytes. The device log has the standard error of `build.sh`. No log holds a request or a response.
+
+A second request while one runs waits (`concurrency = 1`). Closing the worker's terminal during a build ends `build.sh`, which is the ssh process, so the session on the Mac ends within 2 seconds. Why `connect` and not `network = "egress"` with the LAN: `egress` would let the device reach every machine of the LAN and every VPN peer. `connect` lets it reach one host and one port, and the broker makes the connection, so the device sandbox has no route at all.
+
+#### The commands
+
+```sh
+paddock device ls                          # name, shape, run, scope, state, grants, instances
+paddock device show mac                    # the table, the resolved profile, what the sandbox reaches
+paddock device add mac --grant pasture:workers --connect 2222:mac.local:22 --exec ./build.sh
+paddock device add --example mac --host mac.local --user me   # the worked example above
+paddock device example                     # writes upper.py, a device in 20 lines of Python
+paddock device check mac                   # start an instance without a run, print the start time, stop it
+paddock device check mac --send test       # also send one request from the host and print the response
+paddock device logs mac --sandbox ID [-f]  # the log of one instance
+paddock device stop mac --sandbox ID       # the next request starts it again
+paddock device restart mac --sandbox ID    # clears `failed`
+paddock device stop mac --all              # every instance of the device
+paddock device stats mac --since 7d        # requests, errors, cancels, p50, p95, connect relays
+paddock device install model               # a shared device: hand its socket to systemd or launchd
+paddock doctor --escape --device mac       # the escape probe, run as the program of the device sandbox
+paddock ps                                 # shows `device mac (sandbox, running 3m, pid N)` under the sandbox
+paddock claude --device mac                # the grant of one run
+```
+
+`add` writes the table into `~/.config/paddock/config.toml`, refuses a name that exists, and prints what it wrote. Put `--exec` or `--serve` last: the rest of the line is the command. `paddock devices` stays as an alias of `paddock device`. `paddock doctor` prints a line for each table with an old spelling, each host device and each remote device. It also names each device without a grant whose sandbox reaches something, and each `project:` grant whose folder does not exist.
+
+`paddock doctor --escape --device NAME` runs a probe as the program of the named device, in its device sandbox. The probe tries what a device program must not do. It tries to see your home and your runtime folder. It tries to read the private key of a credential, and to see more of `~/.ssh` than the table binds. It tries to reach the host's loopback and the LAN, to write the caller's project, and to find `paddock-host`. The connect ports of the table must answer inside. One line per check, `ok` or `FAIL`, and exit 1 when one failed.
+
+#### Write a device
+
+A device program is a program of yours in any language. It never talks to the agent. paddock (the broker) sits between them. It knows the caller from the mount, asks you once per sandbox, and keeps the limits, the budget and the audit log. It sends the request to your program over one small contract. The contract has two shapes. One script can do both.
+
+`shape = "exec"`: paddock runs the command once per request.
+
+| Channel | Content |
+| :--- | :--- |
+| arguments | the `command` list of the table, nothing else, ever |
+| standard input | the request bytes |
+| standard output | the response bytes |
+| standard error | the device log. The agent sees at most the first five lines |
+| exit 0 | the response is the standard output |
+| exit 65 | the request was rejected: the agent gets `EINVAL` |
+| exit 75 | still waiting: the agent gets `ETIME` and sends the same request again |
+| exit 77 | the program declined: the agent gets `EACCES` |
+| other exit | `status: exit N` in the response, the read succeeds |
+| signal, timeout | `status: signal N` or `status: timeout` |
+
+Without `stream`, the response of an `exec` device is the envelope of 0.2.1: a `status:` line, an optional `message:` line, up to five `stderr:` lines, an empty line, then the standard output. With `stream = true` the response is the raw standard output, and a non-zero exit fails the last read with `EIO`.
+
+The command runs in a fresh empty working folder, with these variables. paddock sets them, the caller cannot.
+
+| Variable | Value |
+| :--- | :--- |
+| `PADDOCK_DEVICE` | the device name |
+| `PADDOCK_DEVICE_PROTOCOL` | `1` |
+| `PADDOCK_CALLER` | the sandbox id of the caller |
+| `PADDOCK_CALLER_HARNESS` | its harness |
+| `PADDOCK_CALLER_PROJECT` | the host path of its project |
+| `PADDOCK_CALLER_MOUNT` | where the caller's project is mounted in the device sandbox, with `caller = ["project:ro"]`, else unset |
+| `PADDOCK_CALLER_CHAIN` | the sandboxes above the caller, root first, comma separated |
+| `PADDOCK_REQUEST` | a request id, unique per instance |
+| `PADDOCK_DEADLINE` | seconds left before paddock fails the request |
+| `PADDOCK_MAX_RESPONSE` | bytes |
+| `HOME`, `PATH`, `TMPDIR`, the locale, `TERM=dumb` | the same set that `[exec]` gives |
+
+`shape = "serve"`: paddock starts the command once per instance. The program listens on the Unix socket in `$PADDOCK_DEVICE_SOCKET` and answers HTTP/1.1. One request of an agent is one `POST`:
+
+```
+POST /v1/call HTTP/1.1
+Host: paddock
+Paddock-Protocol: 1
+Paddock-Device: mac
+Paddock-Caller: codex-app-1a2b3c
+Paddock-Caller-Harness: codex
+Paddock-Caller-Project: /home/demo/src/app/.worktrees/wt-1a2b3c
+Paddock-Caller-Mount: /run/paddock/caller/project
+Paddock-Request: 17
+Paddock-Deadline: 580
+Paddock-Max-Response: 1048576
+Content-Length: 42
+
+<42 bytes>
+```
+
+A request of a `scope = "shared"` device carries one header more, `Paddock-Table`, which is the calling run's view of the device table. The shared instance checks it and answers `503` when it differs (see "Shared devices"). A device program ignores it: it never needs to read it.
+
+| Response | What the agent gets |
+| :--- | :--- |
+| `200` with a body | the response bytes. `Content-Length` or `Transfer-Encoding: chunked`. Chunked is how a program streams. |
+| `204` | an empty response |
+| `202` | still waiting: `ETIME`, the same request comes again |
+| `400` | rejected: `EINVAL` |
+| `403` | declined: `EACCES` |
+| `413` | the request is too large for the program: `EFBIG` |
+| `429` | busy: `EBUSY` |
+| `5xx`, a closed connection, a response that is not HTTP | `EIO`. The audit line keeps the status. |
+| the header `Paddock-Cost: 0.002` | the cost of this request, in the unit of your budgets. It counts before `cost_header`. |
+
+paddock closes the connection to cancel. A program that works for a long time checks for the close. paddock reads at most `max_response` bytes, fails the read with `EMSGSIZE` beyond them and closes.
+
+Two more paths, both optional. `GET /v1/health` answers `200` when the program is ready. paddock waits for it after the start (`ready`, 10 seconds by default) and before the next request after a failure. A `serve` program must answer it, else the start fails and `.catalog` names the log. `GET /v1/catalog` answers a JSON object with `request`, `response`, `examples` (a list of short strings) and `cost`. paddock merges `request`, `response` and `examples` into the catalog entry at the start of the instance. The table wins for the name, the limits, the cost and the budget.
+
+The protocol is numbered. A program that needs a newer one answers `GET /v1/health` with `Paddock-Protocol-Min: 2`, and paddock refuses the instance with "the device program needs protocol 2; this paddock speaks 1". A new header or a new status code is additive and stays in protocol 1.
+
+When the program exits, every open request fails with `EIO` and paddock restarts it after 1, 2 and then 4 seconds. After three exits within a minute the device is `failed`: `.catalog` says so with `how_to_fix`, and every request fails with `EIO` until the sandbox restarts. A request beyond `concurrency` waits up to `timeout`, then fails with `EBUSY`.
+
+Rules for a device author. Do not print request bytes to standard error: standard error is the device log, which stays on disk. Read the whole request before you answer. Close the connection after each response. `paddock device example` writes this script, which does both shapes in 20 lines of Python:
+
+```python
+#!/usr/bin/env python3
+# A device that upper-cases its request. exec: stdin to stdout.
+# serve: an HTTP server on $PADDOCK_DEVICE_SOCKET.
+import os, sys, socketserver
+from http.server import BaseHTTPRequestHandler
+sock = os.environ.get("PADDOCK_DEVICE_SOCKET")
+if not sock:
+    sys.stdout.buffer.write(sys.stdin.buffer.read().upper()); sys.exit(0)
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a): pass  # a Unix socket has no client address
+    def do_GET(self):
+        self.send_response(200); self.end_headers()
+    def do_POST(self):
+        n = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(n).upper()
+        self.send_response(200); self.send_header("Content-Length", str(len(body)))
+        self.end_headers(); self.wfile.write(body)
+class S(socketserver.UnixStreamServer): pass
+S(sock, H).serve_forever()
+```
+
+`paddock device add upper --exec ./upper.py` or `--serve ./upper.py`. No SDK and no library of paddock's. The `log_message` line matters: without it, Python's HTTP handler tries to log the client address of the Unix socket and raises.
+
+Behind the socket is `paddock device-serve`, the supervisor. It is the paddock binary itself. For `exec` it forks the command per request. A thread feeds the request on standard input, so a program that does not read cannot block. It caps the output at `max_response`, kills the process group at `timeout` and when the agent closes the file, and removes the working folder. For `serve` it starts the program once and proxies each request byte for byte. Both sides enforce the limits. The supervisor stops at `max_response` and at `timeout`, and the broker does the same, so a bug in one cannot flood or hang the other. The log of an instance has one line per request: the id, the caller, the status, the bytes, the duration. It also has the program's standard error, with the request id as a prefix. It never has a request or a response. It is capped at 10 MiB and rotated once.
 
 #### Paid devices: budgets and the ledger
 
@@ -1673,13 +2068,46 @@ budget = 1.0            # per run
 - A request that paddock could not send (the service did not accept the connection) costs nothing. A request that the service got costs at least `cost`, also when the service does not answer in `timeout` seconds or closes the connection early (`Paddock-Status: no answer`).
 - A paid device needs a budget before its first request. Without `budget` in its table, the first-use card asks for one: 0.10, 1 or 5, or deny. No budget, no request.
 - The budget is per run: a sandbox and the sandboxes it started. A spawned child spends the budget of the root sandbox, never a budget of its own.
-- A request that would pass the budget fails with `EDQUOT` (`paddock-host device` says "budget used" and exits with 11). You get one notification with the command to raise it: `paddock devices budget ID DEVICE --add 1.0`. The next request can pass.
-- The ledger `~/.local/state/paddock/devices/ledger.db` records the time, the sandbox, the project, the device, the cost and the status of each request. Never a body. `paddock devices ledger [--json] [--project PATH] [--since 7d]` sums it by sandbox and device.
+- A request that would pass the budget fails with `EDQUOT` (`paddock-host device` says "budget used" and exits with 11). You get one notification with the command to raise it: `paddock device budget ID DEVICE --add 1.0`. The next request can pass.
+- The ledger `~/.local/state/paddock/devices/ledger.db` records the time, the sandbox, the project, the device, the cost and the status of each request. Never a body. `paddock device ledger [--json] [--project PATH] [--since 7d]` sums it by sandbox and device.
 - `.catalog` shows the cost of each device and the budget left for this sandbox. The bar panel row shows the spent amount, for example "spent 0.42 of 1.00 on search".
 
-The mount needs FUSE: `/dev/fuse` and `fusermount3` (package `fuse3`). `paddock doctor` checks both. The bwrap backend binds the mount at the start. docker and podman bind an empty folder and paddock mounts the file system on it after the container starts. The container waits up to five seconds for it before the harness starts. This needs a shared mount for the paddock run folder, which is the systemd default. srt cannot place a mount at `/dev/paddock`: there, the devices are at the path in `$PADDOCK_DEVICES`. When FUSE is missing, the sandbox starts without devices, and `paddock doctor` says why.
+#### Migration from 0.2.1
 
-Programs must read the response with `read`. `cat` from coreutils, `dd`, shells, Python and Rust do that. busybox `cat` uses `sendfile` and sees an empty file: use `dd` there. Requests and responses never go into logs or process arguments. The log records the device name, the sizes and the result.
+A configuration of 0.2.1 parses without change. `paddock doctor` prints one line per table that uses an old spelling, with the new one, and never refuses it.
+
+| 0.2.1 | Now | What you see |
+| :--- | :--- | :--- |
+| `kind = "http"` | the same | nothing changes |
+| `kind = "command"` | `shape = "exec"`, `run = "sandbox"`; `network = true` is `network = "egress"` of the profile; the `[exec]` keys stay the base | nothing changes; `doctor` shows the new spelling |
+| `max_body` | sets `max_request` and `max_response` | nothing changes |
+| `isolation` (never released) | `run = "host"` | a parse error that names the new key |
+| `paddock devices budget`, `ledger` | `paddock device budget`, `ledger`; `devices` stays | nothing changes |
+| `.catalog` version 1 | version 2: `shape`, `run`, `stream`, `grant`, `instance` per device | nothing for a reader that ignores unknown fields |
+
+```toml
+[devices.jq]
+kind = "command"
+enabled = true
+command = ["jq", "-c", "."]  # fixed arguments
+max_body = "256K"
+timeout = 30
+network = false              # default false
+```
+
+#### The limits
+
+- Each device is the file `/dev/paddock/NAME`, and `.catalog` shows its format, its limits and whether it is on.
+- A device is off until its table says `enabled = true`. An off device answers with a `disabled` status, and one that no grant covers says which grant is missing.
+- The first request of each sandbox puts a card on the host: "allow the device `ollama` for this sandbox". "Allow for this session" lets the later requests of this sandbox through without a card.
+- A request over `max_request` fails with `EFBIG`, a response over `max_response` with `EMSGSIZE`. A declined device fails with `EACCES`.
+- The audit log records the device, where it runs, the grant, the method and path (`http`) or the byte counts (`exec`), the status and the duration. It never records a body.
+- The mount needs FUSE: `/dev/fuse` and `fusermount3` (package `fuse3`). `paddock doctor` checks both. The bwrap backend binds the mount at the start. docker and podman bind an empty folder and paddock mounts the file system on it after the container starts. The container waits up to five seconds for it before the harness starts. This needs a shared mount for the paddock run folder, which is the systemd default. srt cannot place a mount at `/dev/paddock`: there, the devices are at the path in `$PADDOCK_DEVICES`. When FUSE is missing, the sandbox starts without devices, and `paddock doctor` says why.
+- Programs must read the response with `read`. `cat` from coreutils, `dd`, shells, Python and Rust do that. busybox `cat` uses `sendfile` and sees an empty file: use `dd` there. Requests and responses never go into logs or process arguments.
+- The device sandbox and the agent sandbox share the kernel, as every bubblewrap sandbox does. The VM backend is the answer on macOS.
+- A device with `rw` on a folder you also edit has no lock. The card names the folder.
+
+<a id="devices-on-macos"></a>**On macOS**, there is no `/dev/paddock`: Seatbelt cannot show a mount, and FUSE on macOS needs a kernel extension, which paddock does not ask for. A Seatbelt run (terminal or app) gets the same devices over a Unix socket of its own, which `PADDOCK_DEVICES_SOCKET` names. `paddock-host device NAME`, `device list` and the exit codes are the same as on Linux. A shell redirection such as `exec 3<>/dev/paddock/echo` does not work: use `paddock-host device`. The secret files of `as = "file"` credentials are FIFOs in the folder that `$PADDOCK_DEVICES` names: `cat "$PADDOCK_DEVICES/secret/NAME"` reads the value, and each open counts as one use. The value is never on disk. After `paddock credentials revoke`, the FIFO is gone within 50 ms and a read fails with "No such file or directory". `paddock-host device secret/NAME` prints the value too. The question of `ask` comes as a plain notification on macOS: answer it with `paddock approvals answer ID --text -`. A device with `run = "sandbox"` runs under Seatbelt too, with host paths in place of the mounts of bubblewrap (see "The device sandbox"). A device with `scope = "shared"` has a LaunchAgent in place of the systemd units. `paddock device install NAME` writes `~/Library/LaunchAgents/com.harnessix.paddock.device.NAME.plist` with a `Sockets` entry and loads it. launchd owns the socket and keeps it when the instance exits on idle, and `paddock device uninstall NAME` unloads the agent and deletes the file. Without `install`, macOS has no `systemd-run`, so the first run owns the instance and paddock logs the notice (see "Shared devices"). The socket of a shared device is at `~/.local/state/paddock/devices/NAME.sock` there, not in a runtime folder, because launchd makes it at login and that folder exists then. The VM backend does not get the devices yet. `paddock doctor` shows a line for each. A Unix socket path on macOS has at most 103 bytes, and the default `TMPDIR` under `/var/folders` is long. So paddock keeps the sockets of a run in `/tmp/paddock-<uid>/<hash of the run folder>/<id>`, mode 0700, with a hash in place of an id that is too long. macOS starts each process with a limit of 256 open files, so paddock raises its own limit to the hard limit, at most 10240. The worked example works from a Mac too: the device then reaches `mac.local:22` of the same Mac, and the audit line says `lan`.
 
 ### Wait without sleep
 
@@ -1713,6 +2141,9 @@ paddock ps                                    # shows "frozen 12m"
 
 With a systemd user instance, every bwrap or srt sandbox runs in a scope of its own, `paddock-sb-<id>`, and `paddock freeze` freezes that scope with the cgroup freezer. paddock never freezes a scope that is not its own, such as the one of your terminal. docker and podman sandboxes are paused with `pause` instead. A sandbox that started without a systemd user instance cannot be frozen. The bar panel has a key for it on each row, and shows how long a sandbox has been frozen.
 
+macOS has no cgroups: a Seatbelt run starts in a process group of its own, and `paddock freeze` sends SIGSTOP to that group and to every process under the sandbox process, again and again until it finds no new one, so a process that forks during the freeze cannot get away. `paddock thaw` sends SIGCONT the same way. A process that left both the group and the tree (with `setsid` after its parent ended) is not frozen, and a thaw also continues a process that the agent had stopped itself. The device instances of the run are not frozen with it: `paddock device ls` keeps showing them as running. When the run has your terminal, its group gets the terminal while it runs, and paddock takes it back at the end.
+
+- A session of the macOS guest (`paddock app run` on macOS) is frozen with the pause of its VM: the id is `macvm-<app>`. See [The marks and freeze](#the-marks-and-freeze).
 - `paddock stop` thaws a frozen sandbox first, so that it can end.
 - Each freeze and thaw goes to the audit log, with the reason.
 - The other members of its pasture see the state in paddock kv: `sandbox:<id>` in the `pasture` scope is `{"state": "suspended", ...}` while it is frozen and `running` after.
@@ -1795,10 +2226,10 @@ Windows of app sandboxes get a colored border, so you can tell a protected app a
 
 ### Protected windows
 
-On Omarchy (Hyprland), each window that shows a sandbox gets a border, always: an app sandbox window, the display of window mode, and the terminal window of a terminal run. A terminal window counts when its terminal emulator holds the terminal of the run. Some terminal emulators draw several windows from one process, for example Ghostty, `foot --server` and kitty with a single instance. paddock cannot tell which of those windows holds the run, so none of them gets a border. An app window counts only when its process runs in the sandbox. A run in tmux, a detached run and a spawned child have no window of their own and get no border.
+On Omarchy (Hyprland), each window that shows a sandbox gets a border, always: an app sandbox window, the display of window mode, and the terminal window of a terminal run. A terminal window counts when its terminal emulator holds the terminal of the run. Some terminal emulators draw several windows from one process, for example Ghostty, `foot --server` and kitty with a single instance. paddock cannot tell which of those windows holds the run, so none of them gets a border. An app window counts only when its process runs in the sandbox. A run in tmux, a detached run and a spawned child have no window of their own and get no border. On macOS the rule for terminal windows is different: see [App mode on macOS](#app-mode-on-macos).
 
 - Sage green: the sandbox reaches the network only through paddock's proxy, or not at all (network modes `none`, `api` and `egress`).
-- Amber: the sandbox has a wider network (`host` and `allowlist`).
+- Amber: the sandbox has a wider network (`host`, and `allowlist` on srt).
 
 paddock sets the border on each window at run time, and your Hyprland configuration does not change. After a run ends, its terminal window gets its own border back. On a light Omarchy theme, both colors take a deeper tone.
 
@@ -1822,25 +2253,299 @@ Known limits:
 - To add a folder, restart the app. A running sandbox cannot get new mounts.
 - Custom links (`claude://`, `codex://`, `vscode://`) reach the app in its sandbox after `paddock app install`, which makes paddock their handler. `paddock app uninstall` gives them back to the old handler. A login page that the app opens through paddock and that returns to `http://127.0.0.1:PORT` reaches the app: paddock opens that one port on 127.0.0.1 of your machine for ten minutes, while the app listens on it. If an app opens its login page in another way, set `[apps.NAME] login_ports = true` in `~/.config/paddock/config.toml`. Then all the ports the app listens on are open on 127.0.0.1 of your machine while it listens, for any local program.
 
-### App mode on macOS
+### App mode on macOS in a guest VM
 
-On macOS, `paddock app run vscode ~/src/api` runs the app bundle under Seatbelt (`sandbox-exec`) instead of bubblewrap. paddock knows `vscode` (`/Applications/Visual Studio Code.app`) and `claude-desktop` (`/Applications/Claude.app`).
+<a id="app-mode-in-the-macos-guest"></a>On macOS, `paddock app run NAME` runs a desktop app in a macOS guest of paddock's own, in Apple's Virtualization framework. Each window of the app in the guest is a window on your desktop, with its own Dock icon `ChatGPT (paddock)`. This is the default route for every app profile once the golden image is sealed. Without the golden image, `paddock app run` stops with one line that names `paddock macvm setup`. `--backend seatbelt` keeps the older route of [App mode on macOS under Seatbelt](#app-mode-on-macos) for the apps that ran there. `paddock app run` never downloads anything.
+
+The guest is a real macOS. So an app that uses Apple's App Sandbox, such as ChatGPT, runs unchanged under Apple's own sandbox in the guest. The app sees only the workspace folders that you name, never your home. All its traffic goes through paddock's proxy, and paddock asks you about each new host in network mode `ask`.
+
+#### The first run
+
+The example app is ChatGPT, with ChatGPT.app in `/Applications`.
+
+1. Run `paddock app run chatgpt-desktop`. Without the golden image, paddock prints the size and the time of the setup, and the command to run: `paddock macvm setup`.
+2. Run `paddock macvm setup`. It shows the URL, the macOS version, the sizes and the time, and asks `Download and install? [y/N]`. Then it prints one progress line per 5 percent, each with the time left.
+3. Watch the setup window. On a Mac with macOS 27 or later and a guest of macOS 27 or later, the setup needs no clicks and no typing. Before the first boot, paddock writes the guest agent and a first-boot service into the guest disk, as your user and without administrator rights. The provisioning options of macOS 27 give the guest the account `paddock`, so the guest skips Setup Assistant. The first-boot service installs the agent and removes itself. After the agent reports, paddock shuts the guest down, turns on Accessibility for `paddock-guest` in the permission database of the stopped guest, makes `~/Downloads` of the guest a link to the downloads share, and boots the guest again. So the guest boots twice. The panel shows `paddock sets up the guest, there is nothing to do in this window`. Click Stop to do the steps yourself.
+   On an older Mac or with an older guest, follow the guided window, step by step. The agent and the Accessibility permission still need no step of yours when paddock can write the guest disk: you make the account only. Choose the language and the region. Keep the keyboard English (US) or ABC, which is the default, because the Type buttons of the window send the keys of a US keyboard. Skip every sign-in, analytics and Siri step, because paddock needs no Apple ID. Create the account `paddock` with the password that the window shows. The guest has no clipboard before its agent runs, so do not paste: click into the Password field of the guest, then click Type the password into the guest. Do the same for Verify. Then open Terminal in the guest, click into it, click Type the command into the guest and press Return. The command is `sudo /bin/sh "/Volumes/My Shared Files/paddock-seed/install.sh"`. When sudo asks for the password, click Type the password into the guest again and press Return. The command installs the guest agent from a read-only folder of your Mac and starts it. paddock needs no administrator rights on your Mac for it, and a second run of the command is safe. Turn on `paddock-guest` in System Settings, Privacy & Security, Accessibility of the guest.
+4. Wait for the line `golden ready`. paddock configures and seals the image by itself in about 2 minutes.
+5. Run `paddock app run chatgpt-desktop` again. The start lines name the backend, the memory, the display, the shares, the downloads folder, the network mode and the time of the start. The first start of a profile is a cold boot of about 40 s. The copy of the app into the guest adds about 20 s.
+6. Log in to ChatGPT. The hosts of a ChatGPT login are in the profile, so a plain login asks nothing. If the app opens its sign-in page in a browser, the page opens in the browser of your Mac, and the login comes back to the app in the guest. See [Links and logins](#links-and-logins-in-the-guest).
+7. When you are done, quit the app. The quit saves the state of the guest, and the next start is warm, in about 6 s.
+
+The password has 20 lowercase letters without `a`, `m`, `q`, `w`, `y` and `z`. These letters are on the same key on US, UK, German, French and Chinese (Pinyin or ABC) keyboards, so the password types the same with any of these guest keyboards, also by hand. The command contains `/`, `.`, `"` and spaces, which are on other keys on a French keyboard, so Type the command needs English (US) or ABC in the guest. The guided window opens inside the visible part of your screen, never under the Dock or the menu bar, and you can resize it. The guest view keeps its aspect ratio, and the panel scrolls when its text is longer than the window.
+
+If paddock cannot write the agent into the guest disk, the disk stays as it was, and the window shows the install command to type in Terminal of the guest. The terminal says why. If the agent does not start within 5 minutes of the boot, the window shows the same command, and the terminal names the first-boot log. If paddock cannot set the Accessibility permission in the stopped guest, the window asks you to turn on `paddock-guest` in System Settings, Privacy & Security, Accessibility of the guest. `paddock macvm status` names the step that failed until the setup goes on. paddock never reads the guest screen or clicks in the guest. `PADDOCK_MACVM_GUIDED=1 paddock macvm setup` leaves every step to you from the start. The guest reads the provisioning options only on its first boot: a golden that booted once without them continues with Setup Assistant in the window.
+
+The setup needs about 32 GB free for the golden image, plus the size of the restore image (about 15 GB) before the download. If the volume has less, the setup stops before the download or the install, and it names the space that it needs and the space that is free.
+
+Each configure step runs in the guest with a limit of 30 seconds, and the terminal shows one line per step with its exit code and its time. If a step fails, the line says which step, its output, and what its check printed. A step that waits for a permission prompt in the guest fails at its limit and does not stop the setup. No step asks for a permission in the guest. A command in the running guest that replaces `~/Downloads` waits on a Files and Folders prompt, so paddock makes that link in the stopped guest, with the owner of the account `paddock`. The `downloads-link` step only reads the link. If the link fails, the terminal says why, `paddock macvm status` names it, and the `downloads-link` step fails. A Downloads folder with files in it stays as it is: move the files out in the guest, then run `paddock macvm setup` again. The golden has no black desktop picture: on macOS 26 and later the picture is in a private store of the wallpaper agent that no public API writes, and the guest desktop never shows. Time Machine stays as macOS sets it, because `tmutil disable` needs Full Disk Access and a golden has no backup disk.
+
+At the end of a session paddock shuts the guest down with `sudo shutdown -h now` in the guest, with the guest password on stdin and a limit of 15 seconds. No Automation permission is needed. If the agent refuses or the shutdown fails, the VM stops at once, and the event log of the session says why.
+
+A session reads the guest password from the keyring of `paddock macvm setup` (`~/.local/state/paddock/keyring/macvm/guest-password`) and never makes a new one. The shutdown at the quit and the first preparation of the data disk need it. If the keyring has no password, `paddock app run` prints one warning, the data disk is not prepared, and the quit stops the VM without a shutdown, so the stamp says that the session did not end clean. `paddock macvm setup` asks for the password of the guest account and keeps it in the keyring.
+
+At the first start of a profile, the guest agent moves the home of the guest account onto the data disk (`data.prepare`), before the app starts. The agent copies the home part by part. `du` measures the home first, and the copy gets 60 seconds plus 1 second per 50 MB. macOS guards some folders of the home with its privacy prompts: `Desktop`, `Documents`, `Downloads`, and in `Library` the data of other apps (`Containers`, `Group Containers`) and the data vaults such as `Mail` and `Safari`. Each of these folders gets 20 seconds. If it does not end in that time, it stays as an empty folder, and the event log names it. A file that the agent cannot read is skipped and counted, and the copy goes on. A symbolic link stays a link. The agent makes the `Downloads` link to the host share again on the data disk. The host waits up to 120 seconds for the answer, and longer while the agent reports progress (`copying the home: 3 of 40 parts` in the event log). The agent answers the quit while it copies. A quit during the copy stops the copy, shuts the guest down cleanly, saves no state, and the next cold start prepares the disk again. If a step fails or the agent does not answer, the event log and the `data disk` row of `paddock app status` name the step, the app starts with the home on the system disk, the quit saves no state, and the next start tries again. If that quit finds too little space for a saved state, it also prints the `not enough space for the saved state` line. A warm start never moves the home under the running app: it skips the preparation, and the quit saves no state, so the next start boots cold and prepares the disk. After a session that did not end clean, the agent verifies the volume, and the event log has the result.
+
+After the home moves, the login keychain of the guest is locked, because macOS keeps the keychain of the old path open. An app then asks for the password of the "login" keychain. So before the app starts, at every start, warm starts included, the agent unlocks the login keychain with the guest password through the Security framework (`SecKeychainUnlock`). The password never goes on a command line. The agent also makes the keychain in the moved home the first entry of the search list and the default keychain. The event log gets a `keychain` line with the result. If the unlock fails, the session prints one line, and you type the guest password into the prompt of the app.
+
+The guest screen can lock during a session, although the golden image turns off the screen saver, the sleep and the screen lock. The cause is not known yet. The agent reports the lock state in each `health` and in a `screen.lock` event the moment that the state changes. On a lock, the event log gets a `screen` line with the time, the seconds since the last input in the guest and the uptime of the guest. Then the session types the guest password and Return through the keyboard of the VM, and waits 10 seconds for a report that says unlocked. It types only when the newest report says locked and is at most 5 seconds old, and it checks that state again before each key. After 3 tries for one lock, the session prints one line and stops. Then you click into the app window and type the password yourself. The typing uses the US key layout, the same as the Type button of `paddock macvm setup`, so a password with a character that has no US key is not typed. The `health` of the session record has the field `locked`. paddock has not confirmed on a Mac yet: the lock report, the unlock by typing, and the keychain unlock after the home moves and after a warm start. `packaging/macos/checks/macvm-session.sh` checks them (`lock`, `keychain`).
+
+If you set another password in Setup Assistant, or typed it wrong twice in the same way, the configure step does not start over. The terminal and the window say that the guest refused the password. Type the password that you set into the field of the window and click Use this password. paddock keeps it in its keyring in place of its own and runs the configure step again. After 5 refused passwords the step fails, and `paddock macvm setup` asks again.
+
+You click on the host only in the setup. paddock asks for no host permission, also not Accessibility or Screen Recording.
+
+#### The commands
+
+```sh
+paddock macvm setup                 # the golden image, once: download, install, first boot, trust, configure
+paddock macvm status                # golden version, profiles, sizes, slots, running sessions
+paddock macvm update | rollback | remove [--profiles]
+paddock macvm bench CASE --json     # one case of the bench, for packaging/macos/bench.sh
+paddock app run chatgpt-desktop ~/src/web   # the guest route on macOS
+paddock app install chatgpt-desktop         # the Dock launcher in ~/Applications
+paddock app status NAME [--json]            # one screen about the session
+paddock app stop | files | rules NAME
+paddock app log NAME [--events | --shim | --guest] [--follow]
+paddock app reset NAME [--data | --all]     # the reset tiers below
+paddock app backup NAME [--out FILE] [--stop]
+paddock app restore NAME FILE|TIME
+paddock app backups NAME
+paddock app install --drop                  # Paddock Apps.app, the drag target
+```
+
+`paddock app files NAME` opens the downloads folder of the profile in the Finder. `paddock app rules NAME` shows the firewall rules of the app. A bundle that you drop on `Paddock Apps.app` becomes an app profile with its own launcher `<Name> (paddock).app`, and it starts.
+
+#### The marks and freeze
+
+Every window of a session carries the paddock marks, as every app sandbox does: the frame, the badge and an entry in the shield menu of the menu bar. The frame is sage, because every connection of the guest goes through paddock's proxy, in each network mode. Network mode `host` is refused with one line, because the guest has no host network. The badge has the word `vm`, for example `paddock · chatgpt-desktop · ask · vm · 2h`. While the input source of the guest differs from the one that the host shows, the badge names it: `paddock · chatgpt-desktop · ask · vm · Pinyin - Simplified · 2h`. A note of the session, such as `waking`, comes at the end. The menu entry names the app, for example `ChatGPT (paddock) · web · ask · vm · 2h`.
+
+`paddock freeze macvm-chatgpt-desktop` pauses the VM: the guest uses no CPU and keeps its memory, and the badge says `frozen: paddock thaw resumes it`. The windows keep the last picture. `paddock thaw macvm-chatgpt-desktop` resumes the VM, and the guest goes on where it stopped. A second freeze and a thaw of a running session do nothing. The audit log gets each freeze and thaw, and the members of a pasture see the state in paddock kv, as for every sandbox. A quit of a frozen session thaws it first: `paddock app stop`, Cmd-Q and the Dock menu. Then the app can save its work, and paddock can save the state. The paused time does not count as a silence of the guest.
+
+#### When something fails
+
+Your data is on the data disk of the profile, which holds the guest home with the app, its login and its documents. No failure below removes it.
+
+- If the app crashes in the guest, its windows close and the session stays. The Dock menu offers `Open ChatGPT again`. After three crashes in a minute, paddock stops opening it and prints the path of the crash report.
+- If the guest hangs, the badge says `guest not answering` after 10 s. After 30 s the Dock menu offers `Restart guest`. After 120 s paddock restarts the guest by itself, with the same shares, and the windows come back.
+- If the session process crashes, the VM stops with it. The next `paddock app run` or `paddock app list` cleans up, and the next start is a cold boot with the line `the last session ended without a save`.
+- If the terminal closes or paddock is updated during a session, the session goes on. It depends on no other paddock process after the start.
+- If the Mac sleeps, the VM sleeps with it. At the wake the badge says `waking` until the guest answers, at most 10 s. The app reconnects as any laptop app does, and a firewall question from before the sleep is asked again.
+- If the disk gets full, the badge warns at 2 GiB free. At 1 GiB free the guest shows an alert, and the next quit skips the save. A start that needs more space than the disk has stops before it spends any, with the sizes.
+- If macOS on the Mac is updated, the saved state of the guest no longer fits. The next start says so and boots cold, in about 40 s.
+- If a start finds a profile that a crash left half written, paddock rebuilds the part that is missing and keeps your data.
+
+#### Reset and backups
+
+`paddock app reset NAME` has three tiers. Each one prints what it removes and what it keeps, and asks first. A reset refuses while the session runs.
+
+| Command | Removes | Keeps | Backup first |
+| --- | --- | --- | --- |
+| `paddock app reset NAME` | the saved state, the app copy of the profile, the drops and the logs. The next start is a cold boot and copies the app again | the system disk and the data disk, `downloads/`, `backups/`, the firewall rules | no |
+| `paddock app reset NAME --data` | the system disk and the data disk, the saved state, the stamp, the app copy, the drops and the logs. The next start is a fresh profile from the current golden image | `downloads/`, `backups/`, the firewall rules | yes, `backups/pre-reset-<time>/` |
+| `paddock app reset NAME --all` | the whole profile and its firewall rules, moved to `macvm/trash/` for 7 days | nothing | the trash is the backup |
+
+The system disk and the data disk of a profile are a pair. The system disk holds the account of the guest, the path of its home on the data disk and the daemon that mounts that disk. A data disk that the guest formatted itself (a profile made before this version) is also encrypted with keys that its own system disk holds. So the pair stays together for the life of the profile. A new macOS in the golden image reaches an existing profile only through `paddock app reset NAME --data`.
+
+`paddock app backup NAME` makes a backup of the pair in `backups/<time>/` of the profile, in seconds, because the copy shares the blocks of the disk. `--out FILE` writes it elsewhere. A backup refuses while the session runs, because the guest has writes that are not on the disk yet. `--stop` quits the session first. `paddock app restore NAME FILE|TIME` puts a backup back, and the pair of before goes to `backups/pre-restore-<time>/`. `paddock app backups NAME` lists the backups with their sizes. paddock also makes a backup by itself before `--data`, `--all` and a repair. It keeps the newest 3 automatic backups for 30 days at most, and `paddock gc` removes the rest. A backup holds the login keychain of the guest, so its files have mode 0600 in a folder of mode 0700.
+
+#### Status and logs
+
+`paddock app status NAME` shows one screen about a profile. It has the session with its pid, its age and its kind of start, the golden image and the guest agent. It has the app with its version and the last health of the guest. It has the sizes on disk, the network mode with the allowed and denied connections, the shares and the logs folder. `--json` gives the same as JSON. A stopped profile shows how the last session ended and how the next one starts. `paddock macvm status` lists every profile in one line each, with the golden image and the two VM slots.
+
+The logs of a profile are in `logs/` of its folder:
+
+| Log | What | Size |
+| --- | --- | --- |
+| `shim.log` | the log of the session process | 5 files of 1 MiB |
+| `events.jsonl` | one JSON line per change of the session, for example the start, a lost health, a wake, a freeze, the quit and each error | 2 MiB |
+| `console.log` | the serial console of the guest: the start line of the guest agent and the `sw_vers` lines at each boot, because macOS writes nothing there on a normal boot | 5 files of 1 MiB |
+| `agent.log` | the log of the guest agent, fetched at the quit | 5 files of 1 MiB |
+
+`paddock app log NAME` prints the connection log, `--events` the event log, `--shim` the session log and `--guest` the agent log. `--follow` follows. No log holds the session token, the guest password, clipboard content, file content or the saved state. `paddock doctor` on macOS has a `macvm` block, and `paddock doctor --report` adds the logs of each profile, with the secrets removed.
+
+#### Keyboard and input methods
+
+The session windows send key codes to the guest, not characters, and the guest turns them into text with its own input source. So paddock keeps the input source of the guest equal to the one of the host. At the start the guest gets the enabled input sources of the host. While a session window is key, each change on the host goes to the guest. A layout that the guest lacks, such as one of a third-party input method, shows in the badge.
+
+An input method that composes text, such as Pinyin, Japanese, Korean or Vietnamese Telex, must compose in the guest. While a session window is key, the host gets the plain layout of the input method, for example `ABC` for Pinyin. The guest gets the input method itself. The candidate window of the guest shows next to the text cursor. When the window loses the focus, the host gets its input method back. The Globe key switches the input source of the guest while a session window is key.
+
+#### Screens, Spaces and full screen
+
+The guest has one display, as large as all your screens together, at the scale of the main screen. With two screens of two scales, windows on the other screen are soft, and the start lines say so. The display keeps its size until the next start. If a screen goes away during a session, the windows on it move to the main screen, and the badge says `display changed, restart for full size`.
+
+A session window moves to another Space as any window does. But all windows of the guest are on its one display. If you put two windows that overlap on two Spaces, the one of the other Space can show through. paddock raises the windows of the active Space in the guest, to keep this rare. When an app window goes to full screen in the guest, its session window goes to full screen on your Mac and shows the whole guest display. When the guest window leaves full screen, the session window comes back to the guest window's frame. A window that the guest puts on a window server level outside the levels of app windows (below the desktop, or at the levels of a drag image and the screen saver) is still refused, and the badge says `full screen is not available in the guest`.
+
+#### VoiceOver
+
+In the first version, VoiceOver read only the title of a session window and `ChatGPT (paddock)`. paddock now mirrors the Accessibility tree of the key window of the guest, four levels deep, with the roles, the titles and the values. A press or a new value goes to the guest. Keyboard navigation with Tab, the arrow keys and Full Keyboard Access works, because the guest handles it. Reduce Motion and Increase Contrast of the Mac go to the guest. The Dynamic Type of the Mac has no counterpart in the guest.
+
+#### Clipboard and drag and drop
+
+While a session window is key, the clipboard goes both ways, up to 16 MiB per copy. The types are plain text, RTF, HTML, PNG, TIFF and file URLs. Items that password managers mark as concealed or transient never cross. A file URL from the guest must point into a share, or it does not cross. A file from the Mac crosses as a drop. You can drag files, text and images into a session window, and paddock puts them into the guest. A drag out of a session window to the Mac is not possible. Use the downloads folder (`paddock app files NAME`) or the clipboard instead.
+
+#### Limits
+
+What a session costs, and where paddock tells you before it spends the time or the disk:
+
+| What | Value | Where paddock says it |
+| --- | --- | --- |
+| Sessions at once | 2 (Apple's limit on macOS VMs) | the third `paddock app run` suspends the least recently used session, or stops and names the two with `[macvm] auto_suspend = false` |
+| RAM per session | 4 GiB, `vm_memory = "8G"` in `[apps.NAME]` for editors, at most half of the Mac's memory | the start lines, `paddock macvm status` |
+| CPUs per session | 4 | the start lines |
+| Golden image on disk | 20 to 25 GB after the seal, plus the 15 GB IPSW until it is removed | `paddock macvm setup` before the download, `paddock macvm status` |
+| Profile on disk | 1 to 5 GB of system writes, a data disk up to 20 GB, a saved state of the RAM size | `paddock app list`, `paddock macvm status` |
+| First golden build | 10 to 20 minutes of download, 10 to 20 minutes of install, 3 minutes of first boots and configure | `paddock macvm setup` before it starts |
+| First start of a profile | 25 to 40 s cold boot, plus 20 to 40 s for the copy of the app | the start lines |
+| Later start | 3 to 6 s restore | the start lines |
+| Quit | 2 to 8 s for the save | the quit lines |
+| Input to screen | one display frame, 16 ms at 60 Hz, plus the guest's own time | this README |
+
+These are not there, and paddock refuses each one with one line where you can ask for it:
+
+- A Mac without Apple silicon.
+- A host before macOS 14, because the save of the state and the keyboard of the guest need macOS 14.
+- More than two sessions, and guest memory above half of the Mac's memory.
+- The network mode `host`.
+- A drag out of the guest.
+- Apple ID and App Store apps.
+- `paddock-host` inside a desktop app.
+
+Two screens of two scales work, with soft windows on the other screen.
+
+#### Performance
+
+The targets of the route are in `packaging/macos/bench/targets.json`, and `packaging/macos/bench.sh` measures them on a Mac with `paddock macvm bench CASE --json`. The baseline is the last committed run in `packaging/macos/bench/baseline.json`. A Linux test checks that the baseline meets the targets, so a change of a target and of the baseline is one commit. The baseline below holds the targets themselves until the first measured run.
+
+| Measure | Target | Baseline |
+| --- | --- | --- |
+| `warm` | p50 6 s, p95 10 s | p50 6 s, p95 10 s |
+| `cold` | p95 45 s | p95 45 s |
+| `first` | p95 120 s | p95 120 s |
+| `quit` | p95 10 s | p95 10 s |
+| `update` | p95 5 s | p95 5 s |
+| `input` | p95 40 ms | p95 40 ms |
+| `move` | p95 8 ms | p95 8 ms |
+| `frames` | p50 17 ms, p95 50 ms | p50 17 ms, p95 50 ms |
+| `idle.cpu` | mean 3 % | mean 3 % |
+| `idle.ram` | p95 4 GiB | p95 4 GiB |
+| `idle.load` | mean 1 | mean 1 |
+| `video` | mean 60 % | mean 60 % |
+| `disk` | p95 6 GiB | p95 6 GiB |
+
+`warm`, `cold` and `first` are the times from `paddock app run` to the first window, `first` with the copy of a 500 MB app. `quit` is Cmd-Q to the end of the session process at 4 GiB, and `update` is the self-update of the guest agent. `input` is the time from a key on the Mac to the change of a text field in the guest. `move` is the time from a window move in the guest to the host window. `frames` is the gap between two frames of a guest animation (17 ms is 60 fps). `idle.cpu` and `video` are the CPU of the session in percent of one core, at idle and with a 1080p video. `idle.ram` is its memory at idle. `disk` is the profile after a start and a quit, without the app.
+
+#### Security
+
+What the guest can reach on the Mac, and nothing else:
+
+| Path | What | Guard |
+| --- | --- | --- |
+| vsock 1030 | the control line of its own session | a token after the hello, one connection, JSON lines of a limited length |
+| vsock 1031 | paddock's proxy of its own session | the token, the network mode of the session, the firewall rules |
+| vsock 1032 | the clipboard and the drops | the token, 16 MiB per transfer, 64 transfers per minute |
+| vsock 1033 | one forwarded login callback | the token and a one-time ticket that the host made for a connection to a callback port of a link that it opened |
+| the `ws-*` shares | the workspace folders that you name | never your home, `/` or a protected folder |
+| the `drop` and `downloads` shares | two folders of the profile | inside the paddock data folder |
+| the `apps` and `agent` shares | the app copy and the guest agent | read-only, and the agent checks the hash before it replaces itself |
+| the VM slots | two lock files in `/private/tmp` | the text of a holder is shown and never trusted |
+| the network device | ARP, DHCP, DNS refused, ping of the gateway | every other frame is dropped and logged |
+| the windows | pixels out, keys and the mouse in | only for the window that has the focus |
+| the clipboard | both ways | only while a session window is key |
+
+The guest cannot reach your home, your keychain, your screen or the clipboard while you work elsewhere. It cannot reach any socket of paddock on the Mac, the network of the Mac or other profiles. It cannot reach the golden image, which is read-only and only cloned, or the Linux VM of `paddock vm`. `paddock-host` is not in the guest, so no host request comes from a desktop app. The 21 items of the checklist each have a test or a Mac script (`packaging/macos/checks/security.sh`).
+
+#### Not confirmed on a Mac yet
+
+These checks have not run on a Mac. The scripts under `packaging/macos/checks/` check each one on a Mac.
+
+- paddock has not confirmed the build, clippy and tests of the bench on macOS (`macvm-bench.sh build`) on a Mac yet.
+- paddock has not confirmed the gates of `paddock macvm bench`, which refuse a session that started without `--bench` (`macvm-bench.sh gates`) on a Mac yet.
+- paddock has not confirmed the numbers of the bench: the baseline above holds the targets until `packaging/macos/bench.sh --baseline` writes a measured run (`macvm-bench.sh bench`) on a Mac yet.
+- paddock has not confirmed the JSON report of a bench run (`macvm-bench.sh json`) on a Mac yet.
+- paddock has not confirmed the MISS line of a target that a bench run misses (`macvm-bench.sh env`) on a Mac yet.
+- paddock has not confirmed that a key reaches the guest app on a Mac yet.
+- paddock has not confirmed the offline seed: the files on the guest disk as your user, their root owner, `fsck_apfs -n` and the agent start by the first-boot service (`macvm-offline.sh seed`) on a Mac yet.
+- paddock has not confirmed the offline trust: the Accessibility row in the permission database of the stopped guest and the report of the agent after the next boot (`macvm-offline.sh trust`) on a Mac yet.
+- paddock has not confirmed that the Accessibility permission stays after a self-update of the agent (`macvm-offline.sh update`) on a Mac yet.
+- paddock has not confirmed that every configure step ends with `ok` within its limit on a macOS 27 guest (`macvm-first-run.sh` unattended) on a Mac yet.
+- paddock has not confirmed the offline `~/Downloads` link: a link to the downloads share with the owner 501:20 in the stopped guest (`macvm-offline.sh downloads`) on a Mac yet.
+- paddock has not confirmed that the end of a session shuts the guest down with `sudo shutdown` and no permission prompt (`macvm-offline.sh shutdown`) on a Mac yet.
+- paddock has not confirmed that the unattended setup needs no click of the person before `golden ready` (`macvm-first-run.sh` clicks) on a Mac yet.
+- paddock has not confirmed the seed of the guided step: the shared seed folder, the install command in Terminal of the guest and the agent start without a new login (`macvm-golden.sh` seed, `macvm-first-run.sh` clicks) on a Mac yet.
+- paddock has not confirmed that the Type buttons of the guided window reach the account fields of Setup Assistant and Terminal of the guest (`macvm-first-run.sh` typing) on a Mac yet.
+- paddock has not confirmed that the guided window fits a 13-inch screen with the Dock visible and that a resize keeps the aspect of the guest view (`macvm-first-run.sh` window) on a Mac yet.
+- paddock has not confirmed that a refused password shows the question of the panel and that the configure step passes with the typed one (`macvm-first-run.sh` password) on a Mac yet.
+- paddock has not confirmed the window list, the titles and the moves through Accessibility in the guest on a Mac yet.
+- paddock has not confirmed the guest layout of the host key codes and Pinyin in the guest on a Mac yet.
+- paddock has not confirmed the marks on two windows of one session (`macvm-marks.sh marks`) on a Mac yet.
+- paddock has not confirmed that `paddock freeze` stops the guest and `paddock thaw` lets it go on (`macvm-marks.sh freeze`) on a Mac yet.
+- paddock has not confirmed that a window on a screen that goes away comes to the main screen (`macvm-marks.sh screen`) on a Mac yet.
+- paddock has not confirmed that a quit of a frozen session saves it (`macvm-marks.sh quit-frozen`) on a Mac yet.
+- paddock has not confirmed that the guest window follows a host drag within 50 ms at the 95th percentile, with no frame more than 2 points apart after the move (`macvm-session.sh drag`) on a Mac yet.
+- paddock has not confirmed that the clip of a session window has the corner radius that the agent measured, within 1 point, for TextEdit and a toolbar window (`macvm-session.sh radius`) on a Mac yet.
+- paddock has not confirmed that a guest window in full screen puts its session window in full screen with the whole guest display, and back (`macvm-session.sh fullscreen`) on a Mac yet.
+- paddock has not confirmed that a guest link opens through the link helper and that a login callback on the host loopback reaches a guest server, and only that port (`macvm-session.sh login`) on a Mac yet.
+
+#### Links and logins in the guest
+
+<a id="links-and-logins-in-the-guest"></a>A link that an app in the guest opens goes to the browser of your Mac. The default browser of the guest account is `Paddock Links`, a small helper of the guest agent. The setup of the golden image writes this choice into the guest disk while the guest is stopped, so macOS in the guest never asks to change the default browser. The helper hands each link to the agent, and the agent sends it to the session on the Mac.
+
+The session uses the rules of the host requests of a terminal run. Only http and https links pass. The mode of `open-url` in `[host]` of `~/.config/paddock/config.toml` decides: `ask` (the default) shows the approval card with the full link, `allow` opens it, and `deny` keeps it closed. The card offers "allow for this session" and "deny for this session". The event log of the profile names each link by its scheme, its host and its length, never by its path or its query.
+
+Many apps log in with OAuth: they listen on a port of the guest loopback and wait for the browser to come back to `http://localhost:PORT/...`. When the session opens a link whose callback address (`redirect_uri` and the like, also in a nested link) is a loopback port, it listens on `127.0.0.1:PORT` and `[::1]:PORT` of your Mac for 10 minutes. The session forwards each connection on that port to the same port of the guest loopback, through vsock 1033, and only while a program in the guest listens there. The port closes 10 seconds after the first callback that the guest answered, so the page that the app redirects to still loads. No other port of the guest is reachable from the Mac, and nothing listens on an address of your Mac that is not a loopback address. When a program of your Mac holds the port, the event log says so, and the login cannot finish in the guest.
+
+The proxy settings of the guest send `localhost`, `127.0.0.1` and `::1` around the proxy, and nothing else: the bypass list of the system proxy and `NO_PROXY` of the app hold exactly these three. A golden image of an earlier paddock has no helper as its default browser and an empty bypass list. Run `paddock macvm update --force` to build a new golden image of the same macOS; until then, links open in Safari of the guest, as before.
+
+#### Details of the route
+
+`paddock app run NAME --backend macvm` boots a macOS guest of paddock's own in the Virtualization framework, one profile per app under `~/.local/share/paddock/macvm/profiles.noindex/NAME/default/`. On macOS `paddock app run NAME` picks this route for every app profile once the golden image is sealed, and otherwise stops with the line that names `paddock macvm setup`; `--backend seatbelt` keeps the older Seatbelt route for the apps that ran there. It needs the sealed golden image of `paddock macvm setup` and refuses with that line without it. The profile holds a clone of the golden (`system.img`, APFS clone, no space), the data disk `data.img` (the guest home, 20 GiB sparse, mode 0600) and the saved machine state `state.vzs` of the last quit. The data disk survives every failure and every repair: only `paddock app reset NAME --data` and `--all` remove it. paddock formats a new data disk on your Mac before the first boot, as a plain user (`hdiutil attach -nomount`, `diskutil partitionDisk ... GPT APFS Data`, `hdiutil detach`), so the guest never shows the dialog `The disk you attached was not readable by this computer`. The guest agent then moves the home onto the empty volume. If the format fails, one warning names the reason, the disk stays blank, and the agent formats it in the guest as before. If a disk dialog shows anyway (an older profile with a blank disk), the agent presses Ignore through Accessibility (never Eject or Initialize), and `events.jsonl` gets a `dialog` line. If the agent cannot press it, the dialog shows on your desktop as a window of the app `system`, and the session prints a line that names it. A volume that paddock formats on your Mac is not encrypted by the guest, so its data at rest has the same protection as the system disk next to it: the mode 0600 of `data.img`, and FileVault when it is on for your Mac. The system disk stays with it for the life of the profile, because the data disk mounts only under the system disk that formatted it; a repair keeps both, and a profile whose system disk is gone is refused with the line that names `paddock app restore` and `--data`, with nothing changed. `paddock app backup NAME` clones the pair (system and data disk, shared blocks, seconds) into `backups/<time>/`, `paddock app restore NAME FOLDER|TIME` puts one back (the pair of before goes to `backups/pre-restore-<time>/`), `paddock app backups NAME` lists them, and a backup holds the login keychain, so it has mode 0600 in a 0700 folder. `paddock app reset NAME` removes the saved state, the app clone, the drops and the logs; `--data` removes the pair after a `pre-reset` backup; `--all` moves the whole profile to `macvm/trash/` for 7 days. `paddock gc` removes the trash after 7 days and the automatic backups beyond the newest 3 or older than 30 days; manual backups stay. During a session the shim watches the guest: no `health` for 10 s sets the badge `guest not answering` and pings, 30 s offers `Restart guest` in the Dock menu, 120 s restarts the guest alone with the same shares (the data disk replays its journal). Three unanswered requests in a row count as an agent crash. An app that exits three times in a minute is not opened again, and the line names the crash report. At a wake of the Mac the badge says `waking` until the first pong, the idle tunnels close and the open firewall questions are asked again. With 2 GiB free the badge warns; with 1 GiB the guest shows an alert and the next quit skips the save. paddock has not confirmed on a Mac yet: the repair, the backup and the restore of a pair, the reset tiers, the guest restart, the crash counter, the wake and the disk watch; `packaging/macos/checks/macvm-recovery.sh` checks them. A start is `warm` (the saved state resumes), `cold` (a boot), `repair` (a half profile after a crash: paddock rebuilds the system part and keeps your data) or `fresh`. Before a clone, the volume needs 8 GiB free. `paddock app stop NAME`, SIGTERM and Ctrl-C ask the app to quit (when the app does not run in the guest, the quit goes on at once), save the state when `[macvm] save` is on (the default) and the volume has the RAM size plus 1 GiB free, then stop the VM. A second signal stops the VM at once without a save. The end of the terminal does not end the session: the shim ignores SIGHUP, and `paddock app list` shows it. Two macOS VMs run per Mac (a limit of the framework): a third start is refused with the holders named, before any clone. A second start of the same profile is refused with the pid of the first. paddock has not confirmed on a Mac yet: the boot of a profile from the golden, the warm start, the two-session limit, the format of a new data disk as a plain user, the copy of a fresh home with its time limit and the guarded folders, the press of Ignore on a disk dialog, the quit of a session whose app does not run, the agent log after each quit, the input source fallback, and that no paddock process leaves zombie processes; `packaging/macos/checks/macvm-session.sh` checks them (`format`, `datadisk`, `dialog`, `noapp`, `input`, `zombies`). The logs of a session are in `profiles.noindex/NAME/default/logs/`: `shim.log`, `events.jsonl` (one JSON line per state change, 2 MiB cap) and `console.log` (the serial console of the guest). The network of the guest: the guest has one network device, and its host end is a stub inside the session helper that answers only ARP, one DHCP lease, DNS with `REFUSED` and `ping` of the gateway `10.0.2.2`. Every other frame is dropped and counted, one line per minute per target in `logs/boundary.jsonl` of the profile, so an app that ignores the proxy shows up there with the host it tried. The only way out is the proxy of the guest agent on `127.0.0.1:3128`, which is the system proxy of the guest and the `HTTPS_PROXY` of the app. Each connection goes over vsock to paddock's proxy inside the session helper, with the guest process in front (pid, bundle id, team id, path, and the app above a helper), and the network mode of the run decides as for every other backend. The identity comes from the guest and can be forged by a root process there, so paddock uses it for rules and the log, never as the only reason to allow a host. paddock has not confirmed on a Mac yet: the network service name of the guest, the proxy through the guest agent, the identity of a connecting process, and the tunnel close at wake; `packaging/macos/checks/macvm-network.sh` checks them.
+
+Suspend and instances. Apple runs at most two macOS VMs per Mac, so paddock holds two slots. If both slots are in use and you start a third session, paddock saves the least recently used session first: the one whose windows were not active for the longest time. The save takes about the RAM size in disk space and a few seconds, and it frees the slot within 15 s. paddock never suspends a session with an open dialog of its app (a save dialog, for example), a session that copies its app into the guest, or a session whose guest prepares its data disk: it takes the next one, or it refuses the start with one line that names each session and the reason. The suspended session keeps its icon in the Dock. A click on the icon, `Resume` in its Dock menu, or `paddock app run NAME` resumes it from the saved state in about 4 s, and suspends another session if it needs the slot. `paddock app list` and `paddock app status NAME --json` show the state `suspended`, and `events.jsonl` of the profile has a `suspend` line and a `resume` line, each with its reason. `paddock app stop NAME` ends a suspended session at once: its state is on disk already. To turn automatic suspend off, set `auto_suspend = false` in `[macvm]` of `~/.config/paddock/config.toml`. Then a third start is refused, as before.
+
+`paddock app run NAME --instance N` runs instance N of an app: another profile with its own system and data disk, login keychain and firewall rules, cloned from the golden like the first. `--new` picks the lowest free number. Instance 1 is the folder `profiles.noindex/NAME/default/`, and instance N is `profiles.noindex/NAME/instance-N/`. The Dock names the instance (`ChatGPT 2 (paddock)`). `paddock app stop`, `status`, `files`, `reset`, `backup`, `restore` and `backups` take `--instance N` too. The firewall rules of instance N are in `~/.config/paddock/firewall/NAME--N.toml`, and `paddock app rules NAME--N` edits them.
+
+`paddock du` lists the macvm folder after the Linux sections: the golden image, the restore images, the trash, and each profile instance with its disks, saved state, app copies and backups, and whether it runs, is suspended or is stopped. `paddock du --json` has the same data under `macvm`. `paddock gc --yes` removes the app archives of stopped profiles (the next copy of a new version makes them again) and the saved states of profiles that were not used for `--older-than` days (their next start is a cold boot). A profile is a user asset, like a home: `paddock gc` lists a profile that was not used for `--older-than` days, but removes it only with `--homes --include-app-logins`, because the app's login in it will be lost. paddock never removes anything of a running or suspended instance. When a start finds less than 8 GiB free on the volume, it runs the automatic tier of `paddock gc` on the macvm folder first. paddock has not confirmed on a Mac yet: the suspend of the least recently used session, the warm resume from the Dock, two instances at once, and the macvm items of `paddock du` and `paddock gc`; `packaging/macos/checks/macvm-session.sh` checks them (`suspend`, `instances`, `gcdata`).
+
+The guest sees the workspace folders that you name, as `ws-1`, `ws-2` and so on under `/Volumes/My Shared Files` (virtiofs), read-write, or read-only with `--ro PATH`. It never gets `/`, your home folder or a parent of it, `/Users`, `/Volumes`, `/private`, `/tmp`, `/var`, `/etc`, `/Library`, `/System`, `/Applications`, `~/.ssh`, `~/Library` or the keyring folders: the start refuses with one line per folder. paddock checks the folder as you named it and its real path, and shares the real path. So a symlink in your home that points into `/etc` or `/tmp` is refused too. A folder inside your home is never a system folder, even when the home itself is under `/private/var`. The secrets detector runs over each folder, and a `.env`, key or token file stops the start with the file named, unless `[apps.NAME] unprotected_workspaces = true` in `~/.config/paddock/config.toml`; virtiofs shares a whole folder, so paddock cannot hide a single file inside one. A file, text or image dropped on a session window is copied (an APFS clone) into `drop/<time>-<n>/` of the profile, never the original, at most 2 GiB per drop, and opened in the guest app ("dropped as open"); the staging folders go at quit unless the app still has a file open. A drag out of a session window to the host is not possible: use the downloads folder or the clipboard. The clipboard moves both ways only while a session window is key on the host, with plain text, RTF, HTML, PNG, TIFF and file URLs (into a share), up to 16 MiB per transfer; an HTML item without plain text gets the text of the HTML as a second type, a TIFF image without PNG gets a PNG as a second type, and an image over 16 MiB crosses as its PNG when that fits, or not at all (the badge says `image too large for the clipboard (max 16 MiB)`); an item that a password manager marks concealed or transient never crosses, and a file URL from the guest crosses only when it points into a share. The guest's `Downloads` folder is `profile/downloads/` on the host (`paddock app files NAME` opens it), and the agent remakes the link at each boot. The `guest-files` port of the agent takes 16 MiB per transfer, 64 transfers per minute, and closes a transfer idle for 10 s. paddock has not confirmed the shares, the drops and the clipboard on a Mac yet; `packaging/macos/checks/macvm-files.sh` checks them.
+- The windows. Every window of the app in the guest is a borderless window on your desktop that shows exactly that window: a view of the full guest display, placed so that only that window's rectangle shows. There is no pixel copy and no Screen Recording permission on your Mac. The window follows the guest's moves, resizes, titles, order, minimize and focus, and your clicks, keys and Cmd-Tab reach the guest window. A drag of the title bar or an edge moves or resizes the session window on your Mac at once, and the guest window follows (one move to the guest at a time, then the newest). The content moves with the frame, and the guest's own reports move only the content until the guest window is where you put it. A drag that ends where the guest cannot show the window (the gap between two screens, beyond the size of its level) moves the window back to the nearest allowed place. A click on the title bar without a move, a double click (the guest's zoom) and a click on a button of the title bar or the toolbar go to the guest. The guest agent reads the title bar height and its buttons from Accessibility (28 points when it cannot), and it measures the corner radius of each window once on the window's image, so the clip of the session window has the same corners. The image needs Screen Recording in the guest: `paddock macvm setup` sets that permission for the agent with the Accessibility and Full Disk Access permissions. A golden image from before this version has no such permission until `paddock macvm setup` runs again, and its windows get the radius of the guest's macOS version. Menus, tooltips, popovers and sheets of the app are windows of their own, attached to their parent, and never take the keyboard. The guest display is as large as the union of your screens in points, at the scale of your main screen, and that size is fixed at the start of the session (`PADDOCK_MACVM_DISPLAY` overrides it). With two screens of two scales, the start lines say so, and a window on the other screen is drawn soft. A window that the guest puts in the gap between two screens goes onto the nearest screen, and the guest follows. Your keyboard layout follows you into the guest: while a session window is key, the guest holds the host's input source. An input method that composes (Pinyin, Wubi, Zhuyin, Cangjie, Kotoeri, Hangul, Telex and the third party ones) composes in the guest: your Mac shows the plain layout (ABC) while the window is key, the badge shows the guest's source (`input: Pinyin - Simplified`), and the candidates show as a window of their own next to the caret. When the window resigns key or the session ends, your Mac gets its input source back; after a crash of the session helper, the next `paddock app list` puts it back. A lone press of the Globe key on a session window switches the guest's input source, not the host's. Reduce Motion and Increase Contrast of your Mac are set in the guest. A keyboard layout that the guest does not have is named in the badge (`keyboard layout X not in the guest`). When the guest cannot select your input source (for example Pinyin, when its input method is not on in the guest), the guest uses the ABC layout (or US) instead, and `agent.log` has one info line that names both. VoiceOver and other Accessibility clients read the controls of the guest window through the host window: the first query of a session window's children starts a mirror of the guest window's Accessibility tree (roles, titles, values, frames, four levels deep, read by the guest agent and kept current while the window is key), a press on a mirrored button presses it in the guest, and a value set on a mirrored field sets it in the guest. A tree above 64 KiB or 1500 elements loses whole subtrees. A press on an element from an earlier tree is dropped with a line in the event log, never sent to another control. Keyboard navigation inside the guest window (Tab, the arrow keys) is the guest's own. Limits of this version: a menu, popover or tooltip larger than a quarter of your main screen, or a floating window larger than your main screen, is refused the same way; two overlapping windows of one session on two Spaces show through each other, because the guest has one display; a full screen guest window fills one screen of your Mac, so with two screens the guest display is larger than the full screen window and its lower part does not show; and a window without a measured radius has the radius of the guest's macOS, so a wrong guess shows a black corner, not your desktop. The host menu bar shows the app's own menus from the guest (`File`, `Edit`, `View` and the rest, with their shortcuts and their enabled and checked states, two levels deep), and a click on an item presses it in the guest; the paddock app menu (`About`, `Firewall rules…`, `Hide`, `Quit`) stays first, and the app's own first menu (`Settings…`) is not shown, its shortcut Cmd-, still reaches the guest. A menu bar above 20 KiB loses whole submenus. When the guest agent is slow, restarts or is away, the host keeps the last menu bar, a click then is dropped with a line in the event log, and after the app exits the paddock menu with its `Window` menu is back. The Dock menu has the windows, `Open <App> again` after the app exited, `Restart guest agent`, `Restart guest` after 30 s without a health report, and `Quit`. Cmd-Q on a session window quits the session the same way as `paddock app stop`. paddock has not confirmed on a Mac yet: the windows themselves, the latency of a key press and of a drag, the context menus, the second screen, and the rounded corners (`packaging/macos/checks/macvm-windows.sh` checks them), nor the keyboard layouts and input methods, the Globe key, the restore after a crash, two screens of two scales and Spaces (`packaging/macos/checks/macvm-input.sh` checks them), nor the menu bar of the app, a press through it, the switch between two sessions and the menu after an agent restart (`packaging/macos/checks/macvm-menu.sh` checks them), nor the Accessibility mirror of the guest window (`packaging/macos/checks/macvm-input.sh voiceover` checks it).
+- Upgrades. A new paddock never needs a new golden: the session shares the guest agent of its own version read-only (`macvm/agent/<version>/`, made from `paddock-guest` next to `paddock-vm`), and the agent in the guest replaces itself with it at the next start, also for a downgrade, in under 5 s. When the new agent fails three times at once, the guest falls back to its previous agent, the session logs `agent rollback` and talks to it. A new macOS for the guest is `paddock macvm update` (or `--ipsw PATH`; `--force` rebuilds the same version): it builds into `golden.new`, with the first boots again, and swaps the folders when the build is sealed. The old golden stays as `golden.prev` until a profile completes a session on the new one, then `paddock gc` removes it; `paddock macvm rollback` puts it back before that. An existing profile keeps its own system disk and its macOS version: the home on the data disk belongs to the account on the system disk, and a data disk that the guest formatted mounts only under the system disk that formatted it (the keys live there), so paddock never replaces the system disk under a data disk. A new profile whose data disk was never used counts as a pair too. New profiles clone the new golden, and `paddock app reset NAME --data` moves an existing profile to it after a backup of the pair; the login and the files of the guest go with that. A macOS update of your Mac costs one cold boot per profile: the saved state is discarded, the data stays. A swap that a crash interrupted is finished at the next command, with one line. paddock has not confirmed the agent update, the golden update and the rollback on a Mac yet (`packaging/macos/checks/macvm-upgrade.sh`).
+- The app, the Dock face and the launchers. The app profile names the host bundle (`/Applications/ChatGPT.app`, `/Applications/Visual Studio Code.app`, `/Applications/Claude.app`), and `[apps.NAME] bundle = "PATH"` in `~/.config/paddock/config.toml` names another one. The route never signs or edits the bundle, so an App Sandbox app and a hardened app run unchanged, under Apple's own sandbox inside the guest. At each start paddock compares `CFBundleShortVersionString` and `CFBundleVersion` with the stamp of the profile and, when they differ, clones the bundle into the profile (an APFS clone, no space) and the guest copies it into its home with `ditto`, about 20 s for a 500 MB app, once per version. The copy is written as `<Name>.app.partial` and renamed, so a killed session never leaves half an app, and the old copy stays until the new one is whole: a failed copy is one line and the app runs from the copy that is already there. The guest needs the size of the bundle plus 500 MiB free on its data disk, and refuses the copy with that line otherwise. An App Store app is refused with one line, because the guest has no Apple ID: install the vendor's download into `/Applications` instead. The quarantine attribute is removed from the copy only when the host bundle carried your approval, so Gatekeeper shows no dialog in the guest for an app you have opened on your Mac. A session is one process with the app's own name and icon in the Dock, in Cmd-Tab and in Mission Control: paddock makes `macvm/shims/NAME.app` with a copy of `paddock-vm` inside, the app's icon, `CFBundleName` `ChatGPT (paddock)`, and an ad hoc signature with the virtualization entitlement, and builds it again when the paddock version in it differs. `paddock app install NAME` puts the same bundle in `~/Applications/<Name> (paddock).app`, so the app starts from the Dock, Launchpad and Spotlight; `paddock app install --drop` puts `~/Applications/Paddock Apps.app` there, and an app bundle dropped on it becomes a profile (`[apps.<slug>] bundle = "PATH"`, the slug from the app's name) with its own launcher, and starts. `paddock app uninstall NAME` and `paddock app uninstall --drop` remove them. `[apps.NAME] vm_memory = "6G"` gives the guest more memory, at most half of the Mac's. paddock has not confirmed on a Mac yet: the copy into the guest, the login that survives a quit, a chat with no direct connection, the Dock name and icon, the half copy after a kill, the relaunch from the Dock menu, the absence of a Gatekeeper dialog, the drag target, and VS Code with a workspace folder; `packaging/macos/checks/macvm-chatgpt.sh` checks them, and it is the end-to-end check of this route.
+- The firewall of the guest (network mode `ask`). An app profile in the guest runs in network mode `ask` unless `--network` says otherwise: `egress`, `api`, `allowlist` and `none` work as on every route, `host` is refused, and `ask` is refused on every other route with one line. In mode `ask`, only the app asks: the processes of its bundle and their children, as the guest proxy names them. The guest system never asks. A connection of a daemon, a widget or an Apple service that no rule allows is denied at once with the rule word `system`, written to the connection log with its host and its process, and counted per host. A seed or a rule of your own can still allow such a host. When the app connects to a host that no rule covers, the connection is held, and paddock asks you: a panel next to the app's window (drawn by the window marker), the same question in `paddock approvals`, and `paddock approvals answer ID --allow-once | --allow-session | --allow-always | --deny | --deny-always` from a terminal, whichever comes first. A session shows one panel at a time. The other questions wait behind it, and the panel says how many (`and 3 more waiting`). At most three questions come up per minute. When more than 20 questions are open, asking pauses for that session: one line goes to the session log, `paddock app status NAME` says `asking paused` and lists the open questions, and one notice replaces the panel. The notice has two buttons. `Deny all` denies every open question once, and `Ask one by one` goes on. A panel never closes by itself while its question is open. The panel uses the system material and the system colors in Light and Dark mode, with `Deny` (Esc), `Allow once` and `Always allow` (Return), and the other answers under `More…`. `paddock approvals` keeps the `Why?` line with the process in the guest that opened the connection. `--allow-always` and `--deny-always` write a rule into `~/.config/paddock/firewall/NAME.toml` (mode 0600, written whole and renamed into place); `--allow-session` makes a rule of this session only. A second connection to the same app, host and port while one asks waits on the same question. After 60 s with no answer, that connection is denied once and the question stays. An answer that comes later still counts: the next connection to that host gets it; a question from before a sleep of the Mac is denied once and asked again, so the panel you did not see is fresh. An approver hook (`paddock approver`) with the capability `connect` answers before you. The rules decide by the most specific match: the exact app, host and port first, then wildcards from the right (the port, then the host, then the app); at the same specificity your own rule beats a seed of the profile, a session rule beats an always rule, and deny beats allow. The host of a rule is a name, `*.name` (every name under it, not the name itself), an IP address or `*`; a rule that allows every host needs `--yes-all-hosts`. `paddock app rules NAME` lists the rules with their ids, `add HOST [--port P] [--app BUNDLE] [--deny]` and `remove ID` edit the file, also while the session runs. The profile seeds `allow` rules for the hosts of a plain login (`seed_hosts` of `[app.macos]` in the profile, `by = "profile"`), so the first run of ChatGPT asks nothing; a seed never covers a host outside its list, and your own deny rule wins over it. In modes `api` and `allowlist`, the host list of the mode decides before any rule, because the identity of the guest process can be forged by a root process in the guest. Every decision goes into `logs/connections.jsonl` of the profile (the time, the app, the team, the host, the port, the verdict, the rule id or `ask`, `once`, `timeout`, `stale`, `mode`, `egress`, and at the close the bytes up and down and the seconds; never the content), merged per minute and capped at 5000 lines like the boundary log, a new file per session with the last five kept. The golden also turns off the guest services that phone home and have no use in a paddock guest: desktop widgets, Siri and suggestions, the iCloud setup nag, the News, Weather and Siri agents, automatic macOS installs, location services, analytics and personalized ads. Each one is a documented setting. Each is best effort: a setting that does not take on a new macOS is a warning of the setup, not a failed golden. paddock has not confirmed on a Mac yet: the panel next to the window and how it looks, the answer from a terminal, the rule file after `--allow-always`, the 60 s timeout, the panel after a restart of the marker, a first ChatGPT login with no question, the guest system denied without a question, the queue, the rate limit and the pause, and the effect of each quiet setting. `packaging/macos/checks/macvm-firewall.sh` and `packaging/macos/checks/macvm-quiet.sh` check them.
+- Performance. The targets of the route are in `packaging/macos/bench/targets.json`: a warm start to the first window in 6 s (p50) and 10 s (p95), a cold start in 45 s, a first start with the copy of a 500 MB app in 120 s, a quit with save in 10 s, the agent self-update in 5 s, 40 ms from a key on the host to the value change of a guest text field, 8 ms from a guest window event to the host frame, 60 fps for a guest animation with no frame older than 50 ms, 3 percent of one core and the configured 4 GiB at idle (the guest keeps its memory: the memory balloon is off), 60 percent of one core with a 1080p video, and 6 GiB of disk per profile without the app copy. `packaging/macos/bench.sh` measures every target through `paddock macvm bench CASE` (warm, cold, first, quit, update, input, move, frames, idle, video, disk), writes `.paddock/bench/<date>.json`, prints the table and exits non-zero with the case named when a target is missed. The bench runs in a development build, or in a release build with `PADDOCK_MACVM_BENCH=1`, and only in a session started with `paddock app run NAME --bench`: that flag lets the guest agent honor the bench ops (`bench.animate`, `bench.text`, `bench.hang`, `bench.spawn_child`, `bench.pasteboard`, `bench.env`, `bench.dock_menu`), which every other session refuses. The committed reference run is `packaging/macos/bench/baseline.json`, and a Linux test checks that it meets every target, so a target change and a baseline change are one commit. paddock has not run the bench on a Mac yet: the baseline is a placeholder at the targets, marked `measured: false`, until `packaging/macos/bench.sh --baseline` writes a real run; `packaging/macos/checks/macvm-bench.sh` checks the bench.
+- Status, logs and the support bundle. `paddock app status NAME` is one screen about a profile of the guest: the session (pid, age, `warm start in 4.1 s`), the golden, the agent and the protocol of its stamp, the app with its version and the day of its copy, how many windows it has, the guest's last health (age, load, free RAM, free data disk), the sizes of the profile and the free space, the network mode with the counts of allowed and denied connections, the shares and the logs folder; `--json` gives the same as a struct. A stopped profile shows how the last session ended (`quit with save`, `quit without save`, `crashed`) and what the next start does (`warm`, `cold: the guest image changed`). `paddock macvm status` lists every profile with that state and the two VM slots of the Mac with their holders. The logs of a profile are in `profiles.noindex/NAME/default/logs/`: `shim.log` (the session helper, 5 files of 1 MiB), `events.jsonl` (one JSON line per state change, 2 MiB cap), `console.log` (the serial console of the guest, 5 files of 1 MiB), `agent.log` (the log of the agent in the guest, fetched at each quit, the previous one kept as `agent.log.1`) and `boundary.jsonl` (the dropped frames of the guest network). `paddock app log NAME` prints the connection log of the session, one decision per line with the app, the host, the rule and the bytes (the boundary log of the profile when a session never ran), `--events`, `--shim`, `--guest` and `--console` the others, `--follow` keeps printing until the session ends. No log holds the session token, the guest password or clipboard text: every message is logged by its kind without its payload, and a test writes the clipboard messages through each log and greps for a marker. `paddock doctor` has a `macvm` block: the golden and its seal, the host and the entitlement of `paddock-vm`, each profile with its size and last end, the slots, the permissions (none needed) and the free space. `paddock doctor --report` adds a `MACVM` section with that block, the manifest, each stamp, the last 200 lines of each log of each profile, the firewall rules files and the counts of the connection logs by verdict, through the redaction of the report plus two passes of its own: a 32-digit hex run on a line with `token` becomes `<token>`, a line with a password is removed; `--no-hosts` turns every host name of the rules files and the connection logs into `host-N`. paddock has not confirmed on a Mac yet: the status of a running session, the four logs after a quit, `--follow`, the report and the doctor block; `packaging/macos/checks/macvm-status.sh` checks them.
+- The security checklist. The 21 items of the route (no share of a system folder, a share only for a folder you named, the guest password never in a session request, the token never on disk or in a log, the modes of the profile files, a forged guest identity that cannot pass the host list of the mode, no forward of a host socket but the proxy, every unanswered frame dropped and logged, the clipboard only while a window is key, a crash that leaves no VM and discards the state, no host permission, the sealed golden, one control connection per session, the limits of the files port, the bounded header line, the sticky slots folder, the hash of an agent update, the redaction of the support bundle, the rules file, the window size per level, and the input source restore) are each one test in `src/macvm/security_tests.rs`, named `s01` to `s21` after the item numbers, and a test counts them. Four of them need a Mac: the `uchg` flag of the golden, `kill -9` of the session helper, the TCC database and the slots folder; `packaging/macos/checks/security.sh` prints one line per item, and the `macvm` block of `paddock doctor` says the state of the modes, the seal, the permissions and the slots folder. paddock has not confirmed those four on a Mac yet.
+- The devices that you turn on in `[devices]` come over a socket, as for terminal runs (see [On macOS](#devices-on-macos)). paddock puts `paddock-host` at the end of the app's PATH, so a terminal in the app can run `paddock-host device list`.
+
+### App mode on macOS under Seatbelt
+
+<a id="app-mode-on-macos"></a>`paddock app run vscode ~/src/api --backend seatbelt` runs the app bundle under Seatbelt (`sandbox-exec`) instead of the guest VM of [App mode on macOS in a guest VM](#app-mode-on-macos-in-a-guest-vm). This is the older route, and it gets no new work. paddock knows `vscode` (`/Applications/Visual Studio Code.app`) and `claude-desktop` (`/Applications/Claude.app`) there.
 
 What the sandbox gives the app:
 
 - The workspace folders and the sandbox home are writable. The app bundle and the system folders are read-only. Everything else is denied, also your real home.
 - `HOME` and `CFFIXED_USER_HOME` point at the sandbox home, so the app's Application Support and preferences live there.
-- The app connects only to localhost. paddock's proxy listens there and passes its traffic on, with the same rules as network mode `egress` (or `api`). Electron apps get `--proxy-server` and the proxy variables.
+- The app connects only to localhost. paddock's proxy listens there and passes its traffic on, with the same rules as network mode `egress` (or `api`, or `allowlist`). Electron apps get `--proxy-server` and the proxy variables.
+- With `--network host`, the app gets the network of your Mac: it connects anywhere, listens on every address and resolves names itself. It keeps the host proxy variables, as on Linux. paddock prints a warning at the start.
+- `[apps.NAME] login_ports = true` needs nothing on macOS, because Seatbelt has no network namespace. The app listens on the localhost of your Mac, and your browser reaches it there. paddock prints one notice line at the start and opens nothing. With network mode `none`, the profile then allows the app to listen on localhost, and nothing more.
 - Electron apps get `--no-sandbox`, because Chromium's own sandbox cannot start inside Seatbelt. They get `--use-mock-keychain`, so they never read or write your Keychain, and a data folder of their own (`--user-data-dir`) in the sandbox home.
 - Hidden files such as `.env` stay denied inside the workspace folders.
 
 Every window of an app sandbox carries a mark, so that you can tell it from your other windows:
 
-- A thin frame around the window. Sage means that traffic goes only through paddock's proxy (network `egress` or `api`) or that there is no network. Amber means a wider network.
+- A thin frame around the window. Sage means that traffic goes only through paddock's proxy (network `egress`, `api` or `allowlist`) or that there is no network. Amber means a wider network.
 - A badge such as `paddock · vscode · egress · 2h` on the top right corner. It shows for a few seconds when the window gets focus, and while the pointer is near the corner. Click it for the sandbox details.
 - A shield in the menu bar with the number of protected windows. Its menu lists each window. Choose one to bring it to the front.
 
-paddock starts the marks with the first app sandbox, and they end with the last one. The marks need no permission. If you want the menu to raise the exact window instead of the app, open System Settings, then Privacy & Security, then Accessibility, and turn on the app that runs paddock (your terminal app). To turn the marks off, set `PADDOCK_MARK=0`. Terminal windows of agent runs get no mark yet.
+paddock starts the marks with the first app sandbox, and they end with the last one. The marks need no permission. If you want the menu to raise the exact window instead of the app, open System Settings, then Privacy & Security, then Accessibility, and turn on the app that runs paddock (your terminal app). To turn the marks off, set `PADDOCK_MARK=0`.
+
+Terminal runs get the same mark when the terminal app is in front at the start. When `paddock codex` starts in a terminal window, paddock finds the terminal app: the nearest parent process that owns a window. If that app is the front app, its front window is the window where you typed the command, and that window gets the frame, the badge and an entry in the menu. The menu entry names the terminal app, for example `codex · api · egress · 2h (Terminal)`. The other windows of the terminal app get no mark. When the run ends, the mark goes, and the window stays. If you close the window while the run continues, the mark goes too. This works for Terminal, iTerm2, Ghostty, kitty and WezTerm, and needs no permission. `paddock windows` lists the marked windows with their window numbers.
+
+These terminal runs get no mark, and with `-v` paddock prints one log line that says why:
+
+- A run that starts while another app is in front, for example from a script or a Shortcut.
+- A run in tmux or `screen`, a run with `--detach`, a child of `paddock-host spawn` and a relayed run.
+- A terminal window that is not a normal window: the hotkey window of iTerm2, the quick terminal of Ghostty and the panel of kitty.
+- The window of `paddock view`.
 
 The limits:
 
@@ -1848,7 +2553,8 @@ The limits:
 - Apps that use Apple's App Sandbox (ChatGPT, for example) crash inside Seatbelt. paddock refuses them: Apple already confines them. Start them as usual.
 - One instance per data folder. paddock refuses a start when the app already runs with the same data folder, because the running copy would take over the start.
 - The app reaches the macOS services that a desktop app needs (the window server, the pasteboard, Launch Services). It can ask macOS to open a link or another app, outside the sandbox. It can also connect to services on your Mac's localhost.
-- Not there yet on macOS, and refused when you ask for them: `[apps.NAME] bus`, `login_ports`, the devices of `/dev/paddock`, `paddock freeze`, network modes `host` and `allowlist`, and backends other than Seatbelt. Links (`claude://`) do not reach the sandbox yet.
+- Not there yet on macOS, and refused when you ask for them: `[apps.NAME] bus`, `paddock freeze` of an app under Seatbelt (it works for terminal runs and for the guest route), and backends other than Seatbelt and `macvm`. Links (`claude://`) do not reach the sandbox yet.
+- An app that Seatbelt cannot run, such as an App Sandbox app, runs in the guest route: see [App mode on macOS in a guest VM](#app-mode-on-macos-in-a-guest-vm).
 
 ### Terminal runs on macOS
 
@@ -1859,8 +2565,11 @@ What the sandbox gives the agent:
 - The project, or its worktree, is writable. Hidden files such as `.env` stay denied.
 - The sandbox home is writable. `HOME` and `CFFIXED_USER_HOME` point at it. It gets the read-only imports of the profile and the login of `[state] auth`, as on Linux.
 - The system folders, `/opt` (Homebrew) and `/nix` are read-only. Everything else is denied, also your real home and the shared `/tmp`.
-- Network modes `egress` and `api` connect only to a relay on a free localhost port, which passes the traffic to paddock's proxy. The proxy variables point at the relay. In mode `egress`, the sandbox can also reach the host ports that `[network] host_ports` allows. Network mode `none` has no IP network.
+- Network modes `egress`, `api` and `allowlist` connect only to a relay on a free localhost port, which passes the traffic to paddock's proxy. The proxy variables point at the relay. In modes `api` and `allowlist`, the proxy lets through only the hosts of the list. In modes `egress` and `allowlist`, the sandbox can also reach the host ports that `[network] host_ports` allows. Network mode `none` has no IP network.
+- Network mode `host` gives the network of your Mac: the agent connects anywhere, listens on every address, and resolves names through mDNSResponder. It keeps the host proxy variables, as on Linux. `paddock run` prints the mode and a warning at the start. Its servers are open to the LAN.
 - `paddock-host` works: kv, spawn, `done`, timers and the other host requests. The sockets stay at their host paths, and `PADDOCK_HOST_SOCKET` and `PADDOCK_KV_SOCKET` name them.
+- The devices that you turn on in `[devices]` work over a socket: `paddock-host device NAME` (see [On macOS](#devices-on-macos)). Secret files are at `$PADDOCK_DEVICES/secret/NAME`. A device with `run = "sandbox"` runs in a Seatbelt device sandbox of its own, started by the paddock process of the run (see [The device sandbox](#the-device-sandbox)).
+- `paddock-host borrow` and `return` work. Seatbelt cannot mount the borrow folder at `/run/paddock/borrow`, so the agent changes the copies in the host folder `$XDG_DATA_HOME/paddock/borrow/<sandbox id>/`, which `PADDOCK_BORROW_DIR` names and `borrow` prints. The agent cannot remove or replace that folder itself. paddock copies without reflinks on macOS, so `[borrow] max` limits every borrow.
 - `--env clean` passes only the allowlist, as on Linux. `paddock run --detach` uses paddock's tmux server, as on Linux.
 - The agent reaches a short list of macOS services: user names, the system log, TLS certificate checks and file change events. It does not reach the Keychain, the pasteboard, Launch Services or the preferences of your real home.
 
@@ -1871,9 +2580,8 @@ The limits:
 - The profile allows only the relay and the allowed host ports. So the agent cannot connect to its own servers on localhost, such as a dev server, unless you open a port range (see below). On macOS 15, Seatbelt also counts the other addresses of your Mac as localhost. The same ports then open on those addresses too, and no other ports.
 - The agent cannot open a terminal by its path (`/dev/ttys*` or `/dev/ptmx`). Seatbelt cannot tell a new terminal from your other terminals by path, and an open terminal gives its keystrokes away. No process in the sandbox can push input into a terminal (`TIOCSTI`).
 - Some features are not there yet on macOS. If you ask for one, paddock refuses the start, or the request, with one line:
-  - network modes `host` and `allowlist`, and display modes other than `off`
-  - the devices of `/dev/paddock`, `paddock freeze`, and `paddock-host borrow` and `return`
-  - `--profile default`, the private keyring, login ports and links into the sandbox
+  - display modes other than `off`
+  - the private keyring, login ports and links into the sandbox
   - credentials that go through the gateway
 - `paddock doctor --escape` is for the Linux backends. The Seatbelt checks run with `cargo test` on a Mac.
 
@@ -1896,7 +2604,7 @@ In network mode `egress`, the agent can then listen on these ports and connect t
 
 ### The VM backend on macOS
 
-`paddock run codex --backend vm` runs the agent with Linux paddock and bwrap in a light Linux VM. Use it when an agent needs a Linux sandbox on a Mac, for example new ptys for a harness that ignores paddock's pty library. paddock kv, the devices of `/dev/paddock` and borrow do not reach the VM yet. The VM needs Apple silicon and its files. `paddock vm setup` downloads them once, after it shows the URL, size and sha256 and asks you. `paddock run` never downloads anything. paddock looks for the files in its data folder first, then in the share folder of the Homebrew install. `PADDOCK_VM_SHARE` replaces the Homebrew folders with its own list of folders, separated by `:`, and an empty value turns them off.
+`paddock run codex --backend vm` runs the agent with Linux paddock and bwrap in a light Linux VM. Use it when an agent needs a Linux sandbox on a Mac, for example new ptys for a harness that ignores paddock's pty library. paddock kv, the devices of `/dev/paddock` and borrow do not reach the VM yet: a run with devices starts with a notice. When they do, a device of a VM run runs on the Mac, started by the paddock process of the run: a `run = "sandbox"` device in a Seatbelt device sandbox, with the host path of the project as the caller's project, and `"platform": "macos"` in the catalog so that an agent in the guest knows the program builds on macOS tools. Nothing runs in the guest for a device. A device that needs Linux tools is a `remote` device to a Linux machine (see "Remote devices"). The VM needs Apple silicon and its files. `paddock vm setup` downloads them once, after it shows the URL, size and sha256 and asks you. `paddock run` never downloads anything. paddock looks for the files in its data folder first, then in the share folder of the Homebrew install. `PADDOCK_VM_SHARE` replaces the Homebrew folders with its own list of folders, separated by `:`, and an empty value turns them off.
 
 The first run starts one VM for your user. Later runs use the same VM. It stops after 10 minutes without a run. The VM has no network device, and the project folder is the only host folder in it, at the same path. Your home is never in it. Host requests, network modes `egress` and `api`, and login pages in your browser go to paddock on the Mac, as on Linux. The logins of the agent stay in the VM, in a home per sandbox. The VM holds one project at a time. A run in another project stops with a message while the runs of the first project go on.
 
@@ -1904,6 +2612,8 @@ The first run starts one VM for your user. Later runs use the same VM. It stops 
 paddock vm status    # the running VM: pid, uptime, runs and project
 paddock vm stop      # stop it, with its runs
 ```
+
+The macOS guest for desktop apps is a VM of its own, apart from this Linux VM: see [App mode on macOS in a guest VM](#app-mode-on-macos-in-a-guest-vm).
 
 `--backend auto` chooses as follows:
 
@@ -1917,7 +2627,7 @@ paddock vm stop      # stop it, with its runs
 backend = "vm"
 ```
 
-`paddock run` prints the backend and the reason at the start. The VM has no display: display modes `window` and `headless` stay Linux only, and network mode `host` is not available in the VM.
+`paddock run` prints the backend and the reason at the start. The VM has no display: display modes `window` and `headless` stay Linux only, and network modes `host` and `allowlist` are not available in the VM.
 
 ## Sandbox by default
 
@@ -2159,7 +2869,7 @@ paddock prints warnings and errors to the terminal. Other messages stay hidden.
 - The parts that run for the whole session also write to the systemd journal, under the name `paddock`. These are the host request broker, the proxy, the login callback forwarder and the window border. Read the warnings with `journalctl -t paddock -p warning`. Without systemd, paddock skips the journal.
 - The bar plugin is silent. It writes a warning to the shell log when it cannot read paddock's output. To see more, start the shell with `PADDOCK_DEBUG=true`. Read the shell log with `journalctl -t omarchy-shell`.
 
-To report a bug, run `paddock doctor --report`. It prints the version, the `paddock doctor` output, the running sandboxes and recent paddock warnings from the journal. `--output FILE` writes it to a file. The report replaces your user name, host name, home path, variable values and tokens with placeholders. Read it before you share it.
+To report a bug, run `paddock doctor --report`. It prints the version, the `paddock doctor` output, the running sandboxes and recent paddock warnings from the journal, and on a Mac the `MACVM` section of the macOS guest (its logs, stamps and rules files). `--output FILE` writes it to a file. The report replaces your user name, host name, home path, variable values and tokens with placeholders; `--no-hosts` also replaces every host name of the guest's rules files and connection logs with `host-N`. Read it before you share it.
 
 ## Support scope
 

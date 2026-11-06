@@ -1,0 +1,37 @@
+#!/bin/sh
+# paddock: start the guest agent. launchd runs this script with KeepAlive,
+# so it runs again after every exit. When current/paddock-guest exits
+# non-zero within 10 s three times in a row, prev/ becomes current/, so a
+# bad agent never bricks a profile. The host sees the fallback as a hello
+# with the old version again, and logs `agent rollback`.
+#
+# PADDOCK_GUEST_DIR replaces the folder, PADDOCK_GUEST_FAST_SECS the 10 s,
+# PADDOCK_GUEST_WAIT the sleep without an agent: the tests use them.
+dir="${PADDOCK_GUEST_DIR:-/Library/Application Support/paddock}"
+agent="$dir/current/paddock-guest"
+count="$dir/.failures"
+fast="${PADDOCK_GUEST_FAST_SECS:-10}"
+if [ ! -x "$agent" ]; then
+  echo "paddock launch: no agent at $agent" >&2
+  sleep "${PADDOCK_GUEST_WAIT:-60}"
+  exit 0
+fi
+n=$(cat "$count" 2>/dev/null || echo 0)
+case "$n" in
+  ''|*[!0-9]*) n=0 ;;
+esac
+start=$(date +%s)
+"$agent"
+code=$?
+if [ "$code" -ne 0 ] && [ $(( $(date +%s) - start )) -lt "$fast" ]; then
+  n=$((n + 1))
+  if [ "$n" -ge 3 ] && [ -x "$dir/prev/paddock-guest" ]; then
+    rm -rf "$dir/broken" && mv "$dir/current" "$dir/broken" && mv "$dir/prev" "$dir/current"
+    echo "paddock launch: current/paddock-guest exited $code within $fast s three times in a row; prev/ is current/ now, the failed agent is in broken/" >&2
+    n=0
+  fi
+else
+  n=0
+fi
+echo "$n" > "$count"
+exit "$code"

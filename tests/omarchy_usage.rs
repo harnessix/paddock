@@ -126,26 +126,13 @@ impl World {
             pid: std::process::id(),
             started: 1,
             auth: "shared".into(),
-            window_pid: None,
-            warnings: vec![],
             host_pid: std::process::id(),
-            parent: None,
-            spawn_id: None,
             logins: vec![HeldLogin {
                 home: sandbox.to_path_buf(),
                 rel: rel.into(),
                 store: store.to_path_buf(),
             }],
-            unit: None,
-            kv_project: None,
-            pasture: None,
-            credentials: Vec::new(),
-            gateway: Vec::new(),
-            agent: Vec::new(),
-            secret_files: Vec::new(),
-            kept_logins: Vec::new(),
-            watched: false,
-            relay: false,
+            ..Default::default()
         }
         .register(&self.env())
         .unwrap();

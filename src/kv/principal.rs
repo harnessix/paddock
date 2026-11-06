@@ -164,6 +164,7 @@ impl Call<'_> {
             session_allowed: true,
             choices: Vec::new(),
             started_by: Vec::new(),
+            connect: None,
         };
         let verdict = self.approver.ask_verdict(env, &p, self.wait);
         let note = verdict.as_ref().and_then(|v| v.note.clone());

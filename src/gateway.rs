@@ -232,15 +232,15 @@ impl GwDevice {
 }
 
 pub fn info() -> crate::devices::Info {
-    crate::devices::Info {
-        request: "a host request as JSON: {\"v\":1,\"cap\":\"...\",\"args\":{...},\"reason\":\"...\"}, and an optional \"timeout\" in seconds for this read".into(),
-        response: "the response as JSON: {\"status\":\"done|denied|disabled|timeout|failed|invalid\",...}. ETIME: still waiting, send the same request again".into(),
-        limits: crate::devices::Limits {
+    crate::devices::Info::builtin(
+        "a host request as JSON: {\"v\":1,\"cap\":\"...\",\"args\":{...},\"reason\":\"...\"}, and an optional \"timeout\" in seconds for this read",
+        "the response as JSON: {\"status\":\"done|denied|disabled|timeout|failed|invalid\",...}. ETIME: still waiting, send the same request again",
+        crate::devices::Limits {
             max_request: MAX_REQUEST,
             max_response: MAX_RESPONSE,
             deadline_seconds: crate::waiting::MAX_READ_TIMEOUT + 5,
         },
-    }
+    )
 }
 
 impl crate::devices::Device for GwDevice {
@@ -366,13 +366,24 @@ fn random_hex(n: usize) -> std::io::Result<String> {
     Ok(crate::manifest::hex(&b))
 }
 
-/// The signing key, `gateway.key` in paddock's runtime folder (mode 0600).
-/// The first caller makes it. Sandboxes never see paddock's folders, and
-/// `fetch` refuses them.
+/// The signing key, `gateway.key` in [`key_file`] (mode 0600). The first
+/// caller makes it. Sandboxes never see paddock's folders, and `fetch`
+/// refuses them.
 pub fn key(env: &crate::env::HostEnv) -> std::io::Result<Vec<u8>> {
+    let path = key_file(env);
     // The key of an older paddock, kept across logins.
     let _ = std::fs::remove_file(env.paddock_state().join("gateway.key"));
-    let path = key_file(env);
+    // macOS: the key of 0.2.1 in the run folder, which also outlived logins.
+    let old = env.paddock_state().join("run").join("gateway.key");
+    if cfg!(target_os = "macos") && old != path {
+        let _ = std::fs::remove_file(old);
+    }
+    key_at(&path)
+}
+
+/// The key in `path`, made when it is missing.
+fn key_at(path: &std::path::Path) -> std::io::Result<Vec<u8>> {
+    let path = path.to_path_buf();
     match std::fs::read(&path) {
         Ok(k) if k.len() == 32 => return Ok(k),
         Ok(_) => {
@@ -421,7 +432,16 @@ pub fn key(env: &crate::env::HostEnv) -> std::io::Result<Vec<u8>> {
 
 /// The key lives in paddock's runtime folder (`$XDG_RUNTIME_DIR/paddock`),
 /// which is in memory and empty at each login: every session gets a new key.
+/// On macOS it lives in the user's temporary folder
+/// (`DARWIN_USER_TEMP_DIR/paddock`): per user, mode 0700, and emptied at
+/// each start of the Mac.
 pub fn key_file(env: &crate::env::HostEnv) -> std::path::PathBuf {
+    // An explicit runtime folder wins on macOS too, so tests never touch it.
+    if cfg!(target_os = "macos") && env.runtime_dir.is_none() {
+        if let Some(t) = crate::backend::seatbelt::keychain::user_temp() {
+            return t.join("paddock").join("gateway.key");
+        }
+    }
     env.paddock_run().join("gateway.key")
 }
 
@@ -762,14 +782,19 @@ mod tests {
             1,
             Default::default(),
         );
-        let a = key(&env).unwrap();
+        // On macOS, key_file is the real temporary folder of the user: the
+        // test makes its key in the test folder instead.
+        let file = env.paddock_run().join("gateway.key");
+        let a = key_at(&file).unwrap();
         assert_eq!(a.len(), 32);
-        assert_eq!(key(&env).unwrap(), a);
-        let mode = std::fs::metadata(key_file(&env))
-            .unwrap()
-            .permissions()
-            .mode()
-            & 0o777;
+        assert_eq!(key_at(&file).unwrap(), a);
+        let mode = std::fs::metadata(&file).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
+        if cfg!(target_os = "macos") {
+            let t = crate::backend::seatbelt::keychain::user_temp().unwrap();
+            assert_eq!(key_file(&env), t.join("paddock/gateway.key"));
+        } else {
+            assert_eq!(key_file(&env), file);
+        }
     }
 }

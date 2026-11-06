@@ -1,0 +1,102 @@
+{
+  "v": 1,
+  "app": {
+    "name": "ChatGPT",
+    "bundle_path": "/Applications/ChatGPT.app",
+    "state": "running",
+    "next_start": "Warm, about 10 s",
+    "memory_bytes": 6442450944,
+    "host_memory_bytes": 17179869184,
+    "sizes": {
+      "app_copy": 1200000000,
+      "data": 3400000000,
+      "saved_state": 2000000000
+    },
+    "network": "ask",
+    "open_questions": 2,
+    "rule_count": 14,
+    "golden": "macOS 15.1 (sealed)",
+    "app_changed": false,
+    "agent_connected": true,
+    "since": "2026-11-06T09:00:00Z",
+    "windows": 3
+  },
+  "downloads": "/Users/demo/Downloads/paddock/ChatGPT",
+  "shares": [
+    {
+      "path": "/Users/demo/Projects",
+      "mode": "rw",
+      "last_used": "2026-11-06T09:57:00Z",
+      "open_handles": 2,
+      "guest_path": "/Volumes/My Shared Files/Projects",
+      "applies": "live"
+    },
+    {
+      "path": "/Users/demo/Documents/Notes",
+      "mode": "ro",
+      "last_used": "2026-11-05T09:00:00Z",
+      "open_handles": 0,
+      "guest_path": "/Volumes/My Shared Files/Notes",
+      "applies": "live"
+    }
+  ],
+  "rules": [
+    {
+      "host": "chatgpt.com",
+      "answer": "allow",
+      "scope": "always",
+      "added": "2026-11-01T09:00:00Z",
+      "last_used": "2026-11-06T09:58:00Z",
+      "count": 120,
+      "seeded": true
+    },
+    {
+      "host": "api.openai.com",
+      "answer": "allow",
+      "scope": "always",
+      "added": "2026-11-06T09:04:00Z",
+      "last_used": "2026-11-06T09:58:00Z",
+      "count": 12,
+      "seeded": false
+    },
+    {
+      "host": "tracker.example.net",
+      "answer": "deny",
+      "scope": "session",
+      "added": "2026-11-06T09:10:00Z",
+      "count": 3,
+      "seeded": false
+    }
+  ],
+  "network_text": "paddock asks you the first time the app reaches a new server.",
+  "open_connections": 4,
+  "clipboard": {
+    "to_app": true,
+    "from_app": false
+  },
+  "devices": [
+    {
+      "name": "Camera",
+      "enabled": false,
+      "applies": "next_start"
+    },
+    {
+      "name": "Microphone",
+      "enabled": true,
+      "applies": "next_start"
+    }
+  ],
+  "changes": [
+    {
+      "time": "2026-11-06T09:04:00Z",
+      "text": "Allow always api.openai.com",
+      "source": "question_panel"
+    },
+    {
+      "time": "2026-11-01T09:00:00Z",
+      "text": "Allow always chatgpt.com",
+      "source": "profile"
+    }
+  ],
+  "log_path": "/Users/demo/Library/Logs/paddock/ChatGPT.log"
+}

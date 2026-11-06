@@ -235,12 +235,8 @@ fn report_rest(env: &HostEnv, os: crate::onboard::Os) -> Result<()> {
     }
 
     println!("\nDevices and paddock kv:");
-    let devices = match linux {
-        true => crate::devices::doctor_lines(env),
-        false => crate::onboard::refused_line(os, crate::onboard::Feature::Devices)
-            .into_iter()
-            .collect(),
-    };
+    // On macOS the devices come to Seatbelt over a socket, with no FUSE.
+    let devices = crate::devices::doctor_lines(env);
     for l in devices.into_iter().chain(crate::kv::doctor_lines(env)) {
         println!("{l}");
     }
@@ -324,10 +320,9 @@ fn report_rest(env: &HostEnv, os: crate::onboard::Os) -> Result<()> {
         }
     }
 
-    if linux {
-        println!("\nGateway (host requests):");
-        println!("{}", crate::gatewayd::status_line(env));
-    } else {
+    println!("\nGateway (host requests):");
+    println!("{}", crate::gatewayd::status_line(env));
+    if !linux {
         println!("\nLinux only (refused on macOS with one line):");
         crate::onboard::refused_lines(os)
             .iter()
@@ -359,7 +354,7 @@ fn host_bus_id() -> Option<String> {
 }
 
 /// The IPv4 default gateway, from /proc/net/route.
-fn default_gateway() -> Option<std::net::IpAddr> {
+pub fn default_gateway() -> Option<std::net::IpAddr> {
     let text = std::fs::read_to_string("/proc/net/route").ok()?;
     text.lines().skip(1).find_map(|l| {
         let f: Vec<&str> = l.split_whitespace().collect();
@@ -402,8 +397,7 @@ pub struct EscapeOpts {
 
 /// Run the probe in a real sandbox. Returns the number of failed checks.
 pub fn escape(env: &HostEnv, o: &EscapeOpts) -> Result<usize> {
-    // probe.sh checks mounts, namespaces and /proc. The Seatbelt checks are
-    // in src/backend/seatbelt/run_macos_tests.rs and tests/seatbelt_run.rs.
+    // probe.sh checks mounts, namespaces and /proc. The Seatbelt checks are in src/backend/seatbelt/run_macos_tests.rs and tests/seatbelt_run.rs; the device sandbox ones in src/backend/seatbelt/device_macos_tests.rs and tests/seatbelt_devices.rs.
     let mac_auto = crate::onboard::Os::HOST == crate::onboard::Os::Macos && o.backend == "auto";
     if o.backend == crate::backend::seatbelt::NAME || mac_auto {
         anyhow::bail!("the escape probe is for the Linux backends: on macOS the Seatbelt checks run with cargo test, and --backend podman or docker probes a Linux container");
@@ -1297,6 +1291,7 @@ fn s_set_approvals(built: &mut build::Built, env: &HostEnv) {
     );
 }
 
+pub mod macvm;
 #[cfg(test)]
 #[path = "doctor_tests.rs"]
 mod tests;

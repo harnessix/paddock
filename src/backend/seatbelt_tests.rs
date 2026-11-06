@@ -218,6 +218,27 @@ fn the_environment_moves_home_and_points_at_the_proxy() {
 }
 
 #[test]
+fn network_host_keeps_the_host_proxy_variables() {
+    let t = tempfile::tempdir().unwrap();
+    let (env, mut s) = spec(t.path());
+    s.network = Network::Host;
+    s.set_env(
+        "HTTPS_PROXY",
+        "http://proxy.example:3128",
+        "network: host proxy",
+    );
+    s.set_env("NO_PROXY", "intranet", "network: host proxy");
+    let tmp = s.home_src.join(".paddock-tmp/vscode-1");
+    let v = app_env(&env, &s, &tmp, None);
+    assert_eq!(v["HTTPS_PROXY"], "http://proxy.example:3128");
+    assert_eq!(v["NO_PROXY"], "intranet");
+    // The other modes drop them: paddock's proxy or no network.
+    s.network = Network::None;
+    let v = app_env(&env, &s, &tmp, None);
+    assert!(!v.contains_key("HTTPS_PROXY") && !v.contains_key("NO_PROXY"));
+}
+
+#[test]
 fn electron_gets_its_flags_once() {
     let mac = MacApp {
         args: vec!["--no-sandbox".into()],
@@ -247,13 +268,33 @@ fn electron_gets_its_flags_once() {
 
 #[test]
 fn linux_only_settings_are_refused() {
-    assert!(refuse_linux_only("x", Some("bwrap"), None, &[]).is_err());
-    assert!(refuse_linux_only("x", Some(NAME), None, &[]).is_ok());
-    assert!(refuse_linux_only("x", None, None, &["echo".into()]).is_err());
-    assert!(net_for(Network::Host).is_err());
-    assert!(net_for(Network::Allowlist).is_err());
+    assert!(refuse_linux_only("x", Some("bwrap"), None).is_err());
+    assert!(refuse_linux_only("x", Some(NAME), None).is_ok());
+    let bus = crate::manifest::AppCfg {
+        bus: Some(crate::manifest::AppBus::Private),
+        ..Default::default()
+    };
+    assert!(refuse_linux_only("x", None, Some(&bus)).is_err());
+    assert_eq!(net_for(Network::Host).unwrap(), Net::Host);
+    assert_eq!(net_for(Network::Allowlist).unwrap(), Net::Localhost);
     assert_eq!(net_for(Network::Egress).unwrap(), Net::Localhost);
     assert_eq!(net_for(Network::None).unwrap(), Net::None);
+}
+
+#[test]
+fn login_ports_are_accepted_with_one_notice() {
+    let on = crate::manifest::AppCfg {
+        login_ports: true,
+        ..Default::default()
+    };
+    assert!(refuse_linux_only("vscode", None, Some(&on)).is_ok());
+    assert!(login_ports(Some(&on)));
+    assert!(!login_ports(Some(&crate::manifest::AppCfg::default())));
+    assert!(!login_ports(None));
+    let n = login_ports_notice("vscode");
+    assert!(n.starts_with("[apps.vscode] login_ports"));
+    assert!(n.contains("localhost of this Mac"));
+    assert!(!n.contains('\n'));
 }
 
 #[test]
@@ -291,4 +332,56 @@ fn relays_tcp_to_the_proxy_socket() {
     let mut b = [0u8; 4];
     c.read_exact(&mut b).unwrap();
     assert_eq!(&b, b"ping");
+}
+
+#[test]
+fn an_app_with_devices_gets_the_socket_the_run_folder_and_paddock_host() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut spec = SandboxSpec::new(
+        "box1".into(),
+        "vscode",
+        &dir.path().join("project"),
+        dir.path().join("home-src"),
+        &dir.path().join("home"),
+        501,
+        20,
+        "demo",
+    );
+    let run_dir = dir.path().join("run/box1");
+    let exe = dir.path().join("bin/paddock");
+    let mut p = Policy::new(Net::Localhost);
+    let mut vars = BTreeMap::from([("PATH".to_string(), "/usr/bin:/bin".to_string())]);
+    // Without a socket, nothing changes.
+    app_devices(&spec, &run_dir, &exe, &mut p, &mut vars);
+    assert!(p.paths.is_empty());
+    assert_eq!(vars.len(), 1);
+    spec.device_socket = Some(dir.path().join("s/devices.sock"));
+    spec.devices = Some(run_dir.join("devices"));
+    app_devices(&spec, &run_dir, &exe, &mut p, &mut vars);
+    let rule = |access: Access| {
+        p.paths
+            .iter()
+            .filter(|r| r.access == access)
+            .map(|r| r.path.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        rule(Access::Connect),
+        [real(&dir.path().join("s/devices.sock"))]
+    );
+    assert!(rule(Access::ReadOnly).contains(&real(&run_dir)));
+    assert!(rule(Access::ReadOnly).contains(&real(&exe)));
+    assert_eq!(
+        vars["PADDOCK_DEVICES_SOCKET"],
+        dir.path().join("s/devices.sock").display().to_string()
+    );
+    assert_eq!(
+        vars["PADDOCK_DEVICES"],
+        run_dir.join("devices").display().to_string()
+    );
+    assert_eq!(vars["PATH"], format!("/usr/bin:/bin:{}", run_dir.display()));
+    assert_eq!(
+        host_wrapper(Path::new("/Users/a b/it's/paddock")),
+        "#!/bin/sh\nexec '/Users/a b/it'\\''s/paddock' host \"$@\"\n"
+    );
 }

@@ -61,6 +61,7 @@ impl RunArgs {
             child: None,
             transparent: None,
             pasture: self.pasture.clone(),
+            devices: self.device.clone(),
             workbench: false,
             detach: None,
             profile_default: self.profile.as_deref() == Some(paddock::shadow::DEFAULT),

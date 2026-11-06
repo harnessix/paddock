@@ -1,8 +1,10 @@
 use super::*;
 use crate::broker::{Approver, Pending};
-use crate::devices::{catalog, DevicesCfg};
+use crate::devices::grant::GrantHit;
+use crate::devices::{catalog, DevicesCfg, GrantCtx};
 use crate::env::HostEnv;
-use std::net::TcpListener;
+use std::io::{Read, Write};
+use std::net::{SocketAddr, TcpListener};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 /// Answers every card with one answer, and counts the cards.
@@ -40,6 +42,10 @@ pub fn ctx(dir: &std::path::Path, answer: Answer) -> (DeviceCtx, Arc<Fixed>) {
     let env = HostEnv::from_parts(dir.join("home"), "demo".into(), 1000, 1000, vars);
     let fixed = Arc::new(Fixed(answer, AtomicUsize::new(0)));
     let ctx = DeviceCtx {
+        instances: crate::devices::sandbox::Instances::with_launcher(
+            env.clone(),
+            crate::devices::sandbox::Launcher::Thread,
+        ),
         env,
         sandbox: "box1".into(),
         harness: "fake".into(),
@@ -85,26 +91,21 @@ timeout = 30
     assert_eq!(c.enabled, ["echo", "ollama"]);
     assert_eq!(c.user.len(), 2);
     let o = &c.user.iter().find(|u| u.name == "ollama").unwrap();
-    assert_eq!(o.max_body, 1 << 20);
+    assert_eq!(o.max_body(), 1 << 20);
     assert!(o.enabled);
     let j = &c.user.iter().find(|u| u.name == "jq").unwrap();
     assert!(!j.enabled, "a device is off until enabled = true");
-    assert_eq!(j.max_body, 256 << 10);
-    assert_eq!(j.timeout, 30);
-    assert_eq!(
-        j.kind,
-        UserKind::Command {
-            command: vec!["jq".into(), "-c".into(), ".".into()],
-            network: false
-        }
-    );
+    assert_eq!(j.max_body(), 256 << 10);
+    assert_eq!(j.timeout(), 30);
+    assert_eq!(j.command, ["jq", "-c", "."]);
+    assert_eq!(j.profile().network, crate::devices::config::Net::None);
     // The off device is no device to serve, but a ceiling name for none.
     assert_eq!(
-        crate::devices::enabled_names(&c, false, None),
+        crate::devices::enabled_names(&c, false, &GrantCtx::none()),
         ["echo", "ollama"]
     );
     assert_eq!(
-        crate::devices::enabled_names(&c, false, Some(&["echo".into()])),
+        crate::devices::enabled_names(&c, false, &GrantCtx::with_ceiling(Some(&["echo".into()]))),
         ["echo"]
     );
 }
@@ -367,7 +368,7 @@ fn a_request_reaches_the_loopback_service_and_returns_its_answer() {
         b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nTransfer-Encoding: chunked\r\n\r\n7\r\n{\"a\":1}\r\n0\r\n\r\n",
     );
     let (ctx, approver) = ctx(dir.path(), Answer::Session);
-    let dev = http_dev(addr, "1K").build(&ctx, true);
+    let dev = http_dev(addr, "1K").build(&ctx, Ok(GrantHit::NoKey));
     let req = b"POST /api/generate\nContent-Type: application/json\nAuthorization: Bearer sk-x\nCookie: s=1\nConnection: X-Private\nX-Private: p\nX-Keep: k\n\n{\"model\":\"m\"}";
     let out = dev.call(&call(), req).unwrap();
     assert_eq!(
@@ -411,7 +412,7 @@ fn a_refused_or_declined_request_never_reaches_the_service() {
     let dir = tempfile::tempdir().unwrap();
     let (addr, seen, _l) = server(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
     let (ctx, approver) = ctx(dir.path(), Answer::Session);
-    let dev = http_dev(addr, "1K").build(&ctx, true);
+    let dev = http_dev(addr, "1K").build(&ctx, Ok(GrantHit::NoKey));
     for req in [&b"GET /admin"[..], b"DELETE /api/x", b"GET /api/../admin"] {
         let out = String::from_utf8(dev.call(&call(), req).unwrap()).unwrap();
         assert!(
@@ -427,7 +428,7 @@ fn a_refused_or_declined_request_never_reaches_the_service() {
     assert_eq!(dev.call(&call(), &big).unwrap_err(), DevError::TooLarge);
     // The user denies for the session: no more cards.
     let (ctx, approver) = super::tests::ctx(dir.path(), Answer::DenySession);
-    let dev = http_dev(addr, "1K").build(&ctx, true);
+    let dev = http_dev(addr, "1K").build(&ctx, Ok(GrantHit::NoKey));
     for _ in 0..2 {
         assert_eq!(
             dev.call(&call(), b"GET /api/tags").unwrap_err(),
@@ -450,7 +451,7 @@ fn a_response_over_max_body_fails_and_a_dead_port_is_unreachable() {
         v
     });
     let (addr, _, _l) = server(big);
-    let dev = http_dev(addr, "1K").build(&ctx, true);
+    let dev = http_dev(addr, "1K").build(&ctx, Ok(GrantHit::NoKey));
     assert_eq!(
         dev.call(&call(), b"GET /api/x").unwrap_err(),
         DevError::TooLarge
@@ -460,7 +461,7 @@ fn a_response_over_max_body_fails_and_a_dead_port_is_unreachable() {
         .unwrap()
         .local_addr()
         .unwrap();
-    let dev = http_dev(free, "1K").build(&ctx, true);
+    let dev = http_dev(free, "1K").build(&ctx, Ok(GrantHit::NoKey));
     let out = String::from_utf8(dev.call(&call(), b"GET /api/x").unwrap()).unwrap();
     assert!(
         out.starts_with("HTTP/1.1 502 Bad Gateway\nPaddock-Status: unreachable\n"),
@@ -476,9 +477,10 @@ fn an_off_device_answers_disabled_and_the_catalog_shows_it() {
         "[devices.svc]\nkind = \"http\"\ntarget = \"127.0.0.1:9\"\n[devices.tool]\nkind = \"command\"\nenabled = true\ncommand = [\"cat\"]\n",
     )
     .unwrap();
-    let mut served = crate::devices::enabled(&cfg, false, None, &ctx);
+    let none = GrantCtx::none();
+    let mut served = crate::devices::enabled(&cfg, false, &none, &ctx);
     assert_eq!(served.len(), 1);
-    served.extend(crate::devices::disabled(&cfg, &served, &ctx));
+    served.extend(crate::devices::disabled(&cfg, &served, &none, &ctx));
     let svc = served.iter().find(|d| d.name() == "svc").unwrap();
     let out = String::from_utf8(svc.call(&call(), b"GET /x").unwrap()).unwrap();
     assert!(
@@ -500,7 +502,12 @@ fn an_off_device_answers_disabled_and_the_catalog_shows_it() {
     assert_eq!(svc["state"], "off");
     assert_eq!(svc["kind"], "http");
     assert_eq!(svc["target"], "127.0.0.1:9");
-    assert_eq!(svc["path"], "/dev/paddock/svc");
+    if cfg!(target_os = "macos") {
+        // No /dev/paddock on macOS: the catalog names the command instead.
+        assert!(svc.get("path").is_none(), "{svc}");
+    } else {
+        assert_eq!(svc["path"], "/dev/paddock/svc");
+    }
     assert!(svc["how_to_enable"]
         .as_str()
         .unwrap()
@@ -530,8 +537,13 @@ fn an_http_device_answers_through_the_mount() {
     let (ctx, _) = ctx(dir.path(), Answer::Session);
     let cfg =
         DevicesCfg::parse("[devices.off]\nkind = \"command\"\ncommand = [\"cat\"]\n").unwrap();
-    let mut devs = vec![http_dev(addr, "1K").build(&ctx, true)];
-    devs.extend(crate::devices::disabled(&cfg, &devs, &ctx));
+    let mut devs = vec![http_dev(addr, "1K").build(&ctx, Ok(GrantHit::NoKey))];
+    devs.extend(crate::devices::disabled(
+        &cfg,
+        &devs,
+        &GrantCtx::none(),
+        &ctx,
+    ));
     let root = dir.path().join("dev");
     let _m = match crate::devices::mount(&root, crate::devices::DeviceFs::new("box1", devs)) {
         Ok(m) => m,
@@ -602,7 +614,11 @@ fn a_paid_device_stops_at_its_budget_until_the_user_raises_it() {
     let (addr, seen, _l) = server(b"HTTP/1.1 200 OK\r\nX-Cost: 0.4\r\nContent-Length: 2\r\n\r\nok");
     let (ctx, fixed) = ctx(dir.path(), Answer::Session);
     let env = ctx.env.clone();
-    let dev = Http::new(paid_dev(addr, "budget = 1.0\n"), ctx);
+    let dev = Http::new(
+        paid_dev(addr, "budget = 1.0\n"),
+        ctx.clone(),
+        GrantHit::NoKey,
+    );
     let call = || Call::for_test("box1", Duration::from_secs(10));
     let req = b"GET /q HTTP/1.1\n\n";
     // 0.4 each, the larger of the header and the declared 0.002: the third
@@ -616,12 +632,13 @@ fn a_paid_device_stops_at_its_budget_until_the_user_raises_it() {
     assert_eq!(seen.lock().unwrap().len(), 3);
     let catalog = String::from_utf8(catalog(&[Arc::new(Http::new(
         paid_dev(addr, "budget = 1.0\n"),
-        dev.gate.ctx.clone(),
+        ctx,
+        GrantHit::NoKey,
     )) as Arc<dyn Device>]))
     .unwrap();
     assert!(catalog.contains("\"cost\": \"0.002\""), "{catalog}");
     assert!(catalog.contains("\"budget_left\": \"0.00\""), "{catalog}");
-    // paddock devices budget box1 search --add 1.0
+    // paddock device budget box1 search --add 1.0
     let (root, budget) = ledger::raise(&env, "box1", "search", ledger::UNIT).unwrap();
     assert_eq!((root.as_str(), budget), ("box1", 2 * ledger::UNIT));
     assert!(dev.call(&call(), req).is_ok());
@@ -639,7 +656,7 @@ fn a_paid_device_without_a_budget_asks_for_one_and_a_child_spends_the_root() {
     let dir = tempfile::tempdir().unwrap();
     let (addr, seen, _l) = server(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");
     let (denied, _) = ctx(dir.path(), Answer::Deny);
-    let dev = Http::new(paid_dev(addr, ""), denied);
+    let dev = Http::new(paid_dev(addr, ""), denied, GrantHit::NoKey);
     let call = |sb: &str| Call::for_test(sb, Duration::from_secs(10));
     // Deny on the budget card: no budget, no request.
     let req = b"GET /q HTTP/1.1\n\n";
@@ -649,7 +666,7 @@ fn a_paid_device_without_a_budget_asks_for_one_and_a_child_spends_the_root() {
     child.sandbox = "kid".into();
     child.started_by = vec!["box1".into()];
     let env = child.env.clone();
-    let dev = Http::new(paid_dev(addr, ""), child);
+    let dev = Http::new(paid_dev(addr, ""), child, GrantHit::NoKey);
     // The card sets the budget of the root (1): the child spends it.
     assert!(dev.call(&call("kid"), req).is_ok());
     assert!(dev.call(&call("kid"), req).is_ok());
@@ -685,7 +702,11 @@ fn review_b_a_paid_request_that_times_out_still_costs() {
     let text = format!(
         "[devices.search]\nkind = \"http\"\nenabled = true\ntarget = \"{addr}\"\nmethods = [\"GET\"]\npaths = [\"/\"]\ntimeout = 1\ncost = 0.002\nbudget = 0.004\n"
     );
-    let dev = Http::new(DevicesCfg::parse(&text).unwrap().user.remove(0), ctx);
+    let dev = Http::new(
+        DevicesCfg::parse(&text).unwrap().user.remove(0),
+        ctx,
+        GrantHit::NoKey,
+    );
     for _ in 0..5 {
         let _ = dev.call(
             &Call::for_test("box1", Duration::from_secs(10)),

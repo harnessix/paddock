@@ -108,6 +108,19 @@ impl Broker {
             .get("from_head")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+        let devices: Vec<String> = req
+            .args
+            .get("devices")
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        sp.ceiling
+            .check_devices(&devices)
+            .map_err(|e| invalid(format!("{e:#}")))?;
         // `--task`: paddock writes the prompt from the Spec Kit files.
         let (prompt, task, chosen) = match arg_str(req, "task") {
             Some(want) => {
@@ -148,6 +161,7 @@ impl Broker {
              Login: {} (the {harness} login of this computer; this sandbox never sees it)\n\
              Branch: a new worktree of {} from {}\n\
              Limits: network {}, backend {}, no display, {} (enforced by {}), at most {} at a time\n\
+             Devices: {}\n\
              Results go to {}/{INBOX}.\n\n\
              Task ({chars} characters{}):\n{shown}",
             role.describe(),
@@ -168,6 +182,11 @@ impl Broker {
                 "paddock"
             },
             sp.cfg.max_running,
+            if devices.is_empty() {
+                "none by --device (the devices that every sandbox gets stay)".to_string()
+            } else {
+                devices.join(", ")
+            },
             self.ctx.project.display(),
             if chars > crate::spawn::PROMPT_SHOWN {
                 format!(", the first {} shown", crate::spawn::PROMPT_SHOWN)
@@ -198,6 +217,7 @@ impl Broker {
                     limits,
                     from_head,
                     pick: chosen.pick,
+                    devices,
                 },
                 task,
             },

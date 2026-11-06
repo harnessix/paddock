@@ -19,6 +19,11 @@ pub struct MacApp {
     /// signature.
     #[serde(default)]
     pub app_sandbox: bool,
+    /// Host globs (`x.y` or `*.x.y`, port 443) that the firewall of the
+    /// macOS guest route allows for this app with `by = "profile"`, so a
+    /// plain login asks nothing. The user's own rules win over them.
+    #[serde(default)]
+    pub seed_hosts: Vec<String>,
 }
 
 /// `[macos]` of a harness profile: the backend choice of a terminal run on

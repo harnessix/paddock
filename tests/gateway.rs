@@ -173,7 +173,7 @@ fn the_executor_refuses_forged_and_replayed_grants() {
     let env = paddock::env::HostEnv::from_parts(
         w.root.join("home"),
         "demo".into(),
-        // The executor finds its socket by the real user (macOS: /tmp/paddock-<uid>).
+        // The real user, as the executor sees it.
         unsafe { libc::getuid() },
         unsafe { libc::getgid() },
         vars.clone(),
@@ -216,12 +216,17 @@ fn the_executor_refuses_forged_and_replayed_grants() {
     let good =
         paddock::gateway::sign(&key, "s1", &project, &req, path, serde_json::Value::Null).unwrap();
     let r = ask(&good);
-    if common::bwrap_works() {
+    if isolation_works() {
+        // The same folder: macOS has /tmp as a link to /private/tmp.
+        let got = r["ok"]["stdout"].as_str().unwrap_or("").trim().to_string();
         assert_eq!(
-            r["ok"]["stdout"].as_str().unwrap_or("").trim(),
-            project.display().to_string(),
+            std::fs::canonicalize(&got).ok(),
+            std::fs::canonicalize(&project).ok(),
             "{r}"
         );
+        // The shell found its folder: no getcwd error at its start.
+        let err = r["ok"]["stderr"].as_str().unwrap_or("");
+        assert!(!err.contains("getcwd"), "{r}");
     } else {
         // No way to isolate the command here (no bwrap, or a bwrap that
         // cannot start a sandbox): the executor still runs and says so,
@@ -240,16 +245,20 @@ fn the_executor_refuses_forged_and_replayed_grants() {
     let _ = daemon.wait();
 }
 
-/// Start the executor with the folders of `w`, and wait for its socket.
-fn executor(w: &World, vars: &std::collections::BTreeMap<String, String>) -> std::process::Child {
-    let env = paddock::env::HostEnv::from_parts(
+/// The host as the executor sees it: the folders of `w`, the real user.
+fn env_of(w: &World, vars: &std::collections::BTreeMap<String, String>) -> paddock::env::HostEnv {
+    paddock::env::HostEnv::from_parts(
         w.root.join("home"),
         "demo".into(),
-        // The executor finds its socket by the real user (macOS: /tmp/paddock-<uid>).
         unsafe { libc::getuid() },
         unsafe { libc::getgid() },
         vars.clone(),
-    );
+    )
+}
+
+/// Start the executor with the folders of `w`, and wait for its socket.
+fn executor(w: &World, vars: &std::collections::BTreeMap<String, String>) -> std::process::Child {
+    let env = env_of(w, vars);
     let child = Command::new(env!("CARGO_BIN_EXE_paddock"))
         .args(["gatewayd", "--idle", "5"])
         .envs(vars)
@@ -278,7 +287,7 @@ fn exec_job(
     let env = paddock::env::HostEnv::from_parts(
         w.root.join("home"),
         "demo".into(),
-        // The executor finds its socket by the real user (macOS: /tmp/paddock-<uid>).
+        // The real user, as the executor sees it.
         unsafe { libc::getuid() },
         unsafe { libc::getgid() },
         vars.clone(),
@@ -312,6 +321,12 @@ fn exec_job(
     serde_json::from_str(&line).unwrap()
 }
 
+/// The executor can isolate a command here: Seatbelt on macOS, bwrap or a
+/// systemd unit on Linux.
+fn isolation_works() -> bool {
+    cfg!(target_os = "macos") || common::bwrap_works()
+}
+
 fn exec_vars(w: &World) -> std::collections::BTreeMap<String, String> {
     let mut vars = std::collections::BTreeMap::new();
     for (k, d) in [
@@ -333,7 +348,7 @@ fn exec_vars(w: &World) -> std::collections::BTreeMap<String, String> {
 
 #[test]
 fn an_approved_exec_runs_isolated() {
-    if !common::bwrap_works() {
+    if !isolation_works() {
         eprintln!("skipped: bwrap does not work here");
         return;
     }
@@ -346,7 +361,7 @@ fn an_approved_exec_runs_isolated() {
         &w,
         &vars,
         &format!(
-            "test -e '{}' && echo OUTSIDE_VISIBLE || echo OUTSIDE_HIDDEN; \
+            "cat '{}' >/dev/null 2>&1 && echo OUTSIDE_VISIBLE || echo OUTSIDE_HIDDEN; \
              touch /usr/paddock-x 2>/dev/null && echo USR_WRITABLE || echo USR_RO; \
              touch made && echo PROJECT_RW; \
              echo TOKEN=${{PADDOCK_TEST_TOKEN:-none}}; \
@@ -369,7 +384,7 @@ fn an_approved_exec_runs_isolated() {
     let _ = daemon.kill();
     let _ = daemon.wait();
     // The killed executor left its socket file behind.
-    let _ = std::fs::remove_file(w.root.join("run/paddock/gatewayd.sock"));
+    let _ = std::fs::remove_file(paddock::gatewayd::socket_path(&env_of(&w, &vars)));
 
     // [exec] network = false: only the loopback device.
     std::fs::write(
@@ -378,18 +393,33 @@ fn an_approved_exec_runs_isolated() {
     )
     .unwrap();
     let mut daemon = executor(&w, &vars);
-    // /proc/net/dev lists the devices of the command's own network
-    // namespace (/sys can show the host's).
-    let r = exec_job(
-        &w,
-        &vars,
-        "tail -n +3 /proc/net/dev | cut -d: -f1 | tr -d ' '",
-    );
-    assert_eq!(
-        r["ok"]["stdout"].as_str().unwrap_or_default().trim(),
-        "lo",
-        "{r}"
-    );
+    if cfg!(target_os = "macos") {
+        // Seatbelt allows no IP connection, not even to a local port: the
+        // connect fails with EPERM, not with "Connection refused".
+        let r = exec_job(
+            &w,
+            &vars,
+            "curl -sv -m 5 http://127.0.0.1:9/ 2>&1 | grep -q 'not permitted' && echo DENIED",
+        );
+        assert_eq!(
+            r["ok"]["stdout"].as_str().unwrap_or_default().trim(),
+            "DENIED",
+            "{r}"
+        );
+    } else {
+        // /proc/net/dev lists the devices of the command's own network
+        // namespace (/sys can show the host's).
+        let r = exec_job(
+            &w,
+            &vars,
+            "tail -n +3 /proc/net/dev | cut -d: -f1 | tr -d ' '",
+        );
+        assert_eq!(
+            r["ok"]["stdout"].as_str().unwrap_or_default().trim(),
+            "lo",
+            "{r}"
+        );
+    }
     let _ = daemon.kill();
     let _ = daemon.wait();
 }
@@ -399,7 +429,7 @@ fn an_approved_exec_runs_isolated() {
 /// home folder stays unchanged.
 #[test]
 fn an_approved_push_runs_in_the_executor() {
-    if !common::bwrap_works() {
+    if !isolation_works() {
         eprintln!("skipped: bwrap does not work here");
         return;
     }
@@ -442,7 +472,7 @@ fn an_approved_push_runs_in_the_executor() {
     let env = paddock::env::HostEnv::from_parts(
         w.root.join("home"),
         "demo".into(),
-        // The executor finds its socket by the real user (macOS: /tmp/paddock-<uid>).
+        // The real user, as the executor sees it.
         unsafe { libc::getuid() },
         unsafe { libc::getgid() },
         vars.clone(),
@@ -502,7 +532,7 @@ fn an_approved_push_runs_in_the_executor() {
 /// a home folder that it cannot change.
 #[test]
 fn an_approved_gh_call_runs_in_the_executor() {
-    if !common::bwrap_works() {
+    if !isolation_works() {
         eprintln!("skipped: bwrap does not work here");
         return;
     }
@@ -521,7 +551,7 @@ fn an_approved_gh_call_runs_in_the_executor() {
     let env = paddock::env::HostEnv::from_parts(
         w.root.join("home"),
         "demo".into(),
-        // The executor finds its socket by the real user (macOS: /tmp/paddock-<uid>).
+        // The real user, as the executor sees it.
         unsafe { libc::getuid() },
         unsafe { libc::getgid() },
         vars.clone(),

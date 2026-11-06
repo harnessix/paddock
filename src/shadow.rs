@@ -11,6 +11,11 @@
 //! - At the end paddock prints what the run changed in `upper` and removes
 //!   the run folder. Nothing goes back to the host.
 //!
+//! On macOS Seatbelt cannot mount anything, so there is no overlay: the
+//! data roots are cloned (APFS `clonefileat`) into `runs/ID/home`, and the
+//! harness writes that clone. The summary compares it with a baseline that
+//! paddock takes after its own writes (shadow/summary.rs).
+//!
 //! The real home is never visible: only the data roots come in. paddock
 //! knows no vendor format here: folders and files come in as bytes.
 
@@ -19,10 +24,15 @@ use crate::profile::Profile;
 use crate::safefs::{Dir, Kind, Root};
 use anyhow::{bail, Context, Result};
 use serde::Serialize;
-use std::collections::BTreeMap;
 use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
+
+mod clone;
+mod summary;
+
+pub use summary::{Baseline, Change, Summary};
+
 use std::path::{Component, Path, PathBuf};
 
 /// The value of `--profile` that turns shadow mode on.
@@ -48,9 +58,6 @@ pub const DEFAULT_LIMIT_MIB: u64 = 2048;
 
 /// Folders deeper than this are not copied.
 const MAX_DEPTH: usize = 256;
-
-/// How many changed paths the summary names.
-const SUMMARY_PATHS: usize = 20;
 
 /// The folder of all shadow runs.
 pub fn runs_root(env: &HostEnv) -> PathBuf {
@@ -173,14 +180,43 @@ pub fn copy_limit_in(text: &str) -> u64 {
     mib.saturating_mul(1 << 20)
 }
 
+/// How the sandbox home holds the snapshot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SnapKind {
+    /// Linux: an overlay of `upper` on the copy in `lower`.
+    Overlay,
+    /// macOS: one writable clone in `home`, and no mount.
+    Clone,
+}
+
+impl SnapKind {
+    /// The kind of this platform.
+    pub fn native() -> Self {
+        if cfg!(target_os = "macos") {
+            Self::Clone
+        } else {
+            Self::Overlay
+        }
+    }
+}
+
 /// What the spec records of a shadow run.
 #[derive(Debug, Clone, Serialize)]
 pub struct Plan {
     pub profile: String,
+    pub kind: SnapKind,
     pub dir: PathBuf,
-    pub lower: PathBuf,
-    pub upper: PathBuf,
-    pub work: PathBuf,
+    /// The sandbox home (`home_src`): the upper folder of an overlay, or the
+    /// clone.
+    pub home: PathBuf,
+    /// The overlay folders. None for a clone.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lower: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upper: Option<PathBuf>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub work: Option<PathBuf>,
     /// The data roots, relative to the home.
     pub roots: Vec<String>,
     /// The credential files (`[state] auth`), never in the snapshot.
@@ -188,9 +224,20 @@ pub struct Plan {
 }
 
 impl Plan {
-    /// Make the empty run folder of the sandbox `id`. It must be on the
-    /// file system of the home, so a copy can be a reflink.
+    /// Make the empty run folder of the sandbox `id`, of the kind of this
+    /// platform. It must be on the file system of the home, so a copy can
+    /// be a reflink or a clone.
     pub fn create(env: &HostEnv, id: &str, roots: Vec<String>, auth: Vec<String>) -> Result<Self> {
+        Self::create_kind(env, id, roots, auth, SnapKind::native())
+    }
+
+    pub fn create_kind(
+        env: &HostEnv,
+        id: &str,
+        roots: Vec<String>,
+        auth: Vec<String>,
+        kind: SnapKind,
+    ) -> Result<Self> {
         if id.is_empty() || id.contains('/') || id.starts_with('.') {
             bail!("invalid sandbox id {id}");
         }
@@ -202,18 +249,25 @@ impl Plan {
             remove_dir(&dir)?;
         }
         crate::privfs::dir(&dir)?;
+        let overlay = |n: &str| (kind == SnapKind::Overlay).then(|| dir.join(n));
         let plan = Self {
             profile: DEFAULT.into(),
-            lower: dir.join("lower"),
-            upper: dir.join("upper"),
-            work: dir.join("work"),
+            kind,
+            home: match kind {
+                SnapKind::Overlay => dir.join("upper"),
+                SnapKind::Clone => dir.join("home"),
+            },
+            lower: overlay("lower"),
+            upper: overlay("upper"),
+            work: overlay("work"),
             dir,
             roots,
             auth,
         };
-        for d in [&plan.lower, &plan.upper, &plan.work] {
+        for d in [&plan.lower, &plan.upper, &plan.work].into_iter().flatten() {
             crate::privfs::dir(d)?;
         }
+        crate::privfs::dir(&plan.home)?;
         let home_dev = std::fs::metadata(&env.home)
             .with_context(|| format!("cannot read {}", env.home.display()))?
             .dev();
@@ -227,6 +281,15 @@ impl Plan {
             );
         }
         Ok(plan)
+    }
+
+    /// The overlay at the home `at`. None for a clone: it is the home.
+    pub fn overlay_mount(&self, at: &Path) -> Option<crate::spec::Mount> {
+        let (Some(lower), Some(upper), Some(work)) = (&self.lower, &self.upper, &self.work) else {
+            return None;
+        };
+        let why = "profile default: a private snapshot of the data roots";
+        Some(crate::spec::Mount::overlay(lower, upper, work, at, why))
     }
 
     /// The root that holds the home-relative path `rel`, if any.
@@ -244,34 +307,47 @@ impl Plan {
         })
     }
 
-    /// Copy the data roots of `home` into the lower folder. `reflink`
+    /// The folder that the snapshot is copied into: `lower`, or the clone.
+    pub fn snapshot_dir(&self) -> &Path {
+        self.lower.as_deref().unwrap_or(&self.home)
+    }
+
+    /// Copy the data roots of `home` into the snapshot folder. `reflink`
     /// None: probe the file system; tests force it.
     pub fn fill(&self, home: &Path, limit: u64, reflink: Option<bool>) -> Result<Copied> {
         let root = Root::open(home)?;
-        let lower = Root::open(&self.lower)?;
+        let lower = Root::open(self.snapshot_dir())?;
+        let clones = self.kind == SnapKind::Clone;
         // Pass one: the size and the first file, without copying.
         let mut size = Sizer::default();
         self.walk(home, &root, &mut size)?;
         let reflinks = match reflink {
             Some(r) => r,
             None => match &size.first {
-                Some(rel) => probe_reflink(&root, &self.lower, rel),
+                Some(rel) => clone::probe_reflink(&root, &self.dir, rel),
                 None => true,
             },
         };
         if !reflinks && size.bytes > limit {
             bail!(
-                "--profile default copies {} of host data, and this file system has no reflinks, so each byte is a real copy. The cap is {}. Raise [storage] shadow_copy_limit_mib in the user configuration, or remove old data from the data roots ({})",
+                "--profile default copies {} of host data, and this file system has no {}, so each byte is a real copy. The cap is {}. Raise [storage] shadow_copy_limit_mib in the user configuration, or remove old data from the data roots ({})",
                 human(size.bytes),
+                if clones { "clones" } else { "reflinks" },
                 human(limit),
                 self.roots.join(", ")
             );
         }
+        // The sandbox home of a clone is not at the host home: an absolute
+        // link into a root points into the clone instead.
+        let relink = clones.then(|| (home.to_path_buf(), self.home.clone()));
         let mut copier = Copier {
             lower,
             reflinks,
+            keep: clones,
+            relink,
             out: Copied {
                 reflinks,
+                clones,
                 ..Default::default()
             },
         };
@@ -354,98 +430,28 @@ impl Plan {
 
     /// Before paddock writes a settings file into the upper folder, copy
     /// the snapshot's version up, so the write changes it instead of
-    /// hiding it.
+    /// hiding it. A clone has the file already.
     pub fn copy_up(&self, rel: &Path) -> Result<()> {
-        if self.upper.join(rel).symlink_metadata().is_ok() {
+        let (Some(upper_dir), Some(lower_dir)) = (&self.upper, &self.lower) else {
+            return Ok(());
+        };
+        if upper_dir.join(rel).symlink_metadata().is_ok() {
             return Ok(());
         }
-        let Ok(m) = self.lower.join(rel).symlink_metadata() else {
+        let Ok(m) = lower_dir.join(rel).symlink_metadata() else {
             return Ok(());
         };
         if !m.is_file() {
             return Ok(());
         }
         let parent = rel.parent().unwrap_or(Path::new(""));
-        let upper = Root::open(&self.upper)?;
-        let low = Root::open(&self.lower)?;
+        let upper = Root::open(upper_dir)?;
+        let low = Root::open(lower_dir)?;
         let to = upper.dir(parent, true)?;
         let from = low.dir(parent, false)?;
         let name = rel.file_name().context("no file name")?;
-        let Some(src) = from.open_read(name)? else {
-            return Ok(());
-        };
-        copy_file(&src, &to, name, true)?;
+        clone::copy_file(&from, name, &to, name, true)?;
         Ok(())
-    }
-
-    /// The files in the upper folder now, to leave paddock's own writes out
-    /// of the summary.
-    pub fn baseline(&self) -> BTreeMap<PathBuf, (u64, (i64, i64))> {
-        let mut out = BTreeMap::new();
-        if let Ok(root) = Root::open(&self.upper) {
-            if let Ok(d) = root.dir(Path::new(""), false) {
-                let _ = scan_upper(
-                    &d,
-                    Path::new(""),
-                    &mut |rel, st, _| {
-                        out.insert(rel.to_path_buf(), (st.size, st.mtime));
-                    },
-                    0,
-                );
-            }
-        }
-        out
-    }
-
-    /// What the run changed in the upper folder, without paddock's own
-    /// writes from before the start (`base`) and the mount points that
-    /// bwrap made for the mounts at `skip` (relative to the home).
-    pub fn summary(
-        &self,
-        base: &BTreeMap<PathBuf, (u64, (i64, i64))>,
-        skip: &[PathBuf],
-    ) -> Summary {
-        let mut s = Summary::default();
-        let Ok(root) = Root::open(&self.upper) else {
-            return s;
-        };
-        let Ok(d) = root.dir(Path::new(""), false) else {
-            return s;
-        };
-        let mut all = Vec::new();
-        let _ = scan_upper(
-            &d,
-            Path::new(""),
-            &mut |rel, st, whiteout| {
-                if base.get(rel) == Some(&(st.size, st.mtime))
-                    || (st.size == 0 && skip.iter().any(|m| m == rel))
-                {
-                    return;
-                }
-                let what = if whiteout {
-                    Change::Deleted
-                } else if self.lower.join(rel).symlink_metadata().is_ok() {
-                    Change::Changed
-                } else {
-                    Change::Added
-                };
-                all.push((what, rel.to_path_buf()));
-            },
-            0,
-        );
-        all.sort_by(|a, b| a.1.cmp(&b.1));
-        for (what, rel) in &all {
-            match what {
-                Change::Added => s.added += 1,
-                Change::Changed => s.changed += 1,
-                Change::Deleted => s.deleted += 1,
-            }
-            if self.root_of(rel).is_none() {
-                s.outside += 1;
-            }
-        }
-        s.paths = all.into_iter().take(SUMMARY_PATHS).collect();
-        s
     }
 
     /// Remove the run folder.
@@ -491,57 +497,14 @@ pub fn discard(spec: &crate::spec::SandboxSpec) {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Change {
-    Added,
-    Changed,
-    Deleted,
-}
-
-/// What a run changed in its private snapshot.
-#[derive(Debug, Clone, Default)]
-pub struct Summary {
-    pub added: usize,
-    pub changed: usize,
-    pub deleted: usize,
-    /// Changes outside the data roots.
-    pub outside: usize,
-    /// The first changed paths, relative to the home.
-    pub paths: Vec<(Change, PathBuf)>,
-}
-
-impl Summary {
-    pub fn total(&self) -> usize {
-        self.added + self.changed + self.deleted
-    }
-
-    /// The lines for stderr.
-    pub fn lines(&self) -> Vec<String> {
-        let mut v = vec![format!(
-            "profile default: the run added {}, changed {} and deleted {} file(s) in its private snapshot, {} of them outside the data roots. paddock removes the snapshot now, and nothing goes back to the host",
-            self.added, self.changed, self.deleted, self.outside
-        )];
-        for (c, p) in &self.paths {
-            let mark = match c {
-                Change::Added => '+',
-                Change::Changed => '~',
-                Change::Deleted => '-',
-            };
-            v.push(format!("  {mark} ~/{}", p.display()));
-        }
-        if self.total() > self.paths.len() {
-            v.push(format!("  and {} more", self.total() - self.paths.len()));
-        }
-        v
-    }
-}
-
 /// What a snapshot copied.
 #[derive(Debug, Clone, Default)]
 pub struct Copied {
     pub files: usize,
     pub bytes: u64,
     pub reflinks: bool,
+    /// A clone run (macOS): the copies are APFS clones.
+    pub clones: bool,
     /// Symlinks that leave their root.
     pub skipped_links: Vec<PathBuf>,
     /// Sockets, FIFOs and devices.
@@ -554,10 +517,11 @@ impl Copied {
             "profile default: a private snapshot of {} file(s), {}{}",
             self.files,
             human(self.bytes),
-            if self.reflinks {
-                ""
-            } else {
-                " (plain copies: no reflinks here)"
+            match (self.clones, self.reflinks) {
+                (true, true) => " (clones)",
+                (true, false) => " (plain copies: no clones here)",
+                (false, true) => "",
+                (false, false) => " (plain copies: no reflinks here)",
             }
         );
         if !self.skipped_links.is_empty() {
@@ -609,6 +573,12 @@ impl Visit for Sizer {
 struct Copier {
     lower: Root,
     reflinks: bool,
+    /// A clone: a file that paddock wrote into the home before the copy
+    /// stays, as the upper folder of an overlay hides the lower one.
+    keep: bool,
+    /// A clone: an absolute link target in the host home (first) moves to
+    /// the clone (second).
+    relink: Option<(PathBuf, PathBuf)>,
     out: Copied,
 }
 
@@ -618,22 +588,32 @@ impl Visit for Copier {
         Ok(())
     }
     fn file(&mut self, dir: &Dir, name: &OsStr, rel: &Path, _size: u64) -> Result<()> {
-        // A file that went away since the walk is no error.
-        let Ok(Some(src)) = dir.open_read(name) else {
-            return Ok(());
-        };
         let parent = rel.parent().unwrap_or(Path::new(""));
         let to = self.lower.dir(parent, true)?;
-        let n = copy_file(&src, &to, name, self.reflinks)
+        if self.keep && to.kind(name)?.is_some() {
+            return Ok(());
+        }
+        // A file that went away since the walk is no error.
+        let n = clone::copy_file(dir, name, &to, name, self.reflinks)
             .with_context(|| format!("cannot copy ~/{}", rel.display()))?;
-        self.out.files += 1;
-        self.out.bytes += n;
+        if let Some(n) = n {
+            self.out.files += 1;
+            self.out.bytes += n;
+        }
         Ok(())
     }
     fn link(&mut self, rel: &Path, target: &Path) -> Result<()> {
         let parent = rel.parent().unwrap_or(Path::new(""));
         let to = self.lower.dir(parent, true)?;
-        to.symlink(target, rel.file_name().context("no file name")?)
+        let name = rel.file_name().context("no file name")?;
+        if self.keep && to.kind(name)?.is_some() {
+            return Ok(());
+        }
+        let moved = match &self.relink {
+            Some((host, clone)) => target.strip_prefix(host).ok().map(|r| clone.join(r)),
+            None => None,
+        };
+        to.symlink(moved.as_deref().unwrap_or(target), name)
     }
     fn skip_link(&mut self, rel: &Path) {
         self.out.skipped_links.push(rel.to_path_buf());
@@ -675,85 +655,6 @@ pub fn link_stays_inside(home: &Path, rel: &Path, target: &Path, root: &Path) ->
     }
     let p: PathBuf = cur.iter().collect();
     p.starts_with(root)
-}
-
-const FICLONE: libc::c_ulong = 0x4004_9409;
-
-fn reflink(src: &std::fs::File, dst: &std::fs::File) -> bool {
-    use std::os::fd::AsRawFd;
-    // SAFETY: FICLONE takes the source fd as its argument; both fds are open.
-    unsafe { libc::ioctl(dst.as_raw_fd(), FICLONE as _, src.as_raw_fd()) == 0 }
-}
-
-/// Copy `src` into `to` as `name`, as a reflink when `reflinks`, else a
-/// plain copy, with its mode and change time. Returns the bytes.
-fn copy_file(src: &std::fs::File, to: &Dir, name: &OsStr, reflinks: bool) -> Result<u64> {
-    let meta = src.metadata()?;
-    let _ = to.remove(name);
-    let mut dst = to.create_new(name, 0o600)?;
-    let len = meta.len();
-    if !(reflinks && reflink(src, &dst)) {
-        let mut s = src;
-        std::io::copy(&mut s, &mut dst)?;
-    }
-    dst.set_permissions(std::fs::Permissions::from_mode(meta.mode() & 0o7777))?;
-    if let Ok(t) = meta.modified() {
-        let _ = dst.set_modified(t);
-    }
-    Ok(len)
-}
-
-/// Whether a reflink of the home file `rel` into `lower` works.
-fn probe_reflink(home: &Root, lower: &Path, rel: &Path) -> bool {
-    let parent = rel.parent().unwrap_or(Path::new(""));
-    let Some(name) = rel.file_name() else {
-        return false;
-    };
-    let Ok(Some(src)) = home.dir(parent, false).and_then(|d| d.open_read(name)) else {
-        return false;
-    };
-    let probe = lower.join(".paddock-reflink-probe");
-    let _ = std::fs::remove_file(&probe);
-    let Ok(dst) = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&probe)
-    else {
-        return false;
-    };
-    let ok = reflink(&src, &dst);
-    drop(dst);
-    let _ = std::fs::remove_file(&probe);
-    ok
-}
-
-/// Every non-folder entry below `dir`: `f(rel, stat, whiteout)`.
-fn scan_upper(
-    dir: &Dir,
-    rel: &Path,
-    f: &mut dyn FnMut(&Path, &crate::safefs::Stat, bool),
-    depth: usize,
-) -> Result<()> {
-    if depth > MAX_DEPTH {
-        return Ok(());
-    }
-    let mut stats = dir.stats()?;
-    stats.sort_by(|a, b| a.0.cmp(&b.0));
-    for (name, st) in stats {
-        let r = rel.join(&name);
-        match st.kind {
-            Kind::Dir => {
-                if let Ok(sub) = dir.subdir(&name, false) {
-                    scan_upper(&sub, &r, f, depth + 1)?;
-                }
-            }
-            // In an overlay upper folder, a character device 0/0 is a
-            // whiteout: the run deleted the file.
-            Kind::Other => f(&r, &st, true),
-            _ => f(&r, &st, false),
-        }
-    }
-    Ok(())
 }
 
 fn human(bytes: u64) -> String {

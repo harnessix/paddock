@@ -1,7 +1,8 @@
 //! `paddock doctor --report`: a diagnostic bundle for bug reports, in the
 //! spirit of `omarchy-debug`. Everything goes through [`Redactor`] first, so
 //! the report holds no user name, host name, home path, environment values or
-//! tokens.
+//! tokens. The section of the macOS guest (`macvm::report`) adds its own
+//! passes: the token pattern, the password lines and `--no-hosts`.
 
 use crate::env::HostEnv;
 use std::collections::BTreeMap;
@@ -233,6 +234,12 @@ fn section(out: &mut String, title: &str, body: &str) {
 
 /// Build the report. Every section is redacted.
 pub fn build(env: &HostEnv) -> String {
+    build_with(env, false)
+}
+
+/// Build the report. `no_hosts` replaces every host name of the macOS
+/// guest's rules files and connection logs with `host-N`.
+pub fn build_with(env: &HostEnv, no_hosts: bool) -> String {
     let me = std::env::current_exe()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_else(|_| "paddock".into());
@@ -288,7 +295,21 @@ pub fn build(env: &HostEnv) -> String {
             ],
         ),
     );
-    Redactor::from_env(env).redact(&out)
+    let mut out = Redactor::from_env(env).redact(&out);
+    // The macOS guest of app mode: on a Mac, or wherever its folder
+    // exists. Its section redacts itself.
+    if cfg!(target_os = "macos") || crate::macvm::layout::Layout::new(env).root.exists() {
+        let opts = crate::macvm::report::Opts {
+            no_hosts,
+            ..Default::default()
+        };
+        section(
+            &mut out,
+            "MACVM (the macOS guest of app mode)",
+            &crate::macvm::report::macvm_section(env, &opts),
+        );
+    }
+    out
 }
 
 #[cfg(test)]

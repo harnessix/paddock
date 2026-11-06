@@ -1,0 +1,4 @@
+- New: on macOS, Seatbelt terminal runs and app runs get the devices of `[devices]` (`echo`, `wait`, `ask`, `http` and `command` devices) over a Unix socket per sandbox, which `PADDOCK_DEVICES_SOCKET` names. `paddock-host device` speaks it, with the same exit codes as on Linux. paddock no longer refuses the start of a run with devices on.
+- New: on macOS the secret files of `as = "file"` credentials are FIFOs at `$PADDOCK_DEVICES/secret/NAME`. Each open counts as one use, the value is never on disk, and a revoke removes the FIFO within 50 ms. `paddock-host device secret/NAME` prints a value too.
+- Changed: the `ask` device shows its question as a plain notification on macOS; `paddock approvals answer ID --text -` answers it.
+- Changed: a run on the macOS VM backend with devices on starts with a notice instead of steering `--backend auto` to the VM: the VM does not get the devices yet.

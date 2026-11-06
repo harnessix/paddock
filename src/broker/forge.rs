@@ -16,6 +16,21 @@ pub(in crate::broker::forge) use check::tea_login_in;
 pub use check::{check, check_with, split_body, tea_login};
 pub use tools::{tool, Access, Cmd, RepoForm, Tool, GH, GLAB, TEA, TOOLS};
 
+/// macOS: Seatbelt runs only programs in the folders that it names, and
+/// the tool that the broker found on the PATH of the host can be outside
+/// the system folders and the home, for example in a folder of a version
+/// manager. Its folder becomes readable. Linux sees the system already.
+pub fn exec_ro_paths(tool: &str) -> Vec<std::path::PathBuf> {
+    match std::path::Path::new(tool).parent() {
+        Some(dir)
+            if cfg!(target_os = "macos") && dir.is_dir() && dir != std::path::Path::new("/") =>
+        {
+            vec![dir.to_path_buf()]
+        }
+        _ => Vec::new(),
+    }
+}
+
 /// A repository on a forge, for example github.com/demo/app. The owner can
 /// hold slashes: GitLab groups nest.
 #[derive(Debug, Clone, PartialEq, Eq)]
