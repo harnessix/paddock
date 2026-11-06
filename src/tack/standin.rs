@@ -338,35 +338,84 @@ pub fn start_time(stat: &str) -> Option<u64> {
 /// Print `msg` once per session and `kind`: the first stand-in of a shell
 /// session says it, the next ones are quiet. Old marks are cleaned up.
 pub fn once(dir: &Path, kind: &str, msg: &str) {
-    let key = session_key();
+    once_in(
+        dir,
+        &session_key(),
+        kind,
+        msg,
+        &leader_alive,
+        &mut io::stderr(),
+    );
+}
+
+/// [`once`] with the session key, the check of a session's leader and the
+/// output given. Returns whether it printed. The mark of `key` itself is
+/// never cleaned up: a session whose leader is gone (a daemon that forked
+/// twice, a closed terminal) still has this process in it, and its note
+/// must stay said.
+pub fn once_in(
+    dir: &Path,
+    key: &str,
+    kind: &str,
+    msg: &str,
+    alive: &dyn Fn(i32, u64) -> bool,
+    out: &mut dyn io::Write,
+) -> bool {
     if crate::privfs::dir(dir).is_err() {
-        eprintln!("{msg}");
-        return;
+        let _ = writeln!(out, "{msg}");
+        return true;
     }
     let mark = dir.join(format!("{kind}-{key}"));
     use std::os::unix::fs::OpenOptionsExt;
+    // create_new: of two stand-ins that start at once, one says the note.
     let new = std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
         .mode(0o600)
         .open(&mark)
         .is_ok();
-    if new {
-        eprintln!("{msg}");
-        // Marks of sessions whose leader is gone.
-        if let Ok(rd) = std::fs::read_dir(dir) {
-            for e in rd.flatten() {
-                let n = e.file_name().to_string_lossy().into_owned();
-                let sid = n.rsplit('-').nth(1).and_then(|s| s.parse::<i32>().ok());
-                // SAFETY: kill with signal 0 only checks.
-                if sid.is_some_and(|s| s > 0 && unsafe { libc::kill(s, 0) } != 0)
-                    && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
-                {
-                    let _ = std::fs::remove_file(e.path());
-                }
+    if !new {
+        return false;
+    }
+    let _ = writeln!(out, "{msg}");
+    // Marks of sessions whose leader is gone.
+    if let Ok(rd) = std::fs::read_dir(dir) {
+        for e in rd.flatten() {
+            let n = e.file_name().to_string_lossy().into_owned();
+            let Some((sid, start)) = mark_session(&n) else {
+                continue;
+            };
+            if format!("{sid}-{start}") != key && !alive(sid, start) {
+                let _ = std::fs::remove_file(e.path());
             }
         }
     }
+    true
+}
+
+/// The session id and leader start time in a mark name `KIND-SID-START`.
+pub fn mark_session(name: &str) -> Option<(i32, u64)> {
+    let mut it = name.rsplitn(3, '-');
+    let start = it.next()?.parse().ok()?;
+    let sid = it.next()?.parse().ok()?;
+    it.next().filter(|k| !k.is_empty())?;
+    Some((sid, start))
+}
+
+/// Whether the leader of session `sid`, started at `start` (0: unknown),
+/// still runs. A leader that cannot be checked counts as alive, so that a
+/// mark is never removed by mistake; a reused id with another start time
+/// is a new process.
+pub fn leader_alive(sid: i32, start: u64) -> bool {
+    if sid <= 0 {
+        return true;
+    }
+    if let Ok(stat) = std::fs::read_to_string(format!("/proc/{sid}/stat")) {
+        return start == 0 || start_time(&stat).is_none_or(|s| s == start);
+    }
+    // SAFETY: kill with signal 0 only checks.
+    let r = unsafe { libc::kill(sid, 0) };
+    r == 0 || std::io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
 }
 
 /// Where the once-per-session marks live.
@@ -544,7 +593,7 @@ pub fn run(
     command: &[String],
 ) -> anyhow::Result<i32> {
     use std::os::unix::process::CommandExt;
-    let paths = super::service::Paths::system();
+    let paths = super::service::Paths::for_standin(env);
     let argv0 = command.first().cloned().unwrap_or_default();
     match route(env, shim, hint, command, &paths) {
         Route::NotFound(n) => {

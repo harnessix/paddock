@@ -64,9 +64,16 @@ esac
     }
 
     fn paddock(&self, args: &[&str], env: &[(&str, &str)]) -> Output {
+        let mut c = self.command(Path::new(env!("CARGO_BIN_EXE_paddock")), env);
+        c.args(args);
+        c.output().unwrap()
+    }
+
+    /// `program` with this world's environment and nothing of the host's.
+    fn command(&self, program: &Path, env: &[(&str, &str)]) -> Command {
         let sys = if self.bare { "" } else { ":/usr/bin:/bin" };
         let path = format!("{}{sys}", self.root.join("bin").display());
-        let mut c = Command::new(env!("CARGO_BIN_EXE_paddock"));
+        let mut c = Command::new(program);
         c.env_clear()
             .env("HOME", self.home())
             .env("PATH", path)
@@ -75,12 +82,11 @@ esac
             .env("XDG_STATE_HOME", self.root.join("state"))
             .env("XDG_CACHE_HOME", self.root.join("cache"))
             .env("USER", "demo")
-            .current_dir(self.home())
-            .args(args);
+            .current_dir(self.home());
         for (k, v) in env {
             c.env(k, v);
         }
-        c.output().unwrap()
+        c
     }
 
     fn stored(&self, name: &str) -> Option<String> {
@@ -291,9 +297,15 @@ fn setup_and_remove_without_root_are_the_stand_ins_and_on_the_host_only() {
     assert!(text(&o).contains("tackd runs as root"), "{}", text(&o));
 }
 
+/// Hermetic: the stand-in looks for tackd under the test folder (not the
+/// host's /run and /etc), PATH has no system folder, and both stand-ins
+/// run in a session of the test's own, whose leader is a shell that waits
+/// for them, so the host's login session, terminal and tackd stay out.
 #[test]
 fn a_stand_in_without_tackd_runs_the_program_with_the_reference() {
-    let w = World::new("ok");
+    use std::os::unix::process::CommandExt;
+    let mut w = World::new("ok");
+    w.bare = true;
     let gh = w.root.join("bin/gh");
     std::fs::write(&gh, "#!/bin/sh\necho \"gh $* token=$GH_TOKEN\"\nexit 3\n").unwrap();
     std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -301,29 +313,55 @@ fn a_stand_in_without_tackd_runs_the_program_with_the_reference() {
         "[tack.secrets.GH_TOKEN]\n[[tack.secrets.GH_TOKEN.allow]]\nprogram = \"{}\"\n",
         gh.display()
     ));
-    let installed = std::path::Path::new("/etc/systemd/system/paddock-tackd.service").exists();
-    if installed || !cfg!(target_os = "linux") {
-        return;
-    }
     let run = w.root.join("run").display().to_string();
+    let tackd = w.root.join("tackd").display().to_string();
     let env = [
         ("GH_TOKEN", "tack://GH_TOKEN"),
         ("XDG_RUNTIME_DIR", run.as_str()),
+        ("PADDOCK_TACK_TEST_ROOT", tackd.as_str()),
     ];
-    let o = w.paddock(&["tack", "run", "gh", "pr", "list"], &env);
-    assert_eq!(o.status.code(), Some(3), "{}", text(&o));
-    assert_eq!(
-        String::from_utf8_lossy(&o.stdout),
-        "gh pr list token=tack://GH_TOKEN\n"
-    );
-    assert!(text(&o).contains("tackd is not installed"), "{}", text(&o));
-    // Not in the output: the note is once per session.
-    let o = w.paddock(&["tack", "run", "gh"], &env);
-    assert!(
-        !String::from_utf8_lossy(&o.stderr).contains("not installed"),
-        "{}",
-        text(&o)
-    );
+    let out = w.root.join("out");
+    std::fs::create_dir_all(&out).unwrap();
+    let mut c = w.command(Path::new("/bin/sh"), &env);
+    c.arg("-c")
+        .arg(
+            "\"$0\" tack run gh pr list >\"$1/out1\" 2>\"$1/err1\"; echo $? >\"$1/code1\"\n\
+             \"$0\" tack run gh >\"$1/out2\" 2>\"$1/err2\"; echo $? >\"$1/code2\"",
+        )
+        .arg(env!("CARGO_BIN_EXE_paddock"))
+        .arg(&out);
+    // SAFETY: setsid is async-signal-safe; the child is a new session's
+    // leader, with no controlling terminal.
+    unsafe {
+        c.pre_exec(|| {
+            if libc::setsid() < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let o = c.output().unwrap();
+    assert!(o.status.success(), "{}", text(&o));
+    let f = |n: &str| read(&out.join(n));
+    let said = format!("{}{}", f("out1"), f("err1"));
+    assert_eq!(f("code1").trim(), "3", "{said}");
+    assert_eq!(f("out1"), "gh pr list token=tack://GH_TOKEN\n");
+    let note = if cfg!(target_os = "linux") {
+        "tackd is not installed"
+    } else {
+        "starts programs with their secrets on Linux only"
+    };
+    assert!(f("err1").contains(note), "{said}");
+    // The second one in the same session runs, without the note.
+    assert_eq!(f("code2").trim(), "3", "{}{}", f("out2"), f("err2"));
+    assert_eq!(f("out2"), "gh  token=tack://GH_TOKEN\n");
+    assert_eq!(f("err2"), "", "the note is once per session");
+    // One mark, under the given runtime folder.
+    let marks: Vec<_> = std::fs::read_dir(w.root.join("run/paddock/tack-notes"))
+        .unwrap()
+        .flatten()
+        .collect();
+    assert_eq!(marks.len(), 1, "{marks:?}");
 }
 
 #[test]

@@ -43,6 +43,19 @@ impl Paths {
         Self::under(Path::new("/"))
     }
 
+    /// The layout a stand-in looks for tackd in: the system's, or the one
+    /// under `$PADDOCK_TACK_TEST_ROOT` (an absolute path), which tests of
+    /// the built binary set so that a tackd of the host stays out of them.
+    /// Only the stand-in reads it: it runs as the user, so the variable
+    /// gives nothing a user's own environment could not already do, and
+    /// setup, remove and tackd itself always use the system's.
+    pub fn for_standin(env: &crate::env::HostEnv) -> Self {
+        match env.var(TEST_ROOT).map(Path::new) {
+            Some(r) if r.is_absolute() => Self::under(r),
+            _ => Self::system(),
+        }
+    }
+
     /// The same layout under `root`, for tests.
     pub fn under(root: &Path) -> Self {
         let p = |s: &str| root.join(s.trim_start_matches('/'));
@@ -188,6 +201,9 @@ pub fn service_text(p: &Paths) -> String {
         unit_text(p)
     }
 }
+
+/// See [`Paths::for_standin`].
+pub const TEST_ROOT: &str = "PADDOCK_TACK_TEST_ROOT";
 
 /// Whether setup wrote this file.
 pub fn ours(p: &Path) -> bool {

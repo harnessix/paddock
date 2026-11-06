@@ -491,33 +491,139 @@ fn a_stand_in_that_dies_takes_the_program_with_it() {
     );
 }
 
+/// The host's own session, leader and terminal stay out: the key and the
+/// check of a leader are given.
 #[test]
 fn a_session_mark_says_a_note_once() {
     let t = tempfile::tempdir().unwrap();
-    let key = session_key();
-    assert!(key.contains('-'));
-    once(t.path(), "rootless", "first");
-    once(t.path(), "rootless", "second");
-    let marks: Vec<_> = std::fs::read_dir(t.path()).unwrap().flatten().collect();
-    assert_eq!(marks.len(), 1);
+    let names = |t: &tempfile::TempDir| {
+        let mut v: Vec<String> = std::fs::read_dir(t.path())
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        v.sort();
+        v
+    };
+    // Every leader is gone, our own too (a daemon that forked twice): our
+    // mark stays, so the note is said once all the same.
+    let dead = |_: i32, _: u64| false;
+    let mut out = Vec::new();
+    assert!(once_in(
+        t.path(),
+        "4242-77",
+        "rootless",
+        "first",
+        &dead,
+        &mut out
+    ));
+    assert!(!once_in(
+        t.path(),
+        "4242-77",
+        "rootless",
+        "second",
+        &dead,
+        &mut out
+    ));
+    assert_eq!(String::from_utf8(out).unwrap(), "first\n");
+    assert_eq!(names(&t), ["rootless-4242-77"]);
+    // Another kind in the same session is said once too.
+    let mut out = Vec::new();
+    assert!(once_in(
+        t.path(),
+        "4242-77",
+        "sandbox",
+        "third",
+        &dead,
+        &mut out
+    ));
+    assert_eq!(names(&t), ["rootless-4242-77", "sandbox-4242-77"]);
+    // A new session: the marks of a session that is gone are cleaned up,
+    // those of a live one and names that are no mark stay.
+    std::fs::write(t.path().join("rootless-5000-9"), "").unwrap();
+    std::fs::write(t.path().join("notes.txt"), "").unwrap();
+    let alive = |sid: i32, _: u64| sid == 5000;
+    let mut out = Vec::new();
+    assert!(once_in(
+        t.path(),
+        "6000-1",
+        "rootless",
+        "fourth",
+        &alive,
+        &mut out
+    ));
+    assert_eq!(String::from_utf8(out).unwrap(), "fourth\n");
     assert_eq!(
-        marks[0].file_name().to_string_lossy(),
-        format!("rootless-{key}")
+        names(&t),
+        ["notes.txt", "rootless-5000-9", "rootless-6000-1"]
     );
-    // A mark of a session that is gone is cleaned up at the next note.
-    std::fs::write(t.path().join("rootless-999999999-1"), "").unwrap();
-    once(t.path(), "sandbox", "third");
-    assert!(!t.t_path_exists("rootless-999999999-1"));
+    // A folder that cannot be made: the note is said, every time.
+    let file = t.path().join("notes.txt");
+    let mut out = Vec::new();
+    assert!(once_in(
+        &file.join("x"),
+        "6000-1",
+        "rootless",
+        "a",
+        &alive,
+        &mut out
+    ));
+    assert!(once_in(
+        &file.join("x"),
+        "6000-1",
+        "rootless",
+        "b",
+        &alive,
+        &mut out
+    ));
+    assert_eq!(String::from_utf8(out).unwrap(), "a\nb\n");
 }
 
-trait Exists {
-    fn t_path_exists(&self, n: &str) -> bool;
+#[test]
+fn a_mark_name_holds_the_session_and_its_start() {
+    assert_eq!(mark_session("rootless-123-456"), Some((123, 456)));
+    assert_eq!(mark_session("sandbox-0-0"), Some((0, 0)));
+    assert_eq!(mark_session("123-456"), None);
+    assert_eq!(mark_session("-123-456"), None);
+    assert_eq!(mark_session("rootless-x-456"), None);
+    assert_eq!(mark_session("notes.txt"), None);
 }
 
-impl Exists for tempfile::TempDir {
-    fn t_path_exists(&self, n: &str) -> bool {
-        self.path().join(n).exists()
+/// The leader check with real processes: a child that runs, then is gone,
+/// and a start time that is not its own (a reused id).
+#[test]
+fn a_leader_is_alive_while_it_runs_with_its_start_time() {
+    let mut c = std::process::Command::new("/bin/sh")
+        .args(["-c", "read x"])
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let pid = c.id() as i32;
+    let start = std::fs::read_to_string(format!("/proc/{pid}/stat"))
+        .ok()
+        .and_then(|s| start_time(&s));
+    assert!(leader_alive(pid, 0));
+    if let Some(s) = start {
+        assert!(leader_alive(pid, s));
+        assert!(!leader_alive(pid, s + 1), "a reused id is a new process");
     }
+    drop(c.stdin.take());
+    c.wait().unwrap();
+    // With its start time a busy host that gives the id to a new process
+    // at once does not fool the check.
+    assert!(!leader_alive(pid, start.unwrap_or(0)));
+    // What cannot be checked counts as alive.
+    assert!(leader_alive(0, 0));
+    assert!(leader_alive(-1, 0));
+}
+
+#[test]
+fn the_session_key_is_the_id_and_start_of_the_leader() {
+    let key = session_key();
+    let (sid, _) = key.split_once('-').unwrap();
+    // SAFETY: getsid(0) reads this process's session.
+    assert_eq!(sid.parse::<i32>().unwrap(), unsafe { libc::getsid(0) });
+    assert!(mark_session(&format!("rootless-{key}")).is_some());
 }
 
 #[test]
