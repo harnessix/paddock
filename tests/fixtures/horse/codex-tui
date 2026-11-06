@@ -63,9 +63,10 @@ turn() {
 }
 turn 1 hi 3
 n=1
-for _ in $(seq 1200); do
+for _ in $(seq 120); do
+    # Whole seconds: bash 3.2 has no fractional timeout.
     [ -e done ] && exit 0
-    if IFS= read -r -t 0.1 got; then
+    if IFS= read -r -t 1 got; then
         # A bracketed paste is one input, also over more than one line.
         case "$got" in
         $'\e[200~'*)

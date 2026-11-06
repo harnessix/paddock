@@ -165,7 +165,8 @@ fn an_entry_queued_during_a_turn_is_typed_through_the_relay_after_its_stop() {
             session: s.id.clone(),
             native: NATIVE.into(),
             config_dir: home.join(".claude"),
-            cwd: project.display().to_string(),
+            // As run/setup gives it: the real path (macOS has /tmp a link).
+            cwd: project.canonicalize().unwrap().display().to_string(),
             version: codec::VERSION.into(),
             run: "relay-run".into(),
             runs,

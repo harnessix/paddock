@@ -309,7 +309,16 @@ pub fn arm(
     p: Prepared,
 ) -> Result<Option<Captured>> {
     let out = Captured::default();
-    let cwd = built.spec.workdir.display().to_string();
+    // Claude Code names its transcript folder after the real path of its
+    // cwd. Seatbelt runs it on the host's paths, where /tmp and /var are
+    // links on macOS. Under bwrap the workdir is a mount point: as is.
+    let cwd = if cfg!(target_os = "macos") {
+        std::fs::canonicalize(&built.spec.workdir).unwrap_or_else(|_| built.spec.workdir.clone())
+    } else {
+        built.spec.workdir.clone()
+    }
+    .display()
+    .to_string();
     let tick = Duration::from_millis(200);
     let task = p.task.unwrap_or_default();
     match p.wire {
