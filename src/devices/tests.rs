@@ -1,14 +1,14 @@
 use super::*;
-use std::io::{Read, Write};
-use std::sync::atomic::AtomicUsize;
+use std::path::Path;
+use std::time::{Duration, Instant};
 
 #[test]
 fn config_is_off_by_default_and_names_known_devices() {
     let c = DevicesCfg::parse("").unwrap();
     assert!(c.mount);
     assert!(c.enabled.is_empty());
-    assert!(enabled_names(&c, false, None).is_empty());
-    assert_eq!(enabled_names(&c, true, None), ["echo"]);
+    assert!(enabled_names(&c, false, &GrantCtx::none()).is_empty());
+    assert_eq!(enabled_names(&c, true, &GrantCtx::none()), ["echo"]);
     let c = DevicesCfg::parse("[devices]\necho = true\n").unwrap();
     assert_eq!(c.enabled, ["echo"]);
     let c = DevicesCfg::parse("[devices]\nmount = false\necho = false\n").unwrap();
@@ -25,7 +25,7 @@ fn the_project_file_cannot_turn_devices_on() {
 
 #[test]
 fn catalog_lists_every_device_with_its_state() {
-    let off: serde_json::Value = serde_json::from_slice(&catalog(&[])).unwrap();
+    let off: serde_json::Value = serde_json::from_slice(&catalog_on(false, &[], &[])).unwrap();
     let names: Vec<&str> = off["devices"]
         .as_array()
         .unwrap()
@@ -43,7 +43,8 @@ fn catalog_lists_every_device_with_its_state() {
         .as_str()
         .unwrap()
         .contains("config.toml"));
-    let on: serde_json::Value = serde_json::from_slice(&catalog(&[Arc::new(Echo)])).unwrap();
+    let on: serde_json::Value =
+        serde_json::from_slice(&catalog_on(false, &[Arc::new(Echo)], &[])).unwrap();
     assert_eq!(on["devices"][0]["state"], "on");
     assert_eq!(on["devices"][0]["path"], "/dev/paddock/echo");
     assert_eq!(on["devices"][0]["limits"]["max_request"], 65536);
@@ -53,238 +54,10 @@ fn catalog_lists_every_device_with_its_state() {
         .contains("One open is one request"));
 }
 
-/// A device that works until it is cancelled, and counts its calls.
-struct Slow {
-    calls: Arc<AtomicUsize>,
-    saw_cancel: Arc<AtomicBool>,
-    deadline: u64,
-}
-
-impl Device for Slow {
-    fn name(&self) -> &str {
-        "slow"
-    }
-    fn info(&self) -> Info {
-        Info {
-            request: "any".into(),
-            response: "never".into(),
-            limits: Limits {
-                max_request: 16,
-                max_response: 16,
-                deadline_seconds: self.deadline,
-            },
-        }
-    }
-    fn call(&self, call: &Call, _request: &[u8]) -> Result<Vec<u8>, DevError> {
-        self.calls.fetch_add(1, Ordering::SeqCst);
-        while !call.cancelled() {
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        self.saw_cancel.store(true, Ordering::SeqCst);
-        Err(DevError::Cancelled)
-    }
-}
-
-struct Fixture {
-    _dir: tempfile::TempDir,
-    root: PathBuf,
-    _m: Mounted,
-    calls: Arc<AtomicUsize>,
-    saw_cancel: Arc<AtomicBool>,
-}
-
-/// Mount a test file system, or None when this host has no FUSE.
-fn mounted(deadline: u64) -> Option<Fixture> {
-    let env = HostEnv::detect().ok()?;
-    if let Err(why) = fuse_available(&env) {
-        eprintln!("skipped: {why}");
-        return None;
-    }
-    let dir = tempfile::tempdir().unwrap();
-    let root = dir.path().join("dev");
-    let calls = Arc::new(AtomicUsize::new(0));
-    let saw_cancel = Arc::new(AtomicBool::new(false));
-    let slow = Slow {
-        calls: calls.clone(),
-        saw_cancel: saw_cancel.clone(),
-        deadline,
-    };
-    let fs = DeviceFs::new(
-        "test-sandbox",
-        vec![Arc::new(Echo), Arc::new(slow), Arc::new(blocking::Wait)],
-    );
-    let m = match mount(&root, fs) {
-        Ok(m) => m,
-        Err(e) => {
-            eprintln!("skipped: {e:#}");
-            return None;
-        }
-    };
-    Some(Fixture {
-        _dir: dir,
-        root,
-        _m: m,
-        calls,
-        saw_cancel,
-    })
-}
-
-fn open_rw(p: &Path) -> std::io::Result<std::fs::File> {
-    std::fs::OpenOptions::new().read(true).write(true).open(p)
-}
-
-#[test]
-fn echo_round_trip_and_one_request_per_open() {
-    let Some(f) = mounted(5) else { return };
-    let mut h = open_rw(&f.root.join("echo")).unwrap();
-    h.write_all(b"hello ").unwrap();
-    h.write_all(b"world").unwrap();
-    let mut out = Vec::new();
-    h.read_to_end(&mut out).unwrap();
-    assert_eq!(out, b"hello world");
-    // The request was sent: no second one on the same open.
-    assert!(h.write_all(b"again").is_err());
-    drop(h);
-    // A new open is a new request.
-    let mut h = open_rw(&f.root.join("echo")).unwrap();
-    h.write_all(b"2").unwrap();
-    let mut s = String::new();
-    h.read_to_string(&mut s).unwrap();
-    assert_eq!(s, "2");
-    // Shell style: open with O_TRUNC, as `3<>` and `>` do.
-    let mut h = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .truncate(true)
-        .open(f.root.join("echo"))
-        .unwrap();
-    h.write_all(b"t").unwrap();
-    let mut s = String::new();
-    h.read_to_string(&mut s).unwrap();
-    assert_eq!(s, "t");
-}
-
-#[test]
-fn catalog_is_read_only_and_the_folder_fixed() {
-    let Some(f) = mounted(5) else { return };
-    let text = std::fs::read_to_string(f.root.join(CATALOG)).unwrap();
-    let v: serde_json::Value = serde_json::from_str(&text).unwrap();
-    let names: Vec<&str> = v["devices"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|d| d["name"].as_str().unwrap())
-        .collect();
-    // The devices that are on, then the built-in ones that are off.
-    assert_eq!(names, ["echo", "slow", "wait", "ask"]);
-    assert!(open_rw(&f.root.join(CATALOG)).is_err());
-    assert!(std::fs::write(f.root.join(CATALOG), "x").is_err());
-    assert!(std::fs::write(f.root.join("new"), "x").is_err());
-    assert!(std::fs::create_dir(f.root.join("d")).is_err());
-    assert!(std::fs::remove_file(f.root.join("echo")).is_err());
-    assert!(std::fs::rename(f.root.join("echo"), f.root.join("e2")).is_err());
-    let mut list: Vec<String> = std::fs::read_dir(&f.root)
-        .unwrap()
-        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-        .collect();
-    list.sort();
-    assert_eq!(list, [".catalog", "echo", "slow", "wait"]);
-}
-
-#[test]
-fn a_request_over_the_limit_fails() {
-    let Some(f) = mounted(5) else { return };
-    let mut h = open_rw(&f.root.join("slow")).unwrap();
-    let e = h.write_all(&[0u8; 17]).unwrap_err();
-    assert_eq!(e.raw_os_error(), Some(libc::EFBIG));
-}
-
-#[test]
-fn a_read_fails_at_the_deadline() {
-    let Some(f) = mounted(1) else { return };
-    let mut h = open_rw(&f.root.join("slow")).unwrap();
-    h.write_all(b"x").unwrap();
-    let start = Instant::now();
-    let mut out = Vec::new();
-    let e = h.read_to_end(&mut out).unwrap_err();
-    assert_eq!(e.raw_os_error(), Some(libc::ETIMEDOUT));
-    assert!(start.elapsed() < Duration::from_secs(4));
-    let wait = Instant::now();
-    while !f.saw_cancel.load(Ordering::SeqCst) && wait.elapsed() < Duration::from_secs(2) {
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    assert!(f.saw_cancel.load(Ordering::SeqCst));
-}
-
-#[test]
-fn a_waiting_read_reports_still_waiting_with_etime_through_the_mount() {
-    let Some(f) = mounted(5) else { return };
-    let mut h = open_rw(&f.root.join("wait")).unwrap();
-    h.write_all(br#"{"until": "1h", "timeout": 1}"#).unwrap();
-    let start = Instant::now();
-    let mut out = Vec::new();
-    let e = h.read_to_end(&mut out).unwrap_err();
-    assert_eq!(e.raw_os_error(), Some(crate::waiting::ERRNO_STILL_WAITING));
-    assert!(start.elapsed() < Duration::from_secs(4));
-    // A time that has come returns the line.
-    let mut h = open_rw(&f.root.join("wait")).unwrap();
-    h.write_all(b"0s").unwrap();
-    let mut s = String::new();
-    h.read_to_string(&mut s).unwrap();
-    assert!(s.starts_with("reached "), "{s}");
-}
-
-#[test]
-fn closing_before_the_read_sends_nothing() {
-    let Some(f) = mounted(5) else { return };
-    let mut h = open_rw(&f.root.join("slow")).unwrap();
-    h.write_all(b"x").unwrap();
-    drop(h);
-    std::thread::sleep(Duration::from_millis(100));
-    assert_eq!(f.calls.load(Ordering::SeqCst), 0);
-}
-
-#[test]
-fn a_killed_reader_cancels_the_request() {
-    let Some(f) = mounted(30) else { return };
-    let dev = f.root.join("slow");
-    let mut child = std::process::Command::new("/bin/sh")
-        .arg("-c")
-        .arg("exec 3<>\"$1\"; printf x >&3; exec cat <&3")
-        .arg("sh")
-        .arg(&dev)
-        .spawn()
-        .unwrap();
-    let wait = Instant::now();
-    while f.calls.load(Ordering::SeqCst) == 0 && wait.elapsed() < Duration::from_secs(5) {
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    assert_eq!(f.calls.load(Ordering::SeqCst), 1);
-    let killed = Instant::now();
-    child.kill().unwrap();
-    child.wait().unwrap();
-    // Far before the deadline of 30 seconds.
-    assert!(killed.elapsed() < Duration::from_secs(5));
-    let wait = Instant::now();
-    while !f.saw_cancel.load(Ordering::SeqCst) && wait.elapsed() < Duration::from_secs(2) {
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    assert!(f.saw_cancel.load(Ordering::SeqCst));
-}
-
-#[test]
-fn unmount_leaves_an_empty_folder() {
-    let Some(f) = mounted(5) else { return };
-    let root = f.root.clone();
-    let Fixture { _m, _dir, .. } = f;
-    _m.unmount();
-    assert!(!root.join(CATALOG).exists());
-}
-
 #[test]
 fn catalog_lists_secret_files_by_name_only() {
     let v: serde_json::Value =
-        serde_json::from_slice(&catalog_with(&[], &["GH_TOKEN".to_string()])).unwrap();
+        serde_json::from_slice(&catalog_on(false, &[], &["GH_TOKEN".to_string()])).unwrap();
     assert_eq!(v["secrets"][0]["name"], "GH_TOKEN");
     assert_eq!(v["secrets"][0]["path"], "/dev/paddock/secret/GH_TOKEN");
     assert!(v["secrets_how"].as_str().unwrap().contains("cat "));
@@ -293,74 +66,349 @@ fn catalog_lists_secret_files_by_name_only() {
 }
 
 #[test]
-fn a_secret_file_returns_the_value_counts_a_use_and_fails_after_revoke() {
-    use crate::credentials::secret::{Secret, SecretFiles};
-    let Ok(env) = HostEnv::detect() else { return };
-    if let Err(why) = fuse_available(&env) {
-        eprintln!("skipped: {why}");
-        return;
-    }
-    let dir = tempfile::tempdir().unwrap();
-    let revoked = dir.path().join("revoked");
-    let reads = Arc::new(Mutex::new(Vec::<String>::new()));
-    let r2 = reads.clone();
-    let secrets = SecretFiles::new(
-        Some(revoked.clone()),
-        Some(Arc::new(move |n: &str| {
-            r2.lock().unwrap().push(n.to_string())
-        })),
-    );
-    let fs = DeviceFs::with_secrets("test-sandbox", vec![Arc::new(Echo)], secrets.clone());
-    let root = dir.path().join("dev");
-    let _m = match mount(&root, fs) {
-        Ok(m) => m,
-        Err(e) => {
-            eprintln!("skipped: {e:#}");
-            return;
-        }
-    };
-    // Before the start card: no folder.
-    assert!(!root.join(SECRET_DIR).exists());
-    secrets.insert("GH_TOKEN", Secret::from("ghp_FILEvalue"));
-    let file = root.join("secret/GH_TOKEN");
-    assert_eq!(std::fs::read_to_string(&file).unwrap(), "ghp_FILEvalue");
-    assert_eq!(*reads.lock().unwrap(), ["GH_TOKEN"]);
-    let list: Vec<String> = std::fs::read_dir(root.join(SECRET_DIR))
+fn the_catalog_on_macos_names_the_command_and_the_fifo() {
+    let v: serde_json::Value = serde_json::from_slice(&catalog_on(
+        true,
+        &[Arc::new(Echo)],
+        &["GH_TOKEN".to_string()],
+    ))
+    .unwrap();
+    assert_eq!(v["devices"][0]["invoke"], "paddock-host device echo");
+    assert!(v["devices"][0].get("path").is_none());
+    assert!(v["protocol"]
+        .as_str()
         .unwrap()
-        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-        .collect();
-    assert_eq!(list, ["GH_TOKEN"]);
-    let text = std::fs::read_to_string(root.join(CATALOG)).unwrap();
-    assert!(text.contains("/dev/paddock/secret/GH_TOKEN") && !text.contains("FILEvalue"));
-    // Read-only.
-    assert!(open_rw(&file).is_err());
-    assert!(std::fs::write(&file, "x").is_err());
-    // A file that is open when the user revokes fails at its next read.
-    let mut open = std::fs::File::open(&file).unwrap();
-    assert_eq!(reads.lock().unwrap().len(), 2);
-    std::fs::write(&revoked, "GH_TOKEN\n").unwrap();
-    let mut out = Vec::new();
-    let e = open.read_to_end(&mut out).unwrap_err();
-    assert_eq!(e.raw_os_error(), Some(libc::EACCES));
-    assert!(out.is_empty());
-    assert!(std::fs::read(&file).is_err());
-    assert!(secrets.names().is_empty());
-    assert_eq!(reads.lock().unwrap().len(), 2);
+        .contains("paddock-host device NAME"));
+    assert_eq!(v["secrets"][0]["path"], "$PADDOCK_DEVICES/secret/GH_TOKEN");
+    let how = v["secrets_how"].as_str().unwrap();
+    assert!(
+        how.contains("cat \"$PADDOCK_DEVICES/secret/GH_TOKEN\""),
+        "{how}"
+    );
+    assert!(!how.contains("/dev/paddock"), "{how}");
 }
 
-/// For manual checks of a backend: mount at $PADDOCK_TEST_MOUNT for
-/// $PADDOCK_TEST_SECONDS. `cargo test -- --ignored hold_a_mount`.
+/// A host for `start`: the user configuration turns on `devices`.
+fn host(dir: &Path, devices: &str) -> HostEnv {
+    let vars = [
+        ("XDG_RUNTIME_DIR", dir.join("rt")),
+        ("XDG_STATE_HOME", dir.join("st")),
+        ("XDG_CONFIG_HOME", dir.join("cf")),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), v.display().to_string()))
+    .collect();
+    let env = HostEnv::from_parts(dir.join("home"), "demo".into(), 1000, 1000, vars);
+    crate::privfs::write(
+        &env.paddock_config().join("config.toml"),
+        format!("[devices]\n{devices}\n"),
+    )
+    .unwrap();
+    env
+}
+
+fn sandbox(dir: &Path) -> crate::spec::SandboxSpec {
+    crate::spec::SandboxSpec::new(
+        "sb1".into(),
+        "fake",
+        &dir.join("project"),
+        dir.join("home-src"),
+        &dir.join("home"),
+        1000,
+        1000,
+        "demo",
+    )
+}
+
 #[test]
-#[ignore]
-fn hold_a_mount() {
-    let Ok(dir) = std::env::var("PADDOCK_TEST_MOUNT") else {
-        return;
-    };
-    let secs: u64 = std::env::var("PADDOCK_TEST_SECONDS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(30);
-    let fs = DeviceFs::new("manual", vec![Arc::new(Echo)]);
-    let _m = mount(Path::new(&dir), fs).unwrap();
-    std::thread::sleep(Duration::from_secs(secs));
+fn seatbelt_gets_a_socket_and_fifos_without_fuse() {
+    use crate::credentials::secret::{Secret, SecretFiles};
+    let dir = tempfile::tempdir().unwrap();
+    let env = host(dir.path(), "echo = true");
+    let mut spec = sandbox(dir.path());
+    let secrets = SecretFiles::new(None, None);
+    let d = start(
+        &env,
+        &mut spec,
+        "seatbelt",
+        false,
+        &GrantCtx::none(),
+        &[],
+        None,
+        secrets.clone(),
+    )
+    .expect("the devices of a Seatbelt run");
+    assert!(spec.notices.is_empty(), "{:?}", spec.notices);
+    let sock = spec.device_socket.clone().unwrap();
+    assert_eq!(
+        sock,
+        crate::sockpath::named(&env, "sb1", SOCKET_NAME).unwrap()
+    );
+    assert_eq!(spec.devices, Some(socket_dir(&env, "sb1")));
+    use socket::{request_at, Request};
+    assert_eq!(
+        request_at(&sock, &Request::call("echo", 2), b"hi").unwrap(),
+        b"hi"
+    );
+    secrets.insert("T", Secret::from("tok"));
+    let fifo = socket_dir(&env, "sb1").join(SECRET_DIR).join("T");
+    let start = Instant::now();
+    while !fifo.exists() {
+        assert!(start.elapsed() < Duration::from_secs(2), "no FIFO");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(std::fs::read(&fifo).unwrap(), b"tok");
+    drop(d);
+    assert!(!sock.exists());
+    assert!(!socket_dir(&env, "sb1").exists());
+}
+
+#[test]
+fn the_vm_gets_a_notice_not_a_refusal() {
+    let dir = tempfile::tempdir().unwrap();
+    let env = host(dir.path(), "echo = true");
+    let mut spec = sandbox(dir.path());
+    let secrets = crate::credentials::secret::SecretFiles::new(None, None);
+    assert!(start(
+        &env,
+        &mut spec,
+        "vm",
+        false,
+        &GrantCtx::none(),
+        &[],
+        None,
+        secrets
+    )
+    .is_none());
+    assert!(spec.devices.is_none() && spec.device_socket.is_none());
+    assert_eq!(spec.notices.len(), 1);
+    assert!(spec.notices[0].contains("do not reach the VM yet"));
+    assert!(backend_support(&env, "seatbelt").is_ok());
+}
+
+#[test]
+fn doctor_on_macos_names_the_socket_and_not_fuse() {
+    let dir = tempfile::tempdir().unwrap();
+    let env = host(dir.path(), "wait = true");
+    let lines = doctor_lines_on(&env, true).join("\n");
+    assert!(
+        lines.contains("devices on seatbelt: over a socket, `paddock-host device`"),
+        "{lines}"
+    );
+    assert!(
+        lines.contains("device sandboxes on seatbelt: run = \"sandbox\" under sandbox-exec; no mem or cpus limit, and `paddock freeze` does not reach them"),
+        "{lines}"
+    );
+    assert!(lines.contains("devices on vm:"), "{lines}");
+    assert!(!lines.contains("FUSE"), "{lines}");
+    assert!(lines.contains("devices: wait"), "{lines}");
+}
+
+/// Test devices that stream, for the mount, the socket and the client.
+pub(crate) mod streaming {
+    use crate::devices::{Call, Collect, DevError, Device, Info, Limits, Sink};
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+
+    fn info(response: &str, max_response: usize) -> Info {
+        Info {
+            shape: "builtin",
+            stream: true,
+            request: "any".into(),
+            response: response.into(),
+            limits: Limits {
+                max_request: 1024,
+                max_response,
+                deadline_seconds: 30,
+            },
+        }
+    }
+
+    /// What `Ab` does after "a".
+    #[derive(Clone, Copy)]
+    pub enum After {
+        /// "b", then the end.
+        B,
+        /// The device fails: bytes, then EIO.
+        Fail,
+        /// The device says still waiting: bytes, then ETIME.
+        Wait,
+    }
+
+    /// Writes "a", waits 200 ms, then `then`. Records when it wrote "a".
+    pub struct Ab {
+        pub name: &'static str,
+        pub then: After,
+        pub wrote_a: Arc<Mutex<Option<Instant>>>,
+    }
+
+    impl Ab {
+        pub fn new(name: &'static str, then: After) -> Self {
+            Self {
+                name,
+                then,
+                wrote_a: Arc::new(Mutex::new(None)),
+            }
+        }
+    }
+
+    impl Device for Ab {
+        fn name(&self) -> &str {
+            self.name
+        }
+        fn info(&self) -> Info {
+            info("a, then b", 16)
+        }
+        fn call(&self, call: &Call, request: &[u8]) -> Result<Vec<u8>, DevError> {
+            let mut c = Collect::default();
+            self.call_stream(call, request, &mut c)?;
+            Ok(c.0)
+        }
+        fn call_stream(
+            &self,
+            _call: &Call,
+            _request: &[u8],
+            sink: &mut dyn Sink,
+        ) -> Result<(), DevError> {
+            *self.wrote_a.lock().unwrap() = Some(Instant::now());
+            sink.push(b"a");
+            std::thread::sleep(Duration::from_millis(200));
+            match self.then {
+                After::B => {
+                    sink.push(b"b");
+                    Ok(())
+                }
+                After::Fail => Err(DevError::Failed),
+                After::Wait => Err(DevError::Waiting),
+            }
+        }
+    }
+
+    /// The size of `Big`.
+    #[cfg(target_os = "linux")]
+    pub const BIG: usize = 64 << 20;
+    /// The pieces of `Big`.
+    #[cfg(target_os = "linux")]
+    pub const PIECE: usize = 64 << 10;
+
+    /// The byte of `Big` at `pos`.
+    #[cfg(target_os = "linux")]
+    pub fn pattern(pos: usize) -> u8 {
+        pos as u8
+    }
+
+    /// Writes `BIG` bytes of `pattern` in pieces of `PIECE`. The mount
+    /// test of Linux reads it.
+    #[cfg(target_os = "linux")]
+    pub struct Big;
+
+    #[cfg(target_os = "linux")]
+    impl Device for Big {
+        fn name(&self) -> &str {
+            "big"
+        }
+        fn info(&self) -> Info {
+            info("64 MiB of a pattern", BIG)
+        }
+        fn call(&self, call: &Call, request: &[u8]) -> Result<Vec<u8>, DevError> {
+            let mut c = Collect::default();
+            self.call_stream(call, request, &mut c)?;
+            Ok(c.0)
+        }
+        fn call_stream(
+            &self,
+            call: &Call,
+            _request: &[u8],
+            sink: &mut dyn Sink,
+        ) -> Result<(), DevError> {
+            // Every piece is the same: PIECE is a multiple of 256.
+            let piece: Vec<u8> = (0..PIECE).map(pattern).collect();
+            for _ in 0..BIG / PIECE {
+                if call.cancelled() {
+                    return Err(DevError::Cancelled);
+                }
+                sink.push(&piece);
+            }
+            Ok(())
+        }
+    }
+
+    /// Writes pieces of `piece` bytes until it is cancelled, up to `max`
+    /// bytes of response. Records when it saw the cancel.
+    pub struct Forever {
+        pub name: &'static str,
+        pub piece: usize,
+        pub max: usize,
+        pub saw_cancel: Arc<Mutex<Option<Instant>>>,
+    }
+
+    impl Forever {
+        pub fn new(name: &'static str, piece: usize, max: usize) -> Self {
+            Self {
+                name,
+                piece,
+                max,
+                saw_cancel: Arc::new(Mutex::new(None)),
+            }
+        }
+    }
+
+    impl Device for Forever {
+        fn name(&self) -> &str {
+            self.name
+        }
+        fn info(&self) -> Info {
+            info("bytes until cancelled", self.max)
+        }
+        fn call(&self, call: &Call, request: &[u8]) -> Result<Vec<u8>, DevError> {
+            let mut c = Collect::default();
+            self.call_stream(call, request, &mut c)?;
+            Ok(c.0)
+        }
+        fn call_stream(
+            &self,
+            call: &Call,
+            _request: &[u8],
+            sink: &mut dyn Sink,
+        ) -> Result<(), DevError> {
+            let piece = vec![b'z'; self.piece];
+            while !call.cancelled() {
+                sink.push(&piece);
+            }
+            *self.saw_cancel.lock().unwrap() = Some(Instant::now());
+            Err(DevError::Cancelled)
+        }
+    }
+
+    /// Writes `pieces` pieces of `piece` bytes with a short gap, then ends.
+    pub struct Pieces {
+        pub piece: usize,
+        pub pieces: usize,
+    }
+
+    impl Device for Pieces {
+        fn name(&self) -> &str {
+            "pieces"
+        }
+        fn info(&self) -> Info {
+            info("pieces", 1 << 20)
+        }
+        fn call(&self, call: &Call, request: &[u8]) -> Result<Vec<u8>, DevError> {
+            let mut c = Collect::default();
+            self.call_stream(call, request, &mut c)?;
+            Ok(c.0)
+        }
+        fn call_stream(
+            &self,
+            _call: &Call,
+            _request: &[u8],
+            sink: &mut dyn Sink,
+        ) -> Result<(), DevError> {
+            for i in 0..self.pieces {
+                sink.push(&vec![b'0' + i as u8; self.piece]);
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Ok(())
+        }
+    }
 }

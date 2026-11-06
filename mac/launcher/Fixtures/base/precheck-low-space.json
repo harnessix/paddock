@@ -1,0 +1,16 @@
+{
+  "v": 1,
+  "ok": false,
+  "name": "Notebook",
+  "version": "4.2.0",
+  "size_bytes": 610000000,
+  "app_store": false,
+  "golden": "ready",
+  "need_bytes": 2700000000,
+  "free_bytes": 1100000000,
+  "memory_options_gb": [
+    4,
+    6,
+    8
+  ]
+}

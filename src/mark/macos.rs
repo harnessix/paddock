@@ -7,7 +7,7 @@
 //! Accessibility notifications wake the marker on each move, and the menu
 //! raises the exact window.
 
-use super::{Rect, Tone, Win};
+use super::{Rect, Target, Tone, Win};
 use crate::env::HostEnv;
 use crate::state::Running;
 use anyhow::{Context, Result};
@@ -22,6 +22,7 @@ use objc2_app_kit::{
     NSFontWeightMedium, NSFontWeightRegular, NSImage, NSImageSymbolConfiguration, NSMenu,
     NSMenuItem, NSPanel, NSPasteboard, NSPasteboardTypeString, NSRunningApplication, NSScreen,
     NSStatusBar, NSStatusItem, NSTextField, NSVariableStatusItemLength, NSView,
+    NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView,
     NSWindowCollectionBehavior, NSWindowOrderingMode, NSWindowStyleMask, NSWorkspace,
 };
 use objc2_application_services::{
@@ -62,12 +63,48 @@ fn lock_path(env: &HostEnv) -> std::path::PathBuf {
     env.paddock_run().join("mark.lock")
 }
 
-/// Start `paddock mark` in its own session, with its output in a log file
-/// of the run folder.
-pub fn spawn(env: &HostEnv) {
-    let Ok(me) = std::env::current_exe() else {
-        return;
+/// The shortest time between two starts of the marker from one process.
+const SPAWN_GAP: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Whether a marker holds the lock now. A probe lock taken and released
+/// at once; an error counts as "not running".
+fn marker_runs(env: &HostEnv) -> bool {
+    use std::os::fd::AsRawFd;
+    let Ok(f) = std::fs::OpenOptions::new().read(true).open(lock_path(env)) else {
+        return false;
     };
+    // SAFETY: flock on an fd that `f` owns.
+    let free = unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0;
+    if free {
+        // SAFETY: as above.
+        unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_UN) };
+    }
+    !free
+}
+
+/// Whether this process may start a marker now: at most one start per
+/// `SPAWN_GAP`, whatever number of threads ask.
+fn spawn_due() -> bool {
+    use std::sync::Mutex;
+    static LAST: Mutex<Option<Instant>> = Mutex::new(None);
+    let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+    if last.is_some_and(|t| t.elapsed() < SPAWN_GAP) {
+        return false;
+    }
+    *last = Some(Instant::now());
+    true
+}
+
+/// Start `paddock mark` from the paddock binary `exe` in its own session,
+/// with its output in a log file of the run folder. Nothing starts while a
+/// marker runs or within `SPAWN_GAP` of the last start of this process, and
+/// a thread waits for the child, so a marker that ends never stays a
+/// zombie of the caller (a session helper calls this from many threads).
+pub fn spawn(env: &HostEnv, exe: &std::path::Path) {
+    if marker_runs(env) || !spawn_due() {
+        return;
+    }
+    let me = exe.to_path_buf();
     let log = std::fs::OpenOptions::new()
         .create(true)
         .write(true)
@@ -87,8 +124,47 @@ pub fn spawn(env: &HostEnv) {
             Ok(())
         });
     }
-    if let Err(e) = cmd.spawn() {
-        log::warn!("cannot start the window marks: {e}");
+    match cmd.spawn() {
+        Ok(mut child) => {
+            std::thread::spawn(move || {
+                let _ = child.wait();
+            });
+        }
+        Err(e) => log::warn!("cannot start the window marks: {e}"),
+    }
+}
+
+/// The windows on screen, front first.
+pub fn windows() -> Vec<Win> {
+    window_list()
+}
+
+/// The name of an app, as the Dock shows it.
+pub(super) fn app_name(pid: u32) -> String {
+    NSRunningApplication::runningApplicationWithProcessIdentifier(pid as i32)
+        .and_then(|a| a.localizedName())
+        .map(|n| n.to_string())
+        .unwrap_or_else(|| format!("process {pid}"))
+}
+
+/// The terminal window of the run that starts now: the front window of
+/// the nearest ancestor app, when that app is in front. Else None and one
+/// log line that says why.
+pub fn terminal_window_now() -> Option<super::TerminalWindow> {
+    let procs = super::procs::proc_table();
+    let wins = window_list();
+    let front = NSWorkspace::sharedWorkspace()
+        .frontmostApplication()
+        .map(|a| a.processIdentifier() as u32);
+    match super::terminal_window(&procs, std::process::id(), &wins, front) {
+        Ok(t) => {
+            log::info!("window mark on window {} of {}", t.id, app_name(t.pid));
+            Some(t)
+        }
+        Err(e) => {
+            log::info!("{}", e.reason(app_name));
+            None
+        }
     }
 }
 
@@ -156,7 +232,12 @@ struct Mark {
 struct State {
     env: HostEnv,
     runs: Vec<Running>,
-    trees: Vec<BTreeSet<u32>>,
+    /// What tells the windows of each run, in the order of `runs`.
+    targets: Vec<Target>,
+    /// The terminal app of each terminal run, by name, for the menu.
+    terminals: Vec<Option<String>>,
+    /// The facts of each guest session, in the order of `runs`.
+    vm: Vec<Option<super::VmFacts>>,
     marks: BTreeMap<u32, Mark>,
     /// The focused protected window and when it got focus.
     focus: Option<(u32, Instant)>,
@@ -169,6 +250,13 @@ struct State {
     moved: Instant,
     started: Instant,
     empty_since: Option<Instant>,
+    /// The `connect` questions of the firewall, read every second.
+    questions: Vec<crate::broker::Pending>,
+    /// Their panels, by question id.
+    panels: BTreeMap<String, AskPanel>,
+    panels_sig: String,
+    /// The question of the open `More…` menu of a panel.
+    menu_for: Option<String>,
 }
 
 struct Ivars {
@@ -209,6 +297,40 @@ define_class!(
         fn copy_stop(&self, sender: &AnyObject) {
             let tag: isize = unsafe { msg_send![sender, tag] };
             self.copy_stop_command(tag as u32);
+        }
+
+        /// A button of a firewall panel: its answer into the store.
+        #[unsafe(method(answerConnect:))]
+        fn answer_connect(&self, sender: &AnyObject) {
+            self.with(|st| answer_from_button(st, sender));
+            self.refresh();
+        }
+
+        /// The `More…` button of a firewall panel: the other answers.
+        #[unsafe(method(askMore:))]
+        fn ask_more(&self, sender: &AnyObject) {
+            let Some(mtm) = MainThreadMarker::new() else {
+                return;
+            };
+            let me: &AnyObject = self.as_ref();
+            // The menu runs its own loop: the state is let go first.
+            let menu = self.with(|st| more_menu(st, mtm, sender, me));
+            if let Some(menu) = menu {
+                // SAFETY: the sender is the `More…` button, a view.
+                let view: &NSView = unsafe { &*(sender as *const AnyObject).cast::<NSView>() };
+                menu.popUpMenuPositioningItem_atLocation_inView(
+                    None,
+                    NSPoint::new(0.0, -4.0),
+                    Some(view),
+                );
+            }
+            self.refresh();
+        }
+
+        /// An item of the `More…` menu: its answer into the store.
+        #[unsafe(method(answerConnectMenu:))]
+        fn answer_connect_menu(&self, sender: &AnyObject) {
+            self.with(|st| answer_from_menu(st, sender));
         }
 
         #[unsafe(method(openAccessibility:))]
@@ -252,7 +374,9 @@ impl Marker {
         *this.ivars().state.borrow_mut() = Some(State {
             env,
             runs: Vec::new(),
-            trees: Vec::new(),
+            vm: Vec::new(),
+            targets: Vec::new(),
+            terminals: Vec::new(),
             marks: BTreeMap::new(),
             focus: None,
             status,
@@ -263,6 +387,10 @@ impl Marker {
             moved: now,
             started: now,
             empty_since: None,
+            questions: Vec::new(),
+            panels: BTreeMap::new(),
+            panels_sig: String::new(),
+            menu_for: None,
         });
         this
     }
@@ -288,18 +416,29 @@ impl Marker {
         }
     }
 
-    /// Read the app sandboxes and their process trees again. End the marker
-    /// a while after the last one ends.
+    /// Read the marked runs, the process trees of app runs, the windows
+    /// of terminal runs and the firewall questions again. End the marker
+    /// a while after the last run and the last question are gone.
     fn reload(&self) {
         let quit = self.with(|st| {
-            st.runs = super::app_runs(Running::list(&st.env));
-            let procs = if st.runs.is_empty() {
-                BTreeMap::new()
+            st.runs = super::marked_runs(Running::list(&st.env));
+            st.vm = super::vm::facts(&st.env, &st.runs);
+            st.questions = load_questions(&st.env);
+            let procs = if st.runs.iter().any(|r| r.gui == "app") {
+                super::procs::proc_table()
             } else {
-                proc_table()
+                BTreeMap::new()
             };
-            st.trees = st.runs.iter().map(|r| super::tree(&procs, r.pid)).collect();
-            if st.runs.is_empty() {
+            st.targets = st.runs.iter().map(|r| Target::of(r, &procs)).collect();
+            st.terminals = st
+                .targets
+                .iter()
+                .map(|t| match t {
+                    Target::Window(_, pid) => Some(app_name(*pid)),
+                    Target::Tree(_) => None,
+                })
+                .collect();
+            if st.runs.is_empty() && st.questions.is_empty() {
                 let since = *st.empty_since.get_or_insert_with(Instant::now);
                 st.started.elapsed().as_secs_f64() > GRACE && since.elapsed().as_secs_f64() > LINGER
             } else {
@@ -364,7 +503,7 @@ impl Marker {
         let me: &AnyObject = self.as_ref();
 
         self.with(|st| {
-            let matched = super::match_windows(&wins, &st.trees, own);
+            let matched = super::match_windows(&wins, &st.targets, own);
             match (st.focus, focused) {
                 (Some((id, _)), Some(f)) if id == f => {}
                 (_, Some(f)) if matched.iter().any(|(w, _)| w.id == f) => {
@@ -378,11 +517,7 @@ impl Marker {
                 seen.insert(w.id);
                 let r = &st.runs[*run];
                 let tone = Tone::of(&r.network);
-                let text = super::badge_text(
-                    super::badge_name(r),
-                    &r.network,
-                    now.saturating_sub(r.started),
-                );
+                let text = super::run_badge(r, st.vm.get(*run).and_then(|f| f.as_ref()), now);
                 let m = st
                     .marks
                     .entry(w.id)
@@ -450,6 +585,7 @@ impl Marker {
                 keep
             });
             update_menu(st, mtm, me);
+            refresh_panels(st, mtm, &wins, &screens, main_h, me);
         });
     }
 
@@ -478,7 +614,8 @@ impl Marker {
             let r = st.runs.get(m.run)?;
             let menu = NSMenu::new(mtm);
             menu.setAutoenablesItems(false);
-            for line in super::details(r, crate::state::now()) {
+            let terminal = st.terminals.get(m.run).cloned().flatten();
+            for line in super::details(r, crate::state::now(), terminal.as_deref()) {
                 menu.addItem(&item(mtm, &line, None, 0, me));
             }
             menu.addItem(&NSMenuItem::separatorItem(mtm));
@@ -538,11 +675,16 @@ impl Mark {
         frame.setContentView(Some(&view));
 
         let badge = panel(mtm, true);
-        let surface = NSView::new(mtm);
+        // The system popover material, which follows Light and Dark; the
+        // tone of the mark shows only in the border and the dot.
+        let surface = NSVisualEffectView::new(mtm);
+        surface.setMaterial(NSVisualEffectMaterial::Popover);
+        surface.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
+        surface.setState(NSVisualEffectState::Active);
         surface.setWantsLayer(true);
         if let Some(layer) = surface.layer() {
-            layer.setBackgroundColor(Some(&CGColor::new_srgb(0.106, 0.114, 0.110, 0.96)));
             layer.setCornerRadius(11.0);
+            layer.setMasksToBounds(true);
             layer.setBorderWidth(1.0);
         }
         let dot = NSView::new(mtm);
@@ -556,9 +698,7 @@ impl Mark {
         label.setFont(Some(&NSFont::systemFontOfSize_weight(11.0, unsafe {
             NSFontWeightMedium
         })));
-        label.setTextColor(Some(&NSColor::colorWithSRGBRed_green_blue_alpha(
-            1.0, 1.0, 1.0, 0.92,
-        )));
+        label.setTextColor(Some(&NSColor::labelColor()));
         surface.addSubview(&dot);
         surface.addSubview(&label);
         // A transparent button over the whole badge takes the click.
@@ -570,7 +710,8 @@ impl Mark {
         button.setTransparent(true);
         button.setTag(w.id as isize);
         surface.addSubview(&button);
-        badge.setContentView(Some(&surface));
+        let surface_view: &NSView = &surface;
+        badge.setContentView(Some(surface_view));
 
         let mut m = Mark {
             target: w.id,
@@ -626,6 +767,11 @@ impl Mark {
     }
 }
 
+#[path = "ask.rs"]
+mod ask;
+#[path = "ask_panel.rs"]
+mod ask_panel;
 #[path = "ui.rs"]
 mod ui;
+use ask::*;
 use ui::*;

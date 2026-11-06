@@ -1,0 +1,109 @@
+# XcodeGen spec of paddock for Mac. `xcodegen generate` writes
+# PaddockLauncher.xcodeproj from this file; the project is not checked in.
+name: PaddockLauncher
+options:
+  bundleIdPrefix: dev.paddock
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+  developmentLanguage: en
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    SWIFT_STRICT_CONCURRENCY: minimal
+    ENABLE_USER_SCRIPT_SANDBOXING: YES
+    LOCALIZATION_PREFERS_STRING_CATALOGS: YES
+    SWIFT_EMIT_LOC_STRINGS: YES
+
+packages:
+  PaddockKit:
+    path: PaddockKit
+
+targets:
+  PaddockLauncher:
+    type: application
+    platform: macOS
+    sources:
+      - path: App
+    dependencies:
+      - package: PaddockKit
+    info:
+      path: Build/Info.plist
+      properties:
+        CFBundleDisplayName: paddock for Mac
+        CFBundleName: paddock for Mac
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        CFBundleDevelopmentRegion: en
+        CFBundleLocalizations: [en, zh-Hans]
+        LSApplicationCategoryType: public.app-category.utilities
+        LSMinimumSystemVersion: "14.0"
+        NSHumanReadableCopyright: "paddock"
+        NSPrincipalClass: NSApplication
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.paddock.mac
+        PRODUCT_NAME: paddock for Mac
+        PRODUCT_MODULE_NAME: PaddockLauncher
+        ENABLE_HARDENED_RUNTIME: YES
+        ENABLE_APP_SANDBOX: NO
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"
+        CODE_SIGN_INJECT_BASE_ENTITLEMENTS: NO
+        COMBINE_HIDPI_IMAGES: YES
+      configs:
+        Release:
+          CODE_SIGN_IDENTITY: "Developer ID Application"
+          OTHER_CODE_SIGN_FLAGS: "--timestamp"
+
+  PaddockLauncherTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: AppTests
+    dependencies:
+      - target: PaddockLauncher
+      - package: PaddockKit
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.paddock.mac.tests
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGN_IDENTITY: "-"
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/paddock for Mac.app/Contents/MacOS/paddock for Mac"
+        BUNDLE_LOADER: "$(TEST_HOST)"
+
+  PaddockLauncherUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - path: UITests
+    dependencies:
+      - target: PaddockLauncher
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.paddock.mac.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGN_IDENTITY: "-"
+        TEST_TARGET_NAME: PaddockLauncher
+
+schemes:
+  PaddockLauncher:
+    build:
+      targets:
+        PaddockLauncher: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      gatherCoverageData: false
+      environmentVariables:
+        # The unit-test host must not find a paddock installed on this Mac.
+        PADDOCK_LAUNCHER_SEARCH_ROOT: /nonexistent
+        PADDOCK_LAUNCHER_UITEST: "1"
+      targets:
+        - PaddockLauncherTests
+        - PaddockLauncherUITests
+    archive:
+      config: Release

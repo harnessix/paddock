@@ -9,9 +9,12 @@
 use crate::env::HostEnv;
 use crate::state::Running;
 use std::collections::{BTreeMap, BTreeSet};
+pub use vm::VmFacts;
 
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(target_os = "macos")]
+pub mod procs;
 
 /// The width of the frame stroke, in points.
 pub const FRAME_WIDTH: f64 = 2.0;
@@ -42,7 +45,10 @@ impl Tone {
     /// that paddock does not know gets amber.
     pub fn of(network: &str) -> Tone {
         match network {
-            "none" | "api" | "egress" => Tone::Sage,
+            // On macOS, mode allowlist goes through paddock's proxy too, and
+            // mode ask exists only in the macOS guest, whose every
+            // connection goes through paddock's proxy.
+            "none" | "api" | "egress" | "allowlist" | "ask" => Tone::Sage,
             _ => Tone::Amber,
         }
     }
@@ -54,6 +60,14 @@ impl Tone {
             Tone::Sage => (159.0 / 255.0, 184.0 / 255.0, 160.0 / 255.0),
             // #E0A33A, the Omarchy base color.
             Tone::Amber => (224.0 / 255.0, 163.0 / 255.0, 58.0 / 255.0),
+        }
+    }
+
+    /// The word of the tone, for `paddock windows --json`.
+    pub fn word(self) -> &'static str {
+        match self {
+            Tone::Sage => "sage",
+            Tone::Amber => "amber",
         }
     }
 
@@ -82,6 +96,38 @@ pub fn badge_text(name: &str, network: &str, age_secs: u64) -> String {
     format!("paddock · {name} · {network} · {}", age(age_secs))
 }
 
+/// The badge text of one run. A session of the macOS guest (`backend =
+/// "macvm"`) gains the word `vm`, and the name of the guest input source
+/// while it differs from the host's: `paddock · chatgpt-desktop · ask ·
+/// vm · Pinyin - Simplified · 2h`. The note of the session (`waking`,
+/// `display changed, restart for full size`) goes at the end.
+pub fn run_badge(r: &Running, vm: Option<&VmFacts>, now: u64) -> String {
+    let age_secs = now.saturating_sub(r.started);
+    if !is_vm(r) {
+        return badge_text(badge_name(r), &r.network, age_secs);
+    }
+    let mut parts = vec![
+        "paddock".to_string(),
+        badge_name(r).to_string(),
+        r.network.clone(),
+        "vm".to_string(),
+    ];
+    let facts = vm.cloned().unwrap_or_default();
+    if let Some(input) = facts.guest_input.as_deref().filter(|s| !s.is_empty()) {
+        parts.push(input.to_string());
+    }
+    parts.push(age(age_secs));
+    if let Some(note) = facts.note.as_deref().filter(|s| !s.is_empty()) {
+        parts.push(note.to_string());
+    }
+    parts.join(" · ")
+}
+
+/// A run of the macOS guest.
+pub fn is_vm(r: &Running) -> bool {
+    r.backend == crate::macvm::host::BACKEND
+}
+
 /// The name in the badge: the pasture the sandbox joined, or its profile.
 pub fn badge_name(r: &Running) -> &str {
     r.pasture.as_deref().unwrap_or(&r.harness)
@@ -95,8 +141,9 @@ pub fn project_name(r: &Running) -> String {
         .unwrap_or_else(|| r.project.display().to_string())
 }
 
-/// The lines of the details that a click on the badge shows.
-pub fn details(r: &Running, now: u64) -> Vec<String> {
+/// The lines of the details that a click on the badge shows. `terminal` is
+/// the name of the terminal app of a terminal run.
+pub fn details(r: &Running, now: u64, terminal: Option<&str>) -> Vec<String> {
     let since = now.saturating_sub(r.started);
     let mut out = vec![
         badge_text(badge_name(r), &r.network, since),
@@ -104,6 +151,9 @@ pub fn details(r: &Running, now: u64) -> Vec<String> {
         format!("Network: {}, {}", r.network, Tone::of(&r.network).meaning()),
         format!("Backend: {}", r.backend),
     ];
+    if let Some(app) = terminal {
+        out.push(format!("Terminal run in {app}"));
+    }
     if !r.auth.is_empty() {
         out.push(format!("Login: {}", r.auth));
     }
@@ -114,8 +164,9 @@ pub fn details(r: &Running, now: u64) -> Vec<String> {
 }
 
 /// The menu bar entry of one window. `nth` counts the windows of one
-/// sandbox from 1, and `of` is their number.
-pub fn menu_title(r: &Running, now: u64, nth: usize, of: usize) -> String {
+/// sandbox from 1, and `of` is their number. `terminal` is the name of the
+/// terminal app of a terminal run.
+pub fn menu_title(r: &Running, now: u64, nth: usize, of: usize, terminal: Option<&str>) -> String {
     let mut s = format!(
         "{} · {} · {} · {}",
         r.harness,
@@ -126,14 +177,74 @@ pub fn menu_title(r: &Running, now: u64, nth: usize, of: usize) -> String {
     if of > 1 {
         s.push_str(&format!(" ({nth}/{of})"));
     }
+    if let Some(app) = terminal {
+        s.push_str(&format!(" ({app})"));
+    }
     s
 }
 
-/// The running sandboxes that get a mark: app mode only. Agent runs live
-/// in a terminal window, which paddock cannot tell apart from the other
-/// windows of the terminal app.
-pub fn app_runs(list: Vec<Running>) -> Vec<Running> {
-    list.into_iter().filter(|r| r.gui == "app").collect()
+/// The menu entry of one window of a run. A session of the macOS guest is
+/// named by its app (`ChatGPT (paddock)`) and gains `vm`, the other runs
+/// keep [`menu_title`].
+pub fn run_menu_title(
+    r: &Running,
+    vm: Option<&VmFacts>,
+    now: u64,
+    nth: usize,
+    of: usize,
+    terminal: Option<&str>,
+) -> String {
+    if !is_vm(r) {
+        return menu_title(r, now, nth, of, terminal);
+    }
+    let name = vm
+        .map(|f| f.display_name.as_str())
+        .filter(|n| !n.is_empty())
+        .unwrap_or(&r.harness);
+    let mut s = format!(
+        "{name} · {} · {} · vm · {}",
+        project_name(r),
+        r.network,
+        age(now.saturating_sub(r.started))
+    );
+    if of > 1 {
+        s.push_str(&format!(" ({nth}/{of})"));
+    }
+    s
+}
+
+/// The running sandboxes that get a mark: app runs, and terminal runs
+/// whose terminal window paddock recorded at the start.
+pub fn marked_runs(list: Vec<Running>) -> Vec<Running> {
+    list.into_iter()
+        .filter(|r| r.gui == "app" || (r.gui == "off" && r.terminal_window.is_some()))
+        .collect()
+}
+
+/// What tells the windows of one marked run.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Target {
+    /// An app run: every window of a process in this process tree.
+    Tree(BTreeSet<u32>),
+    /// A terminal run: one window, by its window number and owner pid.
+    Window(u32, u32),
+}
+
+impl Target {
+    /// The target of a run. `procs` gives the process tree of an app run.
+    pub fn of(r: &Running, procs: &ProcTable) -> Target {
+        match (r.gui.as_str(), r.terminal_window, r.terminal_pid) {
+            ("off", Some(id), Some(pid)) => Target::Window(id, pid),
+            _ => Target::Tree(tree(procs, r.pid)),
+        }
+    }
+
+    fn matches(&self, w: &Win) -> bool {
+        match self {
+            Target::Tree(t) => t.contains(&w.pid),
+            Target::Window(id, pid) => w.id == *id && w.pid == *pid,
+        }
+    }
 }
 
 /// A rectangle in global screen coordinates with the origin at the top
@@ -241,23 +352,22 @@ pub fn tree(procs: &ProcTable, root: u32) -> BTreeSet<u32> {
     out
 }
 
+/// A normal, visible window of a useful size: one that can get a mark.
+fn markable(w: &Win) -> bool {
+    w.layer == 0 && w.alpha > 0.0 && w.bounds.w >= MIN_WINDOW && w.bounds.h >= MIN_WINDOW
+}
+
 /// The windows that get a mark, in the order of the list (front first),
-/// each with the index of its sandbox in `trees`. Only normal, visible
+/// each with the index of its run in `targets`. Only normal, visible
 /// windows of a useful size count. `own` is the marker process: it never
 /// marks its own windows.
-pub fn match_windows(wins: &[Win], trees: &[BTreeSet<u32>], own: u32) -> Vec<(Win, usize)> {
+pub fn match_windows(wins: &[Win], targets: &[Target], own: u32) -> Vec<(Win, usize)> {
     wins.iter()
-        .filter(|w| {
-            w.pid != own
-                && w.layer == 0
-                && w.alpha > 0.0
-                && w.bounds.w >= MIN_WINDOW
-                && w.bounds.h >= MIN_WINDOW
-        })
+        .filter(|w| w.pid != own && markable(w))
         .filter_map(|w| {
-            trees
+            targets
                 .iter()
-                .position(|t| t.contains(&w.pid))
+                .position(|t| t.matches(w))
                 .map(|i| (w.clone(), i))
         })
         .collect()
@@ -272,6 +382,121 @@ pub fn focused_window(wins: &[Win], front_pid: Option<u32>) -> Option<u32> {
         .map(|w| w.id)
 }
 
+/// The parent chain of `pid`, from `pid` itself up, at most `max` steps.
+/// It ends at launchd (1), at a process that is not in the table, or at a
+/// loop.
+pub fn ancestors(procs: &ProcTable, pid: u32, max: usize) -> Vec<u32> {
+    let mut out = vec![pid];
+    let mut p = pid;
+    while out.len() <= max {
+        match procs.get(&p) {
+            Some(&q) if q > 1 && !out.contains(&q) => {
+                out.push(q);
+                p = q;
+            }
+            _ => break,
+        }
+    }
+    out
+}
+
+/// The terminal window of a run, found at its start.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TerminalWindow {
+    /// The window number of the window server.
+    pub id: u32,
+    /// The terminal app that owns the window.
+    pub pid: u32,
+}
+
+/// Why a terminal run gets no mark.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NoMark {
+    /// No parent process owns a normal window: tmux, screen, ssh, a script.
+    NoTerminal,
+    /// The terminal app was not in front, so its front window is not
+    /// surely the run's window.
+    NotFront { terminal: u32, front: Option<u32> },
+}
+
+impl NoMark {
+    /// The log line. `name` gives the name of an app from its pid.
+    pub fn reason(&self, name: impl Fn(u32) -> String) -> String {
+        match self {
+            NoMark::NoTerminal => {
+                "no window mark: no parent process of paddock owns a terminal window".into()
+            }
+            NoMark::NotFront { terminal, front } => {
+                let front = match front {
+                    Some(p) => format!(", {} is", name(*p)),
+                    None => String::new(),
+                };
+                format!(
+                    "no window mark: {} is not the front app at the start{front}",
+                    name(*terminal)
+                )
+            }
+        }
+    }
+}
+
+/// The ancestor of the run at the most steps up that a terminal can be.
+pub const TERMINAL_DEPTH: usize = 32;
+
+/// The terminal window of a run that starts now. The terminal app is the
+/// nearest ancestor of `me` that owns a normal window. It must be the front
+/// app `front`, and its front window is the run's window: the user typed
+/// the command there. `wins` is the window list, front first.
+pub fn terminal_window(
+    procs: &ProcTable,
+    me: u32,
+    wins: &[Win],
+    front: Option<u32>,
+) -> Result<TerminalWindow, NoMark> {
+    let owns = |pid: u32| wins.iter().find(|w| w.pid == pid && markable(w));
+    let pid = ancestors(procs, me, TERMINAL_DEPTH)
+        .into_iter()
+        .find(|&p| owns(p).is_some())
+        .ok_or(NoMark::NoTerminal)?;
+    if front != Some(pid) {
+        return Err(NoMark::NotFront {
+            terminal: pid,
+            front,
+        });
+    }
+    let w = owns(pid).ok_or(NoMark::NoTerminal)?;
+    Ok(TerminalWindow { id: w.id, pid })
+}
+
+/// On macOS: the terminal window of a run that starts now, when `own`
+/// (the run is watched in the caller's own terminal), and the marker for
+/// it. None and one log line when there is no such window. None on other
+/// platforms, which mark terminal windows their own way.
+pub fn own_terminal_window(env: &HostEnv, own: bool) -> Option<TerminalWindow> {
+    #[cfg(target_os = "macos")]
+    if own {
+        let w = macos::terminal_window_now();
+        if w.is_some() {
+            // The marker waits for the run record (GRACE).
+            spawn(env);
+        }
+        return w;
+    }
+    let _ = (env, own);
+    None
+}
+
+/// macOS: the windows on screen, front first, and the process table.
+#[cfg(target_os = "macos")]
+pub fn screen() -> (Vec<Win>, ProcTable) {
+    (macos::windows(), procs::proc_table())
+}
+
+/// The variable that names the paddock binary for a process that is not
+/// paddock itself (the session helper of the macOS guest): `spawn` runs
+/// `paddock mark` from it.
+pub const EXE_VAR: &str = "PADDOCK_EXE";
+
 /// Start the marker in the background, unless one runs or the user turned
 /// it off with `PADDOCK_MARK=0`. Never inside a sandbox. macOS only: other
 /// platforms have their own window marks.
@@ -279,10 +504,94 @@ pub fn spawn(env: &HostEnv) {
     let off = env.var("PADDOCK").is_some() || env.var("PADDOCK_MARK") == Some("0");
     #[cfg(target_os = "macos")]
     if !off {
-        macos::spawn(env);
+        let exe = env
+            .var(EXE_VAR)
+            .map(std::path::PathBuf::from)
+            .or_else(|| std::env::current_exe().ok());
+        if let Some(exe) = exe {
+            macos::spawn(env, &exe);
+        }
     }
     #[cfg(not(target_os = "macos"))]
     let _ = off;
+}
+
+// ---- The firewall panel -------------------------------------------------
+
+/// The panel of one `connect` question, as the marker reports it in
+/// `panels.json` of the run folder, so `paddock windows --json` lists it
+/// with `kind = approval`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PanelRow {
+    /// The question id in the approvals store.
+    pub question: String,
+    /// The window number of the panel.
+    pub window: u32,
+    /// The marker process that owns the panel.
+    pub pid: u32,
+    /// The sandbox of the question (`macvm-<app>`).
+    pub sandbox: String,
+    pub harness: String,
+}
+
+/// The file with the panels of the marker.
+pub fn panels_file(env: &HostEnv) -> std::path::PathBuf {
+    env.paddock_run().join("mark-panels.json")
+}
+
+/// Write the panels of the marker. An empty list removes the file.
+pub fn write_panels(env: &HostEnv, rows: &[PanelRow]) {
+    let f = panels_file(env);
+    if rows.is_empty() {
+        let _ = std::fs::remove_file(&f);
+        return;
+    }
+    let _ = crate::privfs::write_atomic(&f, serde_json::to_vec(rows).unwrap_or_default());
+}
+
+/// The panels of a marker that still runs.
+pub fn read_panels(env: &HostEnv) -> Vec<PanelRow> {
+    let rows: Vec<PanelRow> = std::fs::read(panels_file(env))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default();
+    rows.into_iter()
+        .filter(|r| crate::state::alive(r.pid))
+        .collect()
+}
+
+/// The width and height of the firewall panel.
+pub const PANEL_SIZE: (f64, f64) = (360.0, 132.0);
+
+/// Where the panel of a question goes: under the top-right corner of
+/// the window of its session, where the badge sits, inside the screen
+/// of that window. Without a window: the top-right of the main screen.
+pub fn panel_rect(win: Option<Rect>, size: (f64, f64), screens: &[Rect]) -> Rect {
+    let (w, h) = size;
+    let main = screens
+        .first()
+        .copied()
+        .unwrap_or(Rect::new(0.0, 0.0, w, h));
+    let Some(win) = win else {
+        return Rect::new(
+            main.x + main.w - w - BADGE_INSET,
+            main.y + BADGE_INSET,
+            w,
+            h,
+        );
+    };
+    let screen = screens
+        .iter()
+        .find(|s| s.contains(win.x + win.w / 2.0, win.y.max(s.y)))
+        .copied()
+        .unwrap_or(main);
+    let x = (win.x + win.w - w - BADGE_INSET)
+        .min(screen.x + screen.w - w)
+        .max(screen.x);
+    let y = (win.y + BADGE_INSET + 22.0)
+        .min(screen.y + screen.h - h)
+        .max(screen.y);
+    Rect::new(x, y, w, h)
 }
 
 /// `paddock mark`: draw the marks until no app sandbox runs.
@@ -298,220 +607,8 @@ pub fn main(env: &HostEnv) -> anyhow::Result<i32> {
     }
 }
 
+pub mod panels;
+pub mod vm;
+
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::path::PathBuf;
-
-    fn running(network: &str, gui: &str) -> Running {
-        serde_json::from_value(serde_json::json!({
-            "id": "vscode-api-1a2b",
-            "harness": "vscode",
-            "project": "/work/api",
-            "backend": "seatbelt",
-            "network": network,
-            "gui": gui,
-            "pid": 4242,
-            "started": 1000,
-            "auth": "isolated",
-        }))
-        .unwrap()
-    }
-
-    #[test]
-    fn proxy_only_modes_are_sage_and_the_rest_amber() {
-        for n in ["none", "api", "egress"] {
-            assert_eq!(Tone::of(n), Tone::Sage, "{n}");
-        }
-        for n in ["host", "allowlist", "", "something-new"] {
-            assert_eq!(Tone::of(n), Tone::Amber, "{n}");
-        }
-        assert_ne!(Tone::Sage.rgb(), Tone::Amber.rgb());
-    }
-
-    #[test]
-    fn ages_are_short() {
-        assert_eq!(age(0), "<1m");
-        assert_eq!(age(59), "<1m");
-        assert_eq!(age(60), "1m");
-        assert_eq!(age(3599), "59m");
-        assert_eq!(age(7200), "2h");
-        assert_eq!(age(86_399), "23h");
-        assert_eq!(age(3 * 86_400 + 5), "3d");
-    }
-
-    #[test]
-    fn badge_text_matches_omarchy() {
-        assert_eq!(
-            badge_text("vscode", "egress", 2 * 3600 + 10),
-            "paddock · vscode · egress · 2h"
-        );
-    }
-
-    #[test]
-    fn the_badge_names_the_pasture_if_there_is_one() {
-        let mut r = running("egress", "app");
-        assert_eq!(badge_name(&r), "vscode");
-        r.pasture = Some("api-team".into());
-        assert_eq!(badge_name(&r), "api-team");
-        assert_eq!(details(&r, 1000)[0], "paddock · api-team · egress · <1m");
-    }
-
-    #[test]
-    fn details_name_the_sandbox() {
-        let r = running("egress", "app");
-        let d = details(&r, 1000 + 7200);
-        assert_eq!(d[0], "paddock · vscode · egress · 2h");
-        assert!(d.contains(&"Project: /work/api".to_string()));
-        assert!(d.contains(&"Network: egress, only through paddock's proxy".to_string()));
-        assert!(d.contains(&"Login: isolated".to_string()));
-        assert!(d.contains(&"Sandbox: vscode-api-1a2b".to_string()));
-        assert!(d.contains(&"Process: 4242".to_string()));
-        let d = details(&running("host", "app"), 1000);
-        assert!(d.contains(&"Network: host, a wider network".to_string()));
-    }
-
-    #[test]
-    fn menu_titles_count_windows_only_when_there_are_several() {
-        let r = running("api", "app");
-        assert_eq!(menu_title(&r, 1100, 1, 1), "vscode · api · api · 1m");
-        assert_eq!(menu_title(&r, 1100, 2, 3), "vscode · api · api · 1m (2/3)");
-        let mut r = r;
-        r.project = PathBuf::from("/");
-        assert_eq!(project_name(&r), "/");
-    }
-
-    #[test]
-    fn only_app_sandboxes_get_marks() {
-        let list = vec![running("egress", "app"), running("egress", "none")];
-        let apps = app_runs(list);
-        assert_eq!(apps.len(), 1);
-        assert_eq!(apps[0].gui, "app");
-    }
-
-    #[test]
-    fn the_tree_holds_all_descendants_and_nothing_else() {
-        // launchd 1 -> 100 (sandbox) -> 101 -> 103, 100 -> 102. 200 is apart.
-        let procs: ProcTable = [
-            (1, 0),
-            (100, 1),
-            (101, 100),
-            (102, 100),
-            (103, 101),
-            (200, 1),
-        ]
-        .into_iter()
-        .collect();
-        assert_eq!(tree(&procs, 100), BTreeSet::from([100, 101, 102, 103]));
-        // A process that is gone from the table still counts as its own root.
-        assert_eq!(tree(&procs, 999), BTreeSet::from([999]));
-        // A loop in a broken table ends.
-        let looped: ProcTable = [(5, 6), (6, 5)].into_iter().collect();
-        assert_eq!(tree(&looped, 5), BTreeSet::from([5, 6]));
-    }
-
-    fn win(id: u32, pid: u32, layer: i64, w: f64) -> Win {
-        Win {
-            id,
-            pid,
-            layer,
-            bounds: Rect::new(10.0, 50.0, w, w),
-            alpha: 1.0,
-        }
-    }
-
-    #[test]
-    fn windows_match_by_process_tree() {
-        let trees = vec![BTreeSet::from([100, 101]), BTreeSet::from([300])];
-        let wins = vec![
-            win(1, 101, 0, 800.0), // sandbox 0, from a child process
-            win(2, 555, 0, 800.0), // not protected
-            win(3, 100, 8, 800.0), // a menu layer
-            win(4, 100, 0, 20.0),  // a tiny helper window
-            win(5, 300, 0, 400.0), // sandbox 1
-            win(6, 9, 0, 400.0),   // the marker itself
-            Win {
-                alpha: 0.0,
-                ..win(7, 100, 0, 800.0)
-            }, // invisible
-        ];
-        let m = match_windows(&wins, &trees, 9);
-        let got: Vec<(u32, usize)> = m.iter().map(|(w, i)| (w.id, *i)).collect();
-        assert_eq!(got, vec![(1, 0), (5, 1)]);
-    }
-
-    #[test]
-    fn the_focused_window_is_the_front_window_of_the_front_app() {
-        let wins = vec![
-            win(1, 7, 25, 800.0),
-            win(2, 5, 0, 800.0),
-            win(3, 5, 0, 800.0),
-        ];
-        assert_eq!(focused_window(&wins, Some(5)), Some(2));
-        assert_eq!(focused_window(&wins, Some(7)), None);
-        assert_eq!(focused_window(&wins, None), None);
-    }
-
-    #[test]
-    fn the_frame_sits_outside_the_window() {
-        let f = frame_rect(Rect::new(100.0, 100.0, 800.0, 600.0));
-        assert!(f.x < 100.0 && f.y < 100.0);
-        assert!(f.x + f.w > 900.0 && f.y + f.h > 700.0);
-        assert_eq!(f.w - 800.0, 2.0 * FRAME_WIDTH);
-    }
-
-    #[test]
-    fn flipping_moves_the_origin_to_the_bottom() {
-        let r = Rect::new(10.0, 20.0, 100.0, 50.0);
-        assert_eq!(r.flip(1000.0), Rect::new(10.0, 930.0, 100.0, 50.0));
-        assert_eq!(r.flip(1000.0).flip(1000.0), r);
-    }
-
-    #[test]
-    fn the_badge_goes_above_the_window_when_there_is_room() {
-        // A screen of 1440x900 with a 30 pt menu bar.
-        let screens = [Rect::new(0.0, 30.0, 1440.0, 870.0)];
-        let win = Rect::new(100.0, 200.0, 800.0, 500.0);
-        let b = badge_rect(win, 220.0, 22.0, &screens);
-        assert!(b.y + b.h < win.y, "above the window: {b:?}");
-        assert_eq!(b.x + b.w, win.x + win.w - BADGE_INSET);
-        // A window at the top of the screen: the badge goes inside, at the
-        // bottom right, never over the menu bar.
-        let full = Rect::new(0.0, 30.0, 1440.0, 870.0);
-        let b = badge_rect(full, 220.0, 22.0, &screens);
-        assert_eq!(b.y + b.h, full.y + full.h - BADGE_INSET);
-        assert!(b.y > full.y);
-    }
-
-    #[test]
-    fn the_badge_finds_the_screen_of_its_window() {
-        // A second screen to the right, without a menu bar, top at 0.
-        let screens = [
-            Rect::new(0.0, 30.0, 1440.0, 870.0),
-            Rect::new(1440.0, 0.0, 1920.0, 1080.0),
-        ];
-        let win = Rect::new(1500.0, 10.0, 800.0, 500.0);
-        let b = badge_rect(win, 200.0, 22.0, &screens);
-        assert!(b.y > win.y, "no room above on the second screen: {b:?}");
-        let win = Rect::new(1500.0, 100.0, 800.0, 500.0);
-        let b = badge_rect(win, 200.0, 22.0, &screens);
-        assert!(b.y < win.y);
-    }
-
-    #[test]
-    fn the_badge_shows_on_focus_for_a_while_and_on_hover() {
-        assert!(badge_visible(Some(0.0), false));
-        assert!(badge_visible(Some(BADGE_FOCUS_SECS - 0.1), false));
-        assert!(!badge_visible(Some(BADGE_FOCUS_SECS), false));
-        assert!(badge_visible(Some(60.0), true));
-        assert!(badge_visible(None, true));
-        assert!(!badge_visible(None, false));
-    }
-
-    #[test]
-    fn near_frames_compare_with_a_tolerance() {
-        let a = Rect::new(10.0, 10.0, 100.0, 100.0);
-        assert!(a.near(Rect::new(11.0, 9.0, 101.0, 100.0), 2.0));
-        assert!(!a.near(Rect::new(20.0, 10.0, 100.0, 100.0), 2.0));
-    }
-}
+mod tests;

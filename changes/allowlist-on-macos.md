@@ -1,0 +1,1 @@
+- New: network mode `allowlist` works on macOS. Terminal runs and app mode use Seatbelt with paddock's proxy, which lets through only the hosts of the list (the same list that srt gets on Linux). `--backend auto` picks Seatbelt for it. A refused host goes into the audit log and the boundary log, with the reason `network mode allowlist: ...`.

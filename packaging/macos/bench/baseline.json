@@ -1,0 +1,23 @@
+{
+  "_doc": "The committed reference run of packaging/macos/bench.sh. The Linux test bench::baseline_meets_targets checks every measure against targets.json, so a target change and a baseline change are one commit. Not measured yet: the numbers are the targets, and measured is false until packaging/macos/bench.sh --baseline writes a real run here.",
+  "measured": false,
+  "model": "not measured yet",
+  "macos": "",
+  "paddock": "",
+  "date": "",
+  "measures": {
+    "warm": { "unit": "s", "p50": 6, "p95": 10, "mean": 6, "max": 10, "samples": 5 },
+    "cold": { "unit": "s", "p50": 45, "p95": 45, "mean": 45, "max": 45, "samples": 5 },
+    "first": { "unit": "s", "p50": 120, "p95": 120, "mean": 120, "max": 120, "samples": 5 },
+    "quit": { "unit": "s", "p50": 10, "p95": 10, "mean": 10, "max": 10, "samples": 5 },
+    "update": { "unit": "s", "p50": 5, "p95": 5, "mean": 5, "max": 5, "samples": 5 },
+    "input": { "unit": "ms", "p50": 40, "p95": 40, "mean": 40, "max": 40, "samples": 200 },
+    "move": { "unit": "ms", "p50": 8, "p95": 8, "mean": 8, "max": 8, "samples": 20 },
+    "frames": { "unit": "ms", "p50": 17, "p95": 50, "mean": 17, "max": 50, "samples": 150 },
+    "idle.cpu": { "unit": "pct", "p50": 3, "p95": 3, "mean": 3, "max": 3, "samples": 60 },
+    "idle.ram": { "unit": "gib", "p50": 4, "p95": 4, "mean": 4, "max": 4, "samples": 60 },
+    "idle.load": { "unit": "load", "p50": 1, "p95": 1, "mean": 1, "max": 1, "samples": 12 },
+    "video": { "unit": "pct", "p50": 60, "p95": 60, "mean": 60, "max": 60, "samples": 60 },
+    "disk": { "unit": "gib", "p50": 6, "p95": 6, "mean": 6, "max": 6, "samples": 1 }
+  }
+}

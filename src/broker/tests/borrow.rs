@@ -1,7 +1,5 @@
 use super::*;
 
-// Borrow names the open folder through /proc/self/fd. macOS has no such path.
-#[cfg(target_os = "linux")]
 #[test]
 fn borrow_and_return_through_the_broker() {
     let (t, b, fixed) = setup(Some(Answer::Once), HostPolicy::default());
@@ -54,31 +52,41 @@ fn borrow_and_return_through_the_broker() {
     assert!(!log.contains("agent") && !log.contains("new\\n"), "{log}");
 }
 
-/// macOS has no /proc/self/fd path for an open folder. The broker reports that.
-#[cfg(not(target_os = "linux"))]
+/// A Seatbelt run sees the folder at its host path: the result, the cards
+/// and the copies use it.
 #[test]
-fn borrow_through_the_broker_is_refused_without_proc_self_fd() {
-    let (t, b, _) = setup(Some(Answer::Once), HostPolicy::default());
+fn a_seatbelt_run_borrows_into_the_folder_that_it_sees() {
+    let (t, mut b, fixed) = setup(Some(Answer::Once), HostPolicy::default());
+    let seen = crate::borrow::dir(&b.env, "t-1");
+    b.borrow_dir = seen.clone();
     let o = t.path().join("shared/lib");
     std::fs::create_dir_all(&o).unwrap();
+    std::fs::write(o.join("a"), "old").unwrap();
     let r = b.handle(&req("borrow", serde_json::json!({ "path": o })));
-    assert_eq!(r.status, Status::Failed, "{}", r.message);
-    assert!(
-        r.message.contains("not available on macOS"),
-        "{}",
-        r.message
-    );
+    assert_eq!(r.status, Status::Done, "{}", r.message);
+    assert_eq!(r.result["path"], seen.join("lib").display().to_string());
+    std::fs::write(seen.join("lib/a"), "new").unwrap();
+    let r = b.handle(&req("return", serde_json::json!({ "name": "lib" })));
+    assert_eq!(r.status, Status::Done, "{}", r.message);
+    assert_eq!(std::fs::read_to_string(o.join("a")).unwrap(), "new");
+    assert_eq!(fixed.asked.load(Ordering::SeqCst), 2);
+    // The audit log names the host folder, not /run/paddock/borrow.
+    let log = std::fs::read_to_string(audit_file(&b.env)).unwrap();
+    assert!(!log.contains(crate::borrow::MOUNT), "{log}");
 }
 
 #[test]
-fn a_seatbelt_run_refuses_borrow_and_return_with_one_line() {
+fn a_refused_capability_is_off_with_one_line() {
     let (_t, mut b, fixed) = setup(Some(Answer::Once), HostPolicy::default());
-    b.refused = crate::backend::seatbelt::run::BROKER_REFUSALS.to_vec();
+    b.refused = vec![
+        ("borrow", "borrow is not there on this backend"),
+        ("return", "return is not there on this backend"),
+    ];
     for cap in ["borrow", "return"] {
         let r = b.handle(&req(cap, serde_json::json!({ "path": "/x", "name": "x" })));
         assert_eq!(r.status, Status::Disabled, "{cap}");
         assert!(
-            r.message.contains("not there yet on macOS"),
+            r.message.contains("not there on this backend"),
             "{}",
             r.message
         );

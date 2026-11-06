@@ -224,6 +224,7 @@ fn answers_go_through_the_approvals_directory() {
         session_allowed: true,
         choices: Vec::new(),
         started_by: vec![],
+        connect: None,
     };
     let env2 = env.clone();
     let t = std::thread::spawn(move || HostApprover.ask(&env2, &p, Duration::from_secs(10)));
@@ -260,6 +261,7 @@ fn the_first_answer_wins_and_is_written_whole() {
         expires: 11,
         session_allowed: true,
         choices: Vec::new(),
+        connect: None,
         started_by: vec![],
     };
     write_pending(&env, &p).unwrap();

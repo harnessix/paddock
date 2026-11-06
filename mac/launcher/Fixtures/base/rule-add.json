@@ -1,0 +1,13 @@
+{
+  "v": 1,
+  "ok": true,
+  "applies": "live",
+  "rule": {
+    "host": "files.example.com",
+    "answer": "allow",
+    "scope": "always",
+    "added": "2026-11-06T10:00:00Z",
+    "count": 0,
+    "seeded": false
+  }
+}

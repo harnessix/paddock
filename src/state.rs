@@ -993,7 +993,7 @@ pub fn changed(before: &BTreeMap<PathBuf, Option<String>>) -> Vec<PathBuf> {
         .collect()
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Running {
     pub id: String,
     pub harness: String,
@@ -1066,6 +1066,13 @@ pub struct Running {
     /// The caller still sends and receives bytes, and owns the input.
     #[serde(default)]
     pub relay: bool,
+    /// macOS: the window number of the terminal window that runs this
+    /// sandbox, recorded at the start (mark.rs). The marker marks it.
+    #[serde(default)]
+    pub terminal_window: Option<u32>,
+    /// macOS: the terminal app that owns `terminal_window`.
+    #[serde(default)]
+    pub terminal_pid: Option<u32>,
 }
 
 /// A host login file and the sandbox's copy of it.
@@ -1367,34 +1374,9 @@ pub fn toml_set(profile: &Profile, home_src: &Path, project: &Path) -> Result<()
 }
 
 #[cfg(test)]
-mod toml_set_tests {
-    use super::*;
-
-    #[test]
-    fn sets_project_trust_and_keeps_the_rest() {
-        let tmp = tempfile::tempdir().unwrap();
-        let home = tmp.path();
-        std::fs::create_dir_all(home.join(".codex")).unwrap();
-        std::fs::write(
-            home.join(".codex/config.toml"),
-            "# mine\nmodel = \"x\"\n\n[mcp_servers.a]\ncommand = \"a\"\n",
-        )
-        .unwrap();
-        let profile: Profile = toml::from_str(
-            "name = \"c\"\n[[state.toml_set]]\nfile = \".codex/config.toml\"\npath = [\"projects\", \"{project}\", \"trust_level\"]\nvalue = \"trusted\"\n",
-        )
-        .unwrap();
-        toml_set(&profile, home, Path::new("/w/app")).unwrap();
-        let text = std::fs::read_to_string(home.join(".codex/config.toml")).unwrap();
-        let v: toml::Value = toml::from_str(&text).unwrap();
-        assert_eq!(
-            v["projects"]["/w/app"]["trust_level"].as_str(),
-            Some("trusted")
-        );
-        assert_eq!(v["mcp_servers"]["a"]["command"].as_str(), Some("a"));
-        assert!(text.starts_with("# mine"));
-    }
-}
+mod running_tests;
+#[cfg(test)]
+mod toml_set_tests;
 
 #[cfg(test)]
 mod auth_sync_tests {

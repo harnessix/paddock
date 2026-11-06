@@ -32,6 +32,10 @@ a home holds your conversations with the harness. [storage] auto_gc = false turn
 --older-than days (90). A home holds the conversations (transcripts, history) of its harness:
 they are lost with it.
 A desktop app keeps its login in its home: those homes also need --include-app-logins.
+On macOS the profiles of paddock's macOS guest count as such homes: a profile that was not
+used for --older-than days goes only with --homes --include-app-logins. --yes alone removes
+the app archives of stopped profiles and the saved states of profiles not used for
+--older-than days (the next start is a cold boot).
 --worktrees adds paddock worktrees. A worktree with unmerged commits or uncommitted changes
 also needs --force, and paddock keeps its branch.
 --scratch adds scratch projects (agents that `paddock wrap` started in the home folder) that
@@ -62,12 +66,17 @@ pub(crate) fn du_cmd(env: &HostEnv, json: bool) -> Result<i32> {
     if let Some(n) = storage::dedupe::du_note(env) {
         inv.notes.push(n);
     }
+    let macvm = paddock::macvm::du::scan_env(env);
     if json {
         let mut v = serde_json::to_value(&inv)?;
         v["api_version"] = "paddock.du/v1".into();
+        if !macvm.root.as_os_str().is_empty() {
+            v["macvm"] = serde_json::to_value(&macvm)?;
+        }
         println!("{}", serde_json::to_string_pretty(&v)?);
     } else {
         print!("{}", storage::render_du(env, &inv, state::now()));
+        print!("{}", paddock::macvm::du::render(&macvm, state::now()));
     }
     Ok(0)
 }
@@ -82,6 +91,7 @@ pub(crate) fn gc_cmd(env: &HostEnv, o: &paddock::storage::GcOptions, json: bool)
     items.extend(paddock::storage::auto::build_cache_items(env));
     items.extend(paddock::borrow::gc_items(env));
     items.extend(paddock::view::gc_items(env, state::now()));
+    items.extend(paddock::macvm::manage::gc_items(env, o));
     match paddock::kv::gc_items(env, state::now()) {
         Ok(kv) => items.extend(kv),
         Err(e) => inv

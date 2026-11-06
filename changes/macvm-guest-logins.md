@@ -1,0 +1,3 @@
+- New: Links that an app in the macOS guest opens go to the browser of your Mac, after the approval of `open-url` in `[host]`. The default browser of the guest is paddock's link helper, set in the golden image without a prompt.
+- New: A login link whose callback is a loopback port opens that port on the loopback of your Mac for 10 minutes and forwards each connection to the app in the guest, so OAuth logins such as the one of ChatGPT finish. The port closes 10 seconds after the first callback, and no other guest port is reachable.
+- Fix: The guest proxy settings send `localhost`, `127.0.0.1` and `::1` around the proxy, and only these, in the system bypass list and in `NO_PROXY` of the app.

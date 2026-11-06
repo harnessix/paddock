@@ -34,6 +34,328 @@ pub struct Cli {
 pub enum Cmd {
     /// Boot the VM and run until the guest stops or the helper gets SIGTERM.
     Start(StartArgs),
+    /// Build the golden macOS guest of app mode. `paddock macvm setup`
+    /// starts this: the Virtualization framework needs the entitlement
+    /// of this binary.
+    #[command(name = "macvm-setup")]
+    MacvmSetup(MacvmSetupArgs),
+    /// Run one app session in the macOS guest: the profile, its clone of
+    /// the golden, cold or warm start, pause, save and stop.
+    App(AppArgs),
+    /// What a launcher bundle of `paddock app install` does when Finder
+    /// starts it: run one app profile, or, as the drag target, make a
+    /// profile of each bundle dropped on it.
+    Install(InstallArgs),
+}
+
+/// The arguments of `paddock-vm install`. The bundle of
+/// `paddock app install` carries them in its target file, and
+/// `shim::argv_from_bundle` turns them into this argv.
+#[derive(Debug, Clone, clap::Args)]
+pub struct InstallArgs {
+    /// The app profile to run.
+    #[arg(long)]
+    pub app: Option<String>,
+    /// The drag target: each path becomes an app profile and runs. With
+    /// no path it waits for the bundles that Finder sends.
+    #[arg(long)]
+    pub drop_target: bool,
+    /// App bundles to add, for a drop that arrives as an argument.
+    pub paths: Vec<PathBuf>,
+    /// The instance of the app profile, 1 by default.
+    #[arg(long, requires = "app")]
+    pub instance: Option<u32>,
+    /// A suspended session resumes after a click on its Dock icon: the
+    /// event log names that reason.
+    #[arg(long, requires = "app", hide = true)]
+    pub resume_from_dock: bool,
+}
+
+#[derive(Debug, Clone, clap::Args)]
+pub struct MacvmSetupArgs {
+    /// The `macvm` folder of paddock's data.
+    #[arg(long)]
+    pub dir: PathBuf,
+    /// A restore image file instead of the download.
+    #[arg(long, value_name = "PATH")]
+    pub ipsw: Option<PathBuf>,
+    /// No question before the download.
+    #[arg(long, short = 'y')]
+    pub yes: bool,
+    /// The paddock-guest binary that the seed copies into the golden.
+    #[arg(long, value_name = "PATH")]
+    pub agent: Option<PathBuf>,
+    /// Build into golden.new (`paddock macvm update`).
+    #[arg(long)]
+    pub new: bool,
+    /// With --new: build even when the image is the version of the
+    /// current golden.
+    #[arg(long)]
+    pub force: bool,
+}
+
+/// A host folder shared into the macOS guest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShareArg {
+    /// The name under the automount folder of the guest.
+    pub name: String,
+    pub path: PathBuf,
+    pub read_only: bool,
+}
+
+/// `NAME=PATH` or `NAME=PATH:ro`.
+pub fn parse_share(text: &str) -> Result<ShareArg, String> {
+    let (name, rest) = text
+        .split_once('=')
+        .ok_or_else(|| format!("{text:?} is not NAME=PATH[:ro]"))?;
+    let (path, read_only) = match rest.strip_suffix(":ro") {
+        Some(p) => (p, true),
+        None => (rest.strip_suffix(":rw").unwrap_or(rest), false),
+    };
+    let ok_name = !name.is_empty()
+        && name.len() <= 64
+        && name != "."
+        && name != ".."
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.');
+    if !ok_name {
+        return Err(format!(
+            "the share name {name:?} must be letters, digits, dots, dashes or underscores, at most 64"
+        ));
+    }
+    let path = PathBuf::from(path);
+    if !path.is_absolute() {
+        return Err(format!(
+            "the share {} is not an absolute path",
+            path.display()
+        ));
+    }
+    Ok(ShareArg {
+        name: name.to_string(),
+        path,
+        read_only,
+    })
+}
+
+/// `--forward` of an app session: only the guest proxy port.
+fn parse_app_forward(text: &str) -> Result<(u32, PathBuf), String> {
+    let (port, path) = parse_forward(text)?;
+    if port != ports::GUEST_PROXY {
+        return Err(format!(
+            "an app session forwards only the guest-proxy port ({}); the other ports stay inside the helper",
+            ports::GUEST_PROXY
+        ));
+    }
+    Ok((port, path))
+}
+
+/// The arguments of `paddock-vm app`. `paddock app run` makes them.
+#[derive(Debug, Clone, clap::Args)]
+pub struct AppArgs {
+    /// The profile folder: the clone of the golden, the data disk, the
+    /// saved state and the stamp.
+    #[arg(long)]
+    pub profile: PathBuf,
+    /// The sealed golden folder.
+    #[arg(long)]
+    pub golden: PathBuf,
+    /// The name of the app, for the lines and the slot text.
+    #[arg(long)]
+    pub app: String,
+    /// The file descriptor with the session token on its first line, and
+    /// the guest password on the second, when there is one.
+    #[arg(long, value_name = "FD")]
+    pub token_fd: i32,
+    #[arg(long, default_value_t = 4, value_parser = clap::value_parser!(u32).range(1..=64))]
+    pub cpus: u32,
+    /// The memory of the VM, in MiB.
+    #[arg(long, default_value_t = 4096, value_parser = clap::value_parser!(u64).range(1024..=262144))]
+    pub memory: u64,
+    /// The display of the guest: pixels and scale, `WxH@S`.
+    #[arg(long, value_name = "WxH@S")]
+    pub display: crate::macvm::session::Display,
+    /// A host folder for the guest: `NAME=PATH` read-write, `NAME=PATH:ro`
+    /// read-only. It appears under the automount folder of the guest.
+    #[arg(long = "share", value_name = "NAME=PATH[:ro]", value_parser = parse_share)]
+    pub shares: Vec<ShareArg>,
+    /// Send guest connections to the guest-proxy port to this unix
+    /// socket instead of the proxy inside the helper.
+    #[arg(long = "forward", value_name = "PORT=SOCKET", value_parser = parse_app_forward)]
+    pub forwards: Vec<(u32, PathBuf)>,
+    /// The control socket for the parent paddock. A unix socket path on
+    /// macOS has at most 103 bytes.
+    #[arg(long, value_name = "PATH")]
+    pub control: Option<PathBuf>,
+    /// Do not save the machine state at quit: the next start is a cold
+    /// boot.
+    #[arg(long = "no-save", action = clap::ArgAction::SetFalse)]
+    pub save: bool,
+    /// Seconds between the stop request to the guest and the hard stop.
+    #[arg(long, default_value_t = 30, value_parser = clap::value_parser!(u64).range(1..=600))]
+    pub stop_timeout: u64,
+    /// The host input source at the start, restored at the end.
+    #[arg(long, default_value = "")]
+    pub input_source: String,
+    /// The session record that the helper removes when the session ends.
+    #[arg(long, value_name = "PATH")]
+    pub record: Option<PathBuf>,
+    /// The folder with the guest agent of this paddock, shared read-only
+    /// as `agent`.
+    #[arg(long, value_name = "DIR")]
+    pub agent: Option<PathBuf>,
+    /// The clone of the host app bundle in the profile, which the session
+    /// copies into the guest once per version. Without
+    /// it the session starts no app.
+    #[arg(long, value_name = "PATH")]
+    pub app_bundle: Option<PathBuf>,
+    /// The guest may remove `com.apple.quarantine` from the copy: the
+    /// host bundle carried the user's approval.
+    #[arg(long)]
+    pub app_unquarantine: bool,
+    /// An argument for the app, for example a workspace folder of an
+    /// editor (repeatable). It is the guest path.
+    #[arg(long = "app-arg", value_name = "VALUE")]
+    pub app_args: Vec<String>,
+    /// The network mode of the session, for the lines and the firewall.
+    #[arg(long, default_value = "ask")]
+    pub network: String,
+    /// A host of the list of network mode api or allowlist (repeatable):
+    /// the endpoints of the profile and `[network] allow` of the user.
+    #[arg(long = "allow", value_name = "HOST")]
+    pub allow: Vec<String>,
+    /// The guest honors the bench ops of `paddock macvm bench`.
+    #[arg(long)]
+    pub bench: bool,
+}
+
+/// Everything an app session needs, checked.
+#[derive(Debug, Clone)]
+pub struct AppPlan {
+    pub profile: crate::macvm::session::Profile,
+    pub golden: crate::macvm::layout::Golden,
+    pub app: String,
+    pub token_fd: i32,
+    pub cpus: u32,
+    pub memory_bytes: u64,
+    pub display: crate::macvm::session::Display,
+    pub shares: Vec<ShareArg>,
+    pub proxy_socket: Option<PathBuf>,
+    pub control: PathBuf,
+    pub save: bool,
+    pub bench: bool,
+    pub stop_timeout: Duration,
+    pub input_source: String,
+    pub record: Option<PathBuf>,
+    /// The clone of the host app bundle in the profile, when the session
+    /// runs an app.
+    pub app_bundle: Option<PathBuf>,
+    pub app_unquarantine: bool,
+    pub app_args: Vec<String>,
+    pub network: String,
+    /// The host list of mode api or allowlist.
+    pub allow: Vec<String>,
+}
+
+/// Check the arguments of an app session. It touches no folder.
+pub fn plan_app(args: &AppArgs) -> Result<AppPlan> {
+    use crate::macvm::layout::Golden;
+    use crate::macvm::session::Profile;
+    if args.app.is_empty()
+        || args.app.len() > 64
+        || !args
+            .app
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.')
+    {
+        bail!(
+            "the app name {:?} must be letters, digits, dots, dashes or underscores",
+            args.app
+        );
+    }
+    let profile = Profile::new(absolute(&args.profile)?);
+    let golden_dir = absolute(&args.golden)?;
+    if !golden_dir.is_dir() {
+        bail!("the golden folder {} is missing", golden_dir.display());
+    }
+    if profile.dir.starts_with(&golden_dir) || golden_dir.starts_with(&profile.dir) {
+        bail!(
+            "the profile {} and the golden {} must not contain each other",
+            profile.dir.display(),
+            golden_dir.display()
+        );
+    }
+    if args.token_fd < 0 {
+        bail!("--token-fd {} is not a file descriptor", args.token_fd);
+    }
+    let control = match &args.control {
+        Some(c) => {
+            if !c.is_absolute() {
+                bail!("the control socket {} is not an absolute path", c.display());
+            }
+            c.clone()
+        }
+        None => profile.dir.join("control.sock"),
+    };
+    crate::sockpath::check(&control)?;
+    let mut shares = args.shares.clone();
+    if let Some(agent) = &args.agent {
+        shares.push(ShareArg {
+            name: "agent".into(),
+            path: absolute(agent)?,
+            read_only: true,
+        });
+    }
+    let mut names = std::collections::BTreeSet::new();
+    for s in &shares {
+        if !names.insert(s.name.clone()) {
+            bail!("two shares are named {}", s.name);
+        }
+        // The profile's own shares (macvm/shares.rs): drop, downloads and
+        // the read-only app copies. Any other folder of the profile is
+        // private to the host.
+        if s.path.starts_with(&profile.dir)
+            && s.path != profile.downloads()
+            && s.path != profile.drop_dir()
+            && s.path != profile.apps()
+        {
+            bail!(
+                "the share {} is inside the profile folder",
+                s.path.display()
+            );
+        }
+    }
+    let mut proxy_socket = None;
+    for (port, path) in &args.forwards {
+        if *port == ports::GUEST_PROXY && proxy_socket.replace(path.clone()).is_some() {
+            bail!("port {port} has two --forward sockets");
+        }
+    }
+    Ok(AppPlan {
+        profile,
+        golden: Golden::new(golden_dir),
+        app: args.app.clone(),
+        token_fd: args.token_fd,
+        cpus: args.cpus,
+        memory_bytes: args.memory << 20,
+        display: args.display,
+        shares,
+        proxy_socket,
+        control,
+        save: args.save,
+        bench: args.bench,
+        stop_timeout: Duration::from_secs(args.stop_timeout),
+        input_source: args.input_source.clone(),
+        record: args.record.clone(),
+        app_bundle: match &args.app_bundle {
+            Some(b) => Some(absolute(b)?),
+            None => None,
+        },
+        app_unquarantine: args.app_unquarantine,
+        app_args: args.app_args.clone(),
+        network: args.network.clone(),
+        allow: args.allow.clone(),
+    })
 }
 
 #[derive(Debug, Clone, clap::Args)]

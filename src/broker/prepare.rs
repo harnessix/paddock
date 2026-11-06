@@ -20,6 +20,7 @@ pub(in crate::broker) fn perform(
     ctx: &Context,
     req: &Request,
     work: &Work,
+    seen: &Path,
 ) -> Result<serde_json::Value> {
     match work {
         Work::Spawn { .. } | Work::SpawnControl => bail!("spawn was not prepared"),
@@ -32,7 +33,7 @@ pub(in crate::broker) fn perform(
             let asked = PathBuf::from(arg_str(req, "path").unwrap_or(""));
             check_fetch(env, &asked, &b.src.real_path()?, true)?;
             let max = crate::borrow::Cfg::load(env)?.max;
-            return crate::borrow::borrow(env, &ctx.id, b, max);
+            return crate::borrow::borrow(env, &ctx.id, b, max, seen);
         }
         Work::Return(r) => return r.apply(env, &ctx.id),
         Work::Plain => {}
@@ -80,7 +81,13 @@ pub(in crate::broker) struct Prepared {
     pub(in crate::broker) work: Work,
 }
 
-pub(in crate::broker) fn prepare(env: &HostEnv, ctx: &Context, req: &Request) -> Result<Prepared> {
+/// `seen`: the borrow folder in the sandbox, for the cards.
+pub(in crate::broker) fn prepare(
+    env: &HostEnv,
+    ctx: &Context,
+    req: &Request,
+    seen: &Path,
+) -> Result<Prepared> {
     match req.cap.as_str() {
         "git-push" => {
             let mut plan = git::plan_private(
@@ -171,7 +178,7 @@ pub(in crate::broker) fn prepare(env: &HostEnv, ctx: &Context, req: &Request) ->
             let mut detail = format!(
                 "Copy the host folder {real} ({}) into {} in the sandbox. The agent changes the copy, and the original stays as it is. A return asks again and shows every change.",
                 crate::storage::human(plan.bytes),
-                crate::borrow::MOUNT
+                seen.display()
             );
             if asked != plan.real {
                 detail.push_str(&format!(" (asked for as {})", asked.display()));
@@ -204,7 +211,7 @@ pub(in crate::broker) fn prepare(env: &HostEnv, ctx: &Context, req: &Request) ->
             let orig = plan.manifest.original.display().to_string();
             Ok(Prepared {
                 summary: format!("return {name} to {orig} ({})", plan.changes.counts()),
-                detail: plan.detail(),
+                detail: plan.detail(seen),
                 audit: Some(format!(
                     "return {name} to {orig}: {}, {} kept, {} skipped, {} changed bytes",
                     plan.changes.counts(),

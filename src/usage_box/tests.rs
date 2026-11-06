@@ -638,10 +638,7 @@ fn proxy_refuses_unlisted_host_and_names_it() {
         ));
     }));
     let cfg = crate::proxy::HostProxy {
-        api: Some(ApiPolicy {
-            list,
-            refusals: Some(refusals),
-        }),
+        api: Some(ApiPolicy::api(list, Some(refusals))),
         ..Default::default()
     };
     crate::proxy::serve(&sock, cfg).unwrap();

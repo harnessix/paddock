@@ -63,7 +63,7 @@ impl Backend for Bwrap {
 
     fn check(&self, env: &HostEnv, spec: &SandboxSpec) -> Result<()> {
         if spec.network == Network::Allowlist {
-            bail!("network mode 'allowlist' needs the srt backend");
+            bail!(super::ALLOWLIST_BACKENDS);
         }
         let Some(ver) = bwrap_version(env) else {
             bail!("bubblewrap (bwrap) is not installed")
@@ -211,7 +211,12 @@ impl Backend for Bwrap {
                         a.extend([flag.into(), p(&src), p(&dst)]);
                     }
                 }
-                MountKind::Tmpfs => a.extend(["--tmpfs".into(), p(&m.dst)]),
+                MountKind::Tmpfs => {
+                    if let Some(size) = m.size {
+                        a.extend(["--size".into(), size.to_string()]);
+                    }
+                    a.extend(["--tmpfs".into(), p(&m.dst)]);
+                }
                 MountKind::Overlay => a.extend(overlay_args(m)),
                 MountKind::MaskFile => a.extend(["--ro-bind".into(), p(&empty_f), p(&m.dst)]),
                 MountKind::MaskDir => {

@@ -10,6 +10,7 @@ use std::path::PathBuf;
 pub(crate) fn doctor(
     env: &HostEnv,
     escape: bool,
+    device: Option<String>,
     backend: String,
     network: paddock::spec::Network,
     gui: bool,
@@ -20,9 +21,10 @@ pub(crate) fn doctor(
     online: bool,
     report: bool,
     output: Option<PathBuf>,
+    no_hosts: bool,
 ) -> Result<i32> {
     if report {
-        let text = paddock::report::build(env);
+        let text = paddock::report::build_with(env, no_hosts);
         match output {
             Some(f) => {
                 std::fs::write(&f, &text)?;
@@ -34,6 +36,11 @@ pub(crate) fn doctor(
             None => print!("{text}"),
         }
         return Ok(0);
+    }
+    if let Some(name) = device {
+        let mut out = std::io::stdout();
+        let failed = paddock::devices::escape::run(env, &name, &mut out)?;
+        return Ok(if failed == 0 { 0 } else { 1 });
     }
     if escape {
         let display = if app {

@@ -1,0 +1,21 @@
+{
+  "v": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "app": "ChatGPT",
+      "host": "api.openai.com",
+      "port": 443,
+      "process": "ChatGPT.app → helper (Renderer)",
+      "opened": "2026-11-06T09:59:00Z"
+    },
+    {
+      "id": "q2",
+      "app": "ChatGPT",
+      "host": "cdn.oaistatic.com",
+      "port": 443,
+      "process": "ChatGPT.app",
+      "opened": "2026-11-06T09:59:30Z"
+    }
+  ]
+}

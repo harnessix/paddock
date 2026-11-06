@@ -262,15 +262,17 @@ pub fn sink(
         harness.to_string(),
         project.to_path_buf(),
     );
-    Some(crate::proxy::Egress(Arc::new(move |host: &str| {
-        let alerts = match tracker.lock() {
-            Ok(mut t) => t.connect(host, crate::state::now()),
-            Err(_) => return,
-        };
-        for a in alerts {
-            report(&env, &sandbox, &harness, &project, &a, cfg.notify);
-        }
-    })))
+    Some(crate::proxy::Egress(Arc::new(
+        move |host: &str, _: Option<&crate::proxy::Identity>| {
+            let alerts = match tracker.lock() {
+                Ok(mut t) => t.connect(host, crate::state::now()),
+                Err(_) => return,
+            };
+            for a in alerts {
+                report(&env, &sandbox, &harness, &project, &a, cfg.notify);
+            }
+        },
+    )))
 }
 
 /// One alert: an audit line with the host or the count, and a notification.

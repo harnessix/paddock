@@ -336,12 +336,38 @@ impl Proxy {
 
     /// Serve on `socket` until the process ends.
     pub fn serve(self, socket: &Path) -> Result<()> {
+        self.serve_until(socket, Arc::new(std::sync::atomic::AtomicBool::new(false)))
+    }
+
+    /// Serve on `socket` until `stop` is set (checked every 200 ms): for an
+    /// agent that lives shorter than the process, such as the one of a
+    /// device instance.
+    pub fn serve_until(
+        self,
+        socket: &Path,
+        stop: Arc<std::sync::atomic::AtomicBool>,
+    ) -> Result<()> {
         let _ = std::fs::remove_file(socket);
         let listener = UnixListener::bind(socket)
             .with_context(|| format!("cannot listen on {}", socket.display()))?;
+        listener.set_nonblocking(true)?;
         let me = Arc::new(self);
         std::thread::spawn(move || {
-            for conn in listener.incoming().flatten() {
+            use std::os::fd::AsRawFd as _;
+            while !stop.load(Ordering::SeqCst) {
+                let mut p = libc::pollfd {
+                    fd: listener.as_raw_fd(),
+                    events: libc::POLLIN,
+                    revents: 0,
+                };
+                // SAFETY: poll on our own listener.
+                if unsafe { libc::poll(&mut p, 1, 200) } <= 0 {
+                    continue;
+                }
+                let Ok((conn, _)) = listener.accept() else {
+                    continue;
+                };
+                let _ = conn.set_nonblocking(false);
                 if me.connections.fetch_add(1, Ordering::SeqCst) >= MAX_CONNECTIONS {
                     me.connections.fetch_sub(1, Ordering::SeqCst);
                     continue;
@@ -496,6 +522,7 @@ pub fn approver_ask(
             expires: now + wait.as_secs(),
             session_allowed: false,
             started_by: Vec::new(),
+            connect: None,
             choices: Vec::new(),
         };
         matches!(

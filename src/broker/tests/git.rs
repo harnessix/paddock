@@ -67,6 +67,7 @@ fn push_approval_warns_for_spec_commits_only_with_the_default_store() {
             &b.env,
             &b.ctx,
             &push_req("origin", sha, "refs/heads/feature", false),
+            std::path::Path::new(crate::borrow::MOUNT),
         )
         .unwrap()
         .detail
@@ -99,6 +100,7 @@ fn push_approval_names_private_files_and_new_docs() {
             &b.env,
             &b.ctx,
             &push_req("origin", sha, "refs/heads/feature", false),
+            std::path::Path::new(crate::borrow::MOUNT),
         )
         .unwrap()
         .detail

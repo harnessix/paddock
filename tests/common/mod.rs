@@ -10,6 +10,26 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
+/// The world of the device sandbox tests.
+#[allow(dead_code)]
+pub mod device_world;
+
+/// The world of the shared device tests.
+#[allow(dead_code)]
+pub mod shared_world;
+
+/// The device scenarios that need bubblewrap and FUSE, as functions.
+#[allow(dead_code)]
+pub mod scenarios;
+
+/// The shared device under the systemd user manager, as a function.
+#[allow(dead_code)]
+pub mod unit_scenario;
+
+/// The stand-in Mac of the worked example tests: an sshd of the test user.
+#[allow(dead_code)]
+pub mod sshd;
+
 const MAX_AGE: Duration = Duration::from_secs(24 * 3600);
 
 pub fn root() -> PathBuf {

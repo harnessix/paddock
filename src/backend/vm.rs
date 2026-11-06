@@ -52,9 +52,12 @@ pub fn proxy_socket(env: &HostEnv, id: &str) -> Result<PathBuf> {
 
 /// Spec features that the VM backend cannot give.
 pub fn refuse(spec: &SandboxSpec) -> Result<()> {
+    if spec.shadow.is_some() {
+        bail!("--profile default needs the host data of the harness, and the VM guest never sees the host home: on macOS use --backend seatbelt");
+    }
     match spec.network {
         Network::Host => bail!("network mode 'host' needs the host network, and the VM has no network device: use --network egress"),
-        Network::Allowlist => bail!("network mode 'allowlist' needs the srt backend: on macOS use --network api with --allow"),
+        Network::Allowlist => bail!("network mode 'allowlist' is not there yet in the VM: on macOS use --backend seatbelt"),
         _ => {}
     }
     match spec.gui.mode {
@@ -83,10 +86,10 @@ pub fn start_proxy(env: &HostEnv, spec: &SandboxSpec) -> Result<()> {
         Network::Api => {
             let (list, _) = crate::proxy::allow::Allowlist::parse(&spec.allow_domains);
             cfg.allow_loopback = Vec::new();
-            cfg.api = Some(crate::proxy::allow::ApiPolicy {
+            cfg.api = Some(crate::proxy::allow::ApiPolicy::api(
                 list,
-                refusals: Some(super::api_refusals(env, spec)),
-            });
+                Some(super::api_refusals(env, spec)),
+            ));
         }
         _ => return Ok(()),
     }
@@ -273,6 +276,26 @@ mod tests {
         s.network = Network::Egress;
         s.gui.mode = GuiMode::Window;
         assert!(refuse(&s).unwrap_err().to_string().contains("--gui off"));
+    }
+
+    #[test]
+    fn the_vm_refuses_the_default_profile() {
+        let t = tempfile::tempdir().unwrap();
+        let (_, mut s) = spec(t.path());
+        let dir = t.path().join("runs/id");
+        s.shadow = Some(crate::shadow::Plan {
+            profile: crate::shadow::DEFAULT.into(),
+            kind: crate::shadow::SnapKind::Clone,
+            home: dir.join("home"),
+            dir,
+            lower: None,
+            upper: None,
+            work: None,
+            roots: vec![".fake".into()],
+            auth: vec![],
+        });
+        let e = refuse(&s).unwrap_err().to_string();
+        assert!(e.contains("--backend seatbelt"), "{e}");
     }
 
     #[test]

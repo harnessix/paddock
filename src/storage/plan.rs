@@ -67,6 +67,11 @@ pub enum Action {
         home: PathBuf,
         folders: Vec<PathBuf>,
     },
+    /// A folder of the macOS guest: the previous golden or an old agent
+    /// share (macvm/manage.rs removes it with its seal flags).
+    Macvm {
+        dir: PathBuf,
+    },
     /// Build output in a worktree that is kept: folders with a
     /// `CACHEDIR.TAG` that git ignores, relative to it (storage/buildout.rs).
     BuildOutput {

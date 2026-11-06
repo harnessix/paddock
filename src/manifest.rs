@@ -86,6 +86,35 @@ pub struct Manifest {
     /// configuration only; a project file cannot set them.
     #[serde(default, skip_serializing)]
     pub spawn: Option<toml::Value>,
+    /// `[devices] use = ["NAME"]` of a project file: a request for devices
+    /// of the user configuration. It widens access, so it needs the
+    /// one-time approval, and it never turns a device on. The user
+    /// configuration's `[devices]` is read by devices.rs instead.
+    #[serde(default)]
+    pub devices: DevicesUse,
+    /// The macOS guest of app mode (`paddock app run --backend macvm`).
+    /// Read from the user configuration only.
+    #[serde(default)]
+    pub macvm: Option<MacvmCfg>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DevicesUse {
+    #[serde(default)]
+    pub r#use: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct MacvmCfg {
+    /// Save the machine state at quit, so the next start is warm. On by
+    /// default. Off: every start is a cold boot.
+    pub save: Option<bool>,
+    /// When both VM slots are held and another session starts, save the
+    /// least recently used session and free its slot. On by default.
+    /// Off: a third session is refused.
+    pub auto_suspend: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -126,6 +155,13 @@ pub struct AppCfg {
     /// Off by default; paddock warns on every start.
     #[serde(default)]
     pub unprotected_workspaces: bool,
+    /// The memory of paddock's macOS guest for this app: `4G`, `6144M`.
+    /// Default: 4 GiB. At most half the memory of the Mac.
+    pub vm_memory: Option<String>,
+    /// The app bundle on macOS. `paddock app install --drop` writes it for
+    /// a bundle the user dropped on the drag target, and it wins over the
+    /// `[app.macos] bundles` list of the profile.
+    pub bundle: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
@@ -381,6 +417,7 @@ impl Manifest {
             self.setup.shared_build_cache = o.setup.shared_build_cache;
         }
         self.setup.run.extend(o.setup.run);
+        self.devices.r#use.extend(o.devices.r#use);
     }
 
     /// The part of a project file that widens access. Approval covers exactly this.
@@ -400,6 +437,7 @@ impl Manifest {
             "env.pass": self.env.pass,
             "setup.run": self.setup.run,
             "docker": { "image": self.docker.image, "packages": self.docker.packages },
+            "devices.use": self.devices.r#use,
         })
     }
 
@@ -420,6 +458,7 @@ impl Manifest {
             || !self.setup.run.is_empty()
             || self.docker.image.is_some()
             || !self.docker.packages.is_empty()
+            || !self.devices.r#use.is_empty()
     }
 }
 
@@ -544,6 +583,9 @@ pub const TEMPLATE: &str = r#"# paddock.toml: sandbox settings for this project.
 [docker]
 # image = "debian:stable"
 # packages = ["libssl-dev"]
+
+[devices]
+# use = ["mac"]               # ask for devices of the user configuration (paddock device ls)
 "#;
 
 #[cfg(test)]

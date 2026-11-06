@@ -19,6 +19,12 @@ impl Served {
         self.svc.clone()
     }
 
+    /// Let `paddock device stop|restart NAME --sandbox ID` reach the device
+    /// instances of this run (the `devices` op).
+    pub fn set_device_control(&self, ctl: super::DeviceControl) {
+        *self.svc.devices.lock().unwrap_or_else(|e| e.into_inner()) = Some(ctl);
+    }
+
     /// Start the credential check of the sandbox home (its host path), with
     /// the login files of the harness profile (`state.auth`).
     pub fn watch_credentials(&self, home: PathBuf, login: Vec<String>) {

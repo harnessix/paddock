@@ -7,7 +7,7 @@ pub const HELP: &str = r#"paddock-host spawn: start another harness in its own s
   paddock-host spawn HARNESS --prompt-file FILE [--role implementer|reviewer]
                      [--from-head] [--timeout TIME] [--mem SIZE] [--cpus N]
                      [--model NAME] [--effort low|medium|high|xhigh]
-                     [--worktree] [--reason TEXT]
+                     [--worktree] [--device NAME]... [--reason TEXT]
   paddock-host spawn HARNESS --task ID|next [--feature NAME] [OPTIONS]
   paddock-host status [ID]                 one child, or all of them
   paddock-host wait ID [--timeout SECONDS]
@@ -48,6 +48,9 @@ and stops when the task is done.
     child takes the hints [model:NAME] and [effort:LEVEL] of its task line,
     then [spawn] effort of the user configuration, then the harness
     default. [spawn] models can limit the models a child may get.
+  - --device NAME gives the child a device of /dev/paddock that this sandbox
+    has (repeatable). A device that this sandbox does not have is refused.
+    Devices that every sandbox gets need no flag.
   - The child uses its own login of that harness. You never see it.
   - The child never gets more than this sandbox: the same network, backend
     and mounts, no display, and host capabilities that are at most as open
@@ -80,11 +83,22 @@ pub(super) fn args(
 ) -> Result<(BTreeMap<String, serde_json::Value>, String, bool), String> {
     // A child always gets a worktree; the flag only says so.
     let from_head = rest.iter().any(|a| a == "--from-head");
-    let args: Vec<String> = rest
-        .iter()
-        .filter(|a| *a != "--worktree" && *a != "--from-head")
-        .cloned()
-        .collect();
+    // `--device` repeats: it is taken out before the one-value parser.
+    let mut devices = Vec::new();
+    let mut args: Vec<String> = Vec::new();
+    let mut it = rest.iter();
+    while let Some(a) = it.next() {
+        if a == "--worktree" || a == "--from-head" {
+            continue;
+        }
+        if a == "--device" {
+            let d = it.next().ok_or("--device needs a device name")?;
+            crate::devices::config::check_name(d).map_err(|e| format!("--device: {e:#}"))?;
+            devices.push(d.clone());
+            continue;
+        }
+        args.push(a.clone());
+    }
     let p = super::parse(
         &args,
         &[
@@ -129,6 +143,9 @@ pub(super) fn args(
         a.insert("feature".into(), serde_json::json!(f));
     }
     a.insert("from_head".into(), serde_json::json!(from_head));
+    if !devices.is_empty() {
+        a.insert("devices".into(), serde_json::json!(devices));
+    }
     if let Some(r) = p.opts.get("role") {
         let role: crate::spawn::Role = r.parse().map_err(|e| format!("{e:#}"))?;
         a.insert("role".into(), serde_json::json!(role.name()));

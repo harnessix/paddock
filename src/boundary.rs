@@ -151,9 +151,11 @@ pub fn record_start(env: &HostEnv, spec: &crate::spec::SandboxSpec) {
 /// sandbox `id`.
 pub fn proxy_sink(env: &HostEnv, id: &str) -> crate::proxy::Boundary {
     let (env, id) = (env.clone(), id.to_string());
-    crate::proxy::Boundary(std::sync::Arc::new(move |target: &str, rule: &str| {
-        record(&env, &id, NETWORK, target, rule)
-    }))
+    crate::proxy::Boundary(std::sync::Arc::new(
+        move |target: &str, rule: &str, _: Option<&crate::proxy::Identity>| {
+            record(&env, &id, NETWORK, target, rule)
+        },
+    ))
 }
 
 /// The number of denials in the log of sandbox `id`.

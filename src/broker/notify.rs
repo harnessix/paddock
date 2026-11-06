@@ -155,6 +155,25 @@ pub fn ask(
     Ok(Handle { conn, id })
 }
 
+/// `ask`, and where a notification cannot have buttons (macOS), a plain
+/// one: its text must name the command that answers.
+pub fn ask_or_show(
+    env: &HostEnv,
+    n: &Note,
+    on_action: impl FnOnce(&str) + Send + 'static,
+) -> Option<Handle> {
+    match ask(env, n, on_action) {
+        Ok(h) => Some(h),
+        Err(e) => {
+            log::debug!("cannot show the question with buttons: {e:#}");
+            if let Err(e) = show(env, n) {
+                log::debug!("cannot show the question as a notification: {e:#}");
+            }
+            None
+        }
+    }
+}
+
 /// A shown notification.
 #[cfg(target_os = "linux")]
 pub struct Handle {

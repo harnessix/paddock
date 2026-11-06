@@ -2,6 +2,10 @@
 //! the errno of a failed read turned into the exit codes of paddock-host.
 //! A plain `exec 3<>/dev/paddock/NAME` works the same; this command only
 //! saves the shell lines and names the errors.
+//!
+//! On macOS (Seatbelt) there is no `/dev/paddock`: when
+//! `PADDOCK_DEVICES_SOCKET` is set, the command speaks the protocol of
+//! devices/socket.rs instead, and the errnos are the same.
 
 use crate::waiting;
 use std::io::{IsTerminal, Read, Write};
@@ -13,10 +17,12 @@ USAGE
   paddock-host device wait TIME [--timeout SECONDS]
   paddock-host device ask QUESTION [--choice TEXT]... [--timeout SECONDS]
   paddock-host device NAME [REQUEST | -]
+  paddock-host device secret/NAME
 
 Devices are off until the user turns them on in the user configuration on
 the host. `device list` prints the catalog: each device, its request format
-and whether it is on.
+and whether it is on. `device secret/NAME` prints the value of a secret
+file (one use), also where the file is a FIFO (macOS).
 
 WAIT AND ASK
   wait TIME returns at TIME: an RFC 3339 time such as 2026-10-30T15:00:00Z,
@@ -39,16 +45,40 @@ EXIT CODES
   8 the device rejected the request   10 the request or response is too large
   75 still waiting: the timeout passed before the event
 
+STREAMS
+  A device with stream true in the catalog answers as it goes, and the
+  command prints each piece as it comes. A failure after the first byte
+  exits with 7 after what it printed; still waiting after bytes exits with
+  75. The output before the exit is what the device wrote, never more.
+
 EXAMPLES
   paddock-host device wait 2026-10-30T15:00:00Z --timeout 100
   paddock-host device ask "Deploy to staging now?" --choice yes --choice no
 "#;
 
-/// Where the devices are: `$PADDOCK_DEVICES` (srt) or `/dev/paddock`.
+/// The variable that names the device socket (Seatbelt on macOS).
+pub const SOCKET_VAR: &str = "PADDOCK_DEVICES_SOCKET";
+
+/// Where the devices are: `$PADDOCK_DEVICES` (srt, and the secret FIFOs on
+/// macOS) or `/dev/paddock`.
 pub fn root() -> std::path::PathBuf {
     std::env::var("PADDOCK_DEVICES")
         .unwrap_or_else(|_| crate::devices::MOUNT_IN_SANDBOX.to_string())
         .into()
+}
+
+/// The device socket, when the sandbox has one.
+pub fn socket() -> Option<std::path::PathBuf> {
+    std::env::var_os(SOCKET_VAR)
+        .filter(|v| !v.is_empty())
+        .map(Into::into)
+}
+
+/// The secret name of a `secret/NAME` device name.
+fn secret_name(name: &str) -> Option<&str> {
+    name.strip_prefix(crate::devices::SECRET_DIR)?
+        .strip_prefix('/')
+        .filter(|n| !n.is_empty() && !n.contains('/'))
 }
 
 /// The exit code for the errno of a failed device read or write.
@@ -75,24 +105,129 @@ pub fn describe(errno: i32) -> &'static str {
         libc::EFBIG => "the request is too large",
         libc::EMSGSIZE => "the response is too large",
         libc::EBUSY => "the device is busy; try again",
-        libc::EDQUOT => "budget used: the user raises it on the host with paddock devices budget",
+        libc::EDQUOT => "budget used: the user raises it on the host with paddock device budget",
         _ => "the device failed",
     }
 }
 
 /// Send `request` to the device `name` and read the whole response.
 pub fn call(name: &str, request: &[u8]) -> Result<Vec<u8>, i32> {
+    call_with(socket().as_deref(), &root(), name, request)
+}
+
+/// A request that failed: the errno, and how many response bytes went to
+/// the output before it.
+pub use crate::devices::socket::Partial;
+
+/// Reads of the device file, each written out at once.
+const READ_SIZE: usize = 64 * 1024;
+
+/// The exit code of a failed request. After bytes, a failure is 7 (the
+/// device failed after what it printed), and still waiting stays 75.
+pub fn exit_for(p: Partial) -> i32 {
+    if p.after == 0 || p.errno == waiting::ERRNO_STILL_WAITING {
+        exit_for_errno(p.errno)
+    } else {
+        7
+    }
+}
+
+/// The catalog: over the socket, or the file `.catalog`.
+pub fn catalog_with(
+    socket: Option<&std::path::Path>,
+    root: &std::path::Path,
+) -> Result<Vec<u8>, i32> {
+    use crate::devices::socket::{request_at, Request};
+    match socket {
+        Some(s) => request_at(s, &Request::catalog(), b""),
+        None => std::fs::read(root.join(crate::devices::CATALOG))
+            .map_err(|e| e.raw_os_error().unwrap_or(libc::EIO)),
+    }
+}
+
+/// `call` with the socket and the device folder given: the socket when
+/// there is one, else the file protocol in `root`. `secret/NAME` reads a
+/// secret file.
+pub fn call_with(
+    socket: Option<&std::path::Path>,
+    root: &std::path::Path,
+    name: &str,
+    request: &[u8],
+) -> Result<Vec<u8>, i32> {
+    let mut out = Vec::new();
+    run_with(socket, root, name, request, &mut out)
+        .map(|_| out)
+        .map_err(|p| p.errno)
+}
+
+/// `call_with`, with the response written to `out` as it comes: a stream
+/// piece by piece, a collected response whole. Ok: how many bytes came.
+/// Err after bytes: the bytes are in `out` already.
+pub fn run_with(
+    socket: Option<&std::path::Path>,
+    root: &std::path::Path,
+    name: &str,
+    request: &[u8],
+    out: &mut dyn Write,
+) -> Result<usize, Partial> {
+    use crate::devices::socket::{request_at, request_into, Request};
+    let io = |e: std::io::Error| e.raw_os_error().unwrap_or(libc::EIO);
+    let before = |errno: i32| Partial { errno, after: 0 };
+    let whole = |r: Result<Vec<u8>, i32>, out: &mut dyn Write| {
+        let data = r.map_err(before)?;
+        out.write_all(&data).map_err(|e| before(io(e)))?;
+        Ok(data.len())
+    };
+    match (socket, secret_name(name)) {
+        (Some(s), Some(secret)) => return whole(request_at(s, &Request::secret(secret), b""), out),
+        (Some(s), None) => {
+            let conn = std::os::unix::net::UnixStream::connect(s).map_err(|e| before(io(e)))?;
+            let req = Request::call_stream(name, request.len());
+            return request_into(conn, &req, request, &mut |b| {
+                out.write_all(b).and_then(|()| out.flush())
+            });
+        }
+        (None, Some(_)) => return whole(std::fs::read(root.join(name)).map_err(io), out),
+        (None, None) => {}
+    }
     let mut f = std::fs::OpenOptions::new()
         .read(true)
         .write(true)
-        .open(root().join(name))
-        .map_err(|e| e.raw_os_error().unwrap_or(libc::EIO))?;
-    f.write_all(request)
-        .map_err(|e| e.raw_os_error().unwrap_or(libc::EIO))?;
-    let mut out = Vec::new();
-    f.read_to_end(&mut out)
-        .map_err(|e| e.raw_os_error().unwrap_or(libc::EIO))?;
-    Ok(out)
+        .open(root.join(name))
+        .map_err(|e| before(io(e)))?;
+    f.write_all(request).map_err(|e| before(io(e)))?;
+    let mut got = 0usize;
+    let mut buf = vec![0u8; READ_SIZE];
+    loop {
+        let after = |errno: i32| Partial { errno, after: got };
+        match f.read(&mut buf) {
+            Ok(0) => return Ok(got),
+            Ok(n) => {
+                out.write_all(&buf[..n])
+                    .and_then(|()| out.flush())
+                    .map_err(|e| after(io(e)))?;
+                got += n;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(after(io(e))),
+        }
+    }
+}
+
+/// Whether this sandbox has devices at all: the socket, or the catalog.
+fn has_devices() -> bool {
+    match socket() {
+        Some(s) => s.exists(),
+        None => root().join(crate::devices::CATALOG).exists(),
+    }
+}
+
+/// Where the devices of this sandbox are, for messages.
+fn place() -> String {
+    match socket() {
+        Some(s) => format!("device socket {}", s.display()),
+        None => root().display().to_string(),
+    }
 }
 
 fn usage(msg: &str) -> i32 {
@@ -112,15 +247,16 @@ pub fn main(args: &[String]) -> i32 {
         return 0;
     }
     if name == "list" {
-        return match std::fs::read(root().join(crate::devices::CATALOG)) {
+        return match catalog_with(socket().as_deref(), &root()) {
             Ok(c) => {
                 let _ = std::io::stdout().write_all(&c);
                 0
             }
             Err(e) => {
                 eprintln!(
-                    "paddock-host device: cannot read {}: {e}. This sandbox has no devices.",
-                    root().join(crate::devices::CATALOG).display()
+                    "paddock-host device: cannot read the catalog of the {}: {}. This sandbox has no devices.",
+                    place(),
+                    std::io::Error::from_raw_os_error(e)
                 );
                 super::EXIT_NO_HOST
             }
@@ -205,6 +341,12 @@ pub fn main(args: &[String]) -> i32 {
             }
             v.to_string().into_bytes()
         }
+        _ if secret_name(name).is_some() => {
+            if !pos.is_empty() {
+                return usage("secret/NAME takes no request");
+            }
+            Vec::new()
+        }
         _ => match pos.as_slice() {
             [] if !std::io::stdin().is_terminal() => read_stdin(),
             [d] if d == "-" => read_stdin(),
@@ -213,29 +355,39 @@ pub fn main(args: &[String]) -> i32 {
             _ => return usage("give the request as one argument, or - for standard input"),
         },
     };
-    match call(name, &request) {
-        Ok(out) => {
-            let _ = std::io::stdout().write_all(&out);
-            let _ = std::io::stdout().flush();
+    let mut stdout = std::io::stdout().lock();
+    match run_with(socket().as_deref(), &root(), name, &request, &mut stdout) {
+        Ok(_) => {
+            let _ = stdout.flush();
             0
         }
-        Err(errno) => {
-            let code = exit_for_errno(errno);
-            if code == waiting::EXIT_STILL_WAITING {
+        Err(p) => {
+            let _ = stdout.flush();
+            let errno = p.errno;
+            let code = exit_for(p);
+            if p.after > 0 && code != waiting::EXIT_STILL_WAITING {
+                eprintln!(
+                    "paddock-host device: {name}: {} after {} bytes of its response ({}); the output above is what came before",
+                    describe(errno),
+                    p.after,
+                    std::io::Error::from_raw_os_error(errno)
+                );
+            } else if code == waiting::EXIT_STILL_WAITING {
                 match &until {
                     Some(t) => eprintln!(
                         "paddock-host device: wait: still waiting until {t}. Run: paddock-host device wait {t}{}",
                         timeout.map(|s| format!(" --timeout {s}")).unwrap_or_default()
                     ),
+                    None if p.after > 0 => eprintln!(
+                        "paddock-host device: {name}: still waiting after {} bytes of its response. Run the same command again.",
+                        p.after
+                    ),
                     None => eprintln!(
                         "paddock-host device: {name}: still waiting. Run the same command again."
                     ),
                 }
-            } else if errno == libc::ENOENT && !root().join(crate::devices::CATALOG).exists() {
-                eprintln!(
-                    "paddock-host device: this sandbox has no {}.",
-                    root().display()
-                );
+            } else if errno == libc::ENOENT && !has_devices() {
+                eprintln!("paddock-host device: this sandbox has no {}.", place());
                 return super::EXIT_NO_HOST;
             } else {
                 eprintln!(
@@ -269,6 +421,16 @@ mod tests {
         assert_eq!(exit_for_errno(libc::EMSGSIZE), 10);
         assert_eq!(exit_for_errno(libc::EDQUOT), 11);
         assert_eq!(exit_for_errno(libc::EIO), 7);
+        // After bytes, every failure is 7, and still waiting stays 75.
+        let after = |errno| Partial { errno, after: 3 };
+        assert_eq!(exit_for(after(libc::EIO)), 7);
+        assert_eq!(exit_for(after(libc::EACCES)), 7);
+        assert_eq!(exit_for(after(libc::ETIMEDOUT)), 7);
+        assert_eq!(exit_for(after(libc::EMSGSIZE)), 7);
+        assert_eq!(exit_for(after(libc::ETIME)), 75);
+        let before = |errno| Partial { errno, after: 0 };
+        assert_eq!(exit_for(before(libc::EACCES)), 3);
+        assert_eq!(exit_for(before(libc::EMSGSIZE)), 10);
         // The same code as a kv watch or a spawn wait that timed out.
         assert_eq!(
             exit_for_errno(waiting::ERRNO_STILL_WAITING),
@@ -280,3 +442,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "device_tests.rs"]
+mod socket_tests;

@@ -151,3 +151,11 @@ impl Node {
         Ok(())
     }
 }
+
+impl super::Dir {
+    /// The fd of this open folder, for the `*at` calls of another module
+    /// (the clones of shadow.rs). It stays owned here.
+    pub fn as_raw_fd(&self) -> std::os::fd::RawFd {
+        std::os::fd::AsRawFd::as_raw_fd(&self.fd)
+    }
+}

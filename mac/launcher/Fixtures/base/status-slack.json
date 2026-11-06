@@ -1,0 +1,46 @@
+{
+  "v": 1,
+  "app": {
+    "name": "Slack",
+    "bundle_path": "/Applications/Slack.app",
+    "state": "saved",
+    "next_start": "Warm, about 10 s",
+    "memory_bytes": 6442450944,
+    "host_memory_bytes": 17179869184,
+    "sizes": {
+      "app_copy": 1200000000,
+      "data": 3400000000,
+      "saved_state": 2000000000
+    },
+    "network": "ask",
+    "open_questions": 0,
+    "rule_count": 3,
+    "golden": "macOS 15.1 (sealed)",
+    "app_changed": false,
+    "agent_connected": true,
+    "since": "2026-11-06T08:00:00Z"
+  },
+  "downloads": "/Users/demo/Downloads/paddock/ChatGPT",
+  "shares": [],
+  "rules": [],
+  "network_text": "paddock asks you the first time the app reaches a new server.",
+  "open_connections": 4,
+  "clipboard": {
+    "to_app": true,
+    "from_app": false
+  },
+  "devices": [
+    {
+      "name": "Camera",
+      "enabled": false,
+      "applies": "next_start"
+    },
+    {
+      "name": "Microphone",
+      "enabled": true,
+      "applies": "next_start"
+    }
+  ],
+  "changes": [],
+  "log_path": "/Users/demo/Library/Logs/paddock/ChatGPT.log"
+}

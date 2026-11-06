@@ -1,0 +1,5 @@
+- Fix: The macOS guest copies the home onto the data disk part by part, with a time limit of 60 s plus 1 s per 50 MB of the home. A folder that the privacy prompts of macOS guard gets 20 s and stays empty when it does not end. A file that cannot be read is skipped and counted. Before, one copy of a fresh home ran into the 90 s limit, and the data disk was not prepared.
+- Fix: The guest agent prepares the data disk in a thread of its own and answers the quit meanwhile. A stop during the preparation ends in seconds and cleanly, with an event that says so, instead of after a 70 s wait with an unclean stamp.
+- Fix: The agent log reaches `logs/agent.log` at every quit: the agent writes to its log file again after the home moved, and the quit of a start that cannot go on fetches the log too.
+- Fix: The gateway, `paddock view`, the bench, the background refresh and the guest agent wait for the children that they start, so no zombie processes gather.
+- New: The data disk preparation reports its progress to the host (`copying the home: 3 of 40 parts`), and the host waits as long as the copy may take.

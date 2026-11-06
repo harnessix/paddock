@@ -254,10 +254,10 @@ impl Backend for Docker {
 
     fn check(&self, env: &HostEnv, _spec: &SandboxSpec) -> Result<()> {
         if _spec.shadow.is_some() {
-            bail!("--profile default runs only on the bwrap backend: it needs an overlay at the sandbox home");
+            bail!("--profile default runs only on the bwrap backend on Linux and the Seatbelt backend on macOS: it needs a private snapshot at the sandbox home");
         }
         if _spec.network == Network::Allowlist {
-            bail!("network mode 'allowlist' needs the srt backend");
+            bail!(super::ALLOWLIST_BACKENDS);
         }
         let Some(exe) = env.which(self.cli) else {
             bail!("{} is not installed", self.cli)
@@ -406,7 +406,7 @@ impl Backend for Docker {
             Network::None => "none".into(),
             Network::Egress | Network::Api => "none".into(),
             Network::Host => "host".into(),
-            Network::Allowlist => bail!("network mode 'allowlist' needs the srt backend"),
+            Network::Allowlist => bail!(super::ALLOWLIST_BACKENDS),
         });
         for port in &spec.publish {
             a.extend(["-p".into(), format!("127.0.0.1:{port}:{port}")]);

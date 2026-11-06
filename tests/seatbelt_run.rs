@@ -165,7 +165,42 @@ fn paddock_host_kv_put_and_done_reach_the_host() {
     // The broker answered: a run that is not detached has nothing to end.
     assert_eq!(w.read("done-code.txt").trim(), "4");
     assert!(w.read("done.txt").contains("not a detached run"));
-    assert!(w.read("borrow.txt").contains("not there yet on macOS"));
+    // Borrow works on Seatbelt now. /tmp is a symlink on macOS, so the
+    // broker answers with the refusal of a symlink, not with a missing
+    // feature.
+    let borrow = w.read("borrow.txt");
+    assert!(
+        borrow.contains("/tmp is a symlink. Borrow the folder by its own path"),
+        "{borrow}"
+    );
+    assert!(!borrow.contains("not there yet on macOS"), "{borrow}");
+    assert_ne!(w.read("borrow-code.txt").trim(), "0", "{borrow}");
+}
+
+#[test]
+fn the_devices_reach_the_harness_over_the_socket() {
+    let script = concat!(
+        "paddock-host device echo x > echo.txt; echo $? > echo-code.txt; ",
+        "paddock-host device list > list.txt; ",
+        "(exec 3<>/dev/paddock/echo) 2>/dev/null; echo $? > file-code.txt",
+    );
+    let w = World::new(script);
+    std::fs::write(
+        w.root.join("cfg/paddock/config.toml"),
+        "[devices]\necho = true\n",
+    )
+    .unwrap();
+    let out = w.run("none", &[]);
+    assert!(out.status.success(), "{}", say(&out));
+    assert!(!say(&out).contains("devices are off"), "{}", say(&out));
+    assert_eq!(w.read("echo-code.txt").trim(), "0", "{}", say(&out));
+    assert_eq!(w.read("echo.txt"), "x");
+    let list = w.read("list.txt");
+    assert!(
+        list.contains("\"invoke\": \"paddock-host device echo\""),
+        "{list}"
+    );
+    assert_ne!(w.read("file-code.txt").trim(), "0");
 }
 
 #[test]

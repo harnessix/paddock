@@ -1,0 +1,44 @@
+{
+  "v": 1,
+  "apps": [
+    {
+      "name": "ChatGPT",
+      "bundle_path": "/Applications/ChatGPT.app",
+      "state": "stopped",
+      "next_start": "Warm, about 10 s",
+      "memory_bytes": 6442450944,
+      "host_memory_bytes": 17179869184,
+      "sizes": {
+        "app_copy": 1200000000,
+        "data": 3400000000,
+        "saved_state": 2000000000
+      },
+      "network": "ask",
+      "open_questions": 0,
+      "rule_count": 14,
+      "golden": "macOS 15.1 (sealed)",
+      "app_changed": false,
+      "agent_connected": true
+    },
+    {
+      "name": "Slack",
+      "bundle_path": "/Applications/Slack.app",
+      "state": "saved",
+      "next_start": "Warm, about 10 s",
+      "memory_bytes": 6442450944,
+      "host_memory_bytes": 17179869184,
+      "sizes": {
+        "app_copy": 1200000000,
+        "data": 3400000000,
+        "saved_state": 2000000000
+      },
+      "network": "ask",
+      "open_questions": 0,
+      "rule_count": 3,
+      "golden": "macOS 15.1 (sealed)",
+      "app_changed": false,
+      "agent_connected": true,
+      "since": "2026-11-06T08:00:00Z"
+    }
+  ]
+}

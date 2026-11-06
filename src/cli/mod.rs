@@ -3,11 +3,13 @@ use paddock::spec::{GuiMode, Network};
 use std::path::PathBuf;
 
 pub(crate) mod app;
+pub(crate) mod app_guest;
 pub(crate) mod approver;
 pub(crate) mod auth;
 pub(crate) mod catalog;
 pub(crate) mod credentials;
-pub(crate) mod devices;
+pub(crate) mod device;
+pub(crate) mod device_serve;
 pub(crate) mod env;
 pub(crate) mod forage;
 pub(crate) mod gateway;
@@ -15,8 +17,10 @@ pub(crate) mod horse;
 pub(crate) mod kv;
 pub(crate) mod loft;
 pub(crate) mod logins;
+pub(crate) mod macvm;
 pub(crate) mod monitor;
 pub(crate) mod pasture;
+pub(crate) mod rules;
 pub(crate) mod run;
 pub(crate) mod setup;
 pub(crate) mod shims;
@@ -100,15 +104,17 @@ pub(crate) enum Cmd {
         cmd: shims::LaunchersCmd,
     },
     /// List the protected windows: app sandbox windows, window mode displays
-    /// and the terminal windows of runs (Hyprland). --mark gives them
-    /// paddock's border, sage or amber by network level.
+    /// and the terminal windows of runs (Hyprland, and macOS without window
+    /// mode). --mark gives them paddock's border, sage or amber by network
+    /// level (on macOS: starts the marker).
     Windows {
         #[arg(long)]
         json: bool,
         #[arg(long)]
         mark: bool,
-        /// Focus this protected window (an address from --json).
-        #[arg(long, value_name = "ADDRESS")]
+        /// Focus this protected window (an address from --json). Not on
+        /// macOS, where the shield menu in the menu bar does it.
+        #[arg(long, value_name = "ADDRESS", hide = cfg!(target_os = "macos"))]
         focus: Option<String>,
     },
     /// Focus the terminal window, or the display window with --display, of a running sandbox (Hyprland).
@@ -280,6 +286,11 @@ pub(crate) enum Cmd {
     Doctor {
         #[arg(long)]
         escape: bool,
+        /// With --escape: probe the device sandbox of this [devices.NAME]
+        /// table instead of an agent sandbox. The probe runs as the device
+        /// program, with the profile of the table.
+        #[arg(long, requires = "escape", value_name = "NAME")]
+        device: Option<String>,
         #[arg(long, default_value = "auto")]
         backend: String,
         #[arg(long, default_value = "none")]
@@ -311,6 +322,10 @@ pub(crate) enum Cmd {
         /// With --report: write the report to this file instead of stdout.
         #[arg(long, requires = "report")]
         output: Option<PathBuf>,
+        /// With --report: replace every host name of the macOS guest's
+        /// firewall rules and connection logs with host-N.
+        #[arg(long, requires = "report")]
+        no_hosts: bool,
     },
     /// First-run setup: packages, shell commands, launchers, the bar widget,
     /// the default backend and app folders. Each step says what it changes
@@ -429,10 +444,12 @@ pub(crate) enum Cmd {
         #[command(subcommand)]
         cmd: credentials::CredentialsCmd,
     },
-    /// The ledger and the budgets of paid devices.
-    Devices {
+    /// The devices of /dev/paddock: list, show, add one, the example
+    /// script, the budgets and the ledger of paid devices.
+    #[command(alias = "devices")]
+    Device {
         #[command(subcommand)]
-        cmd: devices::DevicesCmd,
+        cmd: device::DeviceCmd,
     },
     /// Read what agents wrote to paddock kv, and free their leases.
     Kv {
@@ -565,6 +582,29 @@ pub(crate) enum Cmd {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
+    /// The shared instance of a device (`scope = "shared"`): one per user,
+    /// started by the first broker that needs it or by socket activation.
+    #[command(hide = true)]
+    Deviced {
+        /// The device name: [devices.NAME] of the user configuration.
+        name: String,
+        /// The socket to serve on (default: the shared socket of the
+        /// device). systemd and launchd pass the socket themselves.
+        #[arg(long)]
+        socket: Option<PathBuf>,
+        /// The sandbox that owns the instance on a host without a user
+        /// manager: the instance ends with that run.
+        #[arg(long, value_name = "ID")]
+        owner: Option<String>,
+        /// The systemd unit that runs the instance, for the state file.
+        #[arg(long, value_name = "UNIT")]
+        unit: Option<String>,
+    },
+    /// The supervisor of a device program behind a Unix socket (HTTP/1.1):
+    /// forks an exec program per request, or proxies to a serve program.
+    /// The broker starts this in a device sandbox or on the host.
+    #[command(hide = true, name = "device-serve")]
+    DeviceServe(device_serve::DeviceServeArgs),
     /// Inside a container sandbox: pass connections to the host proxy socket.
     #[command(hide = true)]
     Relay {
@@ -581,6 +621,12 @@ pub(crate) enum Cmd {
     Vm {
         #[command(subcommand)]
         cmd: vm::VmCmd,
+    },
+    /// The macOS guest of app mode: the golden image that `paddock app
+    /// run` clones per app (macOS, Apple silicon).
+    Macvm {
+        #[command(subcommand)]
+        cmd: macvm::MacvmCmd,
     },
     /// In the guest of the VM backend: the agent that starts the runs. The
     /// init of the guest starts it.
@@ -674,6 +720,12 @@ pub(crate) struct RunArgs {
     /// Without it, the sandbox shares paddock kv with no other.
     #[arg(long, value_name = "NAME")]
     pasture: Option<String>,
+    /// Give this run a device of the user configuration (repeatable):
+    /// [devices.NAME] of ~/.config/paddock/config.toml, whatever its grant
+    /// says. `paddock device ls` lists them.
+    #[arg(long, value_name = "NAME")]
+    #[serde(default)]
+    device: Vec<String>,
     /// default: start the harness with a private snapshot of its own host
     /// data (conversations, settings, plugins) in the sandbox home. The
     /// run changes only the snapshot, and paddock removes it at the end.

@@ -1,0 +1,126 @@
+import Foundation
+
+/// The protocol layer between the views and paddock. The stores call this,
+/// never the runner or a socket. `CLIPaddockService` implements it with the
+/// paddock CLI. Tests use it with `ReplayRunner`.
+public protocol PaddockService: AnyObject, Sendable {
+    func version() async throws -> String
+    func macvmStatus() async throws -> MacvmStatusJSON
+    func doctor() async throws -> DoctorJSON
+    func listApps() async throws -> [AppJSON]
+    func appStatus(_ app: String) async throws -> AppStatusJSON
+    func approvals() async throws -> ApprovalsJSON
+    /// `paddock app add PATH --dry-run --json`.
+    func precheck(_ path: String) async throws -> PrecheckJSON
+    /// Any command that answers with a `ResultJSON`.
+    func perform(_ args: [String]) async throws -> ResultJSON
+    /// A command without JSON output. Throws on a non-zero exit.
+    func execute(_ args: [String]) async throws
+    /// A command whose stdout is plain text.
+    func text(_ args: [String]) async throws -> String
+    /// A long-lived command whose stdout is plain text lines.
+    func lines(_ args: [String]) -> AsyncThrowingStream<String, Error>
+    /// `paddock events --follow --json`, decoded.
+    func events() -> AsyncThrowingStream<PaddockEvent, Error>
+    /// `paddock macvm setup --json ...`, decoded.
+    func setup(_ args: [String]) -> AsyncThrowingStream<SetupJSON, Error>
+}
+
+public final class CLIPaddockService: PaddockService, @unchecked Sendable {
+    public let runner: CommandRunner
+
+    public init(runner: CommandRunner) {
+        self.runner = runner
+    }
+
+    public func version() async throws -> String {
+        try await text(PaddockArgs.version)
+    }
+
+    public func macvmStatus() async throws -> MacvmStatusJSON { try await json(PaddockArgs.macvmStatus) }
+    public func doctor() async throws -> DoctorJSON { try await json(PaddockArgs.doctor) }
+    public func listApps() async throws -> [AppJSON] {
+        let list: AppListJSON = try await json(PaddockArgs.appList)
+        return list.apps
+    }
+    public func appStatus(_ app: String) async throws -> AppStatusJSON { try await json(PaddockArgs.appStatus(app)) }
+    public func approvals() async throws -> ApprovalsJSON { try await json(PaddockArgs.approvals) }
+
+    /// A refused precheck still prints JSON, maybe with a non-zero exit.
+    public func precheck(_ path: String) async throws -> PrecheckJSON {
+        let out = try await runner.run(PaddockArgs.precheck(path))
+        if let value = try? PaddockJSON.decoder.decode(PrecheckJSON.self, from: out.stdout) { return value }
+        if out.status != 0 { throw CommandError.failed(status: out.status, line: CLIPaddockService.lastLine(out.stderr)) }
+        throw CommandError.badJSON(output: String(out.stdoutText.prefix(200)))
+    }
+
+    /// A refusal is a normal answer: paddock prints `ok: false` with a line
+    /// and may exit non-zero. The JSON wins over the exit status.
+    public func perform(_ args: [String]) async throws -> ResultJSON {
+        let out = try await runner.run(args)
+        if let result = try? PaddockJSON.decoder.decode(ResultJSON.self, from: out.stdout) {
+            return result
+        }
+        if out.status != 0 { throw CommandError.failed(status: out.status, line: CLIPaddockService.lastLine(out.stderr)) }
+        throw CommandError.badJSON(output: String(out.stdoutText.prefix(200)))
+    }
+
+    public func execute(_ args: [String]) async throws {
+        let out = try await runner.run(args)
+        if out.status != 0 { throw CommandError.failed(status: out.status, line: CLIPaddockService.lastLine(out.stderr)) }
+    }
+
+    public func text(_ args: [String]) async throws -> String {
+        let out = try await runner.run(args)
+        if out.status != 0 { throw CommandError.failed(status: out.status, line: CLIPaddockService.lastLine(out.stderr)) }
+        return out.stdoutText
+    }
+
+    public func lines(_ args: [String]) -> AsyncThrowingStream<String, Error> {
+        runner.lines(args)
+    }
+
+    public func events() -> AsyncThrowingStream<PaddockEvent, Error> {
+        CLIPaddockService.decoded(runner.lines(PaddockArgs.events)) { PaddockEvent.decode(line: $0) }
+    }
+
+    public func setup(_ args: [String]) -> AsyncThrowingStream<SetupJSON, Error> {
+        CLIPaddockService.decoded(runner.lines(args)) { line in
+            guard let data = line.data(using: .utf8) else { return nil }
+            return try? PaddockJSON.decoder.decode(SetupJSON.self, from: data)
+        }
+    }
+
+    func json<T: Decodable>(_ args: [String]) async throws -> T {
+        let out = try await runner.run(args)
+        if out.status != 0 { throw CommandError.failed(status: out.status, line: CLIPaddockService.lastLine(out.stderr)) }
+        do {
+            return try PaddockJSON.decoder.decode(T.self, from: out.stdout)
+        } catch {
+            throw CommandError.badJSON(output: String(out.stdoutText.prefix(200)))
+        }
+    }
+
+    /// paddock's last non-empty stderr line: its own words for the failure.
+    public static func lastLine(_ text: String) -> String {
+        text.split(separator: "\n").last { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+            .map { $0.trimmingCharacters(in: .whitespaces) } ?? ""
+    }
+
+    static func decoded<T: Sendable>(_ source: AsyncThrowingStream<String, Error>,
+                                     _ transform: @escaping @Sendable (String) -> T?) -> AsyncThrowingStream<T, Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    for try await line in source {
+                        if let value = transform(line) { continuation.yield(value) }
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+}

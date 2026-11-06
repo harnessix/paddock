@@ -1,0 +1,6 @@
+{
+  "v": 1,
+  "ok": false,
+  "needs_unprotected": true,
+  "message": "~/Code/site has a .env file. The app could read the keys in it."
+}

@@ -1,0 +1,15 @@
+paddock
+Copyright the paddock authors.
+
+paddock is under the MIT license (LICENSE). Some files hold code from other
+projects under other licenses; each such file names its source and license
+at its top. The notices of those projects follow, as section 4(d) of the
+Apache License 2.0 asks.
+
+=== lima-vm/lima (https://github.com/lima-vm/lima) ===
+Files: src/macvm/apfs.rs (ported from pkg/apfs: chown.go, fletcher64.go,
+types.go, changed as that file says).
+License: Apache License 2.0, https://www.apache.org/licenses/LICENSE-2.0
+
+> Lima
+> Copyright The Lima Authors.

@@ -33,10 +33,11 @@ mod spawn;
 mod spec;
 
 pub use approval::{
-    answer, answer_reply, answer_with_note, approval_note, approval_ui_active, approval_ui_file,
-    approvals_dir, ask_choice, clean_note, clean_text, denied_message, pending, write_pending,
-    Answer, Approver, DenyAll, HostApprover, Pending, Verdict, ASK_CAPABILITY, BUDGET_CAPABILITY,
-    MAX_NOTE, MAX_REPLY, TIMEOUT_CAPABILITY,
+    answer, answer_connect, answer_reply, answer_with_note, approval_note, approval_ui_active,
+    approval_ui_file, approvals_dir, ask_choice, clean_note, clean_text, denied_message, pending,
+    write_pending, Answer, Approver, Connect, ConnectAnswer, DenyAll, HostApprover, Pending,
+    Verdict, ASK_CAPABILITY, BUDGET_CAPABILITY, CONNECT_CAPABILITY, MAX_NOTE, MAX_REPLY,
+    TIMEOUT_CAPABILITY,
 };
 pub use audit::{audit_detail, audit_file, audit_line};
 pub use capture::{run_capture, run_capture_input};
@@ -76,7 +77,7 @@ pub const CAPABILITIES: &[(&str, &str)] = &[
     ),
     (
         "borrow",
-        "copy a host folder into /run/paddock/borrow to change it, and keep the original as it is",
+        "copy a host folder into the borrow folder (/run/paddock/borrow, or PADDOCK_BORROW_DIR on macOS) to change it, and keep the original as it is",
     ),
     (
         "return",
@@ -97,6 +98,10 @@ pub const CAPABILITIES: &[(&str, &str)] = &[
     (
         "spawn",
         "start another harness in its own sandbox and worktree with one task, and get its results",
+    ),
+    (
+        "connect",
+        "allow or deny one connection of a desktop app in paddock's macOS guest, by app, host and port (network mode ask)",
     ),
 ];
 
@@ -139,8 +144,10 @@ pub struct Broker {
     /// the store runs; it starts after the broker.
     pub kv: std::sync::OnceLock<Arc<crate::kv::Service>>,
     /// Capabilities that the backend of this run cannot give, with the
-    /// reason. They are off, never asked (a Seatbelt run has no borrow).
+    /// reason. They are off, never asked.
     pub refused: Vec<(&'static str, &'static str)>,
+    /// Where the sandbox sees its borrow folder (`borrow::in_sandbox`).
+    pub borrow_dir: PathBuf,
     grants: Mutex<Vec<String>>,
     /// "Deny for this session": the keys of the request and the user's note.
     denials: Mutex<Vec<(String, Option<String>)>>,
@@ -165,6 +172,7 @@ impl Broker {
             run: Default::default(),
             kv: std::sync::OnceLock::new(),
             refused: Vec::new(),
+            borrow_dir: crate::borrow::MOUNT.into(),
             grants: Mutex::new(Vec::new()),
             denials: Mutex::new(Vec::new()),
         }
@@ -410,7 +418,7 @@ impl Broker {
                 }
             }
         } else {
-            match prepare::prepare(&self.env, &self.ctx, req) {
+            match prepare::prepare(&self.env, &self.ctx, req, &self.borrow_dir) {
                 Ok(p) => p,
                 Err(e) => return invalid(e),
             }
@@ -470,6 +478,7 @@ impl Broker {
                 session_allowed: prep.session_allowed,
                 choices: Vec::new(),
                 started_by: self.ctx.chain.clone(),
+                connect: None,
             };
             let verdict =
                 self.approver
@@ -615,7 +624,7 @@ impl Broker {
 
     /// Fetch, borrow, return and the other work this process runs itself.
     fn respond_local(&self, req: &Request, work: &prepare::Work) -> Response {
-        match prepare::perform(&self.env, &self.ctx, req, work) {
+        match prepare::perform(&self.env, &self.ctx, req, work, &self.borrow_dir) {
             Ok(result) => Response::done(result),
             Err(e) => Response::new(Status::Failed, format!("{e:#}")),
         }

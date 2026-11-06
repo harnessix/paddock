@@ -6,10 +6,12 @@
 //! signature, the time, that the grant is new, and that it covers exactly
 //! this request, and only then runs it.
 //!
-//! - It listens on `$XDG_RUNTIME_DIR/paddock/gatewayd.sock`. With the systemd
-//!   user units of `paddock gateway install`, systemd owns the socket and
-//!   starts this process on the first connection (socket activation).
-//!   Without them, paddock starts it when a request needs it.
+//! - It listens on `$XDG_RUNTIME_DIR/paddock/gatewayd.sock` (macOS:
+//!   `~/.local/state/paddock/gatewayd.sock`). With the systemd user units
+//!   (macOS: the LaunchAgent) of `paddock gateway install`, systemd or
+//!   launchd owns the socket and starts this process on the first
+//!   connection (socket activation). Without them, paddock starts it when a
+//!   request needs it.
 //! - It exits after a while without connections. The next request starts it
 //!   again.
 //! - The first capability that it runs is `exec`. The others follow.
@@ -32,8 +34,23 @@ const PUSH_TIMEOUT: u64 = 600;
 /// Exit after this long without a connection.
 pub const IDLE: Duration = Duration::from_secs(120);
 
+/// The executor's socket. Linux: `$XDG_RUNTIME_DIR/paddock/gatewayd.sock`.
+/// macOS: [`state_socket`], the same path for launchd and for an executor
+/// that paddock starts.
 pub fn socket_path(env: &HostEnv) -> PathBuf {
+    if cfg!(target_os = "macos") {
+        let p = state_socket(env);
+        if crate::sockpath::check(&p).is_ok() {
+            return p;
+        }
+    }
     crate::sockpath::named_or_run(env, "", "gatewayd.sock")
+}
+
+/// `<paddock state>/gatewayd.sock`: stable and short, and its folder exists
+/// before a login, when launchd makes the socket.
+pub fn state_socket(env: &HostEnv) -> PathBuf {
+    env.paddock_state().join("gatewayd.sock")
 }
 
 /// Run one job that `verify` accepted. The result is the JSON that the
@@ -68,13 +85,14 @@ fn run(
             let mut cmd = crate::execbox::command(
                 how,
                 &cfg,
+                &env.paddock_run(),
                 &env.home,
                 &job.grant.project,
                 &argv,
                 &cfg.pass_env(&job.env),
                 timeout,
                 &unit,
-            );
+            )?;
             let (code, out, err) =
                 crate::broker::run_capture(&mut cmd, Duration::from_secs(timeout + 10))?;
             if let Some(why) = crate::execbox::setup_failure(how, code, &err) {
@@ -124,6 +142,7 @@ fn run(
             let mut cmd = crate::execbox::command_in(
                 how,
                 &cfg,
+                &env.paddock_run(),
                 &env.home,
                 &job.grant.project,
                 &cwd,
@@ -131,7 +150,7 @@ fn run(
                 &cfg.pass_env(&job.env),
                 timeout,
                 &unit,
-            );
+            )?;
             let (code, out, err) =
                 crate::broker::run_capture(&mut cmd, Duration::from_secs(timeout + 10))?;
             if let Some(why) = crate::execbox::setup_failure(how, code, &err) {
@@ -155,19 +174,29 @@ fn run(
                 .starts_with('/')
                 .then(|| PathBuf::from(x.url.strip_prefix("file://").unwrap_or(&x.url)))
                 .filter(|p| p.exists());
+            // macOS: Seatbelt shows only the folders that it names. The
+            // scratch repository borrows the project's objects, so they
+            // stay readable also outside the home.
+            let objects = x.common_dir.join("objects");
+            let ro_paths = if cfg!(target_os = "macos") && objects.is_dir() {
+                vec![objects]
+            } else {
+                Vec::new()
+            };
             let cfg = crate::execbox::ExecCfg {
                 home: crate::execbox::Home::ReadOnly,
                 network: true,
                 paths: local.into_iter().collect(),
-                ro_paths: Vec::new(),
+                ro_paths,
                 env: crate::broker::git::PUSH_ENV
                     .iter()
                     .map(|s| s.to_string())
                     .collect(),
                 remember_allowed: false,
                 // Credential helpers and gh reach the keyring over the
-                // session bus.
+                // session bus (Linux) or securityd (macOS).
                 hide: Vec::new(),
+                keychain: true,
             };
             let unit = format!(
                 "paddock-push-{}",
@@ -179,13 +208,14 @@ fn run(
                 let mut cmd = crate::execbox::command(
                     how,
                     &cfg,
+                    &env.paddock_run(),
                     &env.home,
                     &x.scratch,
                     argv,
                     &vars,
                     PUSH_TIMEOUT,
                     &unit,
-                );
+                )?;
                 let (code, out, err) =
                     crate::broker::run_capture(&mut cmd, Duration::from_secs(PUSH_TIMEOUT + 10))?;
                 if let Some(why) = crate::execbox::setup_failure(how, code, &err) {
@@ -213,12 +243,13 @@ fn run(
                 home: crate::execbox::Home::ReadOnly,
                 network: true,
                 paths: Vec::new(),
-                ro_paths: Vec::new(),
+                ro_paths: crate::broker::forge::exec_ro_paths(&x.tool),
                 env: crate::broker::forge::forge_env(name),
                 remember_allowed: false,
                 // Credential helpers and gh reach the keyring over the
-                // session bus.
+                // session bus (Linux) or securityd (macOS).
                 hide: Vec::new(),
+                keychain: true,
             };
             let mut vars = cfg.pass_env(&job.env);
             vars.extend(crate::broker::forge::forge_vars());
@@ -226,8 +257,16 @@ fn run(
             argv.extend(x.argv.iter().cloned());
             let unit = unit_name("forge", job);
             let mut cmd = crate::execbox::command(
-                how, &cfg, &env.home, &x.workdir, &argv, &vars, x.timeout, &unit,
-            );
+                how,
+                &cfg,
+                &env.paddock_run(),
+                &env.home,
+                &x.workdir,
+                &argv,
+                &vars,
+                x.timeout,
+                &unit,
+            )?;
             let (code, out, err) = crate::broker::run_capture_input(
                 &mut cmd,
                 Duration::from_secs(x.timeout + 10),
@@ -311,6 +350,7 @@ fn desktop_cfg(job: &Job, workdir: &Path) -> crate::execbox::ExecCfg {
         remember_allowed: false,
         // Only the Wayland and compositor sockets, bound above.
         hide: crate::execbox::session_dirs(),
+        keychain: false,
     }
 }
 
@@ -331,8 +371,17 @@ fn desktop(
             .unwrap_or("")
     };
     let run = |argv: Vec<String>, unit: &str| -> Result<(i32, String, String)> {
-        let mut cmd =
-            crate::execbox::command(how, &cfg, &env.home, &x.workdir, &argv, &vars, 30, unit);
+        let mut cmd = crate::execbox::command(
+            how,
+            &cfg,
+            &env.paddock_run(),
+            &env.home,
+            &x.workdir,
+            &argv,
+            &vars,
+            30,
+            unit,
+        )?;
         let r = crate::broker::run_capture(&mut cmd, Duration::from_secs(40))?;
         if let Some(why) = crate::execbox::setup_failure(how, r.0, &r.2) {
             bail!("{why}");
@@ -436,7 +485,17 @@ fn copy(
     };
     match how {
         crate::execbox::Isolation::Systemd => {
-            let cmd = crate::execbox::command(how, cfg, &env.home, &cwd, &argv, vars, 86_400, unit);
+            let cmd = crate::execbox::command(
+                how,
+                cfg,
+                &env.paddock_run(),
+                &env.home,
+                &cwd,
+                &argv,
+                vars,
+                86_400,
+                unit,
+            )?;
             // No --pipe and no --wait: the unit stays after this request.
             let args: Vec<String> = cmd
                 .get_args()
@@ -469,7 +528,17 @@ fn copy(
             }
         }
         _ => {
-            let c = crate::execbox::command(how, cfg, &env.home, &cwd, &argv, vars, 86_400, unit);
+            let c = crate::execbox::command(
+                how,
+                cfg,
+                &env.paddock_run(),
+                &env.home,
+                &cwd,
+                &argv,
+                vars,
+                86_400,
+                unit,
+            )?;
             let args: Vec<String> = c
                 .get_args()
                 .map(|a| a.to_string_lossy().into_owned())
@@ -505,7 +574,7 @@ fn copy(
 /// desktop starts the browser, outside paddock), else with xdg-open and
 /// only the variables that a browser needs.
 #[cfg(target_os = "linux")]
-fn open_url(
+pub(crate) fn open_url(
     env: &HostEnv,
     url: &str,
     host: &std::collections::BTreeMap<String, String>,
@@ -539,8 +608,8 @@ fn open_url(
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
-        .context("cannot start xdg-open")?;
-    Ok(())
+        .map(crate::reap::in_background)
+        .context("cannot start xdg-open")
 }
 
 #[cfg(target_os = "linux")]
@@ -572,7 +641,7 @@ fn desktop(
 /// Services. The broker allows http and https links only; this checks it
 /// again, so no other scheme or option reaches `open`.
 #[cfg(target_os = "macos")]
-fn open_url(
+pub(crate) fn open_url(
     env: &HostEnv,
     url: &str,
     host: &std::collections::BTreeMap<String, String>,
@@ -589,8 +658,8 @@ fn open_url(
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
-        .context("cannot start /usr/bin/open")?;
-    Ok(())
+        .map(crate::reap::in_background)
+        .context("cannot start /usr/bin/open")
 }
 
 /// An http or https link.
@@ -600,7 +669,7 @@ pub fn web_link(url: &str) -> bool {
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn open_url(
+pub(crate) fn open_url(
     env: &HostEnv,
     url: &str,
     host: &std::collections::BTreeMap<String, String>,
@@ -656,17 +725,16 @@ fn serve_conn(
     Ok(())
 }
 
-/// The listener: the socket that systemd passes (`LISTEN_FDS`), or our own.
+/// The listener: the socket that systemd or launchd passes, or our own.
 fn listener(env: &HostEnv) -> Result<Option<UnixListener>> {
-    let pid_ok = std::env::var("LISTEN_PID")
-        .ok()
-        .and_then(|p| p.parse::<u32>().ok())
-        == Some(std::process::id());
-    if pid_ok && std::env::var("LISTEN_FDS").ok().as_deref() == Some("1") {
-        use std::os::unix::io::FromRawFd;
-        // SAFETY: systemd passes the listening socket as fd 3.
-        return Ok(Some(unsafe { UnixListener::from_raw_fd(3) }));
+    if let Some(l) = activation::passed()? {
+        return Ok(Some(l));
     }
+    bind(env)
+}
+
+/// Our own socket at [`socket_path`]. None: another executor answers there.
+fn bind(env: &HostEnv) -> Result<Option<UnixListener>> {
     let path = socket_path(env);
     if let Some(d) = path.parent() {
         crate::privfs::dir(d)?;
@@ -877,118 +945,8 @@ pub fn execute(
     dispatch.dispatch(&job, Duration::from_secs(timeout + 30))
 }
 
-// ---------------------------------------------------------------------------
-// systemd socket activation (`paddock gateway install|remove|status`).
-
-const UNIT_MARK: &str = "# Written by paddock (paddock gateway remove deletes it).";
-pub const SOCKET_UNIT: &str = "paddock-gatewayd.socket";
-pub const SERVICE_UNIT: &str = "paddock-gatewayd.service";
-
-fn unit_dir(env: &HostEnv) -> PathBuf {
-    env.config_dir.join("systemd").join("user")
-}
-
-pub fn socket_unit() -> String {
-    format!(
-        "{UNIT_MARK}\n[Unit]\nDescription=paddock gateway executor socket\n\n\
-         [Socket]\nListenStream=%t/paddock/gatewayd.sock\nSocketMode=0600\nDirectoryMode=0700\n\n\
-         [Install]\nWantedBy=sockets.target\n"
-    )
-}
-
-pub fn service_unit(paddock: &Path) -> String {
-    format!(
-        "{UNIT_MARK}\n[Unit]\nDescription=paddock gateway executor\nRequires={SOCKET_UNIT}\n\n\
-         [Service]\nExecStart={} gatewayd\n",
-        paddock.display()
-    )
-}
-
-fn systemctl(args: &[&str]) -> Result<()> {
-    let st = std::process::Command::new("systemctl")
-        .arg("--user")
-        .args(args)
-        .stdin(std::process::Stdio::null())
-        .status()
-        .context("cannot run systemctl --user")?;
-    if !st.success() {
-        bail!("systemctl --user {} failed with {st}", args.join(" "));
-    }
-    Ok(())
-}
-
-fn ours(p: &Path) -> bool {
-    std::fs::read_to_string(p)
-        .map(|t| t.starts_with(UNIT_MARK))
-        .unwrap_or(false)
-}
-
-/// Write the units and turn the socket on.
-pub fn install(env: &HostEnv) -> Result<Vec<PathBuf>> {
-    crate::update::refuse_in_sandbox(env, "paddock gateway install")?;
-    let paddock = crate::launchers::launcher_exe(env)?;
-    let dir = unit_dir(env);
-    std::fs::create_dir_all(&dir)?;
-    let files = [
-        (dir.join(SOCKET_UNIT), socket_unit()),
-        (dir.join(SERVICE_UNIT), service_unit(&paddock)),
-    ];
-    for (p, _) in &files {
-        if p.exists() && !ours(p) {
-            bail!(
-                "{} exists and paddock did not write it; nothing was changed",
-                p.display()
-            );
-        }
-    }
-    for (p, text) in &files {
-        std::fs::write(p, text)?;
-    }
-    systemctl(&["daemon-reload"])?;
-    // An executor that paddock started itself holds the socket path until it
-    // is idle; systemd takes the path over after that.
-    let _ = std::fs::remove_file(socket_path(env));
-    systemctl(&["enable", "--now", SOCKET_UNIT])?;
-    Ok(files.into_iter().map(|(p, _)| p).collect())
-}
-
-/// Turn the socket off and remove the units that paddock wrote.
-pub fn remove(env: &HostEnv) -> Result<Vec<PathBuf>> {
-    let dir = unit_dir(env);
-    let mut removed = Vec::new();
-    if ours(&dir.join(SOCKET_UNIT)) {
-        let _ = systemctl(&["disable", "--now", SOCKET_UNIT]);
-    }
-    for name in [SOCKET_UNIT, SERVICE_UNIT] {
-        let p = dir.join(name);
-        if ours(&p) {
-            std::fs::remove_file(&p)?;
-            removed.push(p);
-        }
-    }
-    if !removed.is_empty() {
-        let _ = systemctl(&["daemon-reload"]);
-    }
-    Ok(removed)
-}
-
-/// One line for `paddock doctor` and `paddock gateway status`.
-pub fn status_line(env: &HostEnv) -> String {
-    let dir = unit_dir(env);
-    if !ours(&dir.join(SOCKET_UNIT)) {
-        return "  ok       the gateway executor starts when a request needs it (paddock gateway install hands this to systemd)".into();
-    }
-    let active = std::process::Command::new("systemctl")
-        .args(["--user", "is-active", "--quiet", SOCKET_UNIT])
-        .status()
-        .is_ok_and(|s| s.success());
-    if active {
-        "  ok       systemd starts the gateway executor on the first request (socket activation)"
-            .into()
-    } else {
-        format!("  CHECK    {SOCKET_UNIT} is installed but not active: systemctl --user enable --now {SOCKET_UNIT}")
-    }
-}
+pub mod activation;
+pub use activation::{install, remove, status_line};
 
 #[cfg(test)]
 #[path = "gatewayd_tests.rs"]

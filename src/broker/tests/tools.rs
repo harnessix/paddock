@@ -231,6 +231,7 @@ fn fetch_refuses_paddock_s_own_folders_and_the_gateway_key() {
     let key = crate::gateway::key_file(&b.env);
     crate::gateway::key(&b.env).unwrap();
     let audit = b.env.paddock_state().join("host-audit.jsonl");
+    std::fs::create_dir_all(audit.parent().unwrap()).unwrap();
     std::fs::write(&audit, "{}\n").unwrap();
     let home = b.env.paddock_data().join("homes/claude/shared/other");
     std::fs::create_dir_all(&home).unwrap();

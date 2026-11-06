@@ -1094,8 +1094,8 @@ pub fn open(env: &HostEnv, id: &str, write: bool) -> Result<()> {
         .stderr(Stdio::null())
         .process_group(0);
     c.spawn()
-        .with_context(|| format!("cannot start {}", argv[0].to_string_lossy()))?;
-    Ok(())
+        .map(crate::reap::in_background)
+        .with_context(|| format!("cannot start {}", argv[0].to_string_lossy()))
 }
 
 mod pane;

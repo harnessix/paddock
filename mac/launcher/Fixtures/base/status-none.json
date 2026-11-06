@@ -1,0 +1,15 @@
+{
+  "v": 1,
+  "golden": {
+    "state": "none",
+    "dir": "/Users/demo/Library/Application Support/paddock/macvm"
+  },
+  "disk": {
+    "free_bytes": 184000000000,
+    "total_bytes": 494000000000,
+    "used_by_paddock_bytes": 48200000000,
+    "ipsw_bytes": 13100000000,
+    "trash_bytes": 3400000000,
+    "trash_dir": "/Users/demo/.Trash"
+  }
+}

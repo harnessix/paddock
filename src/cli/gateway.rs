@@ -4,9 +4,10 @@ use paddock::env::HostEnv;
 
 #[derive(Subcommand)]
 pub(crate) enum GatewayCmd {
-    /// Write the systemd user units and turn the socket on.
+    /// Let the system start the executor on the first request: systemd user
+    /// units on Linux, a LaunchAgent of launchd on macOS.
     Install,
-    /// Turn the socket off and remove the units that paddock wrote.
+    /// Turn that off and remove the files that paddock wrote.
     Remove,
     /// How the executor starts.
     Status,
@@ -19,7 +20,12 @@ pub(crate) fn run(env: &HostEnv, cmd: GatewayCmd) -> Result<i32> {
             for p in gatewayd::install(env)? {
                 println!("wrote {}", p.display());
             }
-            println!("systemd now starts the gateway executor on the first request. Undo with: paddock gateway remove");
+            let manager = if cfg!(target_os = "macos") {
+                "launchd"
+            } else {
+                "systemd"
+            };
+            println!("{manager} now starts the gateway executor on the first request. Undo with: paddock gateway remove");
         }
         GatewayCmd::Remove => {
             for p in gatewayd::remove(env)? {
