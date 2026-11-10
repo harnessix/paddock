@@ -27,7 +27,11 @@ log="$PWD/tui.log"
 stty -echo 2>/dev/null
 # The text as a JSON string body.
 json() {
-    printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' -e 's/\t/\\t/g' | sed -e ':a;N;$!ba;s/\n/\\n/g'
+    printf '%s\n' "$1" | awk 'BEGIN { ORS = "" } {
+        gsub(/\\/, "\\\\"); gsub(/"/, "\\\""); gsub(/\t/, "\\t")
+        if (NR > 1) print "\\n"
+        print
+    }'
 }
 row() {
     printf '{"timestamp":"2026-11-06T10:00:00.000Z","type":"%s","payload":%s}\n' "$1" "$2" >> "$file"
@@ -77,9 +81,9 @@ poll() {
 }
 turn 1 hi 3
 n=1
-for _ in $(seq 1200); do
+for _ in $(seq 120); do
     [ -e done ] && exit 0
-    if poll 0.1; then
+    if poll 1; then
         # A bracketed paste is one input, also over more than one line.
         case "$got" in
         $'\e[200~'*)

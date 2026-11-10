@@ -1,3 +1,4 @@
+#![cfg(target_os = "linux")]
 //! One walk through horse mode, from a new horse to a resumed one: a
 //! horse per run, DNA inherit, a hitched child whose result reaches the
 //! parent, custody of a running turn, the TUI channel, a graft and its

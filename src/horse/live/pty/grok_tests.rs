@@ -155,6 +155,7 @@ fn an_entry_queued_during_a_grok_turn_is_typed_through_the_relay_after_its_stop_
     for d in [&home.join(".grok"), &project, &bin] {
         std::fs::create_dir_all(d).unwrap();
     }
+    let project = project.canonicalize().unwrap();
     hooks_file(&home);
     // `paddock-host horse safe-point KIND --stdin`: one line per call, the
     // arguments after `horse`, a tab, and the event from stdin.

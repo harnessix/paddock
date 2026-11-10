@@ -1,3 +1,4 @@
+#![cfg(target_os = "linux")]
 //! The mail hooks in a real sandbox: `paddock run claude` in bubblewrap
 //! with a fake `claude` that never reads its mail. It checks that its
 //! arguments carry paddock's Stop hook, and ends its turn as Claude Code

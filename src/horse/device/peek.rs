@@ -4,7 +4,9 @@ pub mod grant;
 mod pattern;
 pub use grant::{issue_own, revoke};
 
-use super::{Access, Tree};
+use super::Access;
+#[cfg(any(target_os = "linux", test))]
+use super::Tree;
 use crate::broker::{Request, Response, Status, PROTOCOL};
 use crate::horse::{store::IndexedNode, Session};
 use anyhow::{bail, Context as _, Result};
@@ -14,6 +16,7 @@ const MAX_RESULT: usize = 64 * 1024 * 1024;
 
 /// Add trainer-grant files to the mount. Their independent keys remain in
 /// the encrypted grant record on the host and are never returned to the run.
+#[cfg(any(target_os = "linux", test))]
 pub(crate) fn add_mount(access: &Access, sandbox: &str, tree: &mut Tree) -> Result<()> {
     tree.dir("peek");
     for grant in grant::active(&access.store, sandbox)? {

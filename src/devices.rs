@@ -48,6 +48,7 @@ use std::time::{Duration, Instant};
 
 pub mod blocking;
 pub mod command;
+#[cfg(any(target_os = "linux", test))]
 mod folders;
 pub mod ledger;
 mod stale;
@@ -740,7 +741,7 @@ pub fn doctor_lines(env: &HostEnv) -> Vec<String> {
 
 #[cfg(all(test, target_os = "linux"))]
 mod horse_ctl_tests;
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod horse_run_tests;
 #[cfg(test)]
 mod tests;

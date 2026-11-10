@@ -1,3 +1,4 @@
+#![cfg(target_os = "linux")]
 //! The run mailbox in a real sandbox: a fake harness in bubblewrap uses
 //! `paddock-host mail` and the files in `/dev/paddock/mail`, and the test
 //! is its starter with `paddock mail send` and `watch`. Skipped where the

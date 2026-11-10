@@ -1,3 +1,4 @@
+#![cfg(target_os = "linux")]
 //! The usage box end to end, for three cases from a real check: 60 sandbox
 //! homes of one profile, and a lapsed login that a fake refresh command
 //! renews. Fake harness profiles and a fake Omarchy command in a temporary

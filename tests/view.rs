@@ -1,3 +1,4 @@
+#![cfg(target_os = "linux")]
 //! The live view end to end: `paddock run` without a terminal gives the
 //! caller the same stdout, stderr and exit code with and without tmux, the
 //! tmux session exists while the sandbox runs and stays after it, and

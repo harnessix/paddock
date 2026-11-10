@@ -1,3 +1,4 @@
+#![cfg(target_os = "linux")]
 //! `paddock windows`: the protected windows, their border by network level,
 //! and the border coming off after the run ends. A fake `hyprctl` on PATH
 //! answers with a window list and records each command. Nothing reaches the

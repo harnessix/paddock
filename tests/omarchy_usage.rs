@@ -555,6 +555,7 @@ fn without_bwrap_the_wrapper_fails_closed() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn the_usage_box_merges_sessions_and_hides_the_rest_of_the_home() {
     let w = box_world();
     if !box_works(&w) {
@@ -644,6 +645,7 @@ fn codex_and_grok_copy_no_sessions_back() {
     assert!(folders[".grok"].contains("grok"));
 }
 
+#[cfg(target_os = "linux")]
 const FAKE_CODEX: &str = r#"#!/usr/bin/python3
 import base64, json, os, sys, time
 def b64(v): return base64.urlsafe_b64encode(json.dumps(v).encode()).decode().rstrip("=")
@@ -669,6 +671,7 @@ for line in sys.stdin:
 
 /// Omarchy's Codex collector, faked: it asks the app-server and prints a
 /// record with the percent and what it saw of the home.
+#[cfg(target_os = "linux")]
 const FAKE_CODEX_COLLECTOR: &str = r#"#!/usr/bin/python3
 import json, os, subprocess
 if os.access(os.path.expanduser("~"), os.W_OK): home = "rw"
@@ -683,6 +686,7 @@ p.kill()
 print(json.dumps({"id": "codex", "limits": [{"percent": r["result"]["rateLimits"]["primary"]["usedPercent"]}], "limitsStale": False, "home": home, "host": open("/etc/hostname").read().strip() if os.path.exists("/etc/hostname") else os.uname().nodename}))
 "#;
 
+#[cfg(target_os = "linux")]
 fn codex_login(exp: u64, rt: &str) -> String {
     use base64::Engine as _;
     let b64 = |v: serde_json::Value| {
@@ -699,6 +703,7 @@ fn codex_login(exp: u64, rt: &str) -> String {
 /// out of the box (`--except codex`), in the keeper's sandbox, with the
 /// writes in the keeper's own folder.
 #[test]
+#[cfg(target_os = "linux")]
 fn a_kept_codex_login_is_checked_in_the_keeper_sandbox() {
     let mut w = world();
     if !box_works(&w)

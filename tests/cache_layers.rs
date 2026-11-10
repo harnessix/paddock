@@ -1,3 +1,4 @@
+#![cfg(target_os = "linux")]
 //! Layered package caches on bwrap: a crate file that project A plants in
 //! its cache never reaches project B. Promotion refuses it because a local
 //! fake crates.io index gives another `cksum`, and it promotes a good crate,

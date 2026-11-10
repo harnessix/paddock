@@ -1,16 +1,22 @@
 //! agy custody with the fake agy of `tests/fixtures/horse/agy-stream` as a
 //! real process on pipes, and with scripted lines. No agy, no vendor.
 
-use super::{args, db_path, run, signal, user_text, CustodyCtx, Report, Start};
+#[cfg(target_os = "linux")]
+use super::signal;
+use super::{args, db_path, run, user_text, CustodyCtx, Report, Start};
 use crate::horse::agy::fixture::{Fixture, ID};
 use crate::horse::agy::{self as codec, VERSION};
-use crate::horse::live::harness::{ChannelIo, Control, Ends};
+#[cfg(target_os = "linux")]
+use crate::horse::live::harness::Control;
+use crate::horse::live::harness::{ChannelIo, Ends};
 use crate::horse::Store;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+#[cfg(target_os = "linux")]
+use std::time::Instant;
 
 /// The conversation id of the fake.
 const FAKE_ID: &str = "7c0e1f2a-3b4c-4d5e-8f60-0a1b2c3d4e5f";
@@ -210,6 +216,7 @@ fn the_fake_gets_queued_entries_only_after_a_result_in_order_and_by_role() {
     assert!(crate::horse::live::records(&w.st).unwrap().is_empty());
 }
 
+#[cfg(target_os = "linux")]
 #[test]
 fn an_interrupt_sends_sigint_and_the_interrupted_result_is_a_safe_point() {
     if !python() {

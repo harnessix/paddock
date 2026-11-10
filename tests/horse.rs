@@ -2,6 +2,7 @@
 //! writes itself: ingest, list, log, fork at a node, project the fork.
 //! Temporary folders only; no dsh, no network.
 
+#[cfg(target_os = "linux")]
 #[path = "horse/store_helpers.rs"]
 mod store_helpers;
 
@@ -415,20 +416,20 @@ fn registry_sync_of_a_plain_folder_and_of_a_git_checkout() {
 }
 
 mod common;
-
 /// Bwrap and FUSE work here, so a sandbox test can run.
+#[cfg(target_os = "linux")]
 fn sandbox_works() -> bool {
     common::sandbox_works()
 }
-
 /// A test folder whose dsh harness is the fake dsh `fixture`.
+#[cfg(target_os = "linux")]
 fn sandbox_setup(fixture: &str) -> tempfile::TempDir {
     let tmp = test_folder();
     install_harness(tmp.path(), "dsh", fixture, "[launch]\nargs = [\"web\"]\n");
     tmp
 }
-
 /// An empty test folder: project, home, runtime folder and harness folders.
+#[cfg(target_os = "linux")]
 fn test_folder() -> tempfile::TempDir {
     use std::os::unix::fs::PermissionsExt;
     let tmp = common::tempdir();
@@ -445,16 +446,15 @@ fn test_folder() -> tempfile::TempDir {
     std::fs::set_permissions(root.join("run"), std::fs::Permissions::from_mode(0o700)).unwrap();
     tmp
 }
-
 /// A fake harness of `tests/fixtures/horse`.
 fn fixture(name: &str) -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/horse")
         .join(name)
 }
-
 /// Install the fixture `fixture` as the harness `name` of the test folder
 /// `root`, with `profile` after the name and the locate table.
+#[cfg(target_os = "linux")]
 fn install_harness(root: &Path, name: &str, fixture: &str, profile: &str) {
     use std::os::unix::fs::PermissionsExt;
     // The install root of a bin executable is its grandparent; keep it
@@ -471,9 +471,9 @@ fn install_harness(root: &Path, name: &str, fixture: &str, profile: &str) {
     )
     .unwrap();
 }
-
 /// Make the project of the test folder `root` a git repository whose one
 /// commit has `task.md` with `task`.
+#[cfg(target_os = "linux")]
 fn task_project(root: &Path, task: &str) {
     let project = root.join("project");
     let git = |args: &[&str]| {
@@ -491,13 +491,13 @@ fn task_project(root: &Path, task: &str) {
     git(&["add", "task.md"]);
     git(&["commit", "-q", "-m", "one"]);
 }
-
 /// `paddock run dsh --horse` in the test folder, stopped after a minute.
+#[cfg(target_os = "linux")]
 fn run_dsh(root: &Path) -> std::process::Output {
     run_dsh_for(root, 60)
 }
-
 /// `paddock run dsh --horse` in the test folder, stopped after `secs`.
+#[cfg(target_os = "linux")]
 fn run_dsh_for(root: &Path, secs: u64) -> std::process::Output {
     use std::process::Stdio;
     let mut child = Command::new(env!("CARGO_BIN_EXE_paddock"))
@@ -537,8 +537,8 @@ fn run_dsh_for(root: &Path, secs: u64) -> std::process::Output {
     }
     child.wait_with_output().unwrap()
 }
-
 #[test]
+#[cfg(target_os = "linux")]
 fn horse_per_run_and_sandbox_device() {
     use paddock::horse::run;
 
@@ -581,8 +581,8 @@ fn horse_per_run_and_sandbox_device() {
         assert!(!String::from_utf8_lossy(&device).contains("horse test"));
     }
 }
-
 #[test]
+#[cfg(target_os = "linux")]
 fn a_dna_edit_in_the_sandbox_hot_loads_at_the_next_idle() {
     if !sandbox_works() {
         eprintln!("skipped: needs bwrap and FUSE");
@@ -611,8 +611,8 @@ fn a_dna_edit_in_the_sandbox_hot_loads_at_the_next_idle() {
         .collect();
     assert_eq!(kinds, ["dna.default", "dna.edit", "dna.adapt"], "{history}");
 }
-
 #[test]
+#[cfg(target_os = "linux")]
 fn a_graft_from_the_host_reaches_the_idle_session() {
     use paddock::horse::dna;
 
@@ -653,9 +653,9 @@ fn a_graft_from_the_host_reaches_the_idle_session() {
         "{explained}"
     );
 }
-
 /// Answer every pending card of the test folder `root` with `once` until
 /// `stop` turns true. Returns how many it answered.
+#[cfg(target_os = "linux")]
 fn auto_approve(
     root: std::path::PathBuf,
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
@@ -693,8 +693,8 @@ fn auto_approve(
         answered
     })
 }
-
 #[test]
+#[cfg(target_os = "linux")]
 fn a_sandbox_fetch_with_use_is_approved_and_reaches_the_idle_session() {
     use paddock::horse::dna;
     use paddock::horse::registry::{artifact_hash, host, trust, Manifest, Transport};
@@ -753,42 +753,39 @@ fn a_sandbox_fetch_with_use_is_approved_and_reaches_the_idle_session() {
         "{explained}"
     );
 }
-
 /// Claude Code and Codex children of a run in horse mode, and the Codex swap.
 #[path = "horse/children.rs"]
 mod children;
-
 /// An interactive Claude Code run in horse mode.
+#[cfg(target_os = "linux")]
 #[path = "horse/tui.rs"]
 mod tui;
-
-#[path = "horse/codex_tui.rs"]
-mod codex_tui;
-
-/// An interactive Claude Code run with no channel, through the relay.
-#[path = "horse/claude_tui_pty.rs"]
-mod claude_tui_pty;
-
-/// Hitched children of a run in horse mode.
-#[path = "horse/hitch.rs"]
-mod hitch;
-
-/// The Grok Build codec on the command line.
-#[path = "horse/grok.rs"]
-mod grok;
 
 /// The agy codec on the command line.
 #[path = "horse/agy.rs"]
 mod agy;
-
-/// Grok Build children and the Grok Build TUI in horse mode.
-#[path = "horse/grok_custody.rs"]
-mod grok_custody;
-
 /// agy children and the agy TUI in horse mode.
+#[cfg(target_os = "linux")]
 #[path = "horse/agy_custody.rs"]
 mod agy_custody;
-
+/// An interactive Claude Code run with no channel, through the relay.
+#[cfg(target_os = "linux")]
+#[path = "horse/claude_tui_pty.rs"]
+mod claude_tui_pty;
+#[cfg(target_os = "linux")]
+#[path = "horse/codex_tui.rs"]
+mod codex_tui;
 /// `paddock horse grant` and the ctl file of a granted sandbox.
 #[path = "horse/ctl.rs"]
 mod ctl;
+/// The Grok Build codec on the command line.
+#[path = "horse/grok.rs"]
+mod grok;
+/// Grok Build children and the Grok Build TUI in horse mode.
+#[cfg(target_os = "linux")]
+#[path = "horse/grok_custody.rs"]
+mod grok_custody;
+/// Hitched children of a run in horse mode.
+#[cfg(target_os = "linux")]
+#[path = "horse/hitch.rs"]
+mod hitch;

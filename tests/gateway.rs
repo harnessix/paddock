@@ -47,6 +47,7 @@ fn world() -> World {
     World { _tmp: tmp, root }
 }
 
+#[cfg(target_os = "linux")]
 fn paddock(w: &World) -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_paddock"));
     c.env("XDG_CONFIG_HOME", w.root.join("cfg"))
@@ -60,6 +61,7 @@ fn paddock(w: &World) -> Command {
     c
 }
 
+#[cfg(target_os = "linux")]
 fn pending(w: &World) -> Vec<serde_json::Value> {
     let out = paddock(w).args(["approvals", "--json"]).output().unwrap();
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_default();
@@ -67,6 +69,7 @@ fn pending(w: &World) -> Vec<serde_json::Value> {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn a_host_request_goes_through_the_gateway_and_attaches_when_sent_again() {
     if !common::sandbox_works() {
         eprintln!("skipped: bwrap or FUSE does not work here");
@@ -254,6 +257,7 @@ fn executor(w: &World, vars: &std::collections::BTreeMap<String, String>) -> std
     child
 }
 
+#[cfg(target_os = "linux")]
 fn exec_job(
     w: &World,
     vars: &std::collections::BTreeMap<String, String>,
@@ -297,6 +301,7 @@ fn exec_job(
     serde_json::from_str(&line).unwrap()
 }
 
+#[cfg(target_os = "linux")]
 fn exec_vars(w: &World) -> std::collections::BTreeMap<String, String> {
     let mut vars = std::collections::BTreeMap::new();
     for (k, d) in [
@@ -317,6 +322,7 @@ fn exec_vars(w: &World) -> std::collections::BTreeMap<String, String> {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn an_approved_exec_runs_isolated() {
     if !common::bwrap_works() {
         eprintln!("skipped: bwrap does not work here");
@@ -396,6 +402,7 @@ fn an_approved_exec_runs_isolated() {
 /// repository of the card, to a bare repository on this machine, and the
 /// home folder stays unchanged.
 #[test]
+#[cfg(target_os = "linux")]
 fn an_approved_push_runs_in_the_executor() {
     if !common::bwrap_works() {
         eprintln!("skipped: bwrap does not work here");
@@ -499,6 +506,7 @@ fn an_approved_push_runs_in_the_executor() {
 /// broker found, the body on standard input, its own login variables, and
 /// a home folder that it cannot change.
 #[test]
+#[cfg(target_os = "linux")]
 fn an_approved_gh_call_runs_in_the_executor() {
     if !common::bwrap_works() {
         eprintln!("skipped: bwrap does not work here");

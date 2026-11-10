@@ -1,3 +1,4 @@
+#![cfg(target_os = "linux")]
 //! The credential gateway end to end, with bwrap and network mode none: the
 //! harness calls a local fake HTTPS upstream through the base URL that
 //! paddock sets. The upstream gets the real value; the sandbox holds only a

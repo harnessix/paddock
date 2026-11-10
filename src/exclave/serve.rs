@@ -162,8 +162,12 @@ pub fn serve(
     crate::privfs::dir(&project_dir)?;
     let project_dir = directory(&projects, &project)?;
     // A fresh private socket exposes only the peer-owned registry allowlist.
-    let socket = root.join(format!("proxy-{}.sock", std::process::id()));
-    crate::sockpath::check(&socket)?;
+    let socket = crate::sockpath::host_socket(
+        &root,
+        env.uid,
+        "",
+        &format!("proxy-{}.sock", std::process::id()),
+    )?;
     let (list, bad) = crate::proxy::allow::Allowlist::parse(&config.registries);
     if !bad.is_empty() {
         bail!("invalid registry list");

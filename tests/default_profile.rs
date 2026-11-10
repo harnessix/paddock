@@ -9,6 +9,7 @@ use std::path::Path;
 use std::process::Command;
 
 /// bwrap starts, and it can mount an overlay in a user namespace.
+#[cfg(target_os = "linux")]
 fn overlay_works(dir: &Path) -> bool {
     let d: Vec<_> = ["low", "up", "work", "dst"]
         .iter()
@@ -47,6 +48,7 @@ fn cmd(root: &Path) -> Command {
     c
 }
 
+#[cfg(target_os = "linux")]
 const SCRIPT: &str = r#"
 cat "$HOME/.fake/conv.jsonl" > seen-conv
 cat "$HOME/.fake/auth.json" > seen-auth
@@ -57,6 +59,7 @@ rm "$HOME/.fake/old.txt"
 "#;
 
 #[test]
+#[cfg(target_os = "linux")]
 fn a_shadow_run_sees_the_host_data_and_changes_only_its_snapshot() {
     let tmp = common::tempdir();
     let root = tmp.path();
@@ -182,6 +185,7 @@ fn a_container_backend_refuses_the_default_profile() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn codex_mcp_filter_changes_only_the_shadow_copy() {
     let tmp = common::tempdir();
     let root = tmp.path();
@@ -271,6 +275,7 @@ fn codex_mcp_filter_changes_only_the_shadow_copy() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn gemini_mcp_filter_keeps_project_config_untouched() {
     let tmp = common::tempdir();
     let root = tmp.path();

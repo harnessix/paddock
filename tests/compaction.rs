@@ -1,3 +1,4 @@
+#![cfg(target_os = "linux")]
 //! The hook after a context compaction, end to end in bubblewrap, with fake
 //! harnesses: a parent starts a child. The child's profile puts a hook into
 //! a settings file of its sandbox home, and the child's fake "compaction"

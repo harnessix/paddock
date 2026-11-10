@@ -77,6 +77,7 @@ fn an_entry_queued_during_a_codex_turn_is_typed_through_the_relay_after_its_noti
     for d in [&home.join(".codex"), &project, &bin] {
         std::fs::create_dir_all(d).unwrap();
     }
+    let project = project.canonicalize().unwrap();
     // paddock's notify, written as in the sandbox copy.
     let cfg =
         crate::privacy::set_toml("model = \"gpt-5.5\"\n", &[&codec::notify::setting()]).unwrap();
@@ -87,7 +88,7 @@ fn an_entry_queued_during_a_codex_turn_is_typed_through_the_relay_after_its_noti
     std::fs::write(
         bin.join("paddock-host"),
         format!(
-            "#!/bin/sh\nshift\n(IFS=\"$(printf '\\t')\"; echo \"$*\") >> '{}'\n",
+            "#!/bin/sh\nshift\n(IFS=\"$(printf '\\t')\"; printf '%s\\n' \"$*\") >> '{}'\n",
             calls.display()
         ),
     )
@@ -193,7 +194,9 @@ fn an_entry_queued_during_a_codex_turn_is_typed_through_the_relay_after_its_noti
         std::thread::spawn(move || {
             let mut done = 0;
             while !stop.load(Ordering::SeqCst) {
-                let l = lines(&calls);
+                let text = std::fs::read_to_string(&calls).unwrap_or_default();
+                let complete = text.rsplit_once('\n').map_or("", |(lines, _)| lines);
+                let l: Vec<_> = complete.lines().collect();
                 for c in &l[done..] {
                     let args: Vec<String> = c.split('\t').map(String::from).collect();
                     assert_eq!(args[0], "safe-point", "{c}");
@@ -210,8 +213,8 @@ fn an_entry_queued_during_a_codex_turn_is_typed_through_the_relay_after_its_noti
     };
 
     let log = project.join("tui.log");
-    let deadline = Instant::now() + Duration::from_secs(60);
     let mut wait = |what: &str, f: &mut dyn FnMut() -> bool| {
+        let deadline = Instant::now() + Duration::from_secs(60);
         while !f() {
             if Instant::now() > deadline || child.try_wait().unwrap().is_some() {
                 let _ = child.kill();

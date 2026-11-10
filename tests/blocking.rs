@@ -1,3 +1,4 @@
+#![cfg(target_os = "linux")]
 //! Blocking reads end to end, in bubblewrap, with a fake harness: a read of
 //! `/dev/paddock/wait` returns at its time, and `paddock-host kv watch
 //! --timeout` and a waiting device read end with the "still waiting" exit

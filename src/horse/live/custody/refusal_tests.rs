@@ -177,7 +177,7 @@ fn a_refused_prompt_leaves_the_session_idle_and_the_first_close_ends_the_run() {
 
 #[test]
 fn an_entry_that_dsh_keeps_refusing_waits_between_tries_and_leaves_the_inbox() {
-    let retry = Duration::from_millis(150);
+    let retry = Duration::from_secs(2);
     let (r, _t) = rig(LIMIT as usize, retry, false);
     let next =
         r.st.queue_append(&r.session, "user", "the next entry")
@@ -204,8 +204,11 @@ fn an_entry_that_dsh_keeps_refusing_waits_between_tries_and_leaves_the_inbox() {
             w[1] - w[0]
         );
     }
-    // The entry after the dropped one does not wait for the retry.
-    assert!(prompts[LIMIT as usize] - prompts[LIMIT as usize - 1] < retry);
+    // The next entry does not inherit the dropped entry's retry delay.
+    assert!(
+        prompts[LIMIT as usize] - prompts[LIMIT as usize - 1] < retry / 2,
+        "the next entry waited after the refused one was dropped"
+    );
     let events = run::events(&r.st, &r.horse).unwrap();
     let dropped: Vec<_> = events
         .iter()

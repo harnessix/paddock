@@ -41,7 +41,7 @@ fn wait_until(what: &str, mut f: impl FnMut() -> bool) {
 /// The host side: a store with the run's horse and session, the TUI
 /// states, the ledger, and the custody loop in its thread.
 struct Host {
-    _dir: tempfile::TempDir,
+    _dir: Arc<tempfile::TempDir>,
     store: Store,
     access: Access,
     runs: &'static Runs,
@@ -53,7 +53,7 @@ struct Host {
 
 impl Host {
     fn start() -> Host {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = Arc::new(tempfile::tempdir().unwrap());
         let store = Store::open(&dir.path().join("store")).unwrap();
         let h = store.new_default_horse().unwrap();
         let s = store
@@ -98,8 +98,14 @@ impl Host {
 
     /// The broker of the host, for the sandbox of this run.
     fn broker(&self) -> impl Fn(&Request) -> Response + Send + Sync + 'static {
-        let (runs, access, ledger) = (self.runs, self.access.clone(), self.ledger.clone());
+        let (runs, access, ledger, dir) = (
+            self.runs,
+            self.access.clone(),
+            self.ledger.clone(),
+            self._dir.clone(),
+        );
         move |req: &Request| {
+            let _keep_dir_alive = &dir;
             let record = |l: &str| ledger.lock().unwrap().push(l.to_string());
             tui_state::handle_in(runs, Some(&access), req, &record)
         }

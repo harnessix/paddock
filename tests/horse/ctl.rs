@@ -1,7 +1,9 @@
 //! Context transforms of a sandbox: `paddock horse grant` on the host, and
 //! a granted sandbox that forks its own session through the device file.
 
-use super::{cmd, host_store, paddock, run_dsh, sandbox_setup, sandbox_works};
+use super::{cmd, paddock};
+#[cfg(target_os = "linux")]
+use super::{host_store, run_dsh, sandbox_setup, sandbox_works};
 
 #[test]
 fn grant_list_and_revoke_on_the_command_line() {
@@ -118,6 +120,7 @@ fn the_fake_of_the_sandbox_test_reports_a_refusal_in_any_language() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn a_granted_sandbox_forks_its_own_session_through_the_device() {
     use paddock::horse::live;
 

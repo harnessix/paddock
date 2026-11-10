@@ -510,6 +510,7 @@ impl Store {
         Ok(std::fs::metadata(self.object_path(hash))?.len())
     }
 
+    #[cfg(any(target_os = "linux", test))]
     pub(crate) fn object_ciphertext(&self, hash: &Hash) -> Result<Vec<u8>> {
         if !self.encrypted {
             bail!("horse object is not encrypted");

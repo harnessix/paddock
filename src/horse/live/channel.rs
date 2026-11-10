@@ -702,6 +702,12 @@ impl Live for Custodian {
     }
 
     fn finish(&mut self, _end: End) -> Result<()> {
+        // Process hook reports already received before closing the custody.
+        while let Ok(report) = self.signals.try_recv() {
+            if let Err(error) = self.signal(report.kind) {
+                log::warn!("horse channel: {error:#}");
+            }
+        }
         // The TUI is gone: its transcript is complete now.
         if let Err(e) = self.tail.look() {
             log::warn!("horse channel: {e:#}");

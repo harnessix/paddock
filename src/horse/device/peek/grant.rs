@@ -161,6 +161,7 @@ pub fn issue_trainer(
     )
 }
 
+#[cfg(any(target_os = "linux", test))]
 pub(super) fn active(store: &Store, sandbox: &str) -> Result<Vec<Grant>> {
     if !super::super::ctl::grant::valid_sandbox(sandbox) {
         bail!("invalid sandbox id");

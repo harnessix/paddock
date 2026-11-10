@@ -5,6 +5,7 @@ use super::*;
 
 /// A test folder whose claude harness is the fake claude: a git project
 /// with a task, spawns allowed, horse mode on.
+#[cfg(target_os = "linux")]
 fn claude_setup() -> tempfile::TempDir {
     let tmp = test_folder();
     let root = tmp.path();
@@ -24,6 +25,7 @@ fn claude_setup() -> tempfile::TempDir {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn a_spawned_claude_child_in_horse_mode_is_held_live() {
     use paddock::horse::run;
     use std::process::Stdio;
@@ -372,6 +374,7 @@ fn the_fake_app_server_swaps_between_turns_under_custody() {
 
 /// A test folder whose dsh parent spawns the fake Codex app-server as a
 /// headless child, in horse mode.
+#[cfg(target_os = "linux")]
 fn codex_spawn_setup() -> tempfile::TempDir {
     let tmp = sandbox_setup("dsh-spawn-codex");
     let root = tmp.path();
@@ -391,6 +394,7 @@ fn codex_spawn_setup() -> tempfile::TempDir {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn a_headless_codex_child_runs_under_live_custody_and_swaps_between_turns() {
     use paddock::horse::{live, run as runs};
 

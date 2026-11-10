@@ -1,4 +1,5 @@
 //! A fake Codex TUI receives mail in a real bwrap sandbox over the relay.
+#![cfg(target_os = "linux")]
 mod common;
 use std::io::Read;
 use std::os::fd::FromRawFd;
@@ -62,7 +63,7 @@ fn a_sandboxed_tui_gets_mail_at_its_idle_prompt() {
         c
     };
     let (mut master, mut slave) = (0, 0);
-    let size = libc::winsize {
+    let mut size = libc::winsize {
         ws_row: 24,
         ws_col: 80,
         ws_xpixel: 0,
@@ -74,8 +75,8 @@ fn a_sandboxed_tui_gets_mail_at_its_idle_prompt() {
                 &mut master,
                 &mut slave,
                 std::ptr::null_mut(),
-                std::ptr::null(),
-                &size,
+                std::ptr::null_mut(),
+                &raw mut size,
             )
         },
         0
@@ -99,7 +100,7 @@ fn a_sandboxed_tui_gets_mail_at_its_idle_prompt() {
     .stderr(Stdio::from(file(slave)));
     unsafe {
         cmd.pre_exec(|| {
-            if libc::setsid() < 0 || libc::ioctl(0, libc::TIOCSCTTY, 0) < 0 {
+            if libc::setsid() < 0 || libc::ioctl(0, libc::TIOCSCTTY as _, 0) < 0 {
                 return Err(std::io::Error::last_os_error());
             }
             Ok(())

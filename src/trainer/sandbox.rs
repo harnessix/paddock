@@ -219,6 +219,7 @@ mod tests {
             ..Default::default()
         };
         let built = crate::build::build_with(&env, &opts, harness)?;
+        let target = target.canonicalize()?;
         assert!(built.worktree.is_none());
         let cache = crate::storage::package_cache::uv_dir(&env, &target)?;
         assert!(built
@@ -240,6 +241,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn read_only_mount_refuses_a_canary_write_when_bwrap_is_available() -> anyhow::Result<()> {
         if !crate::testutil::bwrap_works() {

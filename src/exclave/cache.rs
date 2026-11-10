@@ -272,5 +272,13 @@ pub fn volume_full(path: &Path) -> Result<bool> {
         return Err(std::io::Error::last_os_error().into());
     }
     let info = unsafe { info.assume_init() };
-    Ok(full_counts(info.f_bavail, info.f_files, info.f_favail))
+    #[cfg(target_os = "linux")]
+    let counts = (info.f_bavail, info.f_files, info.f_favail);
+    #[cfg(not(target_os = "linux"))]
+    let counts = (
+        u64::from(info.f_bavail),
+        u64::from(info.f_files),
+        u64::from(info.f_favail),
+    );
+    Ok(full_counts(counts.0, counts.1, counts.2))
 }

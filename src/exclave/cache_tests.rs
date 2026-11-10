@@ -51,6 +51,7 @@ fn fixture_crate_reuses_project_cache_offline() {
     for run in 0..2 {
         // Each nested build has its own memory check. The outer test runner holds
         // the tree-wide cargo lease for both runs.
+        #[cfg(target_os = "linux")]
         loop {
             let info = fs::read_to_string("/proc/meminfo").unwrap();
             let kb: u64 = info

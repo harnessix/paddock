@@ -85,6 +85,7 @@ fn an_entry_queued_during_a_turn_is_typed_through_the_relay_after_its_stop() {
     for d in [&home, &project, &bin] {
         std::fs::create_dir_all(d).unwrap();
     }
+    let project = project.canonicalize().unwrap();
     let hooks = dir.path().join("hooks.log");
     // `paddock-host horse safe-point <kind>`: one line per report.
     std::fs::write(

@@ -1700,7 +1700,7 @@ paddock spec appetite 001-albums off     # remove it
 paddock never stops the work because of the appetite. It sends a warning at 50 %, 80 % and 100 % of the appetite, and at every 25 % after that. Each warning comes once, as an `appetite` event in the mailbox of the run that works on the feature: to its starter, and to the coordinator while the run lives. The warning has the forecast and three choices: cut scope, extend the appetite once with a reason, or stop the feature. paddock checks the appetite when a worker ends and each time gauge runs.
 ## Turnout: scheduled host checks
 
-Turnout runs host-owned jobs from `~/.config/paddock/config.toml`. A project `paddock.toml` cannot define a job. The check is a host shell command: only exit 0 with `work` on stdout admits the wake. Other output, a failure or a check timeout ends it without mail. Turnout does not call a model.
+Turnout requires Linux and a systemd user manager. It runs host-owned jobs from `~/.config/paddock/config.toml`. A project `paddock.toml` cannot define a job. The check is a host shell command: only exit 0 with `work` on stdout admits the wake. Other output, a failure or a check timeout ends it without mail. Turnout does not call a model.
 
 For example, to test new commits of a local branch, add a job to the user configuration (replace the project path):
 
