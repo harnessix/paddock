@@ -82,7 +82,9 @@ while IFS= read -r line; do
         printf '%s\n' "$line" >> prompts.txt
         text=$(printf '%s' "$line" | sed -n 's/.*"text":\("\([^"\\]\|\\.\)*"\).*/\1/p')
         [ -n "$text" ] || text='"?"'
-        echo "prompt $(printf '%s' "$text" | cut -c 2-100)" >> trace.txt
+        # echo may expand JSON's backslash escapes, splitting one prompt into
+        # several trace lines; printf keeps the safe-point trace unambiguous.
+        printf 'prompt %s\n' "$(printf '%s' "$text" | cut -c 2-100)" >> trace.txt
         answer "$(id_of "$line")" "{\"messageId\":\"m-$n\"}"
         status running
         case "$text" in
