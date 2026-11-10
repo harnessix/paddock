@@ -151,7 +151,7 @@ pub fn check_name(name: &str) -> Result<()> {
 
 /// `[pastures.*]` of the user configuration.
 pub fn parse(text: &str) -> Result<BTreeMap<String, Pasture>> {
-    let v: toml::Value = toml::from_str(text)?;
+    let v: toml::Value = crate::manifest::user_config_doc(text)?;
     let Some(t) = v.get("pastures") else {
         return Ok(BTreeMap::new());
     };

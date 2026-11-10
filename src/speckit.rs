@@ -74,7 +74,7 @@ impl Default for Cfg {
 
 impl Cfg {
     pub fn parse(text: &str) -> Result<Self> {
-        let v: toml::Value = toml::from_str(text)?;
+        let v: toml::Value = crate::manifest::user_config_doc(text)?;
         Ok(match v.get("speckit") {
             Some(t) => {
                 let mut cfg: Self = t.clone().try_into()?;

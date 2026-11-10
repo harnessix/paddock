@@ -167,7 +167,7 @@ impl KvCfg {
     }
 
     pub fn parse(text: &str) -> Result<Self> {
-        let v: toml::Value = toml::from_str(text)?;
+        let v: toml::Value = crate::manifest::user_config_doc(text)?;
         let raw: RawCfg = match v.get("kv") {
             Some(t) => t.clone().try_into()?,
             None => RawCfg::default(),

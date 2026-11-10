@@ -1,3 +1,4 @@
+#![cfg(target_os = "linux")]
 //! Run the escape probe in a real sandbox. Skipped where the host cannot run
 //! bubblewrap (for example a CI container without user namespaces).
 

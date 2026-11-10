@@ -40,6 +40,18 @@ pub(super) fn add(env: &HostEnv, built: &mut Built, run_dir: &Path) -> Result<()
     built
         .spec
         .add_tool("paddock-host", wrapper, "host passthrough client");
+    let prefer = crate::exclave::prefer::load(env)?;
+    if !prefer.is_empty() {
+        let wrapper = run_dir.join("cargo-exclave");
+        gui::write_file(
+            &wrapper,
+            &crate::exclave::prefer::cargo_wrapper(&prefer),
+            0o755,
+        )?;
+        built
+            .spec
+            .add_tool("cargo", wrapper, "exclave preferred commands");
+    }
     // Plain `git push` and `gh` reach the host too. The sandbox .gitconfig
     // sends pushes to the paddock:: remote helper.
     let helper = run_dir.join("git-remote-paddock");

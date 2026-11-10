@@ -277,6 +277,36 @@ pub struct Ingest {
 /// the store. A session that the store does not know yet goes into `horse`,
 /// or into a new horse with the default DNA.
 pub fn ingest(store: &Store, path: &Path, version: &str, horse: Option<&str>) -> Result<Ingest> {
+    ingest_locked(&store.lock()?, path, version, horse)
+}
+
+/// Ingest while holding the store writer lock.
+pub fn ingest_locked(
+    locked: &super::store::Lock<'_>,
+    path: &Path,
+    version: &str,
+    horse: Option<&str>,
+) -> Result<Ingest> {
+    ingest_impl(locked, path, version, horse, false)
+}
+
+pub(crate) fn ingest_run_locked(
+    locked: &super::store::Lock<'_>,
+    path: &Path,
+    version: &str,
+    horse: &str,
+) -> Result<Ingest> {
+    ingest_impl(locked, path, version, Some(horse), true)
+}
+
+fn ingest_impl(
+    locked: &super::store::Lock<'_>,
+    path: &Path,
+    version: &str,
+    horse: Option<&str>,
+    scoped: bool,
+) -> Result<Ingest> {
+    let store = locked.store;
     check_version(version)?;
     let file = if path.is_dir() {
         current_file(path)?
@@ -284,21 +314,31 @@ pub fn ingest(store: &Store, path: &Path, version: &str, horse: Option<&str>) ->
         path.to_path_buf()
     };
     let log = read_file(&file)?;
-    let session = match store.session_by_native(HARNESS, &log.header.id)? {
+    let existing = if scoped {
+        store.sessions()?.into_iter().find(|s| {
+            s.horse == horse.unwrap_or_default()
+                && s.binding.harness == HARNESS
+                && s.binding.native_id.as_deref() == Some(&log.header.id)
+        })
+    } else {
+        store.session_by_native(HARNESS, &log.header.id)?
+    };
+    let session = match existing {
         Some(s) => s,
         None => {
             let h = match horse {
                 Some(h) => store.horse(h)?,
-                None => store.new_horse(super::DEFAULT_DNA)?,
+                None => super::dna::new_default_horse_locked(locked)?,
             };
-            store.new_session(&h.id, binding(Some(log.header.id.clone())))?
+            locked.new_session(&h.id, binding(Some(log.header.id.clone())))?
         }
     };
     let old = store.session_nodes(&session)?;
-    let header = store.put_blob("dsh-header", &log.header_raw)?;
+    let scoped = store.for_horse(&session.horse)?;
+    let header = scoped.put_blob("dsh-header", &log.header_raw)?;
     let (mut kept, mut parent) = (0, None::<Hash>);
     for (i, raw) in log.rows.iter().enumerate() {
-        let h = store.put_native(&ORIGIN, parent.as_ref(), &format!("seq:{i}"), raw)?;
+        let h = scoped.put_native(&ORIGIN, parent.as_ref(), &format!("seq:{i}"), raw)?;
         if old.get(i).is_some_and(|n| n.hash == h) {
             kept += 1;
         }
@@ -307,7 +347,7 @@ pub fn ingest(store: &Store, path: &Path, version: &str, horse: Option<&str>) ->
     // A torn tail is a write in progress or a crash that dsh repairs on
     // its next open. The head moves back only when complete rows differ.
     let wait = log.torn && kept == log.rows.len();
-    store.update_session(&session.id, |s| {
+    locked.update_session(&session.id, |s| {
         if !wait {
             s.head = parent;
         }
@@ -441,5 +481,7 @@ pub fn view(raw: &[u8]) -> Option<View> {
 mod project;
 pub use project::{fork_rows, project, Projection};
 
+#[cfg(test)]
+mod rewrite_tests;
 #[cfg(test)]
 mod tests;

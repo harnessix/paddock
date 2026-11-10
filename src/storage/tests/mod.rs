@@ -127,6 +127,7 @@ pub(in crate::storage) fn inventory(homes: Vec<Home>) -> Inventory {
         classes: vec![],
         layers: vec![],
         build_caches: vec![],
+        mailboxes: vec![],
     }
 }
 

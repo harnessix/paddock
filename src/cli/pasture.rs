@@ -63,6 +63,7 @@ pub(crate) fn pasture_cmd(env: &HostEnv, cmd: PastureCmd) -> Result<i32> {
         PastureCmd::List { project: p, json } => {
             let project = project(p)?;
             let all = host::pastures(env, &project)?;
+            let cache_leases = paddock::storage::package_cache::holders(env, &project);
             if json {
                 let rows: Vec<serde_json::Value> = all
                     .iter()
@@ -80,7 +81,7 @@ pub(crate) fn pasture_cmd(env: &HostEnv, cmd: PastureCmd) -> Result<i32> {
                 println!(
                     "{}",
                     serde_json::to_string_pretty(&serde_json::json!({
-                        "api_version": "paddock.pasture/v1", "project": project, "pastures": rows,
+                        "api_version": "paddock.pasture/v1", "project": project, "pastures": rows, "cache_leases": cache_leases,
                     }))?
                 );
                 return Ok(0);
@@ -137,6 +138,9 @@ pub(crate) fn pasture_cmd(env: &HostEnv, cmd: PastureCmd) -> Result<i32> {
                     Some(w) if w.allowed => println!("{:<20} workbench allowed, not running", ""),
                     _ => {}
                 }
+            }
+            for (name, holder) in &cache_leases {
+                println!("{name} held by {holder}");
             }
             let solo = all.iter().filter(|p| p.solo).count();
             if solo > 0 {

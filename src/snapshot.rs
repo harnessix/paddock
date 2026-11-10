@@ -71,7 +71,7 @@ impl Config {
 
     pub fn parse(text: &str) -> Result<Self> {
         let mut c = Config::default();
-        let v: toml::Value = toml::from_str(text)?;
+        let v: toml::Value = crate::manifest::user_config_doc(text)?;
         let Some(t) = v.get("snapshot") else {
             return Ok(c);
         };

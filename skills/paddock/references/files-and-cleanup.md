@@ -20,7 +20,7 @@ A sandbox writes the project directly. Files that it saves elsewhere, for exampl
 
 ## Disk space
 
-`paddock du` and `paddock gc` without `--yes` change nothing. Run them at any time; add `--json` for data. A dry run lists what `--yes` removes, also with `--homes`, `--worktrees` or `--include-app-logins`.
+`paddock du` and `paddock gc` without `--yes` change nothing. Run them at any time; add `--json` for data. A dry run lists what `--yes` removes, also with `--homes`, `--worktrees` or `--include-app-logins`. It includes caches of gone or merged worktrees. When the repository cache is empty, GC moves an old uv cache into it.
 
 Ask the user before `paddock gc` with `--yes`. Show them the dry-run list first, and say what they lose:
 

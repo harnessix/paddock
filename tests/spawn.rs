@@ -1,3 +1,4 @@
+#![cfg(target_os = "linux")]
 //! `paddock-host spawn` end to end, in bubblewrap, with fake harnesses: a
 //! parent sandbox starts a child sandbox, the child commits on its own branch,
 //! and the results reach the parent's inbox. Stopping the parent stops the

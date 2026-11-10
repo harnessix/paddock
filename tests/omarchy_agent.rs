@@ -164,6 +164,7 @@ impl World {
     }
 }
 
+#[cfg(target_os = "linux")]
 fn ok(o: &Output) -> String {
     let text = format!(
         "{}\n{}",
@@ -177,6 +178,7 @@ fn ok(o: &Output) -> String {
 // macOS refuses the omarchy-agent scope (tests/macos_onboarding.rs).
 #[cfg(target_os = "linux")]
 #[test]
+#[cfg(target_os = "linux")]
 fn omarchy_agent_starts_run_in_a_sandbox_and_typed_commands_do_not() {
     if !common::bwrap_works() {
         eprintln!("skipped: bwrap cannot create a user namespace here");
@@ -367,6 +369,12 @@ fn a_user_wrapper_is_never_replaced() {
 
 #[test]
 fn an_unknown_agent_runs_unchanged() {
+    // The test removes PADDOCK from its child; a nested run then needs a
+    // host user bus for clean-start. Exercise it on the host instead.
+    if std::env::var_os("PADDOCK").is_some_and(|v| v == "1") {
+        eprintln!("skipping: this test needs the host user bus");
+        return;
+    }
     let w = world();
     write_exec(
         &w.bin.join("someagent"),
@@ -445,6 +453,7 @@ fn the_real_omarchy_agent_builds_one_command_for_both_paths() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn the_shell_form_a_host_only_agent_and_a_read_only_install() {
     if !common::bwrap_works() {
         eprintln!("skipped: bwrap cannot create a user namespace here");
@@ -491,6 +500,7 @@ fn the_shell_form_a_host_only_agent_and_a_read_only_install() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn history_reaches_the_host_and_other_projects_stay_hidden() {
     if !common::bwrap_works() {
         eprintln!("skipped: bwrap cannot create a user namespace here");
@@ -556,6 +566,7 @@ fn history_reaches_the_host_and_other_projects_stay_hidden() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn a_normal_run_keeps_its_history_in_the_sandbox() {
     if !common::bwrap_works() {
         eprintln!("skipped: bwrap cannot create a user namespace here");
@@ -580,6 +591,7 @@ fn a_normal_run_keeps_its_history_in_the_sandbox() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn a_start_in_the_home_folder_works_in_a_scratch_project() {
     if !common::bwrap_works() {
         eprintln!("skipped: bwrap cannot create a user namespace here");

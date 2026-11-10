@@ -19,8 +19,8 @@ impl SpawnCfg {
         let Ok(text) = std::fs::read_to_string(&file) else {
             return Ok(Self::default());
         };
-        let doc: toml::Value =
-            toml::from_str(&text).with_context(|| format!("{} is invalid", file.display()))?;
+        let doc: toml::Value = crate::manifest::user_config_doc(&text)
+            .with_context(|| format!("{} is invalid", file.display()))?;
         Self::from_doc(&doc)
     }
 

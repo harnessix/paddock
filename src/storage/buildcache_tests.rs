@@ -65,7 +65,7 @@ fn macos_gets_no_build_cache() {
     let env = env_in(t.path());
     let on = SetupCfg::default();
     let (repo, mut spec) = rust_project(&env, "app", "claude-1");
-    apply(&env, &repo, true, &on, &mut spec).unwrap();
+    apply_with(&env, &repo, true, &on, &mut spec).unwrap();
     assert!(mounted(&spec).is_none());
 }
 
@@ -77,24 +77,24 @@ fn only_worktree_runs_of_rust_projects_get_a_target_folder() {
     let env = env_in(t.path());
     let on = SetupCfg::default();
     let (repo, mut spec) = rust_project(&env, "app", "claude-1");
-    apply(&env, &repo, false, &on, &mut spec).unwrap();
+    apply_with(&env, &repo, false, &on, &mut spec).unwrap();
     assert!(mounted(&spec).is_none(), "not a worktree run");
     let off = SetupCfg {
         shared_build_cache: Some(false),
         ..Default::default()
     };
-    apply(&env, &repo, true, &off, &mut spec).unwrap();
+    apply_with(&env, &repo, true, &off, &mut spec).unwrap();
     assert!(mounted(&spec).is_none(), "the project opted out");
     config(&env, "[storage]\nbuild_cache = false\n");
-    apply(&env, &repo, true, &on, &mut spec).unwrap();
+    apply_with(&env, &repo, true, &on, &mut spec).unwrap();
     assert!(mounted(&spec).is_none(), "the user turned it off");
     config(&env, "");
     std::fs::remove_file(spec.project.join("Cargo.toml")).unwrap();
-    apply(&env, &repo, true, &on, &mut spec).unwrap();
+    apply_with(&env, &repo, true, &on, &mut spec).unwrap();
     assert!(mounted(&spec).is_none(), "no Rust project");
 
     let (repo, mut spec) = rust_project(&env, "app", "claude-2");
-    apply(&env, &repo, true, &on, &mut spec).unwrap();
+    apply_with(&env, &repo, true, &on, &mut spec).unwrap();
     let w = mounted(&spec).unwrap();
     assert_eq!(w, project_dir(&env, &repo).join("w/claude-2"));
     assert!(w.is_dir());
@@ -122,8 +122,8 @@ fn a_project_never_sees_the_cache_of_another() {
     let bdir = project_dir(&env, &b);
     std::fs::create_dir_all(bdir.join("base")).unwrap();
     std::fs::write(bdir.join("base/secret.rlib"), "b only").unwrap();
-    apply(&env, &a, true, &on, &mut sa).unwrap();
-    apply(&env, &b, true, &on, &mut sb).unwrap();
+    apply_with(&env, &a, true, &on, &mut sa).unwrap();
+    apply_with(&env, &b, true, &on, &mut sb).unwrap();
     let wa = mounted(&sa).unwrap();
     assert!(wa.starts_with(project_dir(&env, &a)));
     assert!(!wa.join("secret.rlib").exists());
@@ -157,7 +157,7 @@ fn a_sandbox_starts_from_the_base_and_leaves_its_folder_as_the_next_base() {
     )
     .unwrap();
     std::fs::write(own.join("debug/dep.rlib"), "dep v1").unwrap();
-    apply(&env, &repo, true, &on, &mut s1).unwrap();
+    apply_with(&env, &repo, true, &on, &mut s1).unwrap();
     let dir = project_dir(&env, &repo);
     let w1 = mounted(&s1).unwrap();
     let reflinks = can_clone(&dir);
@@ -175,7 +175,7 @@ fn a_sandbox_starts_from_the_base_and_leaves_its_folder_as_the_next_base() {
         );
         // The next sandbox gets its own copy; its writes stay its own.
         let (_, mut s2) = rust_project(&env, "app", "claude-2");
-        apply(&env, &repo, true, &on, &mut s2).unwrap();
+        apply_with(&env, &repo, true, &on, &mut s2).unwrap();
         let w2 = mounted(&s2).unwrap();
         std::fs::write(w2.join("debug/app"), "app of commit 2").unwrap();
         assert_eq!(
@@ -206,7 +206,7 @@ fn two_sandboxes_that_end_at_once_both_leave_a_whole_folder() {
     let mut specs = Vec::new();
     for id in ["claude-1", "claude-2", "claude-3"] {
         let (repo, mut s) = rust_project(&env, "app", id);
-        apply(&env, &repo, true, &on, &mut s).unwrap();
+        apply_with(&env, &repo, true, &on, &mut s).unwrap();
         let w = mounted(&s).unwrap();
         std::fs::create_dir_all(w.join("debug")).unwrap();
         std::fs::write(w.join("debug/app"), id).unwrap();
@@ -305,7 +305,7 @@ fn a_folder_with_a_planted_git_directory_never_becomes_a_seed() {
     let env = env_in(t.path());
     let on = SetupCfg::default();
     let (repo, mut s1) = rust_project(&env, "app", "claude-1");
-    apply(&env, &repo, true, &on, &mut s1).unwrap();
+    apply_with(&env, &repo, true, &on, &mut s1).unwrap();
     let w1 = mounted(&s1).unwrap();
     std::fs::create_dir_all(w1.join(".git")).unwrap();
     after_run(&env, &s1);
@@ -316,7 +316,50 @@ fn a_folder_with_a_planted_git_directory_never_becomes_a_seed() {
     std::fs::create_dir_all(dir.join("base/.git")).unwrap();
     std::fs::write(dir.join("base/out.rlib"), "x").unwrap();
     let (_, mut s2) = rust_project(&env, "app", "claude-2");
-    apply(&env, &repo, true, &on, &mut s2).unwrap();
+    apply_with(&env, &repo, true, &on, &mut s2).unwrap();
     let w2 = mounted(&s2).unwrap();
     assert!(!w2.join("out.rlib").exists() && !w2.join(".git").exists());
+}
+
+#[test]
+fn rust_sandboxes_get_lean_builds_unless_turned_off() {
+    let t = tmp();
+    let env = env_in(t.path());
+    let on = SetupCfg::default();
+    let (repo, mut spec) = rust_project(&env, "app", "claude-lean");
+    apply_with(&env, &repo, false, &on, &mut spec).unwrap();
+    for (k, v) in LEAN_ENV {
+        assert_eq!(spec.env.get(*k).map(|e| e.value.as_str()), Some(*v), "{k}");
+    }
+    let (repo, mut spec) = rust_project(&env, "app", "claude-mine");
+    spec.set_env("CARGO_INCREMENTAL", "1", "user");
+    apply_with(&env, &repo, false, &on, &mut spec).unwrap();
+    assert_eq!(
+        spec.env["CARGO_INCREMENTAL"].value, "1",
+        "a value of the user stays"
+    );
+    std::fs::create_dir_all(env.paddock_config()).unwrap();
+    std::fs::write(
+        env.paddock_config().join("config.toml"),
+        "[storage]\nlean_builds = false\n",
+    )
+    .unwrap();
+    let (repo, mut spec) = rust_project(&env, "app", "claude-off");
+    apply_with(&env, &repo, false, &on, &mut spec).unwrap();
+    assert!(!spec.env.contains_key("CARGO_PROFILE_DEV_DEBUG"));
+}
+
+#[test]
+fn a_run_in_a_worktree_of_paddock_counts_as_a_worktree_run() {
+    let t = tmp();
+    let env = env_in(t.path());
+    let wt = env.paddock_data().join("worktrees/app-1234/wt-x");
+    std::fs::create_dir_all(&wt).unwrap();
+    assert!(in_paddock_worktree(&env, &wt));
+    assert!(!in_paddock_worktree(
+        &env,
+        &env.paddock_data().join("worktrees")
+    ));
+    assert!(!in_paddock_worktree(&env, &env.home));
+    assert!(!in_paddock_worktree(&env, &env.home.join("gone")));
 }

@@ -364,3 +364,129 @@ fn hold_a_mount() {
     let _m = mount(Path::new(&dir), fs).unwrap();
     std::thread::sleep(Duration::from_secs(secs));
 }
+
+#[test]
+fn horse_mount_exposes_ciphertext_and_refuses_content_writes() {
+    use crate::horse::{self as hs, live::fake};
+    let env = HostEnv::detect().unwrap();
+    if let Err(why) = fuse_available(&env) {
+        eprintln!("skipped: {why}");
+        return;
+    }
+    let tmp = tempfile::tempdir().unwrap();
+    let env = HostEnv::from_parts(
+        tmp.path().into(),
+        env.user,
+        env.uid,
+        env.gid,
+        Default::default(),
+    );
+    let store = hs::Store::open(&tmp.path().join("store")).unwrap();
+    let h = store.new_default_horse().unwrap();
+    let root = tmp.path().join("sessions");
+    fake::write_file(&root, "session-a", &fake::turn_rows(0, 1, "hello", "msg-a"));
+    let dir = hs::dsh::session_dir(&root, Some(fake::CWD), "session-a");
+    let session = hs::dsh::ingest(&store, &dir, hs::dsh::VERSION, Some(&h.id))
+        .unwrap()
+        .session;
+    let setup = crate::horse::device::Access {
+        store: store.clone(),
+        horse: h.id.clone(),
+        session: session.clone(),
+    };
+    let ctx = DeviceCtx {
+        env,
+        sandbox: "test".into(),
+        harness: "fake".into(),
+        project: tmp.path().into(),
+        started_by: vec![],
+        approver: Arc::new(crate::broker::HostApprover),
+    };
+    let fs = DeviceFs::new("test", vec![]).with_horse(Some(setup), ctx);
+    let mount_path = tmp.path().join("mount");
+    let Ok(_mounted) = mount(&mount_path, fs) else {
+        eprintln!("skipped: FUSE mount failed");
+        return;
+    };
+    let path = mount_path.join(format!("horse/self/sessions/{session}/log"));
+    let ciphertext = std::fs::read(path).unwrap();
+    assert!(!ciphertext
+        .windows(b"user hello".len())
+        .any(|w| w == b"user hello"));
+    let dna = mount_path.join("horse/self/dna.toml");
+    let ciphertext = std::fs::read(&dna).unwrap();
+    assert!(!ciphertext
+        .windows(b"[traits]".len())
+        .any(|w| w == b"[traits]"));
+    assert!(std::fs::write(&dna, b"[traits]\nstyle = \"careful\"\n").is_err());
+    assert!(std::fs::write(mount_path.join("horse/self/memory/note"), b"hello memory").is_err());
+    assert!(std::fs::write(mount_path.join("horse/self/id"), b"bad").is_err());
+}
+
+#[test]
+fn a_horse_run_without_the_device_mount_says_why() {
+    use crate::horse::{self as hs, run};
+    let tmp = tempfile::tempdir().unwrap();
+    let env = HostEnv::from_parts(
+        tmp.path().join("home"),
+        "demo".into(),
+        unsafe { libc::getuid() },
+        unsafe { libc::getgid() },
+        Default::default(),
+    );
+    let cfg = env.paddock_config();
+    std::fs::create_dir_all(&cfg).unwrap();
+    std::fs::write(cfg.join("config.toml"), "[devices]\nmount = false\n").unwrap();
+    let store = hs::Store::open(&tmp.path().join("store")).unwrap();
+    let rh = run::begin(&store, hs::dsh::HARNESS, hs::dsh::VERSION, None, None).unwrap();
+    let access = crate::horse::device::Access {
+        store,
+        horse: rh.horse,
+        session: rh.session,
+    };
+    let spec = || {
+        crate::spec::SandboxSpec::new(
+            "sb-1".into(),
+            "dsh",
+            std::path::Path::new("/home/demo/app"),
+            env.home.join("sb"),
+            &env.home,
+            1000,
+            1000,
+            "demo",
+        )
+    };
+    let secrets = || crate::credentials::secret::SecretFiles::new(None, None);
+    // Without horse mode an off mount stays quiet.
+    let mut plain = spec();
+    assert!(start(
+        &env,
+        &mut plain,
+        "bwrap",
+        false,
+        None,
+        &[],
+        None,
+        secrets(),
+        None
+    )
+    .is_none());
+    assert!(plain.notices.is_empty(), "{:?}", plain.notices);
+    let mut horse = spec();
+    let devices = start(
+        &env,
+        &mut horse,
+        "bwrap",
+        false,
+        None,
+        &[],
+        None,
+        secrets(),
+        Some(access),
+    );
+    assert!(devices.is_none());
+    assert_eq!(
+        horse.notices,
+        [format!("{HORSE_OFF}: [devices] mount is false")]
+    );
+}

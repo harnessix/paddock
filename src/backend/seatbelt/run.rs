@@ -62,8 +62,8 @@ pub fn localhost_ports(env: &HostEnv) -> Result<Option<(u16, u16)>> {
     let Ok(text) = std::fs::read_to_string(&file) else {
         return Ok(None);
     };
-    let doc: toml::Value =
-        toml::from_str(&text).with_context(|| format!("{} is invalid", file.display()))?;
+    let doc: toml::Value = crate::manifest::user_config_doc(&text)
+        .with_context(|| format!("{} is invalid", file.display()))?;
     match doc.get("macos").and_then(|m| m.get("localhost_ports")) {
         None => Ok(None),
         Some(toml::Value::String(s)) => parse_range(s).map(Some),

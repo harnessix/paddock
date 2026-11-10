@@ -1,0 +1,81 @@
+#!/bin/sh
+# A fake `codex app-server --listen stdio://` (codex-cli 0.166.0) for the
+# horse tests. It contacts nothing. Each turn takes FAKE_CODEX_STEP seconds (2)
+# and writes its rows to the rollout of one thread; `thread/unsubscribe`
+# closes the thread and `thread/resume` reads the rollout again.
+set -eu
+case "${1:-}" in
+--version)
+    echo 'codex-cli 0.166.0'
+    exit 0
+    ;;
+exec)
+    # The probe of the one-shot arguments.
+    echo 'Usage: codex exec [OPTIONS] [PROMPT]'
+    echo '      --dangerously-bypass-approvals-and-sandbox'
+    exit 0
+    ;;
+app-server) ;;
+*)
+    echo "fake codex: unexpected arguments: $*" >&2
+    exit 2
+    ;;
+esac
+thread=019a5f00-0000-7000-8000-00000000e2e0
+dir="$HOME/.codex/sessions/2026/11/06"
+rollout="$dir/rollout-2026-11-06T00-00-00-$thread.jsonl"
+ts='"timestamp":"2026-11-06T00:00:00.000Z"'
+turns=0
+row() {
+    printf '{%s,"type":"%s","payload":%s}\n' "$ts" "$1" "$2" >> "$rollout"
+}
+ok() {
+    printf '{"id":%s,"result":%s}\n' "$1" "$2"
+}
+opened() {
+    ok "$1" "{\"thread\":{\"id\":\"$thread\",\"cliVersion\":\"0.166.0\",\"cwd\":\"/w\",\"turns\":[]}}"
+}
+while IFS= read -r line; do
+    method=$(printf '%s' "$line" | sed -n 's/.*"method":"\([^"]*\)".*/\1/p')
+    id=$(printf '%s' "$line" | sed -n 's/^{"id":\([0-9][0-9]*\),.*/\1/p')
+    case "$method" in
+    initialize)
+        ok "$id" '{"userAgent":"codex_cli_rs/0.166.0 (fake)"}'
+        ;;
+    initialized) ;;
+    thread/start)
+        mkdir -p "$dir"
+        row session_meta "{\"id\":\"$thread\",\"cli_version\":\"0.166.0\",\"cwd\":\"/w\",\"source\":\"exec\"}"
+        opened "$id"
+        ;;
+    thread/resume)
+        cp "$rollout" resumed.txt
+        opened "$id"
+        ;;
+    thread/unsubscribe)
+        ok "$id" '{"status":"unsubscribed"}'
+        printf '{"method":"thread/closed","params":{"threadId":"%s"}}\n' "$thread"
+        ;;
+    thread/inject_items)
+        row response_item '{"type":"message","role":"developer","content":[{"type":"input_text","text":"injected"}]}'
+        ok "$id" '{}'
+        ;;
+    turn/start)
+        turns=$((turns + 1))
+        turn="turn-$turns"
+        ok "$id" "{\"turn\":{\"id\":\"$turn\",\"status\":\"inProgress\",\"items\":[]}}"
+        printf '{"method":"turn/started","params":{"threadId":"%s","turn":{"id":"%s","status":"inProgress"}}}\n' "$thread" "$turn"
+        row event_msg "{\"type\":\"task_started\",\"turn_id\":\"$turn\"}"
+        row response_item "{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"input_text\",\"text\":\"$turn\"}]}"
+        sleep "${FAKE_CODEX_STEP:-2}"
+        row response_item "{\"type\":\"message\",\"role\":\"assistant\",\"id\":\"msg_$turn\",\"content\":[{\"type\":\"output_text\",\"text\":\"done $turn\"}]}"
+        row event_msg "{\"type\":\"task_complete\",\"turn_id\":\"$turn\"}"
+        printf '{"method":"turn/completed","params":{"threadId":"%s","turn":{"id":"%s","status":"completed"}}}\n' "$thread" "$turn"
+        ;;
+    "")
+        ;;
+    *)
+        printf '{"id":%s,"error":{"code":-32601,"message":"unknown method %s"}}\n' "$id" "$method"
+        ;;
+    esac
+done

@@ -322,7 +322,7 @@ pub fn doctor_lines(env: &HostEnv) -> Vec<String> {
     for v in volumes(&folders(env, None)) {
         let mark = match v.level(&s) {
             Level::Ok => "ok",
-            Level::Low => "low",
+            Level::Low => "WARNING",
             Level::Full => "FULL",
         };
         out.push(format!(
@@ -334,6 +334,9 @@ pub fn doctor_lines(env: &HostEnv) -> Vec<String> {
             human(s.hard.bytes(v.total)),
             human(s.soft.bytes(v.total)),
         ));
+        if let Some(line) = super::btrfs::doctor(env, &v.path, v.total) {
+            out.push(line);
+        }
     }
     for w in warnings {
         out.push(format!("  note     {w}"));

@@ -1,0 +1,50 @@
+# Tasks
+
+## Phase 1
+
+- [X] T008 [US1] Work item 008
+- [X] T001 [US1] Work item 001
+
+## Phase 2
+
+- [X] T002 [US2] Work item 002
+- [X] T007 [US2] Work item 007
+- [X] T006 [US2] Work item 006
+- [X] T010 [US2] Work item 010 <!-- paddock: paddock/spawn-claude-34b45ec8 -->
+
+## Phase 3
+
+- [X] T003 [US3] Work item 003
+- [X] T004 [US3] Work item 004
+- [X] T005 [US3] Work item 005
+
+## Phase 4
+
+- [X] T011 [US4] Work item 011
+- [X] T012 [US4] Work item 012
+- [X] T013 [US4] Work item 013
+- [X] T014 [US4] Work item 014
+- [X] T015 [US4] Work item 015
+- [X] T016 [US4] Work item 016
+- [X] T017 [US4] Work item 017
+- [X] T018 [US4] Work item 018 <!-- paddock: paddock/spawn-claude-1126536a -->
+- [X] T019 [US4] Work item 019 <!-- paddock: paddock/spawn-claude-90507731 -->
+- [X] T020 [US4] Work item 020 <!-- paddock: paddock/spawn-claude-40d3579a -->
+- [X] T021 [US4] Work item 021 <!-- paddock: paddock/spawn-claude-3e75fe5c -->
+
+## Phase 5
+
+- [ ] T022 [US1] Work item 022 <!-- paddock: review, paddock/spawn-claude-5e451c79 -->
+- [ ] T023 [US4] Work item 023
+
+## Phase 6
+
+- [ ] T024 [US1] Work item 024
+- [ ] T025 [US1] Work item 025
+
+## Phase 7
+
+- [X] T026 [US4] Work item 026 <!-- paddock: paddock/spawn-claude-fed28bc5 -->
+- [X] T027 [US2] Work item 027
+- [X] T028 [US2] Work item 028
+- [ ] T029 [US4] Work item 029

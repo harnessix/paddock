@@ -103,6 +103,37 @@ impl Allowlist {
     }
 }
 
+/// Peer-owned HTTP registry targets. Every entry must name an exact host and
+/// an explicit port; wildcard names, IP literals, and implicit ports are rejected.
+#[derive(Debug, Clone, Default)]
+pub struct RegistryHttpPolicy {
+    list: Allowlist,
+}
+
+impl RegistryHttpPolicy {
+    pub fn parse<S: AsRef<str>>(items: &[S]) -> (Self, Vec<String>) {
+        let mut list = Allowlist::default();
+        let mut bad = Vec::new();
+        for item in items {
+            let raw = item.as_ref().trim();
+            let explicit = raw.rsplit_once(':').is_some_and(|(host, port)| {
+                !host.contains(':') && !host.starts_with("*.") && !port.is_empty()
+            });
+            let (parsed, rejected) = Allowlist::parse(&[raw]);
+            if !explicit || !rejected.is_empty() || parsed.entries.len() != 1 {
+                bad.push(raw.to_string());
+            } else if !list.entries.contains(&parsed.entries[0]) {
+                list.entries.push(parsed.entries[0].clone());
+            }
+        }
+        (Self { list }, bad)
+    }
+
+    pub fn check(&self, host: &str, port: u16) -> Result<(), String> {
+        self.list.check(host, port)
+    }
+}
+
 const MAX_HELLO: usize = 64 * 1024;
 
 /// Read the TLS records that carry the ClientHello. Returns the raw bytes

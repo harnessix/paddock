@@ -147,6 +147,8 @@ pub struct Inventory {
     pub layers: Vec<layers::Layer>,
     /// The cargo build caches of worktree runs (storage/buildcache.rs).
     pub build_caches: Vec<super::buildcache::CacheDir>,
+    /// The mailboxes of runs (mail.rs).
+    pub mailboxes: Vec<crate::mail::Stored>,
 }
 
 /// A project snapshot, or a folder of the undo trash (`trash`).
@@ -237,6 +239,7 @@ pub fn removable_roots(env: &HostEnv) -> Vec<PathBuf> {
         crate::snapshot::root(env),
         crate::snapshot::trash_root(env),
         layers::projects_root(env),
+        super::package_cache::root(env),
         super::buildcache::root(env),
     ]
 }

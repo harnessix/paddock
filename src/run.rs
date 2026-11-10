@@ -1,5 +1,4 @@
 //! Launch a built spec, wait for it, and clean up.
-
 use crate::backend::{self, Backend, Launch};
 use crate::build::Built;
 use crate::env::HostEnv;
@@ -10,15 +9,17 @@ use crate::state::{self, AuthSync, Running, SyncStep};
 use anyhow::{bail, Context, Result};
 use sha2::{Digest, Sha256};
 use std::io::{IsTerminal, Read};
-
 mod capped;
+mod end;
 mod host_tools;
+mod mcp;
+mod memory_scope;
 use capped::read_capped;
+use end::EndOfRun;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
-
 pub fn write_files(launch: &Launch) -> Result<()> {
     for (path, text, mode) in &launch.files {
         gui::write_file(path, text, *mode)?;
@@ -541,47 +542,6 @@ pub struct Outcome {
     pub stdout: Option<String>,
 }
 
-/// Cleans the run folder, the borrow copies, kv, devices, the pasture
-/// member and the session record, even when `run` returns early.
-struct EndOfRun<'a> {
-    env: &'a HostEnv,
-    id: String,
-    project: PathBuf,
-    snapshot: bool,
-    quiet: bool,
-    kv: Option<crate::kv::Served>,
-    devices: Option<crate::devices::Devices>,
-    bridge: Option<PathBuf>,
-    harness: String,
-    /// This run copied output to a view log.
-    view: bool,
-}
-
-impl Drop for EndOfRun<'_> {
-    fn drop(&mut self) {
-        // Unmount first: the removal must not walk into the device mount.
-        self.devices.take();
-        if let Some(k) = self.kv.take() {
-            k.finish();
-        }
-        if let Some(base) = &self.bridge {
-            crate::pasture::bridge::forget_member(base, &self.id);
-        }
-        // Before the run folder goes: quota peers keep the end of this run.
-        crate::timer::end_runs(self.env, &self.id, crate::state::now());
-        crate::sockpath::end_run(&self.env.paddock_run(), self.env.uid, &self.id);
-        crate::borrow::end(self.env, &self.id);
-        crate::recover::Session::end(self.env, &self.id);
-        if self.view {
-            crate::detach::record_view_end(self.env, &self.id, &self.harness, &self.project);
-        }
-        if self.snapshot {
-            crate::snapshot::after_end(self.env, &self.project, &self.id, self.quiet);
-        }
-        crate::loft::end_of_run(self.env, &self.project, &self.id, &self.harness);
-    }
-}
-
 /// Run the sandbox. With `capture`, stdout is collected instead of shown.
 pub fn run(
     env: &HostEnv,
@@ -590,30 +550,16 @@ pub fn run(
     capture: bool,
     quiet: bool,
 ) -> Result<Outcome> {
+    let _package_cache_lease = crate::storage::package_cache::RunCache::start(env, &built.spec)?;
+    mcp::validate(env, &built)?;
     // SIGTERM and SIGHUP must leave time for the device mount, login and
     // history copies, and session record to finish.
     // Before launch, paddock notes the signal and stops. After launch it
     // forwards the signal and waits. A frozen sandbox is thawed first.
-    // The old handlers come back when `run` returns.
     crate::loft::push::start_notice(env, &built);
     let forwarding = Forward::install();
-    // Without Hyprland, any terminal counts as watched.
-    let tty = !capture && std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
-    let term = crate::relay::plan(tty, crate::relay::this_terminal_is_watched, built.detach);
-    let (caller_terminal, relay_on, terminal_watched) = (tty, term.relay, term.watched);
-    let interactive = caller_terminal;
-    let mut end = EndOfRun {
-        env,
-        id: built.spec.id.clone(),
-        project: built.spec.project.clone(),
-        snapshot: false,
-        quiet,
-        kv: None,
-        devices: None,
-        bridge: None,
-        harness: built.spec.harness.clone(),
-        view: false,
-    };
+    // The mailbox comes first: the devices serve it.
+    let mut end = EndOfRun::new(env, &built, quiet);
     // `--profile default`: the private snapshot of the data roots, before
     // anything else starts. The run folder goes when `run` returns.
     let shadow = built.spec.shadow.clone().map(ShadowRun);
@@ -631,8 +577,15 @@ pub fn run(
             }
         }
     }
-    // App mode: a restricted Wayland socket and a portal-only session bus,
-    // both alive until the sandbox exits.
+    let _horse_lifecycle = crate::horse::lifecycle::start(env, &mut built)?;
+    let (horse, _) = crate::horse::live::take_hooks();
+    let horse_access = _horse_lifecycle.as_ref().map(|l| l.access()).transpose()?;
+    let tty = horse.is_none() && !capture && std::io::stdin().is_terminal();
+    let tty = tty && std::io::stdout().is_terminal();
+    let term = crate::relay::plan(tty, crate::relay::this_terminal_is_watched, built.detach);
+    let (caller_terminal, relay_on, terminal_watched) = (tty, term.relay, term.watched);
+    let interactive = caller_terminal;
+    // App mode: a restricted Wayland socket and a portal-only session bus.
     let _app = if built.spec.gui.mode == GuiMode::App {
         Some(crate::app::start_session(
             env,
@@ -651,6 +604,9 @@ pub fn run(
     };
     backend.prepare(env, &built.spec, interactive)?;
     let (repo, spawner, broker) = host_tools::broker(env, &mut built, interactive, backend.name())?;
+    if let (Some(b), Some(access)) = (&broker, &horse_access) {
+        let _ = b.horse.set(access.clone());
+    }
     // paddock kv and the devices. Each one is optional: when it cannot start,
     // the sandbox starts without it and a notice says why.
     let kv_approver: std::sync::Arc<dyn crate::broker::Approver> = built
@@ -712,6 +668,7 @@ pub fn run(
             .clone()
             .map(|b| -> crate::gateway::Handler { std::sync::Arc::new(move |r| b.handle(&r)) }),
         secrets.clone(),
+        horse_access,
     );
     // Terminal harnesses that log in through a browser and a localhost callback.
     let _login = if built.profile.launch.login_callback && built.spec.gui.mode != GuiMode::App {
@@ -772,6 +729,7 @@ pub fn run(
         broker.as_ref(),
     )?;
     start_api_proxy(env, &mut built, backend.name())?;
+    mcp::prepare(env, &mut built, backend.name())?;
     let launch = backend.render(env, &built.spec, interactive)?;
     write_files(&launch)?;
 
@@ -815,6 +773,7 @@ pub fn run(
             log::warn!("{w}");
         }
     }
+    mcp::apply(env, &built, backend.name())?;
     let auth = AuthSync::copy_in(env, &built.profile, &built.auth, &spec.home_src)?;
     // The keeper refreshes the logins that the sandbox got without their
     // refresh token (keeper.rs), as long as this process runs.
@@ -938,7 +897,7 @@ pub fn run(
         term.unwatched,
         built.detach,
     );
-    let tap = crate::relay::Taps::of(gate.clone(), screens);
+    let tap = crate::relay::Taps::of(gate.clone(), screens, crate::horse::live::take_pty_tap());
     // The live view of a run without a terminal (view.rs). paddock copies
     // each stream that is not a terminal to the caller and to the run log.
     // A watched terminal stays the harness's own. An invisible terminal is
@@ -1009,29 +968,17 @@ pub fn run(
             }
         }
     }
+    if horse.is_some() {
+        cmd.stdin(Stdio::piped()).stdout(Stdio::piped());
+    }
     let mut child = cmd
         .spawn()
         .with_context(|| format!("cannot start {}", launch.program.display()))?;
+    crate::horse::live::handoff(horse, &mut child);
     if let Some(r) = relay.as_mut() {
         r.close_slave();
     }
-    let unit = match new_scope {
-        Some(name) => {
-            let moved = crate::freeze::wait_stopped(child.id())
-                .and_then(|_| crate::freeze::move_to_scope(env, child.id(), &name, &spec.id));
-            // It continues in any case; without the scope it only cannot be
-            // frozen.
-            crate::freeze::resume(child.id());
-            match moved {
-                Ok(()) => Some(name),
-                Err(e) => {
-                    log::debug!("no scope for the sandbox, so it cannot be frozen: {e:#}");
-                    None
-                }
-            }
-        }
-        None => inherited,
-    };
+    let unit = memory_scope::establish(env, child.id(), new_scope, inherited, spec, quiet);
     forwarding.set_child(child.id());
     if let Some(l) = view.as_mut() {
         if let Some(o) = child.stdout.take().filter(|_| l.tee_out) {
@@ -1151,7 +1098,7 @@ pub fn run(
     let old_quit = unsafe { libc::signal(libc::SIGQUIT, libc::SIG_IGN) };
     let mut out = None;
     if capture && view.is_none() {
-        out = Some(read_capped(child.stdout.take().unwrap()));
+        out = child.stdout.take().map(read_capped);
     }
     let sandbox_id = spec.id.clone();
     let seam = crate::spawn::HostSeam(env.clone());
@@ -1171,6 +1118,7 @@ pub fn run(
     let code = status
         .code()
         .unwrap_or_else(|| 128 + status.signal().unwrap_or(0));
+    end.code = Some(code);
     if let Some(r) = relay.take() {
         r.finish();
     }
@@ -1192,7 +1140,6 @@ pub fn run(
         // steps half way.
         quiet_stdio();
     }
-
     // The children of this sandbox end with it.
     if let Some(s) = &spawner {
         s.stop_all(Duration::from_secs(30));
@@ -1245,6 +1192,7 @@ pub fn run(
             }
         }
     }
+    let out = crate::horse::lifecycle::end(_horse_lifecycle, code, out);
     // Verified new packages go to the shared layers; the build cache keeps the target folder.
     crate::storage::layers::promote::spawn_after_run(env, spec, backend.name());
     crate::storage::buildcache::after_run(env, spec);
@@ -1267,7 +1215,7 @@ pub fn run(
     // background too: the exit does not wait for it.
     crate::storage::dedupe::spawn_after_run(env, &spec.home_src);
     if !quiet {
-        recovery_notice(env, &spec.id, &spec.home_src, running.started);
+        crate::recover::notice(env, &spec.id, &spec.home_src, running.started);
     }
     Ok(Outcome { code, stdout: out })
 }
@@ -1281,38 +1229,6 @@ impl Drop for ShadowRun {
             log::warn!("{e:#}");
         }
     }
-}
-
-/// Quick Recovery at exit: the files left in the recovery folders, and how to copy them.
-fn recovery_notice(env: &HostEnv, id: &str, home: &Path, started: u64) {
-    let id = crate::ids::short(id);
-    let cfg = match crate::recover::RecoveryCfg::load(env) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("paddock: warning: {e:#}");
-            return;
-        }
-    };
-    let items: Vec<_> = crate::recover::scan(env, &cfg, home, started)
-        .into_iter()
-        .filter(|i| i.new)
-        .collect();
-    if items.is_empty() {
-        return;
-    }
-    eprintln!(
-        "paddock: the sandbox saved {} file(s) outside the project. They stay in the sandbox until you recover them:",
-        items.len()
-    );
-    for i in items.iter().take(10) {
-        eprintln!("  {}", i.path);
-    }
-    if items.len() > 10 {
-        eprintln!("  ... and {} more", items.len() - 10);
-    }
-    eprintln!(
-        "paddock: list them with `paddock files {id}`, copy them with `paddock recover {id} PATH`"
-    );
 }
 
 pub fn select_backend(env: &HostEnv, built: &Built) -> Result<Box<dyn Backend>> {
@@ -1399,8 +1315,7 @@ fn start_broker(
     let spawner = match crate::spawn::SpawnCfg::load(env) {
         Ok(cfg) => {
             let mut ceiling = crate::spawn::Ceiling::of(built, backend, &policy.modes);
-            ceiling.devices =
-                crate::devices::names_for(env, built.test_devices, built.device_ceiling.as_deref());
+            crate::trainer::sandbox::capture_ceiling(env, built, &mut ceiling);
             match crate::spawn::Spawner::new(env, cfg, ceiling, &built.spec.project) {
                 Ok(mut s) => {
                     // The card at a child's time limit waits as long as

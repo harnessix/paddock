@@ -35,8 +35,7 @@ pub struct Profile {
     /// and where the user turns off the use of their data for training.
     #[serde(default)]
     pub privacy: Privacy,
-    /// Profile entries that come from documentation, not from a test on a
-    /// real install. `paddock doctor` lists them.
+    /// Entries from documentation, not from a test on a real install (`paddock doctor` lists them).
     #[serde(default)]
     pub unverified: Vec<String>,
     /// Present for desktop apps, which `paddock app` runs.
@@ -49,12 +48,13 @@ pub struct Profile {
     pub compaction: Option<crate::compaction::Hook>,
     #[serde(default)]
     pub macos: ProfileMacos,
-    /// Where the harness reads hooks: paddock carries the user's hook
-    /// entries there and checks their programs (hooks.rs).
+    /// Where the harness reads hooks: paddock carries and checks the user's entries (hooks.rs).
     pub hooks: Option<crate::hooks::Files>,
     /// Start screens that paddock answers when nobody watches (screens.rs).
     #[serde(default)]
     pub screens: crate::screens::Screens,
+    /// The idle screen of the TUI for horse mode (horse/live/pty.rs).
+    pub horse: Option<crate::horse::live::pty::ProfileHorse>,
 }
 
 /// `[detach]`: the arguments that give the interactive interface its first

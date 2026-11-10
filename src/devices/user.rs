@@ -207,7 +207,7 @@ pub fn check_name(name: &str) -> Result<()> {
     if !ok {
         bail!("{name:?}: a device name has 1 to 32 lower case letters, digits, - or _, and starts with a letter");
     }
-    if super::BUILTIN.contains(&name) || ["mount", "gw", "secret"].contains(&name) {
+    if super::BUILTIN.contains(&name) || ["mount", "gw", "secret", "horse"].contains(&name) {
         bail!("{name:?} is a built-in name");
     }
     Ok(())

@@ -1,0 +1,1 @@
+- Changed: horse mode reads Codex 0.167.0 rollout files as well as 0.166.0, and records the producer version apart from the reader version. Messages for an interactive 0.167.0 run stay queued until its screen pattern is verified.

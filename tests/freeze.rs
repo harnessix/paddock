@@ -1,3 +1,4 @@
+#![cfg(target_os = "linux")]
 //! `paddock freeze` and `paddock thaw` end to end: a bwrap sandbox runs in
 //! a scope of its own, freezing stops it (a counter that it writes stays
 //! the same), thawing lets it continue, `paddock ps` shows the freeze, and

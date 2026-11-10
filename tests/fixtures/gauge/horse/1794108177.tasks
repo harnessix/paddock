@@ -1,0 +1,17 @@
+# Tasks
+
+## Phase 1
+
+- [x] T001 [US1] Work item 001
+
+## Phase 2
+
+- [X] T002 [US2] Work item 002 <!-- paddock: paddock/spawn-codex-b4d10991 -->
+- [X] T007 [US2] Work item 007 <!-- paddock: paddock/spawn-codex-3afb0bf4 -->
+- [x] T006 [US2] Work item 006 <!-- paddock: paddock/spawn-codex-4d97df6c -->
+
+## Phase 3
+
+- [X] T003 [US3] Work item 003 <!-- paddock: paddock/spawn-claude-6117d6c3 -->
+- [X] T004 [US3] Work item 004 <!-- paddock: paddock/spawn-claude-509ea631 -->
+- [ ] T005 [US3] Work item 005

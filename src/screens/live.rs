@@ -31,11 +31,13 @@ pub struct Report {
     pub rule: String,
     pub keys: String,
     pub ok: bool,
+    pub waiting: bool,
     pub text: String,
 }
 
 type OnReport = Box<dyn Fn(&Report) + Send + Sync>;
 type Watched = Box<dyn Fn() -> bool + Send + Sync>;
+type Policy = Box<dyn Fn(&Rule, &[String]) -> bool + Send + Sync>;
 
 pub struct Watcher {
     inner: Arc<Inner>,
@@ -47,6 +49,7 @@ struct Inner {
     shared: Mutex<Shared>,
     active: AtomicBool,
     watched: Watched,
+    policy: Policy,
     on_report: OnReport,
 }
 
@@ -84,6 +87,20 @@ impl Watcher {
         watched: impl Fn() -> bool + Send + Sync + 'static,
         on_report: impl Fn(&Report) + Send + Sync + 'static,
     ) -> Arc<Watcher> {
+        Self::with_policy(
+            rules,
+            watched,
+            |r, _| r.kind != super::RuleKind::FolderTrust,
+            on_report,
+        )
+    }
+
+    pub fn with_policy(
+        rules: Vec<Rule>,
+        watched: impl Fn() -> bool + Send + Sync + 'static,
+        policy: impl Fn(&Rule, &[String]) -> bool + Send + Sync + 'static,
+        on_report: impl Fn(&Report) + Send + Sync + 'static,
+    ) -> Arc<Watcher> {
         let n = rules.len();
         Arc::new(Watcher {
             inner: Arc::new(Inner {
@@ -102,6 +119,7 @@ impl Watcher {
                 }),
                 active: AtomicBool::new(true),
                 watched: Box::new(watched),
+                policy: Box::new(policy),
                 on_report: Box::new(on_report),
             }),
             thread: Mutex::new(None),
@@ -234,6 +252,11 @@ impl Inner {
         if sh.answers[ri] >= MAX_ANSWERS || (!rule.always && (self.watched)()) {
             return None;
         }
+        if !(self.policy)(rule, &rows) {
+            sh.answers[ri] = MAX_ANSWERS;
+            self.tell_waiting(sh, ri);
+            return None;
+        }
         sh.answers[ri] += 1;
         sh.pending = Some((ri, n, now));
         Some(
@@ -249,11 +272,27 @@ impl Inner {
             rule: self.rules[ri].id.clone(),
             keys: self.rules[ri].send.join(","),
             ok,
+            waiting: false,
             text,
         };
         if let Some(log) = &sh.log {
             log(format!("\r\n[paddock: {}]\r\n", r.text).as_bytes());
         }
+        (self.on_report)(&r);
+        sh.reports.push(r);
+    }
+
+    fn tell_waiting(&self, sh: &mut Shared, ri: usize) {
+        let r = Report {
+            rule: self.rules[ri].id.clone(),
+            keys: String::new(),
+            ok: false,
+            waiting: true,
+            text: format!(
+                "{} waits for a person: paddock cannot confirm the folder is the run's project",
+                self.rules[ri].name
+            ),
+        };
         (self.on_report)(&r);
         sh.reports.push(r);
     }

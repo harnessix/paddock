@@ -1,0 +1,3 @@
+- New: (experimental) a dsh run in horse mode starts `dsh --profile sdk` instead of `dsh web`. You type prompts in the terminal, and paddock prints the answers. A prompt that you type during a reply waits until the reply is complete. Ctrl-D ends the run after the running turn.
+- New: (experimental) `paddock run dsh --horse-id ID` continues horse ID and resumes its newest dsh session. A horse with no dsh session gets a new one. An unknown horse id, or `--horse-id` with another harness, fails before the run starts.
+- New: (experimental) a dsh run in horse mode with no input, for example with stdin from `/dev/null`, delivers the queued entries and then ends dsh.

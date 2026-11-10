@@ -1,0 +1,41 @@
+#!/bin/sh
+# A fake `dsh --profile sdk` in horse mode that spawns a headless Codex
+# child with a task, waits for it, and then ends.
+set -eu
+if [ "${1:-}" = "--version" ]; then
+    echo 'dsh 0.2.1-rc.5'
+    exit 0
+fi
+[ "$1" = --profile ] && [ "$2" = sdk ]
+IFS= read -r request
+id=$(printf '%s' "$request" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
+printf '{"jsonrpc":"2.0","id":%s,"result":{"serverInfo":{"name":"fake","version":"1"}}}\n' "$id"
+sid=$(paddock-host horse sessions)
+# When the device has no binding, show what it has: the test fails below.
+native=$(paddock-host peek binding | sed -n 's/.*"native_id":"\([^"]*\)".*/\1/p')
+idle() {
+    printf '{"jsonrpc":"2.0","method":"session.status","params":{"sessionId":"%s","status":"idle"}}\n' "$native"
+}
+printf '{"jsonrpc":"2.0","method":"session.event","params":{"sessionId":"%s","event":{"type":"user/message","seq":0,"time":1793000000200,"data":{"content":[{"type":"text","text":"horse test"}],"source":{"kind":"user"},"role":"user","id":"m1"},"surfaceOp":"append"}}}\n' "$native"
+idle
+# The child runs in the background; its end ends this fake.
+trap 'exit 0' TERM
+me=$$
+(
+    trap 'kill -TERM "$me"' EXIT
+    child=$(paddock-host spawn codex --worktree --prompt-file task.md --reason horse-e2e)
+    printf '%s\n' "$child" > child-id.txt
+    paddock-host wait "$child" --timeout 150 > child-wait.txt 2>&1 || true
+) &
+n=0
+while IFS= read -r line; do
+    case "$line" in
+    *'"session/prompt"'*)
+        n=$((n + 1))
+        pid=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
+        printf '{"jsonrpc":"2.0","id":%s,"result":{"messageId":"m-%s"}}\n' "$pid" "$n"
+        idle
+        ;;
+    esac
+done
+wait

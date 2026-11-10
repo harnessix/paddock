@@ -1,0 +1,14 @@
+[
+  {"Turn":{"role":"user","text":"Complete every item and prove each check passes before reporting done."}},
+  {"Turn":{"role":"assistant","text":"I held the database lock while waiting for a slow write to complete."}},
+  {"Turn":{"role":"assistant","text":"The first item has taken over an hour of active work."}},
+  {"Question":"Which branch should receive the change?"},
+  {"Question":"Which branch should receive the change?"},
+  {"Check":{"name":"cargo test","passed":false}},
+  {"Check":{"name":"cargo test","passed":false}},
+  {"Check":{"name":"cargo test","passed":false}},
+  {"Turn":{"role":"assistant","text":"Failure output was base64-encoded; I left it unread."}},
+  {"Status":"done: one item complete; remaining items are pending"},
+  {"Status":"done: one item complete; remaining items are pending"},
+  {"Status":"done: one item complete; remaining items are pending"}
+]

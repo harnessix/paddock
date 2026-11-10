@@ -218,8 +218,8 @@ pub fn load(env: &HostEnv) -> Result<BTreeMap<String, Tool>> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(BTreeMap::new()),
         Err(e) => return Err(e).with_context(|| format!("cannot read {}", file.display())),
     };
-    let doc: toml::Value =
-        toml::from_str(&text).with_context(|| format!("{} is invalid", file.display()))?;
+    let doc: toml::Value = crate::manifest::user_config_doc(&text)
+        .with_context(|| format!("{} is invalid", file.display()))?;
     match doc.get("host").and_then(|h| h.as_table()) {
         Some(h) => parse_host(h).with_context(|| format!("{} is invalid", file.display())),
         None => Ok(BTreeMap::new()),

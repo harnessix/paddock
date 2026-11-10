@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 pub const HELP: &str = r#"paddock-host spawn: start another harness in its own sandbox with one task.
 
   paddock-host spawn HARNESS --prompt-file FILE [--role implementer|reviewer]
-                     [--from-head] [--timeout TIME] [--mem SIZE] [--cpus N]
-                     [--model NAME] [--effort low|medium|high|xhigh]
+                     [--from-head] [--hitch] [--timeout TIME] [--mem SIZE]
+                     [--cpus N] [--model NAME] [--effort low|medium|high|xhigh]
                      [--worktree] [--reason TEXT]
   paddock-host spawn HARNESS --task ID|next [--feature NAME] [OPTIONS]
   paddock-host status [ID]                 one child, or all of them
@@ -32,6 +32,10 @@ and stops when the task is done.
     are. --worktree is the default and the only mode.
   - Tell the child to commit its work. Uncommitted changes stay in its
     worktree, and you cannot see them.
+  - --hitch (horse mode only): the child joins the horse of this run as a
+    new session. When it ends, or when it runs `paddock-host done TEXT`, its
+    result is appended to your session at your next safe point. Without
+    horse mode, --hitch is an error.
   - --role sets fixed limits. implementer (the default): its own writable
     worktree. reviewer: the files are read-only, and it cannot push or change
     anything with gh; use it to review or compare. Under a parent with
@@ -80,9 +84,10 @@ pub(super) fn args(
 ) -> Result<(BTreeMap<String, serde_json::Value>, String, bool), String> {
     // A child always gets a worktree; the flag only says so.
     let from_head = rest.iter().any(|a| a == "--from-head");
+    let hitch = rest.iter().any(|a| a == "--hitch");
     let args: Vec<String> = rest
         .iter()
-        .filter(|a| *a != "--worktree" && *a != "--from-head")
+        .filter(|a| *a != "--worktree" && *a != "--from-head" && *a != "--hitch")
         .cloned()
         .collect();
     let p = super::parse(
@@ -129,6 +134,7 @@ pub(super) fn args(
         a.insert("feature".into(), serde_json::json!(f));
     }
     a.insert("from_head".into(), serde_json::json!(from_head));
+    a.insert("hitch".into(), serde_json::json!(hitch));
     if let Some(r) = p.opts.get("role") {
         let role: crate::spawn::Role = r.parse().map_err(|e| format!("{e:#}"))?;
         a.insert("role".into(), serde_json::json!(role.name()));
@@ -166,6 +172,24 @@ mod tests {
     fn args(v: &[&str]) -> Result<serde_json::Value, String> {
         let v: Vec<String> = v.iter().map(|s| s.to_string()).collect();
         super::args(&v).map(|(a, _, _)| serde_json::to_value(a).unwrap())
+    }
+
+    #[test]
+    fn hitch_and_from_head_flags_reach_the_request() {
+        let rest = [
+            "codex",
+            "--prompt-file",
+            "task.md",
+            "--hitch",
+            "--from-head",
+        ];
+        let a = args(&rest).unwrap();
+        assert_eq!(a["harness"], "codex");
+        assert_eq!(a["hitch"], true);
+        assert_eq!(a["from_head"], true);
+        let a = args(&rest[..3]).unwrap();
+        assert_eq!(a["hitch"], false);
+        assert_eq!(a["from_head"], false);
     }
 
     #[test]

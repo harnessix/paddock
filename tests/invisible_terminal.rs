@@ -1,3 +1,4 @@
+#![cfg(target_os = "linux")]
 //! An invisible terminal end to end: paddock's stdin and stdout are a pty,
 //! Hyprland reports no windows, and `paddock ps --json` says the run has a
 //! view, a relay and activity. A fake harness and temporary folders. No real

@@ -151,3 +151,13 @@ impl Node {
         Ok(())
     }
 }
+
+/// The end of the name of a temporary file: unique per process and per
+/// thread, so two threads that write the same file do not share it.
+pub(super) fn tmp_suffix() -> String {
+    format!(
+        ".paddock-tmp-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    )
+}

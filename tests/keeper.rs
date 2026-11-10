@@ -1,3 +1,4 @@
+#![cfg(target_os = "linux")]
 //! The login keeper end to end, with bwrap: the agent sandbox gets the
 //! Codex login without its refresh token, the keeper refreshes it in a
 //! sandbox of its own before the access token runs out, spends each refresh

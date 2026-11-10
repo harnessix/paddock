@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 
 mod apply;
 pub mod auto;
+mod btrfs;
 pub mod buildcache;
 pub mod buildout;
 pub mod caches;
@@ -22,6 +23,7 @@ mod inventory;
 pub mod layers;
 pub mod merged;
 mod origin;
+pub mod package_cache;
 mod plan;
 mod render;
 mod scan;
