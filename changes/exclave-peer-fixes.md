@@ -1,1 +1,2 @@
-Exclave preserves project-contained tracked symlinks and names escaping links. Peer owners can configure private package mirrors and environment settings, use a dedicated bounded cache volume for persistent Python environments, and allow explicit GPU requests. The peer PATH includes local system tools.
+- Fix: exclave keeps tracked symlinks inside the project and names links that leave it.
+- New: exclave peer owners can set private package mirrors and environment settings, a dedicated bounded cache volume for Python environments, and GPU access for explicit requests. The peer PATH includes local system tools.

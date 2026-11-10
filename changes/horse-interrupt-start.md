@@ -1,1 +1,1 @@
-Fix: Keep an early interrupt until the agy turn starts.
+- Fix: an early interrupt is kept until the agy turn starts.
