@@ -81,7 +81,7 @@ fn serve(protect: &str, cfg_uid: u32, store_uid: u32, helper: Option<Helper>) ->
     let prog = t.path().join("tool");
     std::fs::write(
         &prog,
-        "#!/bin/sh\necho \"token=$GH_TOKEN home=$HOME wrap=${PADDOCK_TACK_WRAP:+yes} secrets=$PADDOCK_TACK_SECRETS git=$GIT_CONFIG_KEY_0\"\n",
+        "#!/bin/sh\nprintf \"%s\\n\" \"token=$GH_TOKEN home=$HOME wrap=${PADDOCK_TACK_WRAP:+yes} secrets=$PADDOCK_TACK_SECRETS git=$GIT_CONFIG_KEY_0\"\n",
     )
     .unwrap();
     std::fs::set_permissions(&prog, std::fs::Permissions::from_mode(0o755)).unwrap();

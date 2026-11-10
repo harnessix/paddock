@@ -62,6 +62,8 @@ fn agy() -> crate::profile::Profile {
 
 fn rule(answer: &str, send: &[&str]) -> Rule {
     Rule {
+        kind: RuleKind::Safe,
+        version: String::new(),
         id: "t".into(),
         name: "Test".into(),
         rows: vec![
@@ -79,13 +81,81 @@ fn rule(answer: &str, send: &[&str]) -> Rule {
 }
 
 #[test]
+fn folder_trust_needs_the_recorded_folder_and_version() {
+    let dir = tempfile::tempdir().unwrap();
+    let other = tempfile::tempdir().unwrap();
+    let mut r = rule("› 1. Trust and continue", &["enter"]);
+    r.kind = RuleKind::FolderTrust;
+    r.version = "1.0".into();
+    r.rows = vec![
+        "Trust folder?".into(),
+        "Folder: {folder}".into(),
+        r.answer.clone(),
+    ];
+    r.check().unwrap();
+    let screen = |p: &std::path::Path| {
+        vec![
+            "Trust folder?".into(),
+            format!("Folder: {}", p.display()),
+            r.answer.clone(),
+        ]
+    };
+    let yes = screen(dir.path());
+    assert!(matches!(find(&[r.clone()], &yes), Found::Rule(0, _)));
+    assert!(folder_allowed(&r, &yes, dir.path()));
+    assert!(!folder_allowed(&r, &screen(other.path()), dir.path()));
+    let watcher = Watcher::with_policy(vec![r.clone()], || false, |_, _| false, |_| {});
+    assert_eq!(
+        watcher.decide(&screen_bytes(&yes.join("\n")), Instant::now()),
+        None
+    );
+    assert_eq!(watcher.reports().len(), 1);
+    assert!(watcher.reports()[0].waiting);
+    watcher.decide(b"", Instant::now());
+    assert_eq!(watcher.reports().len(), 1);
+    r.version.clear();
+    assert!(r.check().is_err());
+}
+
+#[test]
+fn recorded_folder_screens_check_every_path() {
+    let project = tempfile::tempdir().unwrap();
+    let other = tempfile::tempdir().unwrap();
+    for (profile, id) in [
+        (agy(), "agy-folder-trust"),
+        (codex(), "codex-folder-trust"),
+        (codex(), "codex-folder-trust-subdirectory"),
+    ] {
+        let r = profile.screens.rule.iter().find(|r| r.id == id).unwrap();
+        r.check().unwrap();
+        let screen: Vec<String> = r
+            .rows
+            .iter()
+            .map(|s| s.replace("{folder}", &project.path().display().to_string()))
+            .collect();
+        assert!(
+            matches!(find(std::slice::from_ref(r), &screen), Found::Rule(0, _)),
+            "{id}"
+        );
+        assert!(folder_allowed(r, &screen, project.path()), "{id}");
+        let mut outside = screen.clone();
+        let i = r.rows.iter().rposition(|s| s.contains("{folder}")).unwrap();
+        outside[i] = r.rows[i].replace("{folder}", &other.path().display().to_string());
+        assert!(!folder_allowed(r, &outside, project.path()), "{id}");
+    }
+}
+
+#[test]
 fn the_codex_rules_load() {
     let p = codex();
-    assert_eq!(p.screens.rule.len(), 2);
+    assert_eq!(p.screens.rule.len(), 4);
     for r in &p.screens.rule {
         r.check().unwrap();
+        if r.kind == RuleKind::FolderTrust {
+            continue;
+        }
         assert!(!r.always, "{}", r.id);
-        assert_eq!(r.send, ["3"]);
+        assert_eq!(r.send, ["down", "down", "enter"]);
     }
 }
 
@@ -233,10 +303,10 @@ fn the_last_screen_is_trimmed() {
 #[test]
 fn explain_lists_the_rules() {
     let lines = explain(&codex());
-    assert_eq!(lines.len(), 2, "{lines:?}");
-    assert!(lines[0].contains("codex-hooks-review"), "{lines:?}");
-    assert!(lines[0].contains("keys 3"), "{lines:?}");
-    assert!(lines[0].contains("when nobody watches"), "{lines:?}");
+    assert_eq!(lines.len(), 4, "{lines:?}");
+    assert!(lines[2].contains("codex-hooks-review"), "{lines:?}");
+    assert!(lines[2].contains("keys down,down,enter"), "{lines:?}");
+    assert!(lines[2].contains("when nobody watches"), "{lines:?}");
     assert!(explain(&agy())
         .iter()
         .any(|l| l.contains("Individual quota reached")));
@@ -259,7 +329,7 @@ fn the_watcher_answers_and_reports() {
     assert_eq!(w.decide(b"starting\r\n", t0), None);
     assert_eq!(
         w.decide(&screen_bytes(CODEX_HOOKS), t0).as_deref(),
-        Some(&b"3"[..])
+        Some(&b"\x1b[B\x1b[B\r"[..])
     );
     // The screen is still there: no second key while the answer is open.
     assert_eq!(w.decide(b"", t0 + Duration::from_secs(1)), None);
@@ -269,12 +339,43 @@ fn the_watcher_answers_and_reports() {
     assert_eq!(r.len(), 1, "{r:?}");
     assert!(r[0].ok);
     assert_eq!(r[0].rule, "codex-hooks-review");
-    assert_eq!(r[0].keys, "3");
+    assert_eq!(r[0].keys, "down,down,enter");
     assert_eq!(
         r[0].text,
         "answered Codex hooks review: continued without trusting 1 hook"
     );
     assert_eq!(w.reports(), r);
+}
+
+#[test]
+fn declining_codex_hooks_sends_a_mail_event() {
+    let tmp = tempfile::tempdir().unwrap();
+    let env = crate::privfs::tests::env_in(tmp.path());
+    let id = "codex-screen-123abc";
+    crate::mail::create(&env, id, &crate::mail::Starter::host()).unwrap();
+    let spec = crate::spec::SandboxSpec::new(
+        id.into(),
+        "codex",
+        tmp.path(),
+        tmp.path().into(),
+        tmp.path(),
+        env.uid,
+        env.gid,
+        "test",
+    );
+    let e = env.clone();
+    let w = Watcher::new(
+        valid("codex", &codex().screens.rule),
+        || false,
+        move |r| report(&e, &spec, false, r),
+    );
+    let t = Instant::now();
+    assert!(w.decide(&screen_bytes(CODEX_HOOKS), t).is_some());
+    w.decide(&screen_bytes("working\n"), t);
+    let messages = crate::mail::read(&env, id, crate::mail::Dir::Up);
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0].event.as_deref(), Some("hooks-untrusted"));
+    assert!(messages[0].text.contains("SessionStart compaction hook"));
 }
 
 #[test]
@@ -296,7 +397,11 @@ fn a_watched_run_gets_no_answer_unless_the_rule_is_always() {
     let mut rules = valid("codex", &codex().screens.rule);
     let w = Watcher::new(rules.clone(), || true, |_| {});
     assert_eq!(w.decide(&screen_bytes(CODEX_HOOKS), Instant::now()), None);
-    rules[0].always = true;
+    rules
+        .iter_mut()
+        .find(|r| r.id == "codex-hooks-review")
+        .unwrap()
+        .always = true;
     let w = Watcher::new(rules, || true, |_| {});
     assert!(w
         .decide(&screen_bytes(CODEX_HOOKS), Instant::now())

@@ -11,7 +11,7 @@ mod containers;
 mod gc;
 mod homes;
 
-pub(in crate::storage::tests) fn setup() -> (tempfile::TempDir, HostEnv) {
+pub(in crate::storage) fn setup() -> (tempfile::TempDir, HostEnv) {
     let tmp = tempfile::tempdir().unwrap();
     let home = tmp.path().join("home");
     std::fs::create_dir_all(&home).unwrap();
@@ -90,7 +90,7 @@ pub(in crate::storage::tests) fn find<'a>(items: &'a [Item], what: &str) -> Opti
     items.iter().find(|i| i.what.contains(what))
 }
 
-pub(in crate::storage::tests) fn home(path: &str, harness: &str) -> Home {
+pub(in crate::storage) fn home(path: &str, harness: &str) -> Home {
     Home {
         path: PathBuf::from(path),
         harness: harness.into(),
@@ -109,7 +109,7 @@ pub(in crate::storage::tests) fn home(path: &str, harness: &str) -> Home {
     }
 }
 
-pub(in crate::storage::tests) fn inventory(homes: Vec<Home>) -> Inventory {
+pub(in crate::storage) fn inventory(homes: Vec<Home>) -> Inventory {
     Inventory {
         size_kind: SizeKind::Allocated,
         homes,
@@ -126,6 +126,8 @@ pub(in crate::storage::tests) fn inventory(homes: Vec<Home>) -> Inventory {
         tmpfs_caches: true,
         classes: vec![],
         layers: vec![],
+        build_caches: vec![],
+        mailboxes: vec![],
     }
 }
 

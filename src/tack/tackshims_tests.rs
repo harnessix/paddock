@@ -35,10 +35,13 @@ fn a_stand_in_runs_paddock_and_falls_back_to_the_next_program() {
     let t = tempfile::tempdir().unwrap();
     let own = t.path().join("shims");
     let real = t.path().join("real");
-    exe(&real.join("gh"), "#!/bin/sh\necho real-gh \"$@\"\n");
+    exe(
+        &real.join("gh"),
+        "#!/bin/sh\nprintf \"%s\\n\" \"real-gh $*\"\n",
+    );
     // A fake paddock that shows what it got.
     let paddock = t.path().join("paddock");
-    exe(&paddock, "#!/bin/sh\necho paddock \"$@\"\n");
+    exe(&paddock, "#!/bin/sh\nprintf \"%s\\n\" \"paddock $*\"\n");
     write_shims(&own, &["gh".into()], &paddock.display().to_string()).unwrap();
     let shim = own.join("gh");
     assert!(is_shim(&shim));
@@ -106,7 +109,7 @@ fn the_path_line_puts_the_folder_first_once() {
     let d = t.path().join("with space");
     std::fs::create_dir_all(&d).unwrap();
     let line = sh_line(&d);
-    let script = format!("PATH=/usr/bin\n{line}\n{line}\necho \"$PATH\"\n");
+    let script = format!("PATH=/usr/bin\n{line}\n{line}\nprintf \"%s\\n\" \"$PATH\"\n");
     let out = std::process::Command::new("/bin/sh")
         .args(["-c", &script])
         .output()

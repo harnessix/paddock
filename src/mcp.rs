@@ -16,6 +16,10 @@
 //! another repository's `node_modules`, needs `[mcp] allow`, which a project
 //! `paddock.toml` can only set with the user's approval.
 
+pub mod diet;
+#[cfg(test)]
+mod precedence_tests;
+
 use crate::env::HostEnv;
 use crate::manifest::Manifest;
 use crate::profile::{install_root, is_system_path, runtime_closure, Profile, HOME_BIN_DIRS};
@@ -34,6 +38,8 @@ pub struct Server {
     /// The definition comes from a file in the host home, not from the
     /// project, which the sandbox can write.
     pub trusted: bool,
+    /// Complete definition, used to distinguish servers with different settings.
+    pub definition: serde_json::Value,
 }
 
 #[derive(Debug, Clone)]
@@ -102,8 +108,25 @@ pub fn servers(env: &HostEnv, profile: &Profile, project: &Path) -> Vec<Server> 
             continue;
         };
         for (name, def) in table {
+            let mut definition = def.clone();
+            let mut trusted = !src.in_project;
+            if profile.name == "codex" && src.in_project {
+                if let Some(previous) = out.iter().find(|s| s.name == *name) {
+                    if let (Some(base), Some(overrides)) =
+                        (previous.definition.as_object(), def.as_object())
+                    {
+                        let mut fields = base.clone();
+                        fields.extend(overrides.clone());
+                        definition = serde_json::Value::Object(fields);
+                        // Project-provided command or arguments receive the narrow trust rule.
+                        trusted = previous.trusted
+                            && !overrides.contains_key("command")
+                            && !overrides.contains_key("args");
+                    }
+                }
+            }
             // Command as a string (claude, codex, gemini) or as an array (opencode).
-            let (command, mut args) = match def.get("command") {
+            let (command, mut args) = match definition.get("command") {
                 Some(serde_json::Value::String(c)) => (Some(c.clone()), vec![]),
                 Some(serde_json::Value::Array(a)) => {
                     let parts: Vec<String> = a
@@ -117,12 +140,15 @@ pub fn servers(env: &HostEnv, profile: &Profile, project: &Path) -> Vec<Server> 
                 }
                 _ => (None, vec![]),
             };
-            if let Some(a) = def.get("args").and_then(|a| a.as_array()) {
+            if let Some(a) = definition.get("args").and_then(|a| a.as_array()) {
                 args.extend(a.iter().filter_map(|x| x.as_str().map(str::to_string)));
             }
-            let url = ["url", "httpUrl", "serverUrl"]
-                .iter()
-                .find_map(|k| def.get(*k).and_then(|u| u.as_str()).map(str::to_string));
+            let url = ["url", "httpUrl", "serverUrl"].iter().find_map(|k| {
+                definition
+                    .get(*k)
+                    .and_then(|u| u.as_str())
+                    .map(str::to_string)
+            });
             out.retain(|s| s.name != *name);
             out.push(Server {
                 name: name.clone(),
@@ -130,7 +156,8 @@ pub fn servers(env: &HostEnv, profile: &Profile, project: &Path) -> Vec<Server> 
                 command,
                 args,
                 url,
-                trusted: !src.in_project,
+                trusted,
+                definition,
             });
         }
     }
@@ -471,6 +498,7 @@ mod tests {
             args: args.iter().map(|a| a.to_string()).collect(),
             url: None,
             trusted: true,
+            definition: serde_json::Value::Null,
         }
     }
 

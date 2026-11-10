@@ -1,3 +1,4 @@
+#![cfg(target_os = "linux")]
 //! The machine identity that a bwrap sandbox sees: two isolated logins read
 //! different machine IDs, one isolated login reads the same one at every
 //! start, and a shared login reads the host's. Temporary folders only; the

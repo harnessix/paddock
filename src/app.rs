@@ -323,8 +323,8 @@ pub fn app_args(profile: &Profile, roots: &[PathBuf], extra: &[String]) -> Vec<S
 }
 
 pub fn run(env: &HostEnv, o: &AppOptions) -> Result<i32> {
-    // macOS: Seatbelt instead of bwrap, Wayland and D-Bus.
-    #[cfg(target_os = "macos")]
+    crate::storage::guard::before_run(env, o.roots.first().map(PathBuf::as_path), false)?;
+    #[cfg(target_os = "macos")] // Seatbelt instead of bwrap, Wayland and D-Bus.
     return crate::backend::seatbelt::run_app(env, o);
     #[cfg(not(target_os = "macos"))]
     run_linux(env, o)
@@ -381,14 +381,14 @@ fn run_linux(env: &HostEnv, o: &AppOptions) -> Result<i32> {
 /// After the app exits: print what it left in its worktree, and send a
 /// notification when no terminal shows the text (a launcher start).
 fn report_worktree(env: &HostEnv, name: &str, w: &build::Worktree) {
-    eprintln!("\n{}", build::worktree_report(env, w));
-    if std::io::IsTerminal::is_terminal(&std::io::stderr()) {
+    let (report, removed) = crate::worktree::finish(env, w);
+    eprintln!("\n{report}");
+    if removed || std::io::IsTerminal::is_terminal(&std::io::stderr()) {
         return;
     }
     let (commits, changed) = build::worktree_counts(env, w);
     let note = worktree_note(name, w, commits, changed);
-    // The Merge and Remove buttons. A server without actions shows the text
-    // only, and the notification closes without an answer.
+    // The Merge and Remove buttons. Without actions, only the text shows.
     let (tx, rx) = std::sync::mpsc::channel::<String>();
     let shown = crate::broker::notify::ask(env, &note, move |key| {
         let _ = tx.send(key.to_string());

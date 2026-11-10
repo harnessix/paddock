@@ -29,7 +29,7 @@ fn world() -> W {
     std::fs::create_dir(&bin).unwrap();
     exe(
         &bin.join("show"),
-        "#!/bin/sh\necho \"token=$GH_TOKEN other=$OTHER args=$* argv0=$0\"\n",
+        "#!/bin/sh\nprintf \"%s\\n\" \"token=$GH_TOKEN other=$OTHER args=$* argv0=$0\"\n",
     );
     for n in ["show", "missing"] {
         std::os::unix::fs::symlink(env!("CARGO_BIN_EXE_paddock"), wrap.join(n)).unwrap();

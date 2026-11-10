@@ -206,7 +206,8 @@ impl Ledger {
 pub type Handler = std::sync::Arc<dyn Fn(Request) -> Response + Send + Sync>;
 
 /// The largest request: the same limit as the broker socket.
-pub const MAX_REQUEST: usize = 64 * 1024;
+/// A mail message (64 KiB of text, JSON-escaped) must fit.
+pub const MAX_REQUEST: usize = 512 * 1024;
 /// The largest response, for example the output of a command.
 pub const MAX_RESPONSE: usize = 8 << 20;
 

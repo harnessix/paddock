@@ -662,3 +662,124 @@ fn a_zero_idle_timeout_never_stops_the_run() {
     assert_eq!(stops.load(Ordering::SeqCst), 0);
     assert!(idle_since(&env, id).is_some());
 }
+
+#[test]
+fn cursor_redraws_do_not_keep_a_static_pane_busy() {
+    let t = tempfile::tempdir().unwrap();
+    let env = env_in(t.path());
+    let Some(tmux) = Tmux::find(&env) else { return };
+    let _server = Server(tmux.clone());
+    write_idle_cfg(&env, "2s", "0");
+    let id = "idle-cursor";
+    quiet_session(
+        &tmux,
+        id,
+        "printf 'ready'; while :; do printf '\\033[?25l\\033[?25h'; sleep 1; done",
+    );
+    record(&env, id);
+    let (c, _) = ctl(&env, id);
+    c.watch(Vec::new());
+    until(
+        "idle despite cursor redraws",
+        Duration::from_secs(8),
+        || idle_since(&env, id).is_some(),
+    );
+}
+
+#[test]
+fn quiet_run_without_mail_reports_idle_once_with_status() {
+    let t = tempfile::tempdir().unwrap();
+    let env = env_in(t.path());
+    let Some(tmux) = Tmux::find(&env) else { return };
+    let _server = Server(tmux.clone());
+    write_idle_cfg(&env, "2s", "0");
+    let id = "idle-mail";
+    crate::mail::create(&env, id, &crate::mail::Starter::host()).unwrap();
+    crate::mail::append(
+        &env,
+        id,
+        crate::mail::Dir::Up,
+        crate::mail::Message::new(
+            crate::mail::FROM_AGENT,
+            crate::mail::Kind::Status,
+            "working",
+        ),
+    )
+    .unwrap();
+    quiet_session(&tmux, id, "printf ready; exec sleep 60");
+    record(&env, id);
+    let (c, _) = ctl(&env, id);
+    c.watch(Vec::new());
+    until("idle mail", Duration::from_secs(12), || {
+        crate::mail::read(&env, id, crate::mail::Dir::Up)
+            .iter()
+            .any(|m| m.event.as_deref() == Some("idle"))
+    });
+    std::thread::sleep(Duration::from_secs(3));
+    let events: Vec<_> = crate::mail::read(&env, id, crate::mail::Dir::Up)
+        .into_iter()
+        .filter(|m| m.event.as_deref() == Some("idle"))
+        .collect();
+    assert_eq!(events.len(), 1);
+    assert!(events[0].text.contains("last status: working"));
+}
+
+#[test]
+fn a_fake_tui_clock_does_not_prevent_idle() {
+    let t = tempfile::tempdir().unwrap();
+    let env = env_in(t.path());
+    let Some(tmux) = Tmux::find(&env) else { return };
+    let _server = Server(tmux.clone());
+    write_idle_cfg(&env, "2s", "0");
+    let id = "idle-clock";
+    quiet_session(
+        &tmux,
+        id,
+        "while :; do printf '\\rready 12:30:%02d' $(( $(date +%s) % 60 )); sleep 1; done",
+    );
+    record(&env, id);
+    let (c, _) = ctl(&env, id);
+    c.watch(Vec::new());
+    until("idle despite clock", Duration::from_secs(12), || {
+        idle_since(&env, id).is_some()
+    });
+}
+
+#[test]
+fn a_done_status_ends_a_fake_tui_after_grace() {
+    let t = tempfile::tempdir().unwrap();
+    let env = env_in(t.path());
+    let Some(tmux) = Tmux::find(&env) else { return };
+    let _server = Server(tmux.clone());
+    std::fs::create_dir_all(env.paddock_config()).unwrap();
+    std::fs::write(
+        env.paddock_config().join("config.toml"),
+        "[mail]\nend_after_done = \"2s\"\n",
+    )
+    .unwrap();
+    let id = "mail-done-pane";
+    crate::mail::create(&env, id, &crate::mail::Starter::host()).unwrap();
+    quiet_session(&tmux, id, "printf ready; exec sleep 60");
+    record(&env, id);
+    let (c, stops) = ctl(&env, id);
+    c.watch(Vec::new());
+    crate::mail::append(
+        &env,
+        id,
+        crate::mail::Dir::Up,
+        crate::mail::Message::new(
+            crate::mail::FROM_AGENT,
+            crate::mail::Kind::Status,
+            "done: complete",
+        ),
+    )
+    .unwrap();
+    until("done event", Duration::from_secs(10), || {
+        crate::mail::read(&env, id, crate::mail::Dir::Up)
+            .iter()
+            .any(|m| m.event.as_deref() == Some("done"))
+    });
+    until("done stop", Duration::from_secs(10), || {
+        stops.load(Ordering::SeqCst) == 1
+    });
+}

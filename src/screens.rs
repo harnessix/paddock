@@ -12,8 +12,8 @@
 //! - A rule names whole trimmed rows of the visible screen, the same way
 //!   as the training rules (training.rs). The block must be on screen
 //!   exactly once. `{n}` in a row stands for a number.
-//! - The answer must not grant anything: a rule whose answer row trusts,
-//!   approves, accepts, allows, agrees or logs in fails to load. The keys
+//! - Ordinary rules must not grant anything. A folder-trust rule can grant
+//!   trust only for the project named on the screen. The keys
 //!   must choose the answer row: a digit key names its number, a lone
 //!   `enter` needs the focus on it.
 //! - In a run that the user watches, paddock answers only the rules marked
@@ -48,6 +48,12 @@ pub struct Screens {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Rule {
+    /// Trust rules must identify the folder on the screen.
+    #[serde(default)]
+    pub kind: RuleKind,
+    /// Version from which the screen was recorded.
+    #[serde(default)]
+    pub version: String,
     /// Names the rule in the audit log, for example `codex-hooks-review`.
     pub id: String,
     /// The screen in plain words, for the notes: `Codex hooks review`.
@@ -65,6 +71,14 @@ pub struct Rule {
     /// Answer also in a run that the user watches.
     #[serde(default)]
     pub always: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuleKind {
+    #[default]
+    Safe,
+    FolderTrust,
 }
 
 /// `[[screens.error]]`: a message on the screen and what it means.
@@ -149,7 +163,32 @@ impl Rule {
         if !self.rows.contains(&self.answer) {
             bail!("screen rule {id}: the answer must be one of the rows");
         }
-        if grants(&self.answer) {
+        if self.kind == RuleKind::FolderTrust {
+            let words = self.answer.to_lowercase();
+            let safe_words = words
+                .split(|c: char| !c.is_alphabetic())
+                .filter(|w| !w.is_empty())
+                .all(|w| {
+                    matches!(
+                        w,
+                        "yes" | "i" | "trust" | "this" | "folder" | "project" | "and" | "continue"
+                    )
+                });
+            if self.version.trim().is_empty()
+                || self
+                    .rows
+                    .iter()
+                    .map(|r| r.matches("{folder}").count())
+                    .sum::<usize>()
+                    == 0
+                || !self.answer.to_lowercase().contains("trust")
+                || !safe_words
+            {
+                bail!(
+                    "screen rule {id}: folder trust needs a version, a folder and a trust answer"
+                );
+            }
+        } else if grants(&self.answer) {
             bail!(
                 "screen rule {id}: the answer {:?} grants trust, an approval, terms or a login. paddock never chooses that",
                 self.answer
@@ -163,6 +202,11 @@ impl Rule {
         }
         let last = self.send.last().map(String::as_str).unwrap_or("");
         let digit = last.len() == 1 && last.as_bytes()[0].is_ascii_digit();
+        if self.kind == RuleKind::FolderTrust
+            && (self.send.len() != 1 || (!digit && last != "enter"))
+        {
+            bail!("screen rule {id}: folder trust needs a digit or focused enter");
+        }
         if digit {
             let c = choice(&self.answer);
             if !c.starts_with(&format!("{last}.")) && !c.starts_with(&format!("{last})")) {
@@ -201,6 +245,10 @@ pub fn valid(profile: &str, rules: &[Rule]) -> Vec<Rule> {
 /// for `{n}`.
 fn row_match(pat: &str, row: &str) -> Option<Option<u64>> {
     let row = row.trim();
+    if let Some((pre, post)) = pat.split_once("{folder}") {
+        let folder = row.strip_prefix(pre)?.strip_suffix(post)?;
+        return (!folder.is_empty()).then_some(None);
+    }
     match pat.split_once("{n}") {
         None => (row == pat).then_some(None),
         Some((pre, post)) => {
@@ -216,30 +264,22 @@ fn row_match(pat: &str, row: &str) -> Option<Option<u64>> {
 /// Where a block of patterns is in `rows`: the number for `{n}` when it is
 /// there exactly once. `Err(())` when it is there more than once.
 fn find_pattern(rows: &[String], block: &[String]) -> Result<Option<Option<u64>>, ()> {
-    if !block.iter().any(|b| b.contains("{n}")) {
+    if !block
+        .iter()
+        .any(|b| b.contains("{n}") || b.contains("{folder}"))
+    {
         return match find_block(rows, block) {
             Some(Some(_)) => Ok(Some(None)),
             Some(None) => Err(()),
             None => Ok(None),
         };
     }
-    if block.is_empty() || block.len() > rows.len() {
+    if block.is_empty() {
         return Ok(None);
     }
     let mut found = None;
-    for start in 0..=rows.len() - block.len() {
-        let mut n = None;
-        let hit = rows[start..start + block.len()]
-            .iter()
-            .zip(block)
-            .all(|(r, b)| match row_match(b, r) {
-                Some(v) => {
-                    n = n.or(v);
-                    true
-                }
-                None => false,
-            });
-        if hit {
+    for start in 0..rows.len() {
+        if let Some((n, _)) = match_block(rows, block, start) {
             if found.is_some() {
                 return Err(());
             }
@@ -247,6 +287,88 @@ fn find_pattern(rows: &[String], block: &[String]) -> Result<Option<Option<u64>>
         }
     }
     Ok(found)
+}
+
+/// Match long prose across terminal wraps, while keeping choice and path
+/// rows exact. Return the screen row used for each pattern.
+fn match_block(
+    rows: &[String],
+    block: &[String],
+    start: usize,
+) -> Option<(Option<u64>, Vec<usize>)> {
+    let mut pos = start;
+    let mut number = None;
+    let mut positions = Vec::new();
+    for pattern in block {
+        positions.push(pos);
+        let row = rows.get(pos)?;
+        if let Some(n) = row_match(pattern, row) {
+            number = number.or(n);
+            pos += 1;
+            continue;
+        }
+        if pattern.len() < 60 || pattern.contains('{') {
+            return None;
+        }
+        let compact = |s: &str| s.chars().filter(|c| !c.is_whitespace()).collect::<String>();
+        let expected = compact(pattern);
+        let mut actual = String::new();
+        loop {
+            actual.push_str(&compact(rows.get(pos)?));
+            pos += 1;
+            if actual == expected {
+                break;
+            }
+            if !expected.starts_with(&actual) {
+                return None;
+            }
+        }
+    }
+    Some((number, positions))
+}
+
+/// The folder named by a matched trust screen. Only absolute, existing
+/// paths that resolve to the run's project are eligible for trust.
+fn folder_allowed(rule: &Rule, rows: &[String], project: &std::path::Path) -> bool {
+    let Some(project) = std::fs::canonicalize(project).ok() else {
+        return false;
+    };
+    let folders: Vec<_> = rule
+        .rows
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| r.contains("{folder}"))
+        .collect();
+    if folders.is_empty() {
+        return false;
+    }
+    // Inspect only the rows in the uniquely matched block, so another path
+    // elsewhere on the terminal cannot stand in for a folder in the dialog.
+    let visible: Vec<_> = rows
+        .iter()
+        .filter(|r| !r.trim().is_empty())
+        .cloned()
+        .collect();
+    let matches: Vec<_> = (0..visible.len())
+        .filter_map(|start| match_block(&visible, &rule.rows, start))
+        .collect();
+    if matches.len() != 1 {
+        return false;
+    }
+    folders.into_iter().all(|(i, pattern)| {
+        let Some((pre, post)) = pattern.split_once("{folder}") else {
+            return false;
+        };
+        let Some(folder) = visible[matches[0].1[i]]
+            .trim()
+            .strip_prefix(pre)
+            .and_then(|r| r.strip_suffix(post))
+        else {
+            return false;
+        };
+        let path = std::path::Path::new(folder);
+        path.is_absolute() && std::fs::canonicalize(path).is_ok_and(|p| p == project)
+    })
 }
 
 /// What a screen shows.
@@ -364,9 +486,11 @@ pub fn prepare(
     let watched =
         move || detached && crate::view::Tmux::find(&e).is_some_and(|t| t.write_clients(&id) > 0);
     let (env, spec) = (env.clone(), spec.clone());
-    Some(live::Watcher::new(
+    let project = spec.project.clone();
+    Some(live::Watcher::with_policy(
         rules,
         watched,
+        move |r, rows| r.kind != RuleKind::FolderTrust || folder_allowed(r, rows, &project),
         move |r: &live::Report| report(&env, &spec, detached, r),
     ))
 }
@@ -380,6 +504,22 @@ fn report(
     r: &live::Report,
 ) {
     log::info!("{}", r.text);
+    if r.waiting {
+        let _ = crate::mail::append(
+            env,
+            &spec.id,
+            crate::mail::Dir::Up,
+            crate::mail::Message::event("trust-screen", &r.text),
+        );
+    }
+    if r.ok && spec.harness == "codex" && r.rule.starts_with("codex-hooks-review") {
+        let _ = crate::mail::append(
+            env,
+            &spec.id,
+            crate::mail::Dir::Up,
+            crate::mail::Message::event("hooks-untrusted", "Codex continued without trusting the changed hooks. Those hooks will not run; if paddock's SessionStart compaction hook is among them, its context will not be restored after compaction."),
+        );
+    }
     crate::broker::audit_line(
         env,
         &serde_json::json!({

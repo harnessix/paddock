@@ -9,15 +9,18 @@
 mod common;
 
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+#[cfg(target_os = "linux")]
+use std::process::Child;
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-/// The fake harness: `$0` is the prompt file (`[detach] args`). It records
-/// what it got in the project, then acts on the task.
+/// The fake harness: `$0` is the prompt file (`[detach] args`). Its first
+/// line is the task; the mailbox reminder follows. It records what it got
+/// in the project, then acts on the task.
 const SCRIPT: &str = r#"f="$0"
 if test -t 0 && test -t 1; then tty=yes; else tty=no; fi
-{ echo "tty $tty"; test -r "$f" && echo "readable"; echo "task $(cat "$f")"; } > .detach-result
-case "$(cat "$f")" in
+{ echo "tty $tty"; test -r "$f" && echo "readable"; echo "task $(head -n1 "$f")"; grep -c "paddock-host mail wait" "$f"; } > .detach-result
+case "$(head -n1 "$f")" in
   ok) paddock-host done --status ok "all good" ;;
   failed) paddock-host done --status failed "it broke" ;;
   late) while [ ! -e .go ]; do sleep 0.2; done; paddock-host done "late but fine" ;;
@@ -114,11 +117,15 @@ impl World {
         );
         let text = String::from_utf8(out.stdout).unwrap();
         let lines: Vec<&str> = text.lines().collect();
-        assert_eq!(lines.len(), 2, "{text}");
+        assert_eq!(lines.len(), 3, "{text}");
         let id = lines[0].to_string();
         assert_eq!(
             lines[1],
             format!("paddock view {} --write", paddock::ids::short(&id))
+        );
+        assert_eq!(
+            lines[2],
+            format!("mail: paddock mail watch {}", paddock::ids::short(&id))
         );
         assert!(self.has_session(&id), "no tmux session {id}");
         id
@@ -170,6 +177,7 @@ impl World {
     }
 
     /// A client with write access, in control mode: it needs no terminal.
+    #[cfg(target_os = "linux")]
     fn attach(&self, id: &str) -> Child {
         self.tmux()
             .args(["-C", "attach", "-t", id])
@@ -180,6 +188,7 @@ impl World {
             .unwrap()
     }
 
+    #[cfg(target_os = "linux")]
     fn result(&self) -> String {
         let f = self.root.join("project/.detach-result");
         let start = Instant::now();
@@ -198,12 +207,14 @@ impl World {
     }
 
     /// `[detach]` and `[view]` in the user configuration, not the harness profile.
+    #[cfg(target_os = "linux")]
     fn user_config(&self, text: &str) {
         let dir = self.root.join("cfg/paddock");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("config.toml"), text).unwrap();
     }
 
+    #[cfg(target_os = "linux")]
     fn sandbox(&self, id: &str) -> serde_json::Value {
         let out = self.paddock().args(["ps", "--json"]).output().unwrap();
         assert!(out.status.success(), "{out:?}");
@@ -215,6 +226,7 @@ impl World {
     }
 
     /// Poll until `ps --json` reports `idle_since` for this run.
+    #[cfg(target_os = "linux")]
     fn wait_idle(&self, id: &str) -> u64 {
         let start = Instant::now();
         loop {
@@ -231,6 +243,7 @@ impl World {
         }
     }
 
+    #[cfg(target_os = "linux")]
     fn messages(&self) -> String {
         let out = self.tmux().args(["show-messages"]).output().unwrap();
         format!(
@@ -305,6 +318,7 @@ fn detach_starts_a_session_on_the_private_socket_and_returns() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn done_ends_the_run_and_wait_reports_it() {
     if !common::bwrap_works() || !has_tmux() {
         eprintln!("skipped: needs bwrap with a user namespace and tmux");
@@ -318,7 +332,23 @@ fn done_ends_the_run_and_wait_reports_it() {
     let r = w.result();
     assert!(r.contains("tty yes"), "{r}");
     assert!(r.contains("readable"), "{r}");
-    assert!(r.contains("task ok"), "{r}");
+    assert!(
+        r.contains("task ok\n1\n"),
+        "the prompt ends with the mailbox reminder: {r}"
+    );
+    // The mailbox saw the run from its start to its end.
+    let out = w
+        .paddock()
+        .args(["mail", "watch", &id, "--timeout", "20s"])
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert!(text.contains("event started:"), "{text}");
+    assert!(
+        text.contains("event ended: the sandbox ended with exit code"),
+        "{text}"
+    );
 
     let w = World::new(true);
     let id = w.detach("failed");
@@ -328,6 +358,7 @@ fn done_ends_the_run_and_wait_reports_it() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn ps_marks_the_run_and_wait_times_out() {
     if !common::bwrap_works() || !has_tmux() {
         eprintln!("skipped: needs bwrap with a user namespace and tmux");
@@ -354,6 +385,7 @@ fn ps_marks_the_run_and_wait_times_out() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn wait_and_stop_take_the_short_id() {
     if !common::bwrap_works() || !has_tmux() {
         eprintln!("skipped: needs bwrap with a user namespace and tmux");
@@ -430,6 +462,7 @@ fn a_short_id_that_fits_no_sandbox_fails() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn a_write_client_keeps_the_run_open_after_done() {
     if !common::bwrap_works() || !has_tmux() {
         eprintln!("skipped: needs bwrap with a user namespace and tmux");
@@ -452,6 +485,7 @@ fn a_write_client_keeps_the_run_open_after_done() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn a_quiet_pane_becomes_idle_and_then_ends() {
     if !common::bwrap_works() || !has_tmux() {
         eprintln!("skipped: needs bwrap with a user namespace and tmux");
@@ -473,6 +507,7 @@ fn a_quiet_pane_becomes_idle_and_then_ends() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn output_before_the_idle_timeout_clears_the_idle_state() {
     if !common::bwrap_works() || !has_tmux() {
         eprintln!("skipped: needs bwrap with a user namespace and tmux");
@@ -502,6 +537,7 @@ fn output_before_the_idle_timeout_clears_the_idle_state() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn a_write_client_keeps_an_idle_run_and_hears_about_it() {
     if !common::bwrap_works() || !has_tmux() {
         eprintln!("skipped: needs bwrap with a user namespace and tmux");
@@ -541,6 +577,7 @@ fn a_write_client_keeps_an_idle_run_and_hears_about_it() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn idle_timeout_zero_never_ends_the_run() {
     if !common::bwrap_works() || !has_tmux() {
         eprintln!("skipped: needs bwrap with a user namespace and tmux");
@@ -563,6 +600,7 @@ fn idle_timeout_zero_never_ends_the_run() {
 }
 
 /// The Codex hooks review screen and its safe answer, as in codex.toml.
+#[cfg(target_os = "linux")]
 const SCREEN_RULE: &str = r#"
 [[screens.rule]]
 id = "codex-hooks-review"
@@ -582,6 +620,7 @@ rows = [
 "#;
 
 #[test]
+#[cfg(target_os = "linux")]
 fn a_detached_run_answers_a_known_start_screen_and_records_it() {
     if !common::bwrap_works() || !has_tmux() {
         eprintln!("skipped: needs bwrap with a user namespace and tmux");

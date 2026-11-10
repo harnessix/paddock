@@ -56,7 +56,13 @@ fn project(t: &Path, cache: &str) -> (HostEnv, PathBuf) {
     let env = test_env(t);
     let proj = t.join("proj");
     std::fs::create_dir_all(&proj).unwrap();
-    mount_with(&env, &proj, cache, "/h/c".into(), "t", true).unwrap();
+    if cache == "npm" {
+        mount_with(&env, &proj, "pip", "/h/c".into(), "t", true).unwrap();
+        std::fs::create_dir_all(upper(&env, &proj, cache)).unwrap();
+        std::fs::create_dir_all(lower(&env, cache)).unwrap();
+    } else {
+        mount_with(&env, &proj, cache, "/h/c".into(), "t", true).unwrap();
+    }
     (env, proj)
 }
 

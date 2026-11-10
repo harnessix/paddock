@@ -377,6 +377,7 @@ fn start(env: &HostEnv, plan: Plan) -> Result<i32> {
         }
         None => HarnessFactory::new(env)?.create(&plan.profile)?,
     };
+    crate::storage::guard::before_run(env, plan.opts.project.as_deref(), false)?;
     let mut built = build::build_with(env, &plan.opts, harness)?;
     if plan.scratch {
         built.spec.notices.push(format!(

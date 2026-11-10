@@ -190,7 +190,7 @@ fn wait_ended(t: &Tackd) {
 #[test]
 fn the_program_gets_the_value_arguments_folder_and_its_exit_code() {
     let t = tackd(
-        "#!/bin/sh\necho \"token=$GH_TOKEN keep=$KEEP preload=${LD_PRELOAD-unset} pwd=$(pwd) args=$*\"\necho to-stderr >&2\nexit 7\n",
+        "#!/bin/sh\nprintf \"%s\\n\" \"token=$GH_TOKEN keep=$KEEP preload=${LD_PRELOAD-unset} pwd=$(pwd) args=$*\"\nprintf \"%s\\n\" to-stderr >&2\nexit 7\n",
     );
     let (o, out) = run_piped(&t, &["pr", "list x"], None, &mut |_| {}, pipe());
     assert_eq!(o, Outcome::Exited(7));
@@ -243,7 +243,7 @@ fn a_binary_starts_from_the_checked_file_with_its_name() {
 fn a_program_that_changed_after_the_check_does_not_start() {
     let t = tackd("#!/bin/sh\nexit 0\n");
     // The allowlist pins the old content: the decision denies.
-    std::fs::write(&t.prog, "#!/bin/sh\necho other\n").unwrap();
+    std::fs::write(&t.prog, "#!/bin/sh\nprintf \"%s\\n\" other\n").unwrap();
     let s = UnixStream::connect(&t.sock).unwrap();
     let o = session(&s, &req(&t, &[], [false; 3]), &[], None, &mut |_| {}).unwrap();
     let Outcome::Denied(d) = o else {
@@ -259,7 +259,7 @@ fn a_program_that_changed_after_the_check_does_not_start() {
 #[test]
 fn a_signal_goes_to_the_program_and_its_exit_code_comes_back() {
     let t = tackd(
-        "#!/bin/sh\ntrap 'echo got-term; exit 42' TERM\necho ready\nwhile :; do sleep 0.05; done\n",
+        "#!/bin/sh\ntrap 'printf \"%s\\n\" got-term; exit 42' TERM\nprintf \"%s\\n\" ready\nwhile :; do sleep 0.05; done\n",
     );
     let (sr, sw) = pipe();
     let (r, w) = pipe();
@@ -322,7 +322,9 @@ fn death_by_signal_is_reported_exactly() {
 
 #[test]
 fn a_stop_reaches_the_stand_in_and_a_continue_reaches_the_program() {
-    let t = tackd("#!/bin/sh\necho before\nkill -STOP $$\necho after\nexit 3\n");
+    let t = tackd(
+        "#!/bin/sh\nprintf \"%s\\n\" before\nkill -STOP $$\nprintf \"%s\\n\" after\nexit 3\n",
+    );
     let (sr, sw) = pipe();
     let mut sw = std::fs::File::from(sw);
     let mut stops = Vec::new();
@@ -345,7 +347,7 @@ fn a_stop_reaches_the_stand_in_and_a_continue_reaches_the_program() {
 #[test]
 fn the_program_reads_and_writes_the_callers_terminal() {
     let t = tackd(
-        "#!/bin/sh\n[ -t 0 ] && [ -t 1 ] && echo is-a-tty\nstty size\ntrap 'stty size; exit 5' WINCH\nread line\necho \"got:$line\"\nwhile :; do sleep 0.05; done\n",
+        "#!/bin/sh\n[ -t 0 ] && [ -t 1 ] && printf \"%s\\n\" is-a-tty\nstty size\ntrap 'stty size; exit 5' WINCH\nread line\nprintf \"%s\\n\" \"got:$line\"\nwhile :; do sleep 0.05; done\n",
     );
     let mut master = 0;
     let mut slave = 0;
@@ -457,7 +459,7 @@ fn streams_that_do_not_match_the_request_start_nothing() {
 
 #[test]
 fn a_stand_in_that_dies_takes_the_program_with_it() {
-    let t = tackd("#!/bin/sh\necho $$ > pid\nwhile :; do sleep 0.05; done\n");
+    let t = tackd("#!/bin/sh\nprintf \"%s\\n\" $$ > pid\nwhile :; do sleep 0.05; done\n");
     let s = UnixStream::connect(&t.sock).unwrap();
     let r = req(&t, &[], [false; 3]);
     let bytes = frame(&Request::Start(r)).unwrap();

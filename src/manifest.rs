@@ -21,10 +21,12 @@ pub const PROJECT_FILE: &str = "paddock.toml";
 /// (gatewayd.rs), `[storage]` (storage/dedupe.rs), `[snapshot]`
 /// (snapshot.rs), `[profiles]` (shadow.rs), `[detach]` (detach.rs),
 /// `[compaction]` (compaction.rs), `[hooks]` (hooks.rs), `[speckit]`
-/// (speckit.rs), `[loft]` (loft.rs), `[tack]` (tack/config.rs). A project
+/// (speckit.rs), `[loft]` (loft.rs), `[horse]` (horse/live.rs), and
+/// `[tack]` (tack/config.rs). A project
 /// `paddock.toml` with one of them is invalid.
 pub const USER_ONLY: &[&str] = &[
     "devices",
+    "memory",
     "kv",
     "exec",
     "pastures",
@@ -33,6 +35,7 @@ pub const USER_ONLY: &[&str] = &[
     "status",
     "monitor",
     "storage",
+    "cache",
     "snapshot",
     "view",
     "profiles",
@@ -42,8 +45,16 @@ pub const USER_ONLY: &[&str] = &[
     "hooks",
     "speckit",
     "loft",
+    "horse",
+    "turnout",
+    "exclave",
     "tack",
 ];
+
+/// Parse host user TOML without exposing private source lines in errors.
+pub fn user_config_doc(text: &str) -> Result<toml::Value> {
+    toml::from_str(text).map_err(|_| anyhow::anyhow!("invalid user configuration"))
+}
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -151,6 +162,26 @@ pub struct McpCfg {
     /// mounted read-only.
     #[serde(default)]
     pub allow: Vec<String>,
+    /// Per-server startup policy, keyed by the harness's server name.
+    #[serde(default)]
+    pub servers: BTreeMap<String, McpServerCfg>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct McpServerCfg {
+    #[serde(default)]
+    pub start: McpStart,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum McpStart {
+    #[default]
+    Auto,
+    Always,
+    Never,
+    Lazy,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -231,6 +262,9 @@ pub struct DockerCfg {
 pub struct SetupCfg {
     /// Run `mise install` inside the sandbox when the project has a mise file.
     pub mise_install: Option<bool>,
+    /// A `--worktree` run or a worker of a Rust project builds in its own
+    /// copy of the repository's cargo build cache (storage/buildcache.rs).
+    pub shared_build_cache: Option<bool>,
     /// Extra shell lines to run inside the sandbox before the harness.
     #[serde(default)]
     pub run: Vec<String>,
@@ -276,7 +310,9 @@ impl Manifest {
     /// have them, so they are taken out here instead of in the schema: the
     /// project file still fails on them.
     pub fn parse_user(text: &str) -> Result<Self> {
-        let mut v: toml::Value = toml::from_str(text)?;
+        // User-only tables can contain private transport arguments. TOML
+        // diagnostics include source lines, so do not expose them here.
+        let mut v = user_config_doc(text)?;
         if let Some(t) = v.as_table_mut() {
             for k in USER_ONLY {
                 t.remove(*k);
@@ -362,6 +398,7 @@ impl Manifest {
             self.auth.mode = o.auth.mode;
         }
         self.mcp.allow.extend(o.mcp.allow);
+        self.mcp.servers.extend(o.mcp.servers);
         if o.gui.mode.is_some() {
             self.gui.mode = o.gui.mode;
         }
@@ -387,12 +424,15 @@ impl Manifest {
         if o.setup.mise_install.is_some() {
             self.setup.mise_install = o.setup.mise_install;
         }
+        if o.setup.shared_build_cache.is_some() {
+            self.setup.shared_build_cache = o.setup.shared_build_cache;
+        }
         self.setup.run.extend(o.setup.run);
     }
 
     /// The part of a project file that widens access. Approval covers exactly this.
     pub fn widening(&self) -> serde_json::Value {
-        serde_json::json!({
+        let mut widening = serde_json::json!({
             "mounts": { "rw": self.mounts.rw, "ro": self.mounts.ro },
             "secrets.reveal": self.secrets.reveal,
             "network.host": self.network.mode == Some(Network::Host),
@@ -407,7 +447,17 @@ impl Manifest {
             "env.pass": self.env.pass,
             "setup.run": self.setup.run,
             "docker": { "image": self.docker.image, "packages": self.docker.packages },
-        })
+        });
+        let start: BTreeMap<_, _> = self
+            .mcp
+            .servers
+            .iter()
+            .filter(|(_, p)| p.start != McpStart::Never)
+            .collect();
+        if !start.is_empty() {
+            widening["mcp.start"] = serde_json::json!(start);
+        }
+        widening
     }
 
     pub fn widens(&self) -> bool {
@@ -419,6 +469,11 @@ impl Manifest {
             || !self.network.host_ports.is_empty()
             || self.network.lan == Some(true)
             || !self.mcp.allow.is_empty()
+            || self
+                .mcp
+                .servers
+                .values()
+                .any(|p| p.start != McpStart::Never)
             || self.auth.mode.as_deref() == Some("shared")
             || self.env.inherit == Some(true)
             || self.gui.mode == Some(GuiMode::Host)
@@ -545,6 +600,7 @@ pub const TEMPLATE: &str = r#"# paddock.toml: sandbox settings for this project.
 
 [setup]
 # mise_install = true
+# shared_build_cache = true   # worktree runs build in a cargo cache outside the worktree
 # run = []
 
 [docker]
@@ -555,6 +611,19 @@ pub const TEMPLATE: &str = r#"# paddock.toml: sandbox settings for this project.
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn starting_a_server_from_project_config_requires_approval() {
+        let never: Manifest = toml::from_str("[mcp.servers.s]\nstart = \"never\"\n").unwrap();
+        assert!(!never.widens());
+        assert!(never.widening().get("mcp.start").is_none());
+        for mode in ["auto", "always", "lazy"] {
+            let m: Manifest =
+                toml::from_str(&format!("[mcp.servers.s]\nstart = \"{mode}\"\n")).unwrap();
+            assert!(m.widens());
+            assert_eq!(m.widening()["mcp.start"]["s"]["start"], mode);
+        }
+    }
 
     #[test]
     fn host_tools_in_a_project_file_are_ignored_with_a_warning() {
@@ -619,6 +688,10 @@ mod tests {
         let text = "backend = \"bwrap\"\n[devices]\nwait = true\n[kv]\nenabled = true\n";
         let m = Manifest::parse_user(text).unwrap();
         assert_eq!(m.backend.as_deref(), Some("bwrap"));
+        assert!(Manifest::parse_user("[exclave.peers.test]\ntransport = ['canary']\n").is_ok());
+        let err = Manifest::parse_user("[exclave.peers.test]\ntransport = ['CANARY_SECRET'\n")
+            .unwrap_err();
+        assert!(!format!("{err:#}").contains("CANARY_SECRET"));
         for k in USER_ONLY {
             let t = format!("[{k}]\nx = 1\n");
             assert!(

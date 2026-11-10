@@ -333,7 +333,7 @@ fn remove_can_keep_the_audit_log() {
 fn the_system_runner_reads_a_version_and_times_out_a_hang() {
     let t = tempfile::tempdir().unwrap();
     let ok = t.path().join("ok");
-    std::fs::write(&ok, "#!/bin/sh\necho paddock 9.9.9\n").unwrap();
+    std::fs::write(&ok, "#!/bin/sh\nprintf \"%s\\n\" \"paddock 9.9.9\"\n").unwrap();
     std::fs::set_permissions(&ok, std::fs::Permissions::from_mode(0o755)).unwrap();
     assert_eq!(System.version(&ok).unwrap(), "paddock 9.9.9");
     let bad = t.path().join("bad");

@@ -1,0 +1,399 @@
+#!/usr/bin/env python3
+"""A fake agy (Antigravity CLI) 1.4.12 for the horse tests. It contacts nothing.
+
+`--version` prints the version, `--help` the flags that paddock checks.
+
+agy-stream:
+- `--input-format stream-json --output-format stream-json [--conversation ID]`
+  is the headless child of a horse-mode spawn. It reads `{"event":"user",...}`
+  lines, writes `init`, `step_update` and one `result` per turn, and keeps
+  its conversation database as agy 1.4.12 does (SQLite, protobuf steps).
+  SIGINT ends a running turn with `finished_reason: "interrupted"`. Another
+  input line ends it with exit code 2. The end of stdin ends it.
+- `--dangerously-skip-permissions --print TEXT` is a plain child outside
+  horse mode.
+- With no arguments it is the parent run: it spawns an agy child and waits.
+
+Each turn thinks FAKE_AGY_STEP seconds (0). With FAKE_AGY_HOLD=1 (or in a
+sandbox), turn 2 (the task, after the DNA entry) does not end until the
+inbox of the session holds the entry of the test (in the sandbox: the
+/dev/paddock/horse inbox view; outside: the file $HOME/go). Then it checks
+for one second that nothing came on stdin during the turn ($HOME/early
+if it did). FAKE_AGY_REPORT names another conversation id in its lines.
+Every line that it reads goes into $HOME/agy-input.log.
+
+agy-tui (a link to this file), or no arguments on a terminal: the TUI. It shows a busy row
+("esc to cancel") while it thinks, writes the steps, and then shows the
+empty input row "> ". At the start of each model call and at the end of
+each turn it runs the hooks of ~/.gemini/config/hooks.json that call
+`safe-point prompt` (PreInvocation) and `safe-point stop` (Stop), with the
+JSON input of agy on stdin. The Stop hook runs twice: first with
+`fullyIdle: false`, then with `fullyIdle: true`. Turn 1 is "hi" and thinks
+for 3 s; each line on the terminal is the next turn, which thinks for 1 s.
+Each event goes into tui.log of its working folder. It ends when the file
+`done` appears there, or after 120 seconds.
+"""
+import json
+import os
+import select
+import signal
+import sqlite3
+import subprocess
+import sys
+import time
+
+VERSION = "1.4.12"
+DEFAULT_ID = "7c0e1f2a-3b4c-4d5e-8f60-0a1b2c3d4e5f"
+TRAJECTORY = "1d2c3b4a-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+HOME = os.environ.get("HOME", "/home/demo")
+AGY = os.path.join(HOME, ".gemini", "antigravity-cli")
+
+DDL = """
+CREATE TABLE trajectory_meta (trajectory_id text, cascade_id text, trajectory_type integer, source integer, PRIMARY KEY (trajectory_id));
+CREATE TABLE steps (idx integer, step_type integer NOT NULL DEFAULT 0, status integer NOT NULL DEFAULT 0, has_subtrajectory numeric NOT NULL DEFAULT false, metadata blob, error_details blob, permissions blob, task_details blob, render_info blob, step_payload blob, step_format integer NOT NULL DEFAULT 0, PRIMARY KEY (idx));
+CREATE INDEX idx_steps_status ON steps(status);
+CREATE INDEX idx_steps_step_type ON steps(step_type);
+CREATE TABLE gen_metadata (idx integer, data blob, size integer NOT NULL DEFAULT 0, PRIMARY KEY (idx));
+CREATE TABLE executor_metadata (idx integer, data blob, PRIMARY KEY (idx));
+CREATE TABLE parent_references (idx integer, data blob, PRIMARY KEY (idx));
+CREATE TABLE trajectory_metadata_blob (id text DEFAULT "main", data blob, PRIMARY KEY (id));
+CREATE TABLE battle_mode_infos (idx integer, data blob, PRIMARY KEY (idx));
+"""
+
+SUMMARY_DDL = """
+CREATE TABLE conversation_summaries (conversation_id text, title text NOT NULL DEFAULT "", preview text NOT NULL DEFAULT "", step_count integer NOT NULL DEFAULT 0, last_modified_time datetime NOT NULL, workspace_uris text NOT NULL, status text NOT NULL DEFAULT "", source text NOT NULL DEFAULT "", project_id text NOT NULL DEFAULT "", agent_name text NOT NULL DEFAULT "", parent_conversation_id text NOT NULL DEFAULT "", nesting_depth integer NOT NULL DEFAULT 0, battle_id text NOT NULL DEFAULT "", winning_conversation_id text NOT NULL DEFAULT "", not_fully_idle numeric NOT NULL DEFAULT false, killed numeric NOT NULL DEFAULT false, last_user_input_time datetime NOT NULL, last_user_input_step_index integer NOT NULL DEFAULT -1, app_data_dir text NOT NULL DEFAULT "", PRIMARY KEY (conversation_id));
+CREATE INDEX idx_conversation_summaries_last_user_input_time ON conversation_summaries(last_user_input_time);
+CREATE INDEX idx_conversation_summaries_last_modified_time ON conversation_summaries(last_modified_time);
+ALTER TABLE conversation_summaries ADD COLUMN group_id text;
+ALTER TABLE conversation_summaries ADD COLUMN raw_summary blob;
+"""
+
+USER_INPUT, PLANNER_RESPONSE = 14, 15
+DONE = 3
+
+
+def varint(v):
+    out = bytearray()
+    while True:
+        b = v & 0x7F
+        v >>= 7
+        if v:
+            out.append(b | 0x80)
+        else:
+            out.append(b)
+            return bytes(out)
+
+
+def f_varint(n, v):
+    return varint(n << 3) + varint(v)
+
+
+def f_bytes(n, b):
+    return varint(n << 3 | 2) + varint(len(b)) + b
+
+
+class Conversation:
+    """The database of one conversation, as agy keeps it."""
+
+    def __init__(self, cid):
+        self.id = cid
+        self.path = os.path.join(AGY, "conversations", cid + ".db")
+        os.makedirs(os.path.dirname(self.path), exist_ok=True)
+        fresh = not os.path.exists(self.path)
+        c = self.open()
+        if fresh:
+            c.executescript("PRAGMA page_size=32768; PRAGMA journal_mode=WAL;" + DDL)
+            meta = f_bytes(2, f_varint(1, 1793750400)) + f_bytes(6, cid.encode()) + f_bytes(18, b"default-cli-project")
+            c.execute("INSERT INTO trajectory_meta VALUES (?, ?, 4, 17)", (TRAJECTORY, cid))
+            c.execute("INSERT INTO trajectory_metadata_blob (id, data) VALUES ('main', ?)", (meta,))
+        self.steps = c.execute("SELECT count(*) FROM steps").fetchone()[0]
+        c.close()
+        self.transcript = os.path.join(AGY, "brain", cid, ".system_generated", "logs", "transcript.jsonl")
+        os.makedirs(os.path.dirname(self.transcript), exist_ok=True)
+
+    def open(self):
+        return sqlite3.connect(self.path, isolation_level=None)
+
+    def step(self, ty, oneof, body, source, kind, content):
+        idx = self.steps
+        payload = f_varint(1, ty) + f_varint(4, DONE) + f_bytes(oneof, body)
+        metadata = f_bytes(1, f_varint(1, 1793750400 + idx))
+        c = self.open()
+        c.execute(
+            "INSERT INTO steps (idx, step_type, status, has_subtrajectory, metadata, step_payload, step_format) VALUES (?, ?, ?, 0, ?, ?, 0)",
+            (idx, ty, DONE, metadata, payload),
+        )
+        if ty == PLANNER_RESPONSE:
+            usage = f_varint(5, 1000 + idx)
+            c.execute("INSERT INTO gen_metadata VALUES (?, ?, ?)", (idx, usage, len(usage)))
+        c.close()
+        self.steps += 1
+        self.summary()
+        with open(self.transcript, "a") as t:
+            t.write(json.dumps({"step_index": idx, "source": source, "type": kind, "status": "DONE",
+                                "created_at": "2026-11-08T10:00:00Z", "content": content}) + "\n")
+        return idx
+
+    def user(self, text):
+        return self.step(USER_INPUT, 19, f_bytes(1, text.encode()), "USER_EXPLICIT", "USER_INPUT", text)
+
+    def reply(self, text):
+        body = f_bytes(1, text.encode()) + f_bytes(6, b"msg-%d" % self.steps)
+        return self.step(PLANNER_RESPONSE, 20, body, "MODEL", "PLANNER_RESPONSE", text)
+
+    def summary(self):
+        p = os.path.join(AGY, "conversation_summaries.db")
+        fresh = not os.path.exists(p)
+        c = sqlite3.connect(p, isolation_level=None)
+        if fresh:
+            c.executescript(SUMMARY_DDL)
+        c.execute(
+            "INSERT OR REPLACE INTO conversation_summaries (conversation_id, title, step_count, last_modified_time, workspace_uris, source, project_id, last_user_input_time, app_data_dir) VALUES (?, 'fake', ?, '2026-11-08 10:00:00+00:00', '[]', 'antigravity-cli', 'default-cli-project', '2026-11-08 10:00:00+00:00', 'antigravity-cli')",
+            (self.id, self.steps),
+        )
+        c.close()
+
+
+def out(obj):
+    sys.stdout.write(json.dumps(obj) + "\n")
+    sys.stdout.flush()
+
+
+class Lines:
+    """The lines of stdin, read without a buffer that select cannot see."""
+
+    def __init__(self):
+        self.buf = b""
+        self.eof = False
+
+    def ready(self, timeout):
+        if b"\n" in self.buf:
+            return True
+        r, _, _ = select.select([0], [], [], timeout)
+        return bool(r)
+
+    def read(self):
+        while b"\n" not in self.buf:
+            try:
+                chunk = os.read(0, 65536)
+            except InterruptedError:
+                continue
+            if not chunk:
+                self.eof = True
+                rest, self.buf = self.buf, b""
+                return rest or None
+            self.buf += chunk
+        line, self.buf = self.buf.split(b"\n", 1)
+        return line
+
+
+interrupted = False
+
+
+def on_sigint(_sig, _frame):
+    global interrupted
+    interrupted = True
+
+
+def device_session():
+    dev = "/dev/paddock/horse/self"
+    if not os.path.isdir(dev):
+        return None
+    sid = subprocess.run(["paddock-host", "horse", "sessions"], capture_output=True, text=True).stdout.split()
+    if not sid:
+        sys.exit(23)
+    return sid[0]
+
+
+def entry_came(sid):
+    if sid:
+        result = subprocess.run(["paddock-host", "peek", "inbox"], capture_output=True, text=True)
+        return result.returncode == 0 and "from the test" in result.stdout
+    return os.path.exists(os.path.join(HOME, "go"))
+
+
+def stream(args):
+    conv_arg = None
+    if "--conversation" in args:
+        conv_arg = args[args.index("--conversation") + 1]
+    if args[args.index("--output-format") + 1] != "stream-json":
+        sys.exit(21)
+    cid = DEFAULT_ID
+    if conv_arg:
+        if os.path.exists(os.path.join(AGY, "conversations", conv_arg + ".db")):
+            cid = conv_arg
+        else:
+            print("Conversation %s not found, ignoring --conversation flag" % conv_arg, file=sys.stderr)
+    conv = Conversation(cid)
+    reported = os.environ.get("FAKE_AGY_REPORT", cid)
+    hold = os.environ.get("FAKE_AGY_HOLD") == "1"
+    sid = device_session()
+    signal.signal(signal.SIGINT, on_sigint)
+    log = open(os.path.join(HOME, "agy-input.log"), "a")
+    lines = Lines()
+    n = 0
+    global interrupted
+    while True:
+        raw = lines.read()
+        if raw is None:
+            return 0
+        if not raw.strip():
+            continue
+        log.write(raw.decode() + "\n")
+        log.flush()
+        msg = json.loads(raw)
+        if msg.get("event") != "user":
+            return 2
+        content = msg["message"]["content"]
+        if isinstance(content, list):
+            content = "".join(b["text"] for b in content if b.get("type") == "text")
+        n += 1
+        interrupted = False
+        if n == 1:
+            out({"event": "init", "conversation_id": reported, "cwd": os.getcwd(), "tools": [], "permission_mode": "bypass"})
+        idx = conv.user(content)
+        out({"event": "step_update", "conversation_id": reported, "step_index": idx, "state": "DONE", "step_type": "user_input"})
+        end = time.time() + float(os.environ.get("FAKE_AGY_STEP", "0"))
+        while time.time() < end and not interrupted:
+            time.sleep(0.02)
+        if n == 2 and (sid or hold) and not interrupted:
+            for _ in range(1200):
+                if entry_came(sid) or interrupted:
+                    break
+                time.sleep(0.05)
+            else:
+                return 24
+            if not interrupted and lines.ready(1.0):
+                with open(os.path.join(HOME, "early"), "w") as f:
+                    f.write("EARLY\n")
+                return 26
+        if interrupted:
+            out({"event": "result", "conversation_id": reported, "status": "success", "response": "",
+                 "num_turns": n, "finished_reason": "interrupted"})
+            continue
+        text = "turn %d done" % n
+        idx = conv.reply(text)
+        out({"event": "step_update", "conversation_id": reported, "step_index": idx, "state": "DONE",
+             "step_type": "agent_response", "text_delta": text})
+        out({"event": "result", "conversation_id": reported, "status": "success", "response": text,
+             "num_turns": n, "finished_reason": "stop", "usage": {"input_tokens": 10, "output_tokens": 3}})
+
+
+def hooks(event):
+    """The commands of the hooks of `event` that call paddock's safe point."""
+    try:
+        with open(os.path.join(HOME, ".gemini", "config", "hooks.json")) as f:
+            doc = json.load(f)
+    except (OSError, ValueError):
+        return []
+    cmds = []
+    for entry in doc.values():
+        for h in (entry or {}).get(event, []):
+            if "safe-point" in h.get("command", ""):
+                cmds.append(h["command"])
+    return cmds
+
+
+def tui():
+    cid = DEFAULT_ID
+    conv = Conversation(cid)
+    log = open(os.path.join(os.getcwd(), "tui.log"), "w")
+    subprocess.run(["stty", "-echo"], stderr=subprocess.DEVNULL)
+
+    def note(s):
+        log.write(s + "\n")
+        log.flush()
+
+    def hook(event, tag, payload):
+        base = {"conversationId": cid, "workspacePaths": [os.getcwd()], "transcriptPath": conv.transcript,
+                "artifactDirectoryPath": os.path.dirname(conv.transcript), "modelName": "gemini-3-pro"}
+        base.update(payload)
+        for cmd in hooks(event):
+            subprocess.run(["sh", "-c", cmd], input=json.dumps(base).encode(),
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        note("hook %s" % tag)
+
+    def screen(s):
+        sys.stdout.write(s)
+        sys.stdout.flush()
+
+    def busy(t):
+        screen("\033[2J\033[H⠋ Working %ss (esc to cancel)\r\n\r\n> " % t)
+
+    def idle():
+        screen("\033[2J\033[H> \r\n\r\n  agy %s" % VERSION)
+
+    def turn(n, text, think):
+        hook("PreInvocation", "prompt %d" % n, {"invocationNum": 1, "initialNumSteps": conv.steps})
+        busy(0)
+        conv.user(text)
+        for s in range(think):
+            time.sleep(1)
+            busy(s + 1)
+        conv.reply("turn %d done" % n)
+        note("end %d" % n)
+        hook("Stop", "stop-busy %d" % n, {"executionNum": n, "terminationReason": "done", "fullyIdle": False})
+        time.sleep(0.5)
+        hook("Stop", "stop %d" % n, {"executionNum": n, "terminationReason": "done", "fullyIdle": True})
+        idle()
+
+    turn(1, "hi", 3)
+    n = 1
+    lines = Lines()
+    deadline = time.time() + 120
+    while time.time() < deadline:
+        if os.path.exists("done"):
+            return 0
+        if not lines.ready(0.1):
+            continue
+        got = lines.read()
+        if got is None:
+            return 0
+        got = got.decode().rstrip("\r")
+        if got.startswith("\033[200~"):
+            while "\033[201~" not in got:
+                if not lines.ready(5):
+                    break
+                more = lines.read()
+                if more is None:
+                    break
+                got += "\n" + more.decode().rstrip("\r")
+            got = got[len("\033[200~"):].split("\033[201~")[0]
+        n += 1
+        note("got %d %s" % (n, got))
+        turn(n, got, 1)
+    return 0
+
+
+def main():
+    args = sys.argv[1:]
+    if args[:1] == ["--version"]:
+        print(VERSION)
+        return 0
+    if args[:1] == ["--help"]:
+        print("      --dangerously-skip-permissions   Skip all permission prompts")
+        print("  -p, --print <prompt>                 Run one prompt and print the response")
+        print("      --input-format <format>          text or stream-json")
+        print("      --output-format <format>         text, json or stream-json")
+        return 0
+    if os.path.basename(sys.argv[0]) == "agy-tui" or (not args and os.isatty(0)):
+        return tui()
+    if "--input-format" in args:
+        if args[args.index("--input-format") + 1] != "stream-json":
+            return 21
+        return stream(args)
+    if "--print" in args:
+        print("plain child: %s" % args[args.index("--print") + 1])
+        return 0
+    r = subprocess.run(["paddock-host", "spawn", "agy", "--prompt-file", "task.md", "--reason", "test"],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        return 11
+    with open("wait.txt", "w") as w:
+        if subprocess.run(["paddock-host", "wait", r.stdout.strip(), "--timeout", "100"], stdout=w).returncode != 0:
+            return 12
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

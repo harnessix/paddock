@@ -11,20 +11,30 @@
 use std::path::{Path, PathBuf};
 
 mod apply;
+pub mod auto;
+mod btrfs;
+pub mod buildcache;
+pub mod buildout;
 pub mod caches;
 pub mod dedupe;
+pub mod guard;
 mod images;
 mod inventory;
 pub mod layers;
+pub mod merged;
 mod origin;
+pub mod package_cache;
 mod plan;
 mod render;
 mod scan;
+pub mod settings;
 mod sizes;
 
+#[cfg(test)]
+pub use apply::drop_leases_for_test;
 pub use apply::{
     after_build, apply, check_removable, record_worktree_branch, remove_doctor_homes, remove_path,
-    remove_worktree, Removed,
+    remove_worktree, worktree_in_use, Removed,
 };
 pub use images::{current_tags, parse_podman_df, parse_size};
 pub use inventory::{
@@ -33,7 +43,7 @@ pub use inventory::{
 };
 pub use origin::{login_dir, read_origin, write_origin, Origin, OriginCheck, ORIGIN_FILE};
 pub use plan::{measure_plan, plan, Action, GcOptions, Item, Tier};
-pub use render::{clock, date, human, local_time, render_du, render_plan};
+pub use render::{clock, date, human, local_time, merged_word, render_du, render_plan};
 pub use scan::{scan, scan_snapshots, worktrees, Containers, Host, RealContainers};
 pub use sizes::{allocated, sizes};
 

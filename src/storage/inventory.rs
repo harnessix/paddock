@@ -80,6 +80,12 @@ pub struct Worktree {
     pub unmerged: Option<usize>,
     /// Uncommitted changes. None when unknown.
     pub dirty: Option<bool>,
+    /// Every commit of the branch and of the worktree's HEAD is in a local
+    /// branch outside `paddock/`, or a commit with the same patch is (a
+    /// cherry-pick or a rebase). None when unknown.
+    pub merged: Option<bool>,
+    /// The newest sign of use: a run in it, a commit, a change at its top.
+    pub last_used: u64,
     pub bytes: u64,
     pub running: bool,
 }
@@ -139,6 +145,10 @@ pub struct Inventory {
     pub classes: Vec<ClassUse>,
     /// The shared cache layers and the layers of each project.
     pub layers: Vec<layers::Layer>,
+    /// The cargo build caches of worktree runs (storage/buildcache.rs).
+    pub build_caches: Vec<super::buildcache::CacheDir>,
+    /// The mailboxes of runs (mail.rs).
+    pub mailboxes: Vec<crate::mail::Stored>,
 }
 
 /// A project snapshot, or a folder of the undo trash (`trash`).
@@ -229,6 +239,8 @@ pub fn removable_roots(env: &HostEnv) -> Vec<PathBuf> {
         crate::snapshot::root(env),
         crate::snapshot::trash_root(env),
         layers::projects_root(env),
+        super::package_cache::root(env),
+        super::buildcache::root(env),
     ]
 }
 

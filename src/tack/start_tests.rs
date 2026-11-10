@@ -25,7 +25,7 @@ fn decision_for(p: &Path) -> Decision {
 fn the_started_file_must_be_the_checked_file() {
     let t = tempfile::tempdir().unwrap();
     let p = t.path().join("tool");
-    std::fs::write(&p, "#!/bin/sh\necho one\n").unwrap();
+    std::fs::write(&p, "#!/bin/sh\nprintf \"%s\\n\" one\n").unwrap();
     std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
     let d = decision_for(&p);
     let cache = HashCache::default();
@@ -33,7 +33,7 @@ fn the_started_file_must_be_the_checked_file() {
     assert!(script);
     // Same file, new content.
     std::thread::sleep(std::time::Duration::from_millis(20));
-    std::fs::write(&p, "#!/bin/sh\necho two\n").unwrap();
+    std::fs::write(&p, "#!/bin/sh\nprintf \"%s\\n\" two\n").unwrap();
     let e = open_program(&d, &cache).unwrap_err();
     assert!(e.contains("changed after tackd checked it"), "{e}");
     // Another file in its place.

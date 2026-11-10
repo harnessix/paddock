@@ -67,6 +67,12 @@ pub enum Action {
         home: PathBuf,
         folders: Vec<PathBuf>,
     },
+    /// Build output in a worktree that is kept: folders with a
+    /// `CACHEDIR.TAG` that git ignores, relative to it (storage/buildout.rs).
+    BuildOutput {
+        worktree: PathBuf,
+        folders: Vec<PathBuf>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -113,6 +119,7 @@ pub fn plan(inv: &Inventory, o: &GcOptions, now: u64) -> Vec<Item> {
     plan_keyrings(&mut items, inv);
     plan_sessions(&mut items, inv, now);
     plan_homes(&mut items, inv, o, now, old);
+    plan_mail(&mut items, inv, o, now, old);
     plan_snapshots(&mut items, inv, o, now, old);
     plan_pure_caches(&mut items, inv);
     plan_scratch(&mut items, inv, o, now, old);
@@ -121,7 +128,15 @@ pub fn plan(inv: &Inventory, o: &GcOptions, now: u64) -> Vec<Item> {
 }
 
 fn plan_layers(items: &mut Vec<Item>, inv: &Inventory) {
-    for l in inv.layers.iter().filter(|l| l.orphan) {
+    for l in &inv.layers {
+        let merged = l.project.as_ref().is_some_and(|project| {
+            inv.worktrees
+                .iter()
+                .any(|w| w.path == *project && !w.running && w.merged == Some(true))
+        });
+        if !l.orphan && !merged {
+            continue;
+        }
         let project = l
             .project
             .as_ref()
@@ -131,7 +146,11 @@ fn plan_layers(items: &mut Vec<Item>, inv: &Inventory) {
             what: format!("cache layers {}", l.path.display()),
             tier: Tier::Auto,
             bytes: l.bytes,
-            reason: format!("its project {project} no longer exists"),
+            reason: if merged {
+                format!("its worktree {project} is merged")
+            } else {
+                format!("its project {project} no longer exists")
+            },
             warning: None,
             needs: vec![],
             action: Action::Path {
@@ -243,6 +262,29 @@ fn plan_sessions(items: &mut Vec<Item>, inv: &Inventory, now: u64) {
     }
 }
 
+/// The mailbox of a run is a record of the user's work, like a home: it
+/// goes only with `--homes`, once the run ended before `--older-than`.
+fn plan_mail(items: &mut Vec<Item>, inv: &Inventory, o: &GcOptions, now: u64, old: u64) {
+    for m in &inv.mailboxes {
+        let Some(ended) = m.ended.filter(|e| *e < old) else {
+            continue;
+        };
+        let mut needs = Vec::new();
+        need(&mut needs, o.homes, "--homes");
+        items.push(Item {
+            what: format!("mailbox of {}", m.id),
+            tier: Tier::Consent,
+            bytes: m.bytes,
+            reason: format!("the run ended {} days ago", now.saturating_sub(ended) / DAY),
+            warning: Some("the messages of this run will be lost".into()),
+            needs,
+            action: Action::Path {
+                path: m.path.clone(),
+            },
+        });
+    }
+}
+
 fn plan_homes(items: &mut Vec<Item>, inv: &Inventory, o: &GcOptions, now: u64, old: u64) {
     for h in &inv.homes {
         if h.running {
@@ -267,13 +309,14 @@ fn plan_homes(items: &mut Vec<Item>, inv: &Inventory, o: &GcOptions, now: u64, o
                 "a leftover of an escape test (paddock doctor --escape)".to_string(),
             )
         } else if !h.profile {
+            // A home holds the user's conversations with the harness: it is
+            // removed only on request, even when its profile is gone.
+            need(&mut needs, o.homes, "--homes");
             if h.app {
-                need(&mut needs, o.homes, "--homes");
                 need(&mut needs, o.include_app_logins, "--include-app-logins");
             }
-            let tier = if h.app { Tier::Consent } else { Tier::Auto };
             (
-                tier,
+                Tier::Consent,
                 format!("the harness profile '{}' no longer exists", h.harness),
             )
         } else if h.project_exists == Some(false) {
@@ -301,12 +344,19 @@ fn plan_homes(items: &mut Vec<Item>, inv: &Inventory, o: &GcOptions, now: u64, o
         } else {
             continue;
         };
+        // What is lost: the conversations (transcripts, history) of the
+        // harness in this home, and an app's login.
+        let warning = if h.harness == DOCTOR_HARNESS {
+            login
+        } else {
+            Some(login.unwrap_or_else(|| h.loses.clone()))
+        };
         items.push(Item {
             what: home_label(h),
             tier,
             bytes: h.bytes,
             reason,
-            warning: login,
+            warning,
             needs,
             action: Action::Path {
                 path: h.path.clone(),
@@ -503,7 +553,11 @@ pub fn measure_plan(inv: &mut Inventory, items: &mut [Item]) {
     let cache_paths: Vec<PathBuf> = items
         .iter()
         .flat_map(|i| match &i.action {
-            Action::Caches { home, folders } => folders.iter().map(|f| home.join(f)).collect(),
+            Action::Caches { home, folders }
+            | Action::BuildOutput {
+                worktree: home,
+                folders,
+            } => folders.iter().map(|f| home.join(f)).collect(),
             _ => vec![],
         })
         .collect();
@@ -511,7 +565,8 @@ pub fn measure_plan(inv: &mut Inventory, items: &mut [Item]) {
         let (v, _) = sizes(&cache_paths);
         let mut it = v.into_iter();
         for i in items.iter_mut() {
-            if let Action::Caches { folders, .. } = &i.action {
+            if let Action::Caches { folders, .. } | Action::BuildOutput { folders, .. } = &i.action
+            {
                 i.bytes = it.by_ref().take(folders.len()).sum();
             }
         }

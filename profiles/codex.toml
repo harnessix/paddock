@@ -6,6 +6,8 @@ unverified = [
   "state.auth .codex/.credentials.json: the file store for MCP OAuth tokens",
   "compaction: the trusted hash of paddock's hook, from the source of codex 0.166.0",
   "state.settings features.unified_exec_tty: shell commands without a pty on macOS, from the source of codex 0.166.0",
+  "horse.pty: the input row, its dim placeholder and the busy text of the codex 0.166.0 TUI, from the source, not from a recorded screen",
+  "horse notify: the JSON argument of the notify program (agent-turn-complete, thread-id), from the Codex documentation of the configuration",
 ]
 
 [locate]
@@ -61,6 +63,12 @@ when = "no_pty"
 
 [[mcp]]
 file = ".codex/config.toml"
+format = "toml"
+path = ["mcp_servers"]
+
+[[mcp]]
+file = ".codex/config.toml"
+in_project = true
 format = "toml"
 path = ["mcp_servers"]
 
@@ -123,15 +131,57 @@ files = [".codex/hooks.json"]
 into = ".codex/hooks.json"
 codex_trust = ".codex/config.toml"
 
+# Folder access in Codex 0.167.0 at the project root.
+[[screens.rule]]
+kind = "folder_trust"
+version = "0.167.0"
+id = "codex-folder-trust"
+name = "Codex folder trust"
+always = true
+send = ["enter"]
+answer = "› 1. Trust and continue"
+note = "trusted the run's project folder"
+rows = [
+  "Folder access",
+  "{folder}",
+  "Trust this folder? Codex can read, edit, and run files here, subject to your permission settings. Folder settings can run code automatically, even without a model request. Continue only if you trust these files. Your trust decision will be saved.",
+  "› 1. Trust and continue",
+  "2. Back to Agent Command Center",
+  "enter continue · esc back",
+]
+
+# Folder access in Codex 0.167.0 when the run starts below a Git root.
+# Both paths must be the run's project, since trust extends to the root.
+[[screens.rule]]
+kind = "folder_trust"
+version = "0.167.0"
+id = "codex-folder-trust-subdirectory"
+name = "Codex folder trust"
+always = true
+send = ["enter"]
+answer = "› 1. Trust and continue"
+note = "trusted the run's project folder"
+rows = [
+  "Folder access",
+  "{folder}",
+  "Note: You’re in a subdirectory of a Git project. Trusting will apply to the repository root:",
+  "{folder}",
+  "Trust this folder? Codex can read, edit, and run files here, subject to your permission settings. Folder settings can run code automatically, even without a model request. Continue only if you trust these files. Your trust decision will be saved.",
+  "› 1. Trust and continue",
+  "2. Back to Agent Command Center",
+  "enter continue · esc back",
+]
+
 # Start screens (src/screens.rs). Codex 0.166.0 stops at "Hooks need review"
 # when a hook of the user changed since the last trust. In a run that nobody
 # watches, paddock chooses "Continue without trusting": the changed hooks do
-# not run, and paddock's own trusted hook still does. paddock never chooses
-# "Trust all". The screen was recorded on 2026-11-03 in a detached run.
+# not run. The mailbox event names the possible effect on compaction.
+# The screen was recorded on 2026-11-03 in a detached run.
 [[screens.rule]]
 id = "codex-hooks-review"
+version = "0.166.0, 0.167.0"
 name = "Codex hooks review"
-send = ["3"]
+send = ["down", "down", "enter"]
 answer = "3. Continue without trusting (hooks won't run)"
 note = "continued without trusting {n} hook"
 rows = [
@@ -148,8 +198,9 @@ rows = [
 # the recording.
 [[screens.rule]]
 id = "codex-hooks-review-many"
+version = "0.166.0, 0.167.0"
 name = "Codex hooks review"
-send = ["3"]
+send = ["down", "down", "enter"]
 answer = "3. Continue without trusting (hooks won't run)"
 note = "continued without trusting {n} hooks"
 rows = [
@@ -161,3 +212,20 @@ rows = [
   "3. Continue without trusting (hooks won't run)",
   "enter confirm · esc skip",
 ]
+
+# Horse mode (src/horse/live/pty.rs). Codex has no push path into its TUI,
+# so paddock types a queued entry into the pty of the run. It does so only
+# when Codex's notify program said that the turn is done, and the screen
+# shows the input row with no text of the user in it (the placeholder is
+# dim), no row shows the busy text, and the screen did not change for
+# quiet_ms. An urgent entry first gets the interrupt key. A codex version
+# other than this one gets no pty delivery: its entries stay queued.
+[horse.pty]
+version = "0.166.0"
+prompt = "›"
+empty_input = true
+busy = ["esc to interrupt"]
+quiet_ms = 1500
+interrupt_key = "escape"
+submit_key = "enter"
+bracketed_paste = true

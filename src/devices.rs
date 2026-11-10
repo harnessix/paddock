@@ -48,15 +48,23 @@ use std::time::{Duration, Instant};
 
 pub mod blocking;
 pub mod command;
+#[cfg(any(target_os = "linux", test))]
+mod folders;
 pub mod ledger;
+mod stale;
 pub mod user;
+pub use stale::clear_stale;
 
 #[cfg(target_os = "linux")]
 mod fuse;
 #[cfg(target_os = "linux")]
-use fuse::lazy_unmount;
+mod fuse_mount;
 #[cfg(target_os = "linux")]
-pub use fuse::{mount, DeviceFs, Mounted};
+pub use fuse::DeviceFs;
+#[cfg(target_os = "linux")]
+use fuse_mount::lazy_unmount;
+#[cfg(target_os = "linux")]
+pub use fuse_mount::{mount, Mounted};
 
 #[cfg(not(target_os = "linux"))]
 mod fuse_stub;
@@ -67,6 +75,10 @@ pub use fuse_stub::{mount, DeviceFs, Mounted};
 
 /// Where the devices appear inside the sandbox.
 pub const MOUNT_IN_SANDBOX: &str = "/dev/paddock";
+
+/// The notice of a run in horse mode whose sandbox gets no device mount.
+const HORSE_OFF: &str =
+    "/dev/paddock/horse is off in this sandbox (paddock-host horse still works)";
 /// The read-only description of the devices.
 pub const CATALOG: &str = ".catalog";
 /// The folder of the secret files.
@@ -165,6 +177,11 @@ pub trait Device: Send + Sync {
     fn details(&self) -> Option<serde_json::Value> {
         None
     }
+    /// A write without a read sends the request when the file closes
+    /// (`echo TEXT > /dev/paddock/mail/out`). The response is dropped.
+    fn sends_on_close(&self) -> bool {
+        false
+    }
 }
 
 /// The built-in test device: the response is the request.
@@ -258,7 +275,7 @@ impl DevicesCfg {
     }
 
     pub fn parse(text: &str) -> Result<Self> {
-        let v: toml::Value = toml::from_str(text)?;
+        let v: toml::Value = crate::manifest::user_config_doc(text)?;
         let mut cfg = Self::default();
         let Some(t) = v.get("devices") else {
             return Ok(cfg);
@@ -565,6 +582,7 @@ impl Drop for Devices {
             m.unmount();
         }
         let _ = std::fs::remove_dir(&self.dir);
+        stale::release(&self.dir);
     }
 }
 
@@ -584,6 +602,7 @@ pub fn start(
     started_by: &[String],
     gateway: Option<crate::gateway::Handler>,
     secrets: Arc<SecretFiles>,
+    horse_setup: Option<crate::horse::device::Access>,
 ) -> Option<Devices> {
     let cfg = match DevicesCfg::load(env) {
         Ok(c) => c,
@@ -592,7 +611,14 @@ pub fn start(
             return None;
         }
     };
+    // A run in horse mode needs the mount for /dev/paddock/horse: each
+    // reason that it is off is a notice.
+    let horse = horse_setup.is_some();
     if !cfg.mount {
+        if horse {
+            spec.notices
+                .push(format!("{HORSE_OFF}: [devices] mount is false"));
+        }
         return None;
     }
     let ctx = DeviceCtx {
@@ -608,7 +634,9 @@ pub fn start(
     // FUSE is not worth a notice at each start. The gateway and the files
     // of off devices do not count: without the mount, paddock-host uses
     // the host socket.
-    let quiet = devices.is_empty();
+    let quiet = devices.is_empty() && !horse;
+    // The mailbox carries no capability.
+    devices.extend(crate::mail::device::devices(env, &spec.id));
     let off = disabled(&cfg, &devices, &ctx);
     devices.extend(off);
     if let Some(h) = gateway {
@@ -617,6 +645,8 @@ pub fn start(
     let tell = |spec: &mut SandboxSpec, why: String| {
         if quiet {
             log::debug!("no /dev/paddock: {why}");
+        } else if horse {
+            spec.notices.push(format!("{HORSE_OFF}: {why}"));
         } else {
             spec.notices
                 .push(format!("devices are off in this sandbox: {why}"));
@@ -632,7 +662,12 @@ pub fn start(
         return None;
     }
     let dir = mount_dir(env, backend, &spec.id);
-    let fs = DeviceFs::with_secrets(&spec.id, devices, secrets);
+    // Before the mount: a sibling that starts now keeps its hands off it.
+    if let Err(e) = stale::claim(&dir) {
+        tell(spec, format!("cannot mark {}: {e}", dir.display()));
+        return None;
+    }
+    let fs = DeviceFs::with_secrets(&spec.id, devices, secrets).with_horse(horse_setup, ctx);
     let mut out = Devices {
         dir: dir.clone(),
         mounted: Arc::new(Mutex::new(None)),
@@ -657,50 +692,6 @@ pub fn start(
     }
     spec.devices = Some(dir);
     Some(out)
-}
-
-/// Unmount device file systems of sandboxes that no longer run. A paddock
-/// process that was killed leaves its mount behind, and every access to it
-/// fails until it is unmounted.
-pub fn clear_stale(env: &HostEnv) {
-    let Ok(info) = std::fs::read_to_string("/proc/self/mountinfo") else {
-        return;
-    };
-    let run = env.paddock_run();
-    let running: Vec<String> = crate::state::Running::list(env)
-        .into_iter()
-        .map(|r| r.id)
-        .collect();
-    for line in info.lines() {
-        let f: Vec<&str> = line.split(' ').collect();
-        let Some(sep) = f.iter().position(|x| *x == "-") else {
-            continue;
-        };
-        if f.get(sep + 1) != Some(&"fuse.paddock") {
-            continue;
-        }
-        let mp = Path::new(f[4]);
-        let Ok(rel) = mp.strip_prefix(&run) else {
-            continue;
-        };
-        let mut parts = rel.components();
-        let (Some(id), Some(dev), None) = (parts.next(), parts.next(), parts.next()) else {
-            continue;
-        };
-        // <id>/dev, or devices/<id> for srt.
-        let (id, dev) = if id.as_os_str() == "devices" {
-            (
-                dev.as_os_str().to_string_lossy(),
-                std::ffi::OsStr::new("dev"),
-            )
-        } else {
-            (id.as_os_str().to_string_lossy(), dev.as_os_str())
-        };
-        if dev == "dev" && !running.iter().any(|r| *r == id) {
-            log::debug!("unmounting the stale device mount {}", mp.display());
-            lazy_unmount(mp);
-        }
-    }
 }
 
 /// For `paddock doctor`: one line per backend.
@@ -748,5 +739,9 @@ pub fn doctor_lines(env: &HostEnv) -> Vec<String> {
     v
 }
 
+#[cfg(all(test, target_os = "linux"))]
+mod horse_ctl_tests;
+#[cfg(all(test, target_os = "linux"))]
+mod horse_run_tests;
 #[cfg(test)]
 mod tests;

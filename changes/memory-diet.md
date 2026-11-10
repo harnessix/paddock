@@ -1,0 +1,3 @@
+- New: Codex and Gemini MCP startup policies can disable configured servers, and Linux runs filter xcodebuildmcp by default. `paddock explain` shows discovered decisions and the limits of discovery; Claude Code keeps its native configuration.
+- New: systemd sandbox scopes use a configurable 2 GiB `memory.high` soft boundary by default, and `paddock ps --mem` shows the effective value when available.
+- New: detached runs ask the kernel to reclaim inactive file cache when they become idle. Reclaim is best effort and does not freeze the run.

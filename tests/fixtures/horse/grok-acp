@@ -1,0 +1,133 @@
+#!/bin/bash
+# A fake Grok Build 1.0.70 for the horse tests. It contacts nothing.
+#
+# `--version` prints the version, `--help` the flags that paddock checks.
+# `agent [--always-approve] --no-leader stdio` is the headless child of a
+# horse-mode spawn: it speaks ACP (JSON-RPC 2.0) on stdin and stdout and
+# writes its session folder as Grok does. `--always-approve --prompt-file
+# FILE` is a plain spawned child outside horse mode. With no arguments it
+# is the parent run: it spawns a grok child and waits for it.
+#
+# Each `session/prompt` is one turn of FAKE_GROK_STEP seconds (0). With
+# FAKE_GROK_HOLD=1 (or in a sandbox), turn 2 (the task, after the DNA
+# entry) does not end until the inbox of the session holds the entry of
+# the test (in the sandbox: the /dev/paddock/horse inbox view; outside a
+# sandbox: the file $HOME/go). Then the fake checks for one second that
+# nothing came on stdin during the turn, and answers the prompt.
+set -eu
+version=1.0.70
+case "${1:-}" in
+--version)
+    echo "grok $version"
+    exit 0
+    ;;
+--help)
+    echo "      --always-approve        Auto-approve all tool executions"
+    echo "      --prompt-file <FILE>    Run one turn with the prompt from a file"
+    exit 0
+    ;;
+--always-approve)
+    [ "${2:-}" = --prompt-file ] || exit 2
+    printf 'plain child: %s\n' "$(cat "$3")"
+    exit 0
+    ;;
+agent) ;;
+*)
+    id=$(paddock-host spawn grok --prompt-file task.md --reason test) || exit 11
+    paddock-host wait "$id" --timeout 100 > wait.txt || exit 12
+    exit 0
+    ;;
+esac
+case " $* " in
+*" --no-leader stdio "*) ;;
+*) exit 21 ;;
+esac
+id=019a5f00-3333-7000-8000-00000000e2e0
+enc=""
+for ((i = 0; i < ${#PWD}; i++)); do
+    c=${PWD:i:1}
+    case "$c" in
+    [A-Za-z0-9._~-]) enc+="$c" ;;
+    *) enc+=$(printf '%%%02X' "'$c") ;;
+    esac
+done
+dir="$HOME/.grok/sessions/$enc/$id"
+updates="$dir/updates.jsonl"
+chat="$dir/chat_history.jsonl"
+device=/dev/paddock/horse/self
+sid=
+if [ -d "$device" ]; then
+    sid=$(paddock-host horse sessions | head -n 1)
+    test -n "$sid" || exit 23
+fi
+event=0
+summary() {
+    printf '{"info":{"id":"%s","cwd":"%s"},"session_kind":"interactive","num_messages":%s,"chat_format_version":1}\n' \
+        "$id" "$PWD" "$event" > "$dir/summary.json"
+}
+update() {
+    event=$((event + 1))
+    printf '{"timestamp":%s,"method":"%s","params":{"sessionId":"%s","update":%s,"_meta":{"eventId":"%s-%s"}}}\n' \
+        "$((1793750400 + event))" "$1" "$id" "$2" "$id" "$event" >> "$updates"
+}
+ok() {
+    printf '{"jsonrpc":"2.0","id":%s,"result":%s}\n' "$1" "$2"
+}
+wait_for_entry() {
+    i=0
+    while [ "$i" -lt 1200 ]; do
+        if [ -n "$sid" ]; then
+            paddock-host peek inbox 2>/dev/null | grep -q 'from the test' && return 0
+        else
+            [ -e "$HOME/go" ] && return 0
+        fi
+        i=$((i + 1))
+        sleep 0.6
+    done
+    exit 24
+}
+n=0
+while IFS= read -r line; do
+    method=$(printf '%s' "$line" | sed -n 's/.*"method":"\([^"]*\)".*/\1/p')
+    rid=$(printf '%s' "$line" | sed -n 's/^{"id":\([0-9][0-9]*\),.*/\1/p')
+    case "$method" in
+    initialize)
+        ok "$rid" "{\"protocolVersion\":1,\"agentCapabilities\":{\"loadSession\":true},\"agentInfo\":{\"name\":\"grok\",\"version\":\"$version\"}}"
+        ;;
+    session/new)
+        mkdir -p "$dir"
+        : > "$updates"
+        printf '{"type":"system","content":"You are Grok."}\n' > "$chat"
+        summary
+        ok "$rid" "{\"sessionId\":\"$id\"}"
+        ;;
+    session/prompt)
+        p=$n
+        n=$((n + 1))
+        text=$(printf '%s' "$line" | sed -n 's/.*"prompt":\[{"text":"\(.*\)","type":"text"}\],"sessionId".*/\1/p')
+        update session/update "{\"sessionUpdate\":\"user_message_chunk\",\"content\":{\"type\":\"text\",\"text\":\"$text\"},\"_meta\":{\"promptIndex\":$p}}"
+        printf '{"type":"user","content":[{"type":"text","text":"%s"}],"prompt_index":%s}\n' "$text" "$p" >> "$chat"
+        summary
+        printf '{"jsonrpc":"2.0","method":"session/update","params":{"sessionId":"%s","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"working"}}}}\n' "$id"
+        sleep "${FAKE_GROK_STEP:-0}"
+        if [ "$n" -eq 2 ] && { [ -n "$sid" ] || [ "${FAKE_GROK_HOLD:-0}" = 1 ]; }; then
+            wait_for_entry
+            early=$(timeout 1 dd bs=1 count=1 2>/dev/null || true)
+            if [ -n "$early" ]; then
+                echo "EARLY" > "$HOME/early"
+                exit 26
+            fi
+        fi
+        update session/update "{\"sessionUpdate\":\"agent_message_chunk\",\"content\":{\"type\":\"text\",\"text\":\"turn $n done\"}}"
+        update _x.ai/session/update "{\"sessionUpdate\":\"turn_completed\",\"stopReason\":\"end_turn\"}"
+        printf '{"type":"assistant","content":"turn %s done","model_id":"grok-build"}\n' "$n" >> "$chat"
+        summary
+        ok "$rid" '{"stopReason":"end_turn"}'
+        ;;
+    session/cancel | "") ;;
+    *)
+        printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32601,"message":"unknown method %s"}}\n' "${rid:-null}" "$method"
+        ;;
+    esac
+done
+exit 0

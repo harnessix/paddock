@@ -1,3 +1,4 @@
+#![cfg(target_os = "linux")]
 //! The training gate end to end: `paddock run` on a caller pty starts a
 //! fake agy dialog (a shell script that draws the recorded screens and
 //! reads keys) with the shipped agy rule. paddock unchecks the box and

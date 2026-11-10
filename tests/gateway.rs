@@ -10,21 +10,6 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-fn fuse_works() -> bool {
-    std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open("/dev/fuse")
-        .is_ok()
-        && ["fusermount3", "fusermount"].iter().any(|h| {
-            Command::new("sh")
-                .args(["-c", &format!("command -v {h}")])
-                .stdout(Stdio::null())
-                .status()
-                .is_ok_and(|s| s.success())
-        })
-}
-
 /// In the sandbox: the same exec request first as a raw device read that
 /// gives up after one second, then through paddock-host.
 const SCRIPT: &str = r#"
@@ -62,6 +47,7 @@ fn world() -> World {
     World { _tmp: tmp, root }
 }
 
+#[cfg(target_os = "linux")]
 fn paddock(w: &World) -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_paddock"));
     c.env("XDG_CONFIG_HOME", w.root.join("cfg"))
@@ -75,6 +61,7 @@ fn paddock(w: &World) -> Command {
     c
 }
 
+#[cfg(target_os = "linux")]
 fn pending(w: &World) -> Vec<serde_json::Value> {
     let out = paddock(w).args(["approvals", "--json"]).output().unwrap();
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_default();
@@ -82,8 +69,9 @@ fn pending(w: &World) -> Vec<serde_json::Value> {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn a_host_request_goes_through_the_gateway_and_attaches_when_sent_again() {
-    if !common::bwrap_works() || !fuse_works() {
+    if !common::sandbox_works() {
         eprintln!("skipped: bwrap or FUSE does not work here");
         return;
     }
@@ -269,6 +257,7 @@ fn executor(w: &World, vars: &std::collections::BTreeMap<String, String>) -> std
     child
 }
 
+#[cfg(target_os = "linux")]
 fn exec_job(
     w: &World,
     vars: &std::collections::BTreeMap<String, String>,
@@ -312,6 +301,7 @@ fn exec_job(
     serde_json::from_str(&line).unwrap()
 }
 
+#[cfg(target_os = "linux")]
 fn exec_vars(w: &World) -> std::collections::BTreeMap<String, String> {
     let mut vars = std::collections::BTreeMap::new();
     for (k, d) in [
@@ -332,6 +322,7 @@ fn exec_vars(w: &World) -> std::collections::BTreeMap<String, String> {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn an_approved_exec_runs_isolated() {
     if !common::bwrap_works() {
         eprintln!("skipped: bwrap does not work here");
@@ -339,6 +330,8 @@ fn an_approved_exec_runs_isolated() {
     }
     let w = world();
     std::fs::write(w.root.join("outside.txt"), "private").unwrap();
+    // The runtime folder of the executor is hidden wherever it is.
+    std::fs::write(w.root.join("run/session.txt"), "private").unwrap();
     let vars = exec_vars(&w);
     let mut daemon = executor(&w, &vars);
     let outside = w.root.join("outside.txt");
@@ -347,22 +340,33 @@ fn an_approved_exec_runs_isolated() {
         &vars,
         &format!(
             "test -e '{}' && echo OUTSIDE_VISIBLE || echo OUTSIDE_HIDDEN; \
+             test -e '{}' && echo SESSION_VISIBLE || echo SESSION_HIDDEN; \
              touch /usr/paddock-x 2>/dev/null && echo USR_WRITABLE || echo USR_RO; \
              touch made && echo PROJECT_RW; \
              echo TOKEN=${{PADDOCK_TEST_TOKEN:-none}}; \
              test -n \"$PATH\" && echo PATH_SET",
-            outside.display()
+            outside.display(),
+            w.root.join("run/session.txt").display()
         ),
     );
     let out = r["ok"]["stdout"].as_str().unwrap_or_default().to_string();
     assert_eq!(r["ok"]["exit_code"], 0, "{r}");
-    for want in [
-        "OUTSIDE_HIDDEN",
+    let mut wants = vec![
+        "SESSION_HIDDEN",
         "USR_RO",
         "PROJECT_RW",
         "TOKEN=none",
         "PATH_SET",
-    ] {
+    ];
+    // The command sees the system read-only, but not the home or /tmp. A
+    // test folder elsewhere (XDG_CACHE_HOME outside the home) stays visible.
+    let home = std::path::PathBuf::from(&vars["HOME"]);
+    if w.root.starts_with(&home) || w.root.starts_with("/tmp") {
+        wants.push("OUTSIDE_HIDDEN");
+    } else {
+        eprintln!("the test folder is outside the home and /tmp: no check of outside.txt");
+    }
+    for want in wants {
         assert!(out.contains(want), "{want} missing:\n{r}");
     }
     assert!(w.root.join("project/made").exists());
@@ -398,6 +402,7 @@ fn an_approved_exec_runs_isolated() {
 /// repository of the card, to a bare repository on this machine, and the
 /// home folder stays unchanged.
 #[test]
+#[cfg(target_os = "linux")]
 fn an_approved_push_runs_in_the_executor() {
     if !common::bwrap_works() {
         eprintln!("skipped: bwrap does not work here");
@@ -501,6 +506,7 @@ fn an_approved_push_runs_in_the_executor() {
 /// broker found, the body on standard input, its own login variables, and
 /// a home folder that it cannot change.
 #[test]
+#[cfg(target_os = "linux")]
 fn an_approved_gh_call_runs_in_the_executor() {
     if !common::bwrap_works() {
         eprintln!("skipped: bwrap does not work here");

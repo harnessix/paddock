@@ -1,0 +1,4 @@
+- New: (experimental) the horse store reads Grok Build 1.0.70 session folders row by row, and keeps the old items when Grok rewrites its chat history. `paddock horse project-grok` writes a session back, and a fork gets a new session id and the files of a native Grok fork. Other versions are refused.
+- New: (experimental) `paddock horse swap SESSION BRANCH --grok-home DIR` continues a stopped Grok Build session at another branch under the same session id. The old files stay as hard links in the session folder.
+- New: (experimental) in horse mode, a Grok Build child of `paddock-host spawn` runs as `grok agent stdio` over ACP. Tool permissions get the answer of the plain Grok run of the profile.
+- New: (experimental) an interactive Grok Build in horse mode gets queued entries through the pty relay. paddock adds its hooks to the sandbox copy of the hooks file, and `paddock-host horse safe-point stop|prompt --stdin` reads the hook event.

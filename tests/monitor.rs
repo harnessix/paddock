@@ -1,3 +1,4 @@
+#![cfg(target_os = "linux")]
 //! The monitor watch end to end: a bwrap sandbox runs a copy of `sleep`
 //! named `ngrok`, and paddock names it in the run folder and in
 //! `paddock ps --json`, next to the traffic count. Needs a systemd user instance and the session bus

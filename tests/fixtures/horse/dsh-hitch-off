@@ -1,0 +1,16 @@
+#!/bin/sh
+# A parent run outside horse mode. `paddock-host spawn --hitch` must fail,
+# and a plain spawn of the same child must work.
+set -u
+if [ "${1:-}" = "--version" ]; then
+    echo 'dsh 0.2.1-rc.5'
+    exit 0
+fi
+if paddock-host spawn claude --hitch --prompt-file task.md --reason hitch-off > hitch.out 2> hitch.err; then
+    echo 0 > hitch.code
+else
+    echo "$?" > hitch.code
+fi
+id=$(paddock-host spawn claude --prompt-file task.md --reason plain) || exit 11
+printf '%s\n' "$id" > child-id.txt
+paddock-host wait "$id" --timeout 100 > wait.txt 2>&1 || exit 12

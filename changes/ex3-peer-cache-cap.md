@@ -1,0 +1,2 @@
+- Fix: exclave shows the peer's error and runs a job locally only when it cannot reach the peer.
+- Changed: before a run, an exclave peer evicts the least recently used idle project caches to stay within its cache size.

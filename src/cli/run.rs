@@ -110,9 +110,15 @@ pub(crate) fn start_detached(env: &HostEnv, a: &RunArgs) -> Result<i32> {
         env: paddock::detach::caller_env(),
         run: serde_json::to_value(a)?,
     };
-    paddock::detach::launch(env, &tmux, &job, &opts.harness, &project, &prompt)?;
+    // The mailbox exists before the pane starts, so a watch can begin now.
+    paddock::mail::create(env, &id, &paddock::mail::Starter::host())?;
+    if let Err(e) = paddock::detach::launch(env, &tmux, &job, &opts.harness, &project, &prompt) {
+        let _ = std::fs::remove_dir_all(paddock::mail::dir(env, &id)?);
+        return Err(e);
+    }
     println!("{id}");
     println!("paddock view {} --write", paddock::ids::short(&id));
+    println!("mail: paddock mail watch {}", paddock::ids::short(&id));
     Ok(0)
 }
 
@@ -140,6 +146,8 @@ pub(crate) fn detach_run(job: &std::path::Path) -> Result<i32> {
         r.ended = Some(state::now());
         r.exit_code = Some(code);
     });
+    // The run writes its end itself; this covers a run that never started.
+    paddock::mail::events::ended(&env, &id, Some(code));
     let _ = writeln!(
         std::io::stderr(),
         "\npaddock: the sandbox ended at {} with exit code {code}.",
@@ -165,21 +173,28 @@ fn start_with(
     shell: bool,
     detach: Option<(String, Vec<u8>)>,
 ) -> Result<i32> {
+    let horse =
+        !shell && (a.horse || a.horse_id.is_some() || paddock::horse::live::settings(env)?.enabled);
     let mut opts = a.options(env, shell)?;
     opts.detach = detach.as_ref().map(|(id, _)| id.clone());
+    let project = build::resolve_project(opts.project.as_deref()).ok();
+    paddock::storage::guard::before_run(env, project.as_deref(), false)?;
     let mut built = build::build(env, &opts)?;
+    built.horse = horse;
     // The VM backend starts the same run with paddock in the guest.
     built.spec.intent = paddock::spec::Intent {
         shell,
         no_yolo: opts.no_yolo,
         args: opts.args.clone(),
+        horse_id: a.horse_id.clone(),
     };
     // The first prompt: a read-only copy where the [oneshot] prompt goes.
     let prompt_home = match &detach {
         Some((_, prompt)) => {
             let home = built.spec.home_src.clone();
             let id = built.spec.id.clone();
-            paddock::spawn::write_prompt(&home, &id, prompt, 0o400)?;
+            let prompt = paddock::mail::text::with_reminder(prompt);
+            paddock::spawn::write_prompt(&home, &id, &prompt, 0o400)?;
             Some((home, id))
         }
         None => None,
@@ -214,7 +229,7 @@ fn start_built(env: &HostEnv, opts: &Options, built: build::Built, shell: bool) 
     let wt = built.worktree.clone();
     let code = run::run(env, built, backend.as_ref(), false, false)?.code;
     if let Some(w) = wt {
-        eprintln!("\n{}", build::worktree_report(env, &w));
+        eprintln!("\n{}", paddock::worktree::finish(env, &w).0);
     }
     Ok(code)
 }
@@ -224,6 +239,23 @@ pub(crate) fn explain(env: &HostEnv, a: &RunArgs, json: bool) -> Result<()> {
     let built = build::build(env, &opts)?;
     let backend = run::select_backend(env, &built);
     let s = &built.spec;
+    let backend_name = backend.as_ref().map(|b| b.name()).unwrap_or_else(|_| {
+        if built.backend == "auto" && s.network == Network::Allowlist {
+            "srt"
+        } else {
+            &built.backend
+        }
+    });
+    let cache_note = match backend_name {
+        "srt" => Some("srt cannot remap package caches: caches stay in its sandbox home and [cache] share does not apply."),
+        "seatbelt" => Some("Seatbelt cannot remap package caches: caches stay in its sandbox home and [cache] share does not apply. Seatbelt can also reject cache overlays."),
+        _ => None,
+    };
+    let linux = cfg!(target_os = "linux")
+        || backend
+            .as_ref()
+            .is_ok_and(|b| matches!(b.name(), "vm" | "docker" | "podman"));
+    let mcp = paddock::mcp::diet::explain(env, &built.profile, &s.project, &built.manifest, linux);
     let cleanup = || {
         let _ = std::fs::remove_dir_all(env.paddock_run().join(&s.id));
         paddock::sockpath::remove_run_sockets(&env.paddock_run(), env.uid, &s.id);
@@ -241,6 +273,18 @@ pub(crate) fn explain(env: &HostEnv, a: &RunArgs, json: bool) -> Result<()> {
                     var["value"] = "(hidden)".into();
                 }
             }
+        }
+        v["mcp"] = serde_json::to_value(&mcp)?;
+        if built.profile.name == "codex" {
+            v["mcp_unfiltered_sources"] = serde_json::json!([
+                "nested --cd project layers",
+                "selected Codex profile files",
+                "plugin configuration",
+                "alternate Codex account config"
+            ]);
+        }
+        if let Some(note) = cache_note {
+            v["cache_backend_note"] = note.into();
         }
         v["screens"] = paddock::screens::explain(&built.profile).into();
         v["tack"] = paddock::tack::report::explain(env, &s.env).into();
@@ -262,6 +306,13 @@ pub(crate) fn explain(env: &HostEnv, a: &RunArgs, json: bool) -> Result<()> {
     match &backend {
         Ok(b) => println!("backend   {}", b.name()),
         Err(e) => println!("backend   unavailable: {e}"),
+    }
+    if let Some(note) = cache_note {
+        println!("cache     {note}");
+    }
+    match s.memory_high {
+        Some(high) => println!("memory    planned high {high} bytes (systemd scope only)"),
+        None => println!("memory    high disabled"),
     }
     println!(
         "network   {:?}{}",
@@ -287,6 +338,21 @@ pub(crate) fn explain(env: &HostEnv, a: &RunArgs, json: bool) -> Result<()> {
         s.gui.origin,
         if s.gui.gpu { ", gpu" } else { "" }
     );
+    if !mcp.is_empty() {
+        println!("\nMCP servers:");
+        for server in &mcp {
+            println!("  {}  {}", server.name, server.reason);
+            if !server.same_as.is_empty() {
+                println!(
+                    "       same configuration as {}; names remain separate",
+                    server.same_as.join(", ")
+                );
+            }
+        }
+    }
+    if built.profile.name == "codex" {
+        println!("  MCP platform filtering does not inspect nested --cd layers, selected profile files, plugin configuration, or alternate account config.");
+    }
     println!("\nmounts (everything else on the host is absent):");
     for m in s.ordered_mounts() {
         let kind = match m.kind {
@@ -392,8 +458,41 @@ pub(crate) fn explain(env: &HostEnv, a: &RunArgs, json: bool) -> Result<()> {
     for w in &s.warnings {
         println!("warning   {w}");
     }
+    if built.horse {
+        println!("\n{}", horse_block(env, &built));
+    }
     cleanup();
     Ok(())
+}
+
+/// The horse of a run in horse mode, for `paddock explain`.
+fn horse_block(env: &HostEnv, built: &build::Built) -> String {
+    use paddock::horse::{dna::explain, run::by_sandbox, Store};
+    let explained = |horse: &str| {
+        Store::open_host(env)
+            .and_then(|st| explain::explain(&st, horse))
+            .unwrap_or_else(|e| format!("cannot explain horse {horse}: {e:#}"))
+    };
+    let spawn = built.spawn.as_ref();
+    if let Some(h) = spawn.and_then(|c| c.hitch.as_ref()) {
+        let horse = h.run().horse;
+        return format!(
+            "horse mode: this run joins horse {horse} (hitched)\n{}",
+            explained(&horse)
+        );
+    }
+    let parent = spawn.and_then(|c| {
+        let st = Store::open_host(env).ok()?;
+        by_sandbox::find(&st, &c.parent).ok().flatten()
+    });
+    match parent {
+        Some(p) => format!(
+            "horse mode: this run gets a child horse of {} that inherits its DNA\n{}",
+            p.horse,
+            explained(&p.horse)
+        ),
+        None => "horse mode: this run gets a new horse with the default DNA (no traits)".into(),
+    }
 }
 
 pub(crate) fn run(env: &HostEnv, a: RunArgs) -> Result<i32> {

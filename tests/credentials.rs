@@ -1,3 +1,4 @@
+#![cfg(target_os = "linux")]
 //! The deliver channel end to end, with bwrap: the harness does not start
 //! before the user answers both cards, only two yes answers hand the value
 //! over, and a registered credential never passes with the environment.

@@ -1,0 +1,59 @@
+#!/bin/sh
+# A fake `dsh --profile sdk` in horse mode that spawns two hitched Claude
+# Code children, takes the prompts that paddock delivers, and ends when the
+# results of both children arrived. trace.txt has one line per idle and
+# per prompt, in order.
+set -eu
+if [ "${1:-}" = "--version" ]; then
+    echo 'dsh 0.2.1-rc.5'
+    exit 0
+fi
+[ "$1" = --profile ] && [ "$2" = sdk ]
+IFS= read -r request
+id=$(printf '%s' "$request" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
+printf '{"jsonrpc":"2.0","id":%s,"result":{"serverInfo":{"name":"fake","version":"1"}}}\n' "$id"
+sid=$(paddock-host horse sessions)
+test -n "$sid"
+# When the device has no binding, show what it has: the test fails below.
+native=$(paddock-host peek binding | sed -n 's/.*"native_id":"\([^"]*\)".*/\1/p')
+test -n "$native"
+seq=0
+# message ID TEXT: a user message row; TEXT is a JSON string.
+message() {
+    printf '{"jsonrpc":"2.0","method":"session.event","params":{"sessionId":"%s","event":{"type":"user/message","seq":%s,"time":1793000000%s,"data":{"content":[{"type":"text","text":%s}],"source":{"kind":"user"},"role":"user","id":"%s"},"surfaceOp":"append"}}}\n' \
+        "$native" "$seq" "$((200 + seq))" "$2" "$1"
+    seq=$((seq + 1))
+}
+idle() {
+    echo idle >> trace.txt
+    printf '{"jsonrpc":"2.0","method":"session.status","params":{"sessionId":"%s","status":"idle"}}\n' "$native"
+}
+: > trace.txt
+: > prompts.txt
+message m0 '"split the work"'
+paddock-host spawn claude --hitch --prompt-file task.md --reason hitch-a > child-a.txt
+paddock-host spawn claude --hitch --prompt-file task.md --reason hitch-b > child-b.txt
+printf '%s\n' "$sid" > sessions.txt
+idle
+n=0
+while IFS= read -r line; do
+    case "$line" in
+    *'"session/prompt"'*)
+        n=$((n + 1))
+        echo prompt >> trace.txt
+        printf '%s\n' "$line" >> prompts.txt
+        pid=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
+        text=$(printf '%s' "$line" | sed -n 's/.*"text":\("\([^"\\]\|\\.\)*"\).*/\1/p')
+        [ -n "$text" ] || text='"?"'
+        printf '{"jsonrpc":"2.0","id":%s,"result":{"messageId":"m-%s"}}\n' "$pid" "$n"
+        printf '{"jsonrpc":"2.0","method":"session.status","params":{"sessionId":"%s","status":"running"}}\n' "$native"
+        message "m-$n" "$text"
+        idle
+        ;;
+    esac
+    # One prompt can carry the results of both children: count the
+    # children, not the lines.
+    if [ "$(grep -o 'hitched [^ ]*' prompts.txt | sort -u | wc -l)" -ge 2 ]; then
+        break
+    fi
+done

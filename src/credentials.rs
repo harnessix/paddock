@@ -324,7 +324,7 @@ pub fn git_env(port: u16, routes: &[(String, String)]) -> Vec<(String, String)> 
 
 /// `[credentials.*]` of the user configuration.
 pub fn parse(text: &str) -> Result<BTreeMap<String, Credential>> {
-    let v: toml::Value = toml::from_str(text)?;
+    let v: toml::Value = crate::manifest::user_config_doc(text)?;
     let Some(t) = v.get("credentials") else {
         return Ok(BTreeMap::new());
     };

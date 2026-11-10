@@ -32,8 +32,8 @@ impl World {
             let script = format!(
                 r#"#!/bin/sh
 items='{items}'
-echo "$*" >> '{root}/calls'
-if [ '{mode}' = locked ]; then echo "secret-tool: Cannot get secret of a locked object" >&2; exit 1; fi
+printf '%s\n' "$*" >> '{root}/calls'
+if [ '{mode}' = locked ]; then printf '%s\n' "secret-tool: Cannot get secret of a locked object" >&2; exit 1; fi
 cmd=$1; shift
 case "$cmd" in
   store) shift; cat > "$items/$2-$4" ;;
@@ -321,7 +321,11 @@ fn a_stand_in_without_tackd_runs_the_program_with_the_reference() {
     let mut w = World::new("ok");
     w.bare = true;
     let gh = w.root.join("bin/gh");
-    std::fs::write(&gh, "#!/bin/sh\necho \"gh $* token=$GH_TOKEN\"\nexit 3\n").unwrap();
+    std::fs::write(
+        &gh,
+        "#!/bin/sh\nprintf \"%s\\n\" \"gh $* token=$GH_TOKEN\"\nexit 3\n",
+    )
+    .unwrap();
     std::fs::set_permissions(&gh, std::fs::Permissions::from_mode(0o755)).unwrap();
     w.config(&format!(
         "[tack.secrets.GH_TOKEN]\n[[tack.secrets.GH_TOKEN.allow]]\nprogram = \"{}\"\n",
@@ -339,8 +343,8 @@ fn a_stand_in_without_tackd_runs_the_program_with_the_reference() {
     let mut c = w.command(Path::new("/bin/sh"), &env);
     c.arg("-c")
         .arg(
-            "\"$0\" tack run gh pr list >\"$1/out1\" 2>\"$1/err1\"; echo $? >\"$1/code1\"\n\
-             \"$0\" tack run gh >\"$1/out2\" 2>\"$1/err2\"; echo $? >\"$1/code2\"",
+            "\"$0\" tack run gh pr list >\"$1/out1\" 2>\"$1/err1\"; printf \"%s\\n\" $? >\"$1/code1\"\n\
+             \"$0\" tack run gh >\"$1/out2\" 2>\"$1/err2\"; printf \"%s\\n\" $? >\"$1/code2\"",
         )
         .arg(env!("CARGO_BIN_EXE_paddock"))
         .arg(&out);

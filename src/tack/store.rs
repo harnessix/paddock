@@ -462,16 +462,16 @@ pub(crate) mod tests {
         let script = format!(
             r#"#!/bin/sh
 items='{items}'
-echo "$*" >> '{dir}/calls'
+printf '%s\n' "$*" >> '{dir}/calls'
 case '{mode}' in
-  locked) echo "secret-tool: Cannot get secret of a locked object" >&2; exit 1 ;;
-  nobus) echo "secret-tool: Cannot autolaunch D-Bus without X11 \$DISPLAY" >&2; exit 1 ;;
+  locked) printf '%s\n' "secret-tool: Cannot get secret of a locked object" >&2; exit 1 ;;
+  nobus) printf '%s\n' "secret-tool: Cannot autolaunch D-Bus without X11 \$DISPLAY" >&2; exit 1 ;;
 esac
 cmd=$1; shift
 case "$cmd" in
   store) shift; f="$items/$2-$4"; if [ '{mode}' = forget ]; then cat >/dev/null; else cat > "$f"; fi ;;
   lookup) f="$items/$2-$4"; [ -f "$f" ] || exit 1; cat "$f" ;;
-  *) echo "unknown $cmd" >&2; exit 2 ;;
+  *) printf '%s\n' "unknown $cmd" >&2; exit 2 ;;
 esac
 "#,
             items = items.display(),
@@ -548,7 +548,7 @@ esac
         std::fs::write(
             &p,
             format!(
-                "#!/bin/sh\necho \"ARGS $*\" >> '{0}'\nif [ \"$1\" = -i ]; then cat >> '{0}'; exit 0; fi\nif [ \"$5\" = MISSING ]; then exit 44; fi\nprintf 'fake-v\\n'\n",
+                "#!/bin/sh\nprintf \"%s\\n\" \"ARGS $*\" >> '{0}'\nif [ \"$1\" = -i ]; then cat >> '{0}'; exit 0; fi\nif [ \"$5\" = MISSING ]; then exit 44; fi\nprintf 'fake-v\\n'\n",
                 log.display()
             ),
         )

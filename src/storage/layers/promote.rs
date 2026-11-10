@@ -762,7 +762,9 @@ pub fn command(
             *slot = v;
         }
     }
-    if !super::project_dir(env, project).is_dir() {
+    let project_dir = super::project_dir(env, project);
+    let _lease = crate::storage::package_cache::lease(env, &project_dir, false)?;
+    if !project_dir.is_dir() {
         return Ok(vec![]);
     }
     let _lock = lock(env)?;

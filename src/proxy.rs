@@ -190,6 +190,10 @@ pub struct HostProxy {
     /// Network mode `api`: only CONNECT to listed hosts, with a matching TLS
     /// server name. Plain HTTP is refused.
     pub api: Option<allow::ApiPolicy>,
+    /// Opt-in peer-owned exact HTTP registry targets, used with API mode.
+    pub registry_http: Option<allow::RegistryHttpPolicy>,
+    /// Exact peer-owned registry targets permitted on private networks.
+    pub registry_private: Option<allow::RegistryHttpPolicy>,
     /// Trust only this TLS config for `https://` proxies, instead of the
     /// system trust store. Tests use it for a local CA.
     #[cfg(test)]
@@ -253,6 +257,8 @@ impl Default for HostProxy {
             idle: Duration::from_secs(15 * 60),
             max_conns: 512,
             api: None,
+            registry_http: None,
+            registry_private: None,
             #[cfg(test)]
             tls: None,
             boundary: None,
@@ -418,21 +424,7 @@ fn check_target(cfg: &HostProxy, host: &str, port: u16) -> Result<Vec<std::net::
         Err(_) => return Ok(vec![]), // only an upstream proxy may resolve this name
     };
     let local: Vec<IpAddr> = local_addrs().into_iter().map(canonical).collect();
-    for a in &resolved {
-        let ip = canonical(a.ip());
-        if ip.is_loopback() {
-            if !cfg.allow_loopback.contains(&port) {
-                cfg.refused(host, port, "host loopback port not in [network] host_ports");
-                bail!("refused: {host}:{port} is a host loopback port that is not allowed");
-            }
-        } else if ip.is_unspecified() || local.contains(&ip) {
-            cfg.refused(host, port, "an address of this host");
-            bail!("refused: {host}:{port} is an address of this host");
-        } else if !cfg.allow_lan && is_lan(&ip) {
-            cfg.refused(host, port, "private network ([network] lan = false)");
-            bail!("refused: {host}:{port} is on a private network; set [network] lan = true to allow it");
-        }
-    }
+    target::check_resolved(cfg, host, port, &resolved, &local)?;
     Ok(resolved)
 }
 
@@ -517,7 +509,7 @@ fn connect_proxy(cfg: &HostProxy, host: &str, port: u16, tls: bool) -> Result<Bo
 /// Open a tunnel to host:port the way a host program would.
 fn open_tunnel(cfg: &HostProxy, host: &str, port: u16) -> Result<Box<dyn Duplex>> {
     let vetted = check_target(cfg, host, port)?;
-    let up = if cfg.bypass(host) || is_loopback(host) {
+    let up = if cfg.registry_http.is_some() || cfg.bypass(host) || is_loopback(host) {
         None
     } else {
         cfg.https.as_ref()
@@ -681,30 +673,6 @@ fn splice(a: impl Duplex, b: impl Duplex, idle: Duration) {
     let _ = t.join();
 }
 
-fn respond(client: &mut impl Write, code: u16, reason: &str) {
-    let _ = write!(
-        client,
-        "HTTP/1.1 {code} {reason}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-    );
-}
-
-fn fail(client: &mut impl Write, e: &anyhow::Error) {
-    if e.to_string().starts_with("refused") {
-        respond(client, 403, "Forbidden");
-    } else {
-        respond(client, 502, "Bad Gateway");
-    }
-}
-
-/// The host and port of a CONNECT target `host:port`. The port must be
-/// written out; `Url::port` alone hides port 80 as the default of http.
-fn connect_target(target: &str) -> Option<(String, u16)> {
-    let (_, port) = target.rsplit_once(':')?;
-    port.parse::<u16>().ok()?;
-    let parsed = Url::parse(&format!("http://{target}")).ok()?;
-    Some((host_of(&parsed)?, parsed.port_or_known_default()?))
-}
-
 /// Hop-by-hop headers that a proxy must not forward.
 const HOP: &[&str] = &[
     "proxy-connection",
@@ -771,21 +739,18 @@ fn handle(cfg: &HostProxy, mut client: UnixStream) -> Result<()> {
         return Ok(());
     }
 
-    if let Some(api) = &cfg.api {
-        let host = Url::parse(&target)
-            .ok()
-            .as_ref()
-            .and_then(host_of)
-            .unwrap_or_default();
-        let port = Url::parse(&target)
-            .ok()
-            .and_then(|u| u.port_or_known_default())
-            .unwrap_or(80);
-        if api.refuse(&host, "plain HTTP") {
-            cfg.refused(&host, port, "network mode api: plain HTTP");
+    // Preserve the API proxy's default refusal, including malformed targets.
+    if cfg.registry_http.is_none() {
+        if let Some(api) = &cfg.api {
+            let parsed = Url::parse(&target).ok();
+            let host = parsed.as_ref().and_then(host_of).unwrap_or_default();
+            let port = parsed.and_then(|u| u.port_or_known_default()).unwrap_or(80);
+            if api.refuse(&host, "plain HTTP") {
+                cfg.refused(&host, port, "network mode api: plain HTTP");
+            }
+            respond(&mut client, 403, "Forbidden");
+            bail!("refused: plain HTTP to {host} in network mode api");
         }
-        respond(&mut client, 403, "Forbidden");
-        bail!("refused: plain HTTP to {host} in network mode api");
     }
 
     // A plain HTTP request in absolute form.
@@ -798,7 +763,20 @@ fn handle(cfg: &HostProxy, mut client: UnixStream) -> Result<()> {
     };
     let host = host_of(&url).unwrap_or_default();
     let port = url.port_or_known_default().unwrap_or(80);
-    let via = if cfg.bypass(&host) || is_loopback(&host) {
+    if let Some(api) = &cfg.api {
+        let result = cfg.registry_http.as_ref().map_or_else(
+            || Err("plain HTTP".to_string()),
+            |policy| policy.check(&host, port),
+        );
+        if let Err(why) = result {
+            if api.refuse(&host, &why) {
+                cfg.refused(&host, port, &format!("network mode api: {why}"));
+            }
+            respond(&mut client, 403, "Forbidden");
+            bail!("refused: {host}:{port}: {why}");
+        }
+    }
+    let via = if cfg.registry_http.is_some() || cfg.bypass(&host) || is_loopback(&host) {
         None
     } else {
         cfg.http.clone()
@@ -962,7 +940,10 @@ pub fn relay(listen: &str, socket: &Path, forward: &[u16], ready: Option<&Path>)
 }
 
 pub mod allow;
+mod response;
+use response::{fail, respond};
 mod target;
+use target::connect_target;
 pub(crate) mod tls;
 
 #[cfg(test)]

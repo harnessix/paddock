@@ -105,7 +105,6 @@ impl Approver for NoOne {
         None
     }
 }
-
 /// A TCP server that answers each line with "echo:" and the line.
 fn echo_server() -> u16 {
     let l = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -171,7 +170,6 @@ impl Drop for Kill {
         let _ = self.0.wait();
     }
 }
-
 /// Two members in one network. The owner binds its socket in its own
 /// folder. A socket planted in the shared pasture folder is not the one
 /// the owner serves. The other member skips the port because its own
@@ -280,11 +278,11 @@ fn a_member_shares_a_port_in_its_own_socket_folder() {
 }
 
 // ---- end to end, in bubblewrap ---------------------------------------------
-
 /// Each wait prints WAIT, the key and the exit code when it fails, and each
 /// member ends with its view of the pasture (LIST) and its helper log
 /// (HELPER), so that a failure explains itself. The keys are written once,
 /// so every watch starts at version 0: a write before the watch counts.
+#[cfg(target_os = "linux")]
 const LOG: &str = r#"
 wait_for() { paddock-host kv watch "$1" --version 0 --scope pasture --timeout "${2:-12}" >/dev/null 2>/tmp/w; c=$?; [ $c = 0 ] || echo "WAIT $1 $c $(cat /tmp/w)"; }
 report() {
@@ -293,9 +291,9 @@ report() {
 }
 paddock-host kv list --scope pasture >/dev/null 2>/tmp/k; echo "KV_EXIT $? $(cat /tmp/k)"
 "#;
-
 /// Member A serves on 3000 and shares it. It writes ready:a, then waits
 /// for go:unshare and unshares.
+#[cfg(target_os = "linux")]
 const OWNER: &str = r#"
 python3 - <<'PY' &
 import socket, threading
@@ -316,9 +314,9 @@ paddock-host kv put done:a yes --scope pasture >/dev/null
 wait_for go:end
 report
 "#;
-
 /// Member B waits for ready:a, reaches 127.0.0.1:3000, tries to share it,
 /// lets A unshare, and checks that the port is gone.
+#[cfg(target_os = "linux")]
 const OTHER: &str = r#"
 ask() { python3 -c '
 import socket, sys
@@ -340,8 +338,8 @@ echo "AFTER $r"
 report
 paddock-host kv put go:end yes --scope pasture >/dev/null
 "#;
-
 #[test]
+#[cfg(target_os = "linux")]
 fn two_members_reach_a_shared_port_in_bubblewrap() {
     if !common::bwrap_works() {
         eprintln!("skipped: bwrap cannot create a user namespace here");
@@ -461,7 +459,6 @@ fn two_members_reach_a_shared_port_in_bubblewrap() {
 // ---- the bridge: one member asks another -----------------------------------
 
 const TOKEN: &str = "fake-Tok3n-Ab9cD8eF7gH6iJ5kL4mN";
-
 /// The one-shot command of member B: it reads the question on stdin. A
 /// question about the login prints its login file.
 const ANSWER: &str = r#"q=$(cat); case "$q" in *login*) cat "$0";; *) echo "B answers: $q";; esac"#;
@@ -635,9 +632,9 @@ fn a_member_asks_another_and_the_guard_withholds_a_login() {
     let out = a.run(&["pasture", "members"]);
     assert!(text(&out).contains("bridge: off"), "{}", text(&out));
 }
-
 /// Member A asks member B twice: a plain question, and one that makes B
 /// print its login file. B answers with its `[oneshot]` command.
+#[cfg(target_os = "linux")]
 const ASKER: &str = r#"
 paddock-host kv watch ready:b --version 0 --scope pasture --timeout 60 >/dev/null
 echo "what is two and two" > /tmp/q.md
@@ -648,12 +645,13 @@ echo "LEAK $(cat /tmp/a) $(cat /tmp/e)"
 paddock-host kv put go:end yes --scope pasture >/dev/null
 "#;
 
+#[cfg(target_os = "linux")]
 const ANSWERER: &str = r#"
 paddock-host kv put ready:b yes --scope pasture >/dev/null
 paddock-host kv watch go:end --version 0 --scope pasture --timeout 120 >/dev/null
 "#;
-
 #[test]
+#[cfg(target_os = "linux")]
 fn a_member_asks_another_in_bubblewrap() {
     if !common::bwrap_works() {
         eprintln!("skipped: bwrap cannot create a user namespace here");
@@ -794,8 +792,8 @@ fn the_workbench_needs_the_configuration() {
     let out = paddock(t.path(), &["pasture", "workbench", "team"]);
     assert!(!out.status.success(), "{}", text(&out));
 }
-
 /// A member types into the workbench through its read-only socket folder.
+#[cfg(target_os = "linux")]
 const POKER: &str = r#"
 S=/run/paddock/workbench/tmux
 for i in $(seq 1 100); do [ -S "$S" ] && break; sleep 0.1; done
@@ -808,8 +806,8 @@ paddock-host pasture workbench --print >/tmp/o 2>&1; echo "JOIN_EXIT $?"
 echo "JOIN $(head -n 1 /tmp/o)"
 paddock-host pasture members > /tmp/m; echo "MEMBERS $(tr '\n' ' ' </tmp/m)"
 "#;
-
 #[test]
+#[cfg(target_os = "linux")]
 fn a_member_types_into_the_workbench_in_bubblewrap() {
     if !common::bwrap_works() {
         eprintln!("skipped: bwrap cannot create a user namespace here");

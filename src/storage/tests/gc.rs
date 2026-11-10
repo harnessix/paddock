@@ -47,8 +47,13 @@ fn gc_yes_removes_only_the_automatic_tier_and_spares_running_homes() {
     let inv = scan(&env, &h, false);
     let items = plan(&inv, &o, state::now());
     let removed = apply(&env, &c, &items);
-    assert_eq!(removed.len(), 1, "{removed:?}");
-    assert!(!orphan.exists());
+    // A home is the user's conversations: without --homes none goes, not
+    // even one whose harness profile is gone.
+    assert!(removed.is_empty(), "{removed:?}");
+    assert!(
+        orphan.exists(),
+        "a home whose profile is gone needs --homes"
+    );
     assert!(busy.exists(), "a running sandbox keeps its home");
     assert!(gone.exists(), "a home of a gone project needs --homes");
 
@@ -60,6 +65,7 @@ fn gc_yes_removes_only_the_automatic_tier_and_spares_running_homes() {
     let items = plan(&scan(&env, &h, false), &o, state::now());
     apply(&env, &c, &items);
     assert!(!gone.exists());
+    assert!(!orphan.exists());
     assert!(busy.exists());
 }
 
@@ -202,7 +208,7 @@ fn the_old_shared_package_caches_go_and_so_do_layers_of_gone_projects() {
     assert!(check_removable(&env, &shared.join("mise-tools")).is_err());
     let gone = t.path().join("gone");
     std::fs::create_dir_all(&gone).unwrap();
-    layers::mount_with(&env, &gone, "npm", "/h/.npm".into(), "t", true).unwrap();
+    layers::mount_with(&env, &gone, "pnpm-store", "/h/.npm".into(), "t", true).unwrap();
     std::fs::remove_dir(&gone).unwrap();
 
     let c = FakeContainers::default();
@@ -218,7 +224,7 @@ fn the_old_shared_package_caches_go_and_so_do_layers_of_gone_projects() {
     apply(&env, &c, &items);
     assert!(!shared.join("npm").exists());
     assert!(!layers::project_dir(&env, &gone).exists());
-    assert!(layers::lower(&env, "npm").is_dir());
+    assert!(layers::lower(&env, "pnpm-store").is_dir());
 }
 
 #[test]
@@ -356,4 +362,215 @@ fn gc_clears_pure_caches_in_the_automatic_tier_and_never_a_login() {
     let mut inv = scan(&env, &hst, false);
     inv.homes[0].running = true;
     assert!(find(&plan(&inv, &opts(), state::now()), "pure caches").is_none());
+}
+
+#[test]
+fn merged_worktree_cache_is_listed_for_gc() {
+    let mut inv = inventory(vec![]);
+    let project = PathBuf::from("/fake/worktree");
+    inv.layers.push(layers::Layer {
+        path: "/fake/cache".into(),
+        project: Some(project.clone()),
+        orphan: false,
+        bytes: 10,
+    });
+    inv.worktrees.push(Worktree {
+        path: project,
+        repo: Some("/fake/repo".into()),
+        branch: Some("paddock/test".into()),
+        unmerged: Some(0),
+        dirty: Some(false),
+        merged: Some(true),
+        last_used: 1,
+        bytes: 0,
+        running: false,
+    });
+    let items = plan(&inv, &opts(), state::now());
+    assert!(items
+        .iter()
+        .any(|i| i.what.contains("cache layers") && i.reason.contains("merged")));
+    inv.worktrees[0].running = true;
+    let items = plan(&inv, &opts(), state::now());
+    assert!(!items.iter().any(|i| i.what.contains("cache layers")));
+}
+
+#[test]
+fn cache_gc_only_spares_the_running_project_and_leases() {
+    if package_cache::isolated_test(
+        "storage::tests::gc::cache_gc_only_spares_the_running_project_and_leases",
+    ) {
+        return;
+    }
+    let (_t, env) = setup();
+    let busy_project = env.home.join("src/busy");
+    let gone_project = env.home.join("src/gone");
+    let busy = layers::project_dir(&env, &busy_project);
+    let gone = layers::project_dir(&env, &gone_project);
+    let marker_match = layers::projects_root(&env).join("different-name");
+    let shared_busy = package_cache::root(&env).join(state::slug(&busy_project));
+    let shared_gone = package_cache::root(&env).join(state::slug(&gone_project));
+    let shared_leased = package_cache::root(&env).join("leased");
+    for path in [
+        &busy,
+        &gone,
+        &marker_match,
+        &shared_busy,
+        &shared_gone,
+        &shared_leased,
+    ] {
+        std::fs::create_dir_all(path).unwrap();
+    }
+    std::fs::write(
+        marker_match.join("project"),
+        busy_project.to_string_lossy().as_bytes(),
+    )
+    .unwrap();
+    let lease = package_cache::lease(&env, &shared_leased, false).unwrap();
+    Running {
+        id: "run-busy-1".into(),
+        harness: "porttest".into(),
+        project: busy_project.clone(),
+        backend: "bwrap".into(),
+        network: "none".into(),
+        gui: "off".into(),
+        pid: std::process::id(),
+        started: state::now(),
+        auth: "shared".into(),
+        window_pid: None,
+        warnings: vec![],
+        host_pid: std::process::id(),
+        parent: None,
+        spawn_id: None,
+        logins: Vec::new(),
+        unit: None,
+        kv_project: None,
+        pasture: None,
+        credentials: Vec::new(),
+        gateway: Vec::new(),
+        agent: Vec::new(),
+        secret_files: Vec::new(),
+        kept_logins: Vec::new(),
+        watched: false,
+        relay: false,
+    }
+    .register(&env)
+    .unwrap();
+    let items: Vec<Item> = [
+        &busy,
+        &gone,
+        &marker_match,
+        &shared_busy,
+        &shared_gone,
+        &shared_leased,
+    ]
+    .iter()
+    .map(|path| Item {
+        what: path.display().to_string(),
+        tier: Tier::Auto,
+        bytes: 0,
+        reason: String::new(),
+        warning: None,
+        needs: vec![],
+        action: Action::Path {
+            path: (*path).clone(),
+        },
+    })
+    .collect();
+    let results = apply(&env, &FakeContainers::default(), &items);
+    for i in [0, 2, 3] {
+        assert!(results[i]
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("in use by run run-busy-1; skipped"));
+    }
+    assert!(busy.exists() && marker_match.exists() && shared_busy.exists());
+    assert!(!gone.exists() && !shared_gone.exists(), "{results:?}");
+    assert!(shared_leased.exists());
+    assert!(results[5].error.as_deref().unwrap().contains("in use"));
+    drop(lease);
+}
+
+#[test]
+fn shared_cache_matches_the_repository_of_a_running_worktree() {
+    let (t, env) = setup();
+    let repo = t.path().join("repo");
+    let busy_project = t.path().join("worktree");
+    std::fs::create_dir_all(&repo).unwrap();
+    for args in [
+        vec!["init", "-q", "-b", "main"],
+        vec![
+            "-c",
+            "user.name=Test",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "initial",
+        ],
+    ] {
+        assert!(Command::new("git")
+            .current_dir(&repo)
+            .args(args)
+            .status()
+            .unwrap()
+            .success());
+    }
+    assert!(Command::new("git")
+        .current_dir(&repo)
+        .args(["worktree", "add", "-q", "-b", "other"])
+        .arg(&busy_project)
+        .status()
+        .unwrap()
+        .success());
+    let shared = package_cache::project_dir(&env, &repo).unwrap();
+    std::fs::create_dir_all(&shared).unwrap();
+    Running {
+        id: "run-busy-1".into(),
+        harness: "porttest".into(),
+        project: busy_project.clone(),
+        backend: "bwrap".into(),
+        network: "none".into(),
+        gui: "off".into(),
+        pid: std::process::id(),
+        started: state::now(),
+        auth: "shared".into(),
+        window_pid: None,
+        warnings: vec![],
+        host_pid: std::process::id(),
+        parent: None,
+        spawn_id: None,
+        logins: Vec::new(),
+        unit: None,
+        kv_project: None,
+        pasture: None,
+        credentials: Vec::new(),
+        gateway: Vec::new(),
+        agent: Vec::new(),
+        secret_files: Vec::new(),
+        kept_logins: Vec::new(),
+        watched: false,
+        relay: false,
+    }
+    .register(&env)
+    .unwrap();
+    let item = Item {
+        what: "shared cache".into(),
+        tier: Tier::Auto,
+        bytes: 0,
+        reason: String::new(),
+        warning: None,
+        needs: vec![],
+        action: Action::Path {
+            path: shared.clone(),
+        },
+    };
+    let result = apply(&env, &FakeContainers::default(), &[item]);
+    assert_eq!(
+        result[0].error.as_deref(),
+        Some("in use by run run-busy-1; skipped")
+    );
+    assert!(shared.exists());
 }

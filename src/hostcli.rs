@@ -2,26 +2,29 @@
 //! request to the host broker and prints the result. The help text is the full
 //! reference, so an agent never needs to read this source to use it.
 
-use crate::broker::{Request, Response, Status, PROTOCOL, SOCKET_IN_SANDBOX};
+use crate::broker::{Request, Response, Status, PROTOCOL};
 use std::collections::BTreeMap;
-use std::io::{BufRead, BufReader, Write};
-use std::os::unix::net::UnixStream;
 
 pub mod compacted;
 pub(crate) mod credential;
 pub mod device;
+mod exclave;
 pub mod forage;
 mod git;
+#[path = "hostcli/horse.rs"]
+pub(crate) mod horse;
 pub mod kv;
+pub mod mail;
+pub mod mail_hook;
 pub mod pasture;
 mod spawn;
 pub mod spec;
 pub mod status;
 pub mod timer;
-
+mod transport;
+pub use transport::send;
 pub const EXIT_USAGE: i32 = 2;
 pub const EXIT_NO_HOST: i32 = 6;
-
 pub const HELP: &str = r#"paddock-host: ask the host to do something that the sandbox cannot do.
 
 You are inside a paddock sandbox. You see only the project, your own home
@@ -30,6 +33,7 @@ host. Depending on the user's configuration, the host does it at once, asks the
 user first, or refuses. Nothing here opens the sandbox itself.
 
 USAGE
+  paddock-host exclave run [--on NAME] -- COMMAND...  (run a command on a configured peer)
   paddock-host capabilities [--json]
   paddock-host boundary [--json]   (what the sandbox boundary denied)
   paddock-host screenshot [--target screen|window|output:NAME] [--out FILE] [--reason TEXT]
@@ -45,8 +49,10 @@ USAGE
   paddock-host git push [REMOTE] [REFSPEC...]   (plain `git push` works too)
   paddock-host gh COMMAND [ARG...]              (plain `gh` works too)
   paddock-host tea|glab COMMAND [ARG...]        (plain `tea` and `glab` too, when the host has them)
-  paddock-host spawn HARNESS --prompt-file FILE|--task ID [--role ROLE] [--from-head] [--reason TEXT]
+  paddock-host spawn HARNESS --prompt-file FILE|--task ID [--role ROLE] [--from-head] [--hitch] [--reason TEXT]
   paddock-host spec status|review|note          (Spec Kit tasks, see `paddock-host help spec`)
+  paddock-host gauge [FEATURE] [--strict] [--json]  (how far the feature is)
+  paddock-host train [--deep] | feedback ADVICE adopted|not-adopted [NOTE]
   paddock-host status [ID]
   paddock-host wait ID [--timeout SECONDS]
   paddock-host kill ID
@@ -56,11 +62,13 @@ USAGE
   paddock-host timer COMMAND [ARG...]           (task timers, see `paddock-host timer --help`)
   paddock-host pasture share|unshare PORT       (ports for your pasture, see `paddock-host pasture --help`)
   paddock-host pasture members
+  paddock-host horse COMMAND [ARG...]           (horse commands, see `paddock-host horse --help`)
+  paddock-host peek [--grant ID] ls|cat|grep|range|dna|binding|inbox
   paddock-host forage [--refresh] [--json]      (limits left and how fast they go)
   paddock-host status                           (your timers and limits in a few lines)
   paddock-host device NAME [REQUEST]            (a device in /dev/paddock, see `paddock-host device --help`)
+  paddock-host mail wait|send|ask|status        (messages with whoever started this run, see `paddock-host mail --help`)
   paddock-host help [CAPABILITY]
-
 Common options
   --reason TEXT   One sentence that tells the user why you ask. The user sees it
                   next to the request. Requests with a clear reason get answered.
@@ -328,60 +336,9 @@ the view. In a run that is not detached, done fails with exit code 4."#
         "compacted" | "compaction" => compacted::HELP,
         "spawn" | "status" | "wait" | "kill" => spawn::HELP,
         "spec" => spec::HELP,
+        "gauge" => spec::GAUGE_HELP,
         _ => return None,
     })
-}
-
-/// Send one request to the host: through the gateway device
-/// `/dev/paddock/gw` when the sandbox has it, else through the host socket.
-pub fn send(req: &Request) -> Result<Response, String> {
-    // A unit test talks to its own broker. Run in a paddock sandbox, the
-    // gateway would take the request to the real host instead.
-    if cfg!(test) && std::env::var_os("PADDOCK_HOST_SOCKET").is_some() {
-        return send_socket(req);
-    }
-    let gw = device::root().join("gw");
-    if gw.exists() {
-        return send_gateway(req);
-    }
-    send_socket(req)
-}
-
-/// Through the gateway. A read that reaches its time limit (still waiting)
-/// sends the same request again, which attaches to the one that waits.
-/// When the device fails, paddock-host does not fall back to the socket:
-/// the request may have run.
-fn send_gateway(req: &Request) -> Result<Response, String> {
-    let body = serde_json::to_vec(req).map_err(|e| e.to_string())?;
-    loop {
-        match device::call("gw", &body) {
-            Ok(out) => {
-                return serde_json::from_slice(&out)
-                    .map_err(|e| format!("bad response from the host: {e}"))
-            }
-            Err(e) if e == crate::waiting::ERRNO_STILL_WAITING => continue,
-            Err(e) => {
-                return Err(format!(
-                    "the gateway /dev/paddock/gw failed: {}",
-                    device::describe(e)
-                ))
-            }
-        }
-    }
-}
-
-/// Through the host socket, for a sandbox without `/dev/paddock`.
-fn send_socket(req: &Request) -> Result<Response, String> {
-    let path =
-        std::env::var("PADDOCK_HOST_SOCKET").unwrap_or_else(|_| SOCKET_IN_SANDBOX.to_string());
-    let mut s =
-        UnixStream::connect(&path).map_err(|e| format!("cannot reach the host at {path}: {e}"))?;
-    let line = serde_json::to_string(req).map_err(|e| e.to_string())?;
-    writeln!(s, "{line}").map_err(|e| e.to_string())?;
-    let mut reader = BufReader::new(s);
-    let mut out = String::new();
-    reader.read_line(&mut out).map_err(|e| e.to_string())?;
-    serde_json::from_str(out.trim()).map_err(|e| format!("bad response from the host: {e}"))
 }
 
 struct Parsed {
@@ -431,6 +388,16 @@ fn usage(msg: &str) -> i32 {
     EXIT_USAGE
 }
 
+/// 0 when the child ended with exit code 0, else 1.
+pub fn wait_exit_code(status: &serde_json::Value) -> i32 {
+    let ok = status["state"] == "exited" && status["exit_code"] == 0;
+    if ok {
+        0
+    } else {
+        1
+    }
+}
+
 /// The entry point. Returns the process exit code.
 pub fn main(args: &[String]) -> i32 {
     let Some(cmd) = args.first().map(String::as_str) else {
@@ -449,7 +416,10 @@ pub fn main(args: &[String]) -> i32 {
         "status" => return status::main(rest),
         "compacted" => return compacted::main(rest),
         "spec" => return spec::main(rest),
+        "gauge" | "train" => return spec::gauge_or_train_main(cmd, rest),
         "device" => return device::main(rest),
+        "mail" => return mail::main(rest),
+        "exclave" => return exclave::main(rest),
         "credential" => return credential::main(rest),
         "tea" | "glab" => return git::forge_main(cmd, rest),
         "forge"
@@ -460,6 +430,9 @@ pub fn main(args: &[String]) -> i32 {
             return git::forge_main(&rest[0], &rest[1..])
         }
         _ => {}
+    }
+    if let Some(code) = horse::dispatch(cmd, rest) {
+        return code;
     }
     if matches!(cmd, "-h" | "--help" | "help") {
         match rest.first() {
@@ -717,16 +690,6 @@ pub fn main(args: &[String]) -> i32 {
         return wait_exit_code(&resp.result);
     }
     resp.status.exit_code()
-}
-
-/// 0 when the child ended with exit code 0, else 1.
-pub fn wait_exit_code(status: &serde_json::Value) -> i32 {
-    let ok = status["state"] == "exited" && status["exit_code"] == 0;
-    if ok {
-        0
-    } else {
-        1
-    }
 }
 
 fn print_child(c: &serde_json::Value) {

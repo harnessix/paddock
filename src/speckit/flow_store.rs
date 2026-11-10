@@ -87,6 +87,11 @@ where
                     0o644,
                 )?;
             }
+            crate::gauge::history::log_states(
+                &crate::gauge::collect::Files::of(&spot.layout, &spot.feature).history(),
+                crate::gauge::history::from_records(&tasks),
+                now,
+            );
             *stored = next;
         }
         let ready = board::ready(&doc, &tasks);

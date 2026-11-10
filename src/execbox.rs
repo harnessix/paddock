@@ -106,7 +106,7 @@ impl ExecCfg {
     }
 
     pub fn parse(env: &HostEnv, text: &str) -> Result<Self> {
-        let doc: toml::Value = toml::from_str(text)?;
+        let doc: toml::Value = crate::manifest::user_config_doc(text)?;
         let mut c = Self::default();
         let Some(t) = doc.get("exec").and_then(|e| e.as_table()) else {
             return Ok(c);
@@ -203,10 +203,19 @@ pub fn detect(env: &HostEnv) -> Result<Isolation> {
                 matches!(s.trim(), "running" | "degraded")
             })
             .unwrap_or(false);
-    if systemd {
+    if systemd
+        && env
+            .which("systemd-run")
+            .is_some_and(|b| systemd_isolates(env, &b))
+    {
         return Ok(Isolation::Systemd);
     }
-    let msg = "exec needs a systemd user instance or bwrap to run a command in isolation";
+    if systemd {
+        log::warn!(
+            "exec: systemd-run --user gives a unit no mount namespace here; paddock uses bwrap"
+        );
+    }
+    let msg = "exec needs a systemd user instance that can isolate a unit, or bwrap, to run a command in isolation";
     match env.which("bwrap") {
         Some(bwrap) if bwrap_starts(&bwrap) => Ok(Isolation::Bwrap),
         Some(bwrap) => bail!(
@@ -215,6 +224,41 @@ pub fn detect(env: &HostEnv) -> Result<Isolation> {
         ),
         None => bail!("{msg}"),
     }
+}
+
+/// A transient unit of the user manager gets its mount namespace. A user
+/// manager that cannot make one (for example, no user namespace for it)
+/// logs "assuming containerized execution and ignoring" and runs the
+/// command without ProtectHome=, PrivateTmp= or TemporaryFileSystem=: it
+/// sees the whole home. The probe hides a folder with a mark in it, and
+/// the unit must not see the mark.
+fn systemd_isolates(env: &HostEnv, systemd_run: &Path) -> bool {
+    let dir = env
+        .paddock_cache()
+        .join(format!("exec-probe-{}", std::process::id()));
+    let mark = dir.join("mark");
+    if crate::privfs::dir(&dir).is_err() || std::fs::write(&mark, "").is_err() {
+        return false;
+    }
+    let ok = Command::new(systemd_run)
+        .args(probe_args(&dir, &mark))
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success());
+    let _ = std::fs::remove_dir_all(&dir);
+    ok
+}
+
+fn probe_args(dir: &Path, mark: &Path) -> Vec<String> {
+    let mut a: Vec<String> = ["--user", "--pipe", "--wait", "--collect", "--quiet", "-p"]
+        .map(String::from)
+        .into();
+    a.push(format!("TemporaryFileSystem={}", unit_path(dir)));
+    a.extend(["--", "/bin/sh", "-c", "test ! -e \"$0\""].map(String::from));
+    a.push(mark.display().to_string());
+    a
 }
 
 /// bwrap can start a sandbox with a user namespace. It cannot inside a
@@ -420,6 +464,37 @@ mod tests {
         std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o755)).unwrap();
         let vars = [("PATH".to_string(), bin.display().to_string())].into();
         HostEnv::from_parts(dir.join("home"), "demo".into(), 1, 1, vars)
+    }
+
+    #[test]
+    fn a_user_manager_that_ignores_the_mount_settings_does_not_isolate() {
+        let dir = tempfile::tempdir().unwrap();
+        let env = fake_bwrap(dir.path(), "exit 0");
+        let bin = dir.path().join("bin");
+        // Runs the command as it is, like a user manager without a mount
+        // namespace: the command sees the mark.
+        let plain = bin.join("systemd-run-plain");
+        let body = "#!/bin/sh\nwhile [ \"$1\" != -- ]; do shift; done\nshift\nexec \"$@\"\n";
+        std::fs::write(&plain, body).unwrap();
+        // Hides the folder of the TemporaryFileSystem= setting, as a unit
+        // with its mount namespace does.
+        let hides = bin.join("systemd-run-hides");
+        std::fs::write(
+            &hides,
+            "#!/bin/sh\ncase \"$*\" in *TemporaryFileSystem=*) exit 0 ;; esac\nexit 1\n",
+        )
+        .unwrap();
+        for f in [&plain, &hides] {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(f, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        assert!(!systemd_isolates(&env, &plain));
+        assert!(systemd_isolates(&env, &hides));
+        // The probe folder does not stay.
+        assert!(!env
+            .paddock_cache()
+            .join(format!("exec-probe-{}", std::process::id()))
+            .exists());
     }
 
     #[test]

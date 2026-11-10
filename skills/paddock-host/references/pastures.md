@@ -10,3 +10,7 @@ A pasture is a group of sandboxes that the user started with `--pasture NAME`. `
 - **Ration:** the user can give you a timer named `ration`. Check it with `paddock-host timer status`. When it is used up, other members cannot ask you questions.
 
 `paddock-host pasture --help` gives the details and the exit codes.
+
+## Turnout jobs
+
+Turnout runs jobs on the host from the user's configuration. A project file cannot define a job. From a sandbox, do not install or run a host job directly: ask the host to use `paddock turnout` if the user requests it. The host can inspect jobs with `ls` and `show`, stop all jobs with `pause`, clear the pause with `resume`, and read `log NAME` or `health`. The `host-checks` job reports its branch test results by mail and makes no model call.

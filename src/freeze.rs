@@ -59,7 +59,7 @@ impl SuspendCfg {
     }
 
     pub fn parse(text: &str) -> Result<Self> {
-        let v: toml::Value = toml::from_str(text)?;
+        let v: toml::Value = crate::manifest::user_config_doc(text)?;
         let raw: RawSuspend = match v.get("suspend") {
             Some(t) => t
                 .clone()
@@ -114,7 +114,13 @@ pub fn own_scope() -> Option<String> {
 /// manager's D-Bus API (what `systemd-run --scope` does for itself), and
 /// wait until the kernel shows it there.
 #[cfg(target_os = "linux")]
-pub fn move_to_scope(env: &HostEnv, pid: u32, unit: &str, id: &str) -> Result<()> {
+pub fn move_to_scope(
+    env: &HostEnv,
+    pid: u32,
+    unit: &str,
+    id: &str,
+    high: Option<u64>,
+) -> Result<bool> {
     use zbus::zvariant::Value;
     let conn = crate::broker::notify::session(env)?;
     let p = zbus::blocking::Proxy::new(
@@ -123,14 +129,29 @@ pub fn move_to_scope(env: &HostEnv, pid: u32, unit: &str, id: &str) -> Result<()
         "/org/freedesktop/systemd1",
         "org.freedesktop.systemd1.Manager",
     )?;
-    let props: Vec<(&str, Value<'_>)> = vec![
+    let mut props: Vec<(&str, Value<'_>)> = vec![
         ("PIDs", Value::from(vec![pid])),
         ("CollectMode", Value::from("inactive-or-failed")),
         ("Description", Value::from(format!("paddock sandbox {id}"))),
     ];
     let aux: Vec<(&str, Vec<(&str, Value<'_>)>)> = Vec::new();
-    let _: zbus::zvariant::OwnedObjectPath =
-        p.call("StartTransientUnit", &(unit, "fail", props, aux))?;
+    let applied = if let Some(high) = high {
+        props.push(("MemoryHigh", Value::from(high)));
+        let started: zbus::Result<zbus::zvariant::OwnedObjectPath> =
+            p.call("StartTransientUnit", &(unit, "fail", &props, &aux));
+        if started.is_ok() {
+            true
+        } else {
+            props.pop();
+            let _: zbus::zvariant::OwnedObjectPath =
+                p.call("StartTransientUnit", &(unit, "fail", &props, &aux))?;
+            false
+        }
+    } else {
+        let _: zbus::zvariant::OwnedObjectPath =
+            p.call("StartTransientUnit", &(unit, "fail", &props, &aux))?;
+        true
+    };
     let start = Instant::now();
     while scope_of(pid).as_deref() != Some(unit) {
         if start.elapsed() > Duration::from_secs(3) {
@@ -138,12 +159,18 @@ pub fn move_to_scope(env: &HostEnv, pid: u32, unit: &str, id: &str) -> Result<()
         }
         std::thread::sleep(Duration::from_millis(10));
     }
-    Ok(())
+    Ok(applied)
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn move_to_scope(env: &HostEnv, pid: u32, unit: &str, id: &str) -> Result<()> {
-    let _ = (env, pid, unit, id);
+pub fn move_to_scope(
+    env: &HostEnv,
+    pid: u32,
+    unit: &str,
+    id: &str,
+    high: Option<u64>,
+) -> Result<bool> {
+    let _ = (env, pid, unit, id, high);
     Err(crate::platform::unavailable("freeze"))
 }
 
@@ -464,6 +491,41 @@ mod tests {
         );
         assert!(SuspendCfg::parse("[suspend]\nleases = \"drop\"\n").is_err());
         assert!(SuspendCfg::parse("[suspend]\nother = 1\n").is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "requires a working systemd user manager on the host"]
+    fn host_scope_sets_memory_high() {
+        use std::process::{Command, Stdio};
+        struct ChildGuard(std::process::Child);
+        impl Drop for ChildGuard {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+        let env = HostEnv::detect().unwrap();
+        let child = ChildGuard(
+            Command::new("sh")
+                .args(["-c", "kill -STOP $$; read -r x"])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap(),
+        );
+        let id = format!("memory-high-test-{}", child.0.id());
+        let unit = scope_name(&id);
+        wait_stopped(child.0.id()).unwrap();
+        assert!(move_to_scope(&env, child.0.id(), &unit, &id, Some(512 << 20)).unwrap());
+        resume(child.0.id());
+        let text = std::fs::read_to_string(format!("/proc/{}/cgroup", child.0.id())).unwrap();
+        let path = text.lines().find_map(|l| l.strip_prefix("0::/")).unwrap();
+        let high =
+            std::fs::read_to_string(Path::new("/sys/fs/cgroup").join(path).join("memory.high"))
+                .unwrap();
+        assert_eq!(high.trim(), (512u64 << 20).to_string());
     }
 
     #[test]

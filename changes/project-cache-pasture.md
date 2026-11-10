@@ -1,0 +1,2 @@
+- Added: uv and npm project caches shared by worktrees, spawn children and trainers, with per-tool locks and a user choice of project, verified or isolated sharing. Existing idle caches move into empty project caches.
+- Changed: peer cache identities follow the repository and the user's cache sharing choice.

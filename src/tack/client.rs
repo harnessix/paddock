@@ -59,9 +59,19 @@ pub fn ask(socket: &Path, req: Request, timeout: Duration) -> Result<Answer, Err
     s.set_read_timeout(Some(timeout)).map_err(Error::Io)?;
     s.set_write_timeout(Some(timeout)).map_err(Error::Io)?;
     let mut w = &s;
-    proto::write_frame(&mut w, &proto::envelope(req)).map_err(io_err)?;
+    // A busy server may send its refusal and close before our request is
+    // fully written. Read that reply even when the write sees a broken pipe.
+    let write_error = proto::write_frame(&mut w, &proto::envelope(req)).err();
+    if let Some(ref e) = write_error {
+        if e.kind() != io::ErrorKind::BrokenPipe {
+            return Err(io_err(write_error.unwrap()));
+        }
+    }
     let mut r = &s;
-    let body = proto::read_frame(&mut r).map_err(io_err)?;
+    let body = match proto::read_frame(&mut r) {
+        Ok(body) => body,
+        Err(e) => return Err(io_err(write_error.unwrap_or(e))),
+    };
     match proto::parse_answer(&body).map_err(Error::Protocol)? {
         Answer::Error { message, .. } => Err(Error::Refused(message)),
         a => Ok(a),

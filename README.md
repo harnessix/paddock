@@ -272,7 +272,7 @@ A sandbox uses your existing login of the harness. See [Logins and MCP](#logins-
 | Credential files of the harness | copied from your home directory, or from an isolated store |
 | Harness settings and skills, read-only | the files that the harness profile lists in `import_ro` |
 | The harness program, read-only | its install directory, found through PATH or mise |
-| Package caches (cargo, npm, uv, go) | cache layers: a shared layer under `$XDG_CACHE_HOME/paddock/layers` and one layer per project under `$XDG_CACHE_HOME/paddock/projects` |
+| Package caches (cargo, npm, uv, go) | uv and npm use writable caches per repository under `$XDG_CACHE_HOME/paddock/package-projects`. Other caches use worktree layers under `$XDG_CACHE_HOME/paddock/projects` and verified read-only layers under `$XDG_CACHE_HOME/paddock/layers`. |
 | mise tools from the registry, read-only | `$XDG_CACHE_HOME/paddock/shared/mise-tools` |
 | `/usr`, `/etc`, read-only (bwrap backend) | the host system |
 
@@ -403,7 +403,9 @@ Each harness gets its own home in each project, so the homes grow with the numbe
 
 - Each sandbox home: harness, login, project, size, last use, and what you lose when you delete it.
 - The paddock images of docker and podman, and whether each is current or in use.
-- The worktrees that `--worktree` created, with their unmerged commits.
+- The worktrees that `--worktree` created, with their total size, last use, unmerged commits and merged state.
+- The build caches of worktree runs.
+- The shared project caches and the package cache layers of each worktree.
 - The session records of `paddock files`, and the keyring passwords of app homes.
 - The project snapshots and the undo trash of `paddock undo`.
 - The caches in the homes, by class (see [Caches](#caches)).
@@ -427,7 +429,7 @@ paddock gc --homes --yes                    # remove them
 - Session records that ended more than 30 days ago.
 - Homes of harnesses whose profile no longer exists.
 - Old shared caches that paddock no longer uses, such as `~/.cache/paddock/shared/mise-installs` and the old writable package caches in `~/.cache/paddock/shared`. paddock keeps them while a sandbox runs.
-- The cache layers of projects that no longer exist, in `~/.cache/paddock/projects`.
+- The package caches of gone projects and gone or merged paddock worktrees. Caches in use by a run or held by a live lease are kept; unrelated runs do not block their removal. If a shared uv or npm cache is empty, paddock moves an idle old worktree cache into it.
 - Project snapshots whose project is gone.
 - Pure caches in the homes of sandboxes that do not run (see [Caches](#caches)).
 
@@ -442,6 +444,71 @@ The other items need a flag that names them:
 - `--scratch` adds scratch projects that were not used for `--older-than` days. An agent from `omarchy-agent` works in one when it starts in the home folder (see [Only the agents that Omarchy starts](#only-the-agents-that-omarchy-starts)). Its files are lost.
 
 paddock never removes the home or worktree of a running sandbox. It deletes only inside its own directories. It never follows a symlink, so a link in a sandbox home cannot point it at your files. A sandbox can edit the `.paddock-origin` file in its home, which records the project. paddock uses that file only when it matches the folder name of the home, which contains a hash of the project path.
+
+### Automatic cleanup
+
+paddock cleans up by itself, so its folders do not fill the disk:
+
+- When a `--worktree` run or a spawned worker ends without a commit and without uncommitted changes, paddock removes its worktree and its branch at once. There is nothing to review.
+- Each `paddock run` starts a cleanup in the background, at most once an hour. The start does not wait for it. It removes the worktrees whose work is merged and that have no uncommitted changes, and their `paddock/` branches. If a local branch outside `paddock/` has a commit, the commit counts as merged. A commit with the same patch counts too, for example after a cherry-pick or a rebase.
+- A worktree with unmerged work stays. When it is not used for `worktree_cache_days`, paddock deletes its build output: folders with a `CACHEDIR.TAG` file, such as cargo's `target/`, that git ignores and that hold no tracked file. paddock never deletes a tracked file, or an untracked file that git does not ignore.
+- The same cleanup removes snapshots and undo trash folders older than `snapshot_days`.
+- It never removes a sandbox home. A home holds your conversations with the harness (transcripts and history) and an app's login. Only `paddock gc --homes` removes homes, when you ask, and it names what is lost.
+- It also does what `paddock gc --yes` does, except for images.
+
+The cleanup never touches the home, worktree or snapshot of a running sandbox. `paddock doctor` shows when it last ran, what it removed, and its errors. `paddock gc-auto --now` runs it at once.
+
+### Free space
+
+Before a sandbox starts, paddock checks the free space on the disks of the project, the worktrees, the homes and the build cache:
+
+- Below the hard floor, paddock first runs the cleanup, for at most two minutes. If the space is still below the floor, the sandbox does not start. The message gives the numbers and the commands that free more space.
+- Below the soft floor, the sandbox starts with one warning line, and a desktop notification at most once an hour.
+- While sandboxes run, paddock checks every five minutes. At the hard floor it sends a notification. It does not stop a running sandbox.
+
+Each floor is the smaller of its two numbers, so it fits both small and large disks. The defaults are 15 GB or 5% for the hard floor, and 50 GB or 10% for the soft floor. `paddock doctor` shows the free space and the floors.
+
+### Build cache of worktree runs
+
+A `--worktree` run or a worker of a Rust project does not build into `target/` of its worktree. Its cargo target folder (`CARGO_TARGET_DIR`) is in `~/.cache/paddock/build/<repository>/`. At the start, paddock copies the newest target folder of the same repository with copy-on-write, so the worker does not compile the project from nothing. When the worker ends, its folder becomes the newest one. Each worker has its own copy. Two workers that build different commits do not wait for each other, and they do not see each other's output. A project never sees the build cache of another project.
+
+A run started in a worktree that paddock made, without `--worktree`, uses the same build cache.
+
+Builds in a sandbox write less to the disk by default (`[storage] lean_builds = true`). paddock sets `CARGO_INCREMENTAL=0`, so cargo does not rewrite its incremental folder on every build, and `CARGO_PROFILE_DEV_DEBUG` and `CARGO_PROFILE_TEST_DEBUG` to `line-tables-only`, so backtraces keep file and line numbers but the test binaries are much smaller. A value that you set in `[env]` stays. Set `lean_builds = false` to build as on the host.
+
+On btrfs and xfs the copy takes almost no space. On ext4 and other file systems without copy-on-write, each worker starts with an empty folder, and paddock deletes it when the worker ends. On macOS the build cache is off. The cleanup keeps the build caches of all repositories under `build_cache_gib` and removes the least recently used first.
+
+A script that reads `target/` directly does not find the build output. For such a project, set this in its `paddock.toml`:
+
+```toml
+[setup]
+shared_build_cache = false
+```
+
+### Cleanup settings
+
+Set these in `~/.config/paddock/config.toml`. The values here are the defaults. 0 turns a rule or a floor off.
+
+```toml
+[storage]
+auto_gc = true               # the automatic cleanup; PADDOCK_AUTO_GC=0 also turns it off
+worktree_cache_days = 2      # delete the build output of a kept worktree after this many days without use
+snapshot_days = 30           # delete snapshots and undo trash folders older than this
+hard_floor_gib = 15          # do not start a sandbox below the smaller of these two
+hard_floor_percent = 5
+soft_floor_gib = 50          # warn below the smaller of these two
+soft_floor_percent = 10
+build_cache = true           # the build cache of worktree runs
+build_cache_gib = 40         # the size of all build caches together
+package_cache_project_gib = 20  # package caches for one repository or folder
+package_cache_total_gib = 100   # package caches for all projects
+```
+
+If a value is wrong, paddock uses the default, and the run and `paddock doctor` print a warning.
+
+The package cache limits apply before and after a run. paddock removes the oldest whole tool caches first. It keeps caches that a run uses, so the limits can be exceeded until runs end. Set either package cache limit to 0 to turn off that limit. These limits apply even when `auto_gc` is off.
+
+`paddock doctor` warns when a filesystem is nearly full. On Btrfs, it also reports unallocated space and metadata use. If it cannot read those values, it reports that they are unavailable.
 
 ### Caches
 
@@ -675,6 +742,22 @@ allow = ["my-server"]   # mount the host paths that this server needs, read-only
 [network]
 host_ports = [8765]     # a local MCP server on the host loopback
 ```
+
+For Codex and Gemini, paddock can choose which configured servers start. On Linux it leaves `xcodebuildmcp` off by default. Set a per-server policy in the user configuration or project manifest:
+
+```toml
+[mcp.servers.xcode]
+start = "always"  # keep this server eligible even on Linux
+
+[mcp.servers.search]
+start = "never"   # do not start this server
+```
+
+`auto` uses the platform default. `always` overrides paddock's platform filter; it does not turn on a server that the harness itself has disabled. `never` turns the server off. A project choice other than `never` needs approval, because it can override a user or platform restriction. `lazy` is reserved for harnesses that can defer starting the server process; paddock currently refuses it for these harnesses. Claude Code is not filtered yet; an explicit `never` or `lazy` policy for a configured Claude server fails clearly. For other harnesses, a matching explicit `never` or `lazy` choice is refused rather than ignored. Platform filtering is currently limited to Codex and Gemini.
+
+For Codex, platform filtering inspects the user and root project configuration; it does not inspect nested `--cd` layers, selected profile files, plugin configuration, or alternate account configuration. `paddock explain` lists these limits. `never` is applied to discovered server names with a command-line override; an undiscovered name is not yet enforced.
+
+`paddock explain` shows the startup decision and boundary requirements for each discovered server. A name defined in more than one source follows the harness profile's source precedence. Different names with the same configuration stay separate so their tool names remain available; `paddock explain` identifies them. Claude Code continues to use its own MCP configuration.
 
 Some harnesses can keep MCP tokens in the system keyring instead of a file. The sandbox cannot reach the keyring. For Codex, set `mcp_oauth_credentials_store = "file"` to share the tokens.
 
@@ -1184,6 +1267,55 @@ To make reads ask too, or to turn either capability off, set it in `[host]`, for
 
 `paddock log` shows every request with its decision and result. The log is `~/.local/state/paddock/host-audit.jsonl`. It does not keep text that can be private. For `clipboard-write`, it keeps only the length of the text. For `exec`, it keeps the program and the number of arguments, because arguments can hold tokens. With `[exec] remember_allowed = true`, an allowed command line of plain words stays whole, for `paddock tools suggest` (see [Named host tools](#named-host-tools)); it is off by default. For `forge`, it keeps the command without the body text. For `notify`, it keeps the lengths of the title and the body. For `open-url`, it keeps the scheme and the host. paddock makes its folders readable only by you (mode 0700) and its files too (mode 0600), and tightens older ones that other users can read. Request text never goes into the arguments of a host process, which other users can see: notifications go over the desktop bus, and `gh` reads the body on its standard input (`tea` and `glab` cannot, see above). To teach agents the client, run `paddock skill install`: it copies a short skill into the skill folders of your harnesses. Inside a sandbox, `paddock-host --help` is the full reference.
 
+### Exclave
+
+Exclave runs a command in a sandbox on a peer, which is another machine. The agent stays on the local host. The person configures the transport on the local host in `~/.config/paddock/config.toml`:
+
+```toml
+[exclave]
+prefer = ["build", "test"]
+
+[exclave.peers.worker]
+transport = ["ssh", "worker", "paddock", "exclave", "serve"]
+```
+
+The transport is a command that connects its standard input and output to the peer. Keep its arguments and credentials on the local host. Do not put them in a project file. Agents name only the peer. The preference routes `cargo build` and `cargo test` from a sandbox to a peer.
+
+On the peer, set limits and package sources in its own `~/.config/paddock/config.toml`:
+
+```toml
+[exclave.serve]
+memory_bytes = 4294967296
+cpu_percent = 200
+seconds = 3600
+registries = ["index.crates.io", "static.crates.io", "mirror.example:443"]
+private_registries = ["mirror.example:443"]
+cache_root = "/srv/paddock-exclave"
+cache_bytes = 21474836480
+# devices = ["gpu"]
+# ro_paths = ["/opt/example-tools"]
+# allow_shared_disk = true
+# http_registries = ["packages.example.com:80"]
+# allow_egress = true
+
+[exclave.serve.env]
+PIP_INDEX_URL = "https://mirror.example/simple"
+UV_INDEX_URL = "https://mirror.example/simple"
+PIP_CERT = "/etc/ssl/certs/ca-certificates.crt"
+```
+
+Mount a dedicated, fixed-size filesystem at `cache_root` before starting the peer. The peer user must own that folder and be able to write it. Paddock refuses a cache root on the root filesystem unless the peer owner sets `allow_shared_disk = true`; that override removes the dedicated-volume bound. Before a run, `cache_bytes` limits the combined size of project build caches. The peer evicts the least recently used idle caches until they fit, and refuses the run if active caches still exceed the limit. This is not a live quota; caches can grow during a run. The dedicated volume bounds total disk use during a run. On the peer, `paddock exclave cache ls` lists project IDs and sizes; `paddock exclave cache rm ID` removes a project cache when it is not in use. Pip and uv caches and `/work/.venv` persist per project. Remove the cache to rebuild an environment.
+
+The peer owner can list existing absolute paths in `ro_paths` to make installed tools available read-only in every run, including targets of symlinks from `/usr/local/bin`. Paths overlapping the peer user's home, `/srv`, protected credential paths or sandbox mounts are refused, including symlink targets. Choose paths that contain no credentials; their contents are exposed to every run. GPU runs also receive `/sys` read-only for NVIDIA discovery.
+
+The default network mode is `registries`. It permits only the listed package hosts through the peer proxy. The proxy refuses loopback and addresses of the peer. A registry on a private network also needs its exact `host:port` in `private_registries`. An HTTP source needs an explicit entry in `http_registries`. For HTTPS, list the host in `registries` too. The peer owner sets `env`; its values reach commands in the sandbox and can be visible in process arguments, so do not put secrets there. The peer mounts its system CA bundle read-only when present; add your mirror CA to that bundle on the peer. The peer must have bubblewrap and a systemd user manager with CPU and memory controllers. The peer refuses a run when it cannot enforce the limits. Swap is disabled for the run.
+
+From a sandbox, run `paddock-host exclave run --on worker -- cargo test`. On the host, use `paddock exclave run --on worker -- cargo test`. Use `--gpu` to request NVIDIA devices when the peer owner has enabled `devices = ["gpu"]`; GPU requests do not fall back to local execution. Use `--network none` to disable network access. Use `--network egress` only when the peer enables `allow_egress`. To fetch dependencies before an offline build, run `cargo fetch` with registry access, then run the build with `--network none` and Cargo's `--offline` flag.
+
+In a Git worktree, paddock sends tracked files and paths named with `--include`. In a plain folder, it sends the folder contents, using `.gitignore` files and a root `.paddockignore` with Git-style patterns; Git is not required. The current folder is the root when there is no worktree. Inside a worktree, the worktree root is used by default. Use `--root DIR` to select a different root, for example a plain folder inside a repository; the working directory must be inside it. In a sandbox, the selected root must also be inside the sandbox project. The host CLI reports the root it selects and why. Relative symlinks that stay inside the project are preserved; escaping links are refused by name. Ignored files and credential paths stay out, even when named with `--include`. Use `--output PATH` for each regular file to copy back. Paths are relative to the project root. A file can be at most 256 MiB, and a snapshot can hold at most 512 MiB across 50,000 files. The peer keeps a separate build cache for each project.
+
+If the transport cannot start or connect before an ordinary command starts, the command runs locally and reports why. A busy peer or an error returned by the peer fails the command without local fallback. The sandbox mailbox records fallback reasons. If the connection fails after dispatch, paddock reports an unknown result. It does not start a second copy locally. Mailbox events for peer runs include the peer name and snapshot hash. To attach that evidence to a host-owned gate, pass `--peer NAME --snapshot-hash HASH` to `paddock spec gate`. Copy the hash from the mailbox event.
+
 ### Spawn other agents
 
 An agent in a sandbox can start an agent of another harness. For example, Claude plans the work and Codex writes one part of it. The agent asks with `paddock-host spawn`. paddock then starts a second sandbox on the host, next to the first one. It does not put a sandbox inside a sandbox.
@@ -1198,7 +1330,7 @@ paddock-host wait <id> --timeout 600
 paddock-host kill <id>
 ```
 
-The child runs the harness once, without a terminal (`claude -p`, `codex exec`, `opencode run`, `copilot -p`, `agy --print` or `grok --prompt-file`), and stops when the task is done. It works in a new worktree on the branch `paddock/spawn-<harness>-<id>`, from the commit that the parent has checked out. The worktree uses the same repository, so the child's commits are in the parent's repository at once. `wait` and `status` give the branch name and the exit status. The parent reads the branch with git, for example `git diff main...paddock/spawn-codex-<id>`, and merges what it wants. paddock also writes a short summary to `.paddock/inbox/spawn-<id>/`: `result.json` with the state, the exit code, the branch, the commit count and a diff summary, and `output.txt` with the end of the child's final output. When the child ends, paddock also writes `result:<id>` into the `tree` scope of [paddock kv](#shared-state-paddock-kv), with `status`, `summary` and `ref` (the branch). So the parent can run `paddock-host kv watch --prefix result: --scope tree` instead of polling several children.
+The child runs the harness once, without a terminal (`claude -p`, `codex exec`, `opencode run`, `copilot -p`, `agy --print` or `grok --prompt-file`), and stops when the task is done. It works in a new worktree on the branch `paddock/spawn-<harness>-<id>`, from the commit that the parent has checked out. The worktree uses the same repository, so the child's commits are in the parent's repository at once. `wait` and `status` give the branch name and the exit status. The parent reads the branch with git, for example `git diff main...paddock/spawn-codex-<id>`, and merges what it wants. If the child made no commit and left no change, paddock removes its worktree and its branch when it ends. paddock also writes a short summary to `.paddock/inbox/spawn-<id>/`: `result.json` with the state, the exit code, the branch, the commit count and a diff summary, and `output.txt` with the end of the child's final output. When the child ends, paddock also writes `result:<id>` into the `tree` scope of [paddock kv](#shared-state-paddock-kv), with `status`, `summary` and `ref` (the branch). So the parent can run `paddock-host kv watch --prefix result: --scope tree` instead of polling several children.
 
 With `--from-head`, the child starts from the parent's files as they are now. paddock first makes a commit of them, with uncommitted and new files but without ignored ones. It uses a private index file, so the parent's files, index and branches do not change. The host git call is the hardened one that paddock uses for worktrees: it refuses a repository configuration that can start a program.
 
@@ -1276,12 +1408,12 @@ paddock run codex ~/src/app --detach --prompt-file task.md --worktree
 paddock run claude --detach --prompt "Fix the failing test in src/parser.rs"
 ```
 
-paddock starts the run as if you typed `paddock run codex ~/src/app` in that session, and returns at once. It prints the sandbox id and `paddock view <id> --write`. The other flags (`--worktree`, `--pasture`, `--env`, `--auth`, ...) work as without `--detach`.
+paddock starts the run as if you typed `paddock run codex ~/src/app` in that session, and returns at once. It prints the sandbox id, `paddock view <id> --write` and `mail: paddock mail watch <id>`. The other flags (`--worktree`, `--pasture`, `--env`, `--auth`, ...) work as without `--detach`.
 
 - `paddock view <id> --write` attaches to the terminal of the agent: your keys go to the agent, and you take over. Without `--write`, the view is read-only. In the bar panel, the take-over button shows only for detached runs.
 - The agent calls `paddock-host done [--status ok|failed] [TEXT]` when the task ends. paddock then ends the run as `paddock stop` does. When you are attached with `--write`, paddock tells you once and leaves the run to you: it ends when you close the view. The status and the first 4 KiB of the text go into the run record.
 - `paddock wait <id> [--timeout 30m]` blocks until the run ends and prints the `done` status and text. It exits with 0 for ok, 1 for failed, idle or no `done`, and 124 when the time runs out. Scripts that start detached workers use it.
-- A detached run that has produced output and then stays quiet becomes idle after `[detach] idle_after` (default `10m`). `paddock ps --json` adds `idle_since` (a Unix time) on that run. The bar row says `waiting for input`. paddock sends one desktop notification, `HARNESS in PROJECT waits for input: view it or stop it`. New output clears the idle state and the next quiet period notifies once more.
+- A detached run whose visible screen stays quiet becomes idle after `[detach] idle_after` (default `10m`). `paddock ps --json` adds `idle_since` (a Unix time) on that run. The bar row says `waiting for input`. paddock sends one desktop notification, `HARNESS in PROJECT waits for input: view it or stop it`. A visible screen change clears the idle state and the next quiet period notifies once more.
 - After `[detach] idle_timeout` more quiet time (default `30m`), paddock ends the run the same way `paddock-host done` does. The run record status is `idle`. `paddock wait` prints `idle: ended after N minutes without output` and exits 1. N is the quiet time. A quiet time that is not a whole number of minutes is written in seconds. `idle_timeout = "0"` never ends a run for being idle. A client attached with `paddock view ID --write` keeps the run. paddock tells that client once and ends the run when the client leaves.
 - `[view] keep_ended` (default `2h`) is how long the view session of an ended run stays. The run record of a detached run stays, so `paddock wait` still reads it.
 - A task timer (`paddock timer`) works as for any other run.
@@ -1291,8 +1423,9 @@ paddock starts the run as if you typed `paddock run codex ~/src/app` in that ses
 
 A harness can stop at a screen that waits for a choice before it starts the task. An example is the Codex screen `Hooks need review`, which comes when one of your hooks changed. In a detached run nobody is there to answer it.
 
-- The harness profile names such screens in `[[screens.rule]]`, each with a safe answer. For the Codex hooks review, paddock chooses `3. Continue without trusting (hooks won't run)`. The changed hooks do not run. paddock never chooses an answer that trusts, approves, accepts terms or logs in. A rule with such an answer does not load.
-- paddock answers in detached runs and on terminals that no window shows. In a run that you watch, paddock does not answer, so you see the screen. A rule with `always = true` is the exception. When you are attached with `paddock view ID --write`, or when you press a key, paddock answers no more screens in that run.
+- The harness profile names such screens in `[[screens.rule]]`. For known agy and Codex folder screens, paddock can trust the project folder of the run. Every folder that the screen names must resolve to that project. If paddock cannot confirm that, the screen waits for a person and the mailbox gets a `trust-screen` event. The Claude Code screen has no confirmed pattern yet. Other rules cannot approve terms or log in.
+- For the Codex hooks review, paddock chooses `3. Continue without trusting (hooks won't run)`. The changed hooks do not run. The mailbox gets a `hooks-untrusted` event. If the changed hooks include paddock's compaction hook, paddock cannot restore its context after compaction.
+- paddock answers in detached runs and on terminals that no window shows. In a run that you watch, it answers only rules marked `always = true`. This includes the folder trust rules. If you press a key, paddock answers no more screens in that run.
 - paddock tells you about each answer. It writes one line in the view log and one line in the audit log. For a detached run, `paddock wait` and `paddock ps` show a note such as `answered Codex hooks review: continued without trusting 1 hook`.
 - When the screen of a detached run does not change for `[detach] stuck_after` (default `3m`), paddock puts the last screen into the run record (`stuck` in `paddock ps --json`) and sends one desktop notification. For a spawn child it writes `stuck:<RUN-ID>` into the tree scope of kv, and for a pasture member into the pasture scope, so a parent can `paddock-host kv watch` for it. `stuck_after = "0"` turns this off.
 - The idle end keeps working. Its done text also shows the last lines of the screen. A known message on the screen, such as `Individual quota reached` or a rate limit, gets clear words in the done text.
@@ -1307,6 +1440,73 @@ stuck_after = "3m"
 ```
 
 You can let an agent on the host answer requests for you (`paddock approver`). paddock trusts that setting only from a root-owned file (`sudo paddock approver enable --system`) or from a file signed with a password that you type when a sandbox starts, so that a process on your computer cannot turn it on for itself. The agent approver can only answer the capabilities that you list, the rules above still hold, and if it does not answer clearly, the request comes to you.
+
+### The run mailbox
+
+Each run has a mailbox from its start. You talk to the agent through it, and paddock tells you through it what happens to the run. You do not read the screen or type into the pane. The starter of a run is the person, script or host agent that started it. A run that `paddock-host spawn` started has its parent sandbox as starter.
+
+```sh
+paddock run claude --detach --prompt-file task.md     # prints: mail: paddock mail watch 1a2b3c
+paddock mail watch 1a2b3c                             # one line per message or event, until the run ends
+paddock mail send 1a2b3c "Use the branch release/2.4"
+paddock mail send 1a2b3c --ask - < question.md       # a question: the agent answers with a reply
+paddock mail ls                                       # the runs with a mailbox and their state
+paddock mail ls 1a2b3c                                # the messages of one run
+paddock mail show 1a2b3c 7                            # one message in full
+```
+
+`paddock mail watch` prints one line for each message of the agent and for each event of paddock. Each line names its sender, for example `[1a2b3c #7 13:05:01] from sandbox claude-app-1a2b3c, agent text, say: TEXT`. A line from `paddock` is an event. The command ends with exit code 0 after the end of the run. With `--timeout 30m` it ends with 124 when the time runs out first. `--json` prints one JSON object per line. The output works with Claude Code's Monitor tool and with scripts.
+
+paddock writes these events:
+
+- `started`: the run started.
+- `ended`: the sandbox ended, with its exit code.
+- `gone`: the paddock process of the run was killed, so the run ended without an end record. Its pane can still show the last screen, but nothing runs behind it. A watch finds this within a few seconds.
+- `idle`: a detached run has unread mail and its screen is quiet for `[mail] idle_after` (default `2m`), or its screen is quiet for `[detach] idle_after` (default `10m`). The latter includes the last agent status and the desktop notice.
+- `done`: a detached agent reported `done` and the run is still running. After `[mail] end_after_done` (default `2m`) paddock ends it unless a view is attached or new mail arrived.
+- `card`: an approval card waits for you. The line says what the card asks.
+- `child-started`, `child-ended`: a child of `paddock-host spawn` started or ended. The line names the child.
+- `claim-lapsed`: a relay write did not finish before its claim expired. The mail remains available for another delivery.
+- `delivered`: messages that you sent reached the agent. The line names the messages and how they came, for example `#7 given to the agent at the end of its turn (stop hook)`.
+
+A message reaches a Claude Code agent also when the agent never reads its mailbox. paddock gives Claude Code two hooks in each sandbox:
+
+- At the end of a turn, the Stop hook looks for unread messages. If there are some, the hook keeps the turn going, and the agent gets the messages as the reason. A turn that ends without new mail ends as usual.
+- A message that you send with `--interrupt` comes after the agent's next tool call, together with the unread messages before it.
+
+Each message reaches the agent once, by whichever way comes first. A read with `paddock-host mail wait` counts too. The hook keeps a turn going only one time in a row, so mail never keeps an agent running in a loop. If the host does not answer, the turn ends as usual. Outside horse pty custody, a message that comes while the agent waits at its prompt reaches the agent at the end of its next turn. The `idle` event tells you about such a message.
+
+In horse mode, a Codex, Grok, agy, or Claude Code TUI with pty custody also gets unread mail at its idle prompt. paddock types the message only after the harness reports a safe point and the prompt is empty. An interrupt first sends the harness interrupt key. This path needs a terminal and a profile for the pinned harness version. The profile must use bracketed paste and a one-byte submit key. Horse mode does not support detached runs.
+
+`paddock mail send` says when the agent gets the message. `paddock mail ls RUN` shows the state of each message that you sent: `unread`, `read by the agent`, `given to the agent at the end of its turn (stop hook)`, `given to the agent after a tool call (interrupt)`, or `typed at the idle prompt`. With `--json`, each message has `state` and `delivered_via`. Other agent programs get their mail when they read it.
+
+Each line comes once for each reader. A watch keeps its place in the mailbox, so a new `paddock mail watch` continues where the last one stopped, also after a restart. Two watchers with different `--reader NAME` values each get every line. `--all` and `--from SEQ` print older lines again.
+
+`paddock mail watch --mine` follows every run that you started from the host, also runs that start later. Set `PADDOCK_CALLER` to a short name when several managers start runs, and each one follows only its own runs.
+
+Inside the sandbox, the agent uses `paddock-host mail`:
+
+```sh
+paddock-host mail wait --timeout 60      # new messages, or exit 75 when none came
+paddock-host mail send "Tests pass, PR is open"
+paddock-host mail ask "Which branch?"    # waits for the reply
+paddock-host mail status blocked: no network for the package mirror
+```
+
+With devices in the sandbox, the same mailbox is also a pair of files. `cat /dev/paddock/mail/in` reads the new messages, and `echo TEXT > /dev/paddock/mail/out` sends one. The prompt of a detached run ends with a short note about the mailbox. Claude Code gets the same note at the start of each session.
+
+- A message holds at most 64 KiB of text. For a longer text, write a file in `.paddock/` of the project (the loft) and name it with `--ref .paddock/FILE`. A ref is a path in the project. It is never a host path.
+- One sender writes at most 60 messages a minute into one mailbox.
+- Mail is text from another party. It carries no right to do anything, so no approval card guards it. An agent writes only to the mailbox of its own run. paddock takes the run from the sandbox's own channel, never from the message.
+- `paddock mail send` refuses a run that ended, because nobody reads its mailbox.
+- The mailboxes are in `~/.local/state/paddock/mail/`, one folder for each run. They stay after the run, like the session record. `paddock gc --homes` removes the mailbox of a run that ended longer ago than `--older-than`.
+
+```toml
+# ~/.config/paddock/config.toml
+[mail]
+idle_after = "2m"
+end_after_done = "2m"
+```
 
 ## Shared state: paddock kv
 
@@ -1538,6 +1738,9 @@ paddock is the only writer of `tasks.md`. Workers do not edit it. paddock keeps 
 | `paddock-host spec status` | the feature, each task with state, owner and branch, what is ready, and what waits for review |
 | `paddock-host spec review T012 pass` | marks a task done after you merged its branch. `changes "TEXT"` sends it back, and TEXT goes to the next worker |
 | `paddock spec status` | the same status on the host, for the current folder |
+| `paddock gauge` | how far the feature is: done with evidence, new and reopened tasks, open ages, and a forecast of the finish date (see [How far a feature is](#how-far-a-feature-is-paddock-gauge)). `paddock-host gauge` gives a coordinator the same |
+| `paddock spec appetite 001-albums 3d` | the time budget of a feature. paddock warns in the mailbox and never stops the work |
+| `paddock spec gate T012 tests pass` | records a gate result on the host: `pass`, `fail` or `skip` |
 | `paddock spec adopt` | moves `.specify/` and `specs/` of a repository into the external store (see below) |
 
 `changes` also reopens a failed task and sends the note to the next worker.
@@ -1558,6 +1761,374 @@ store = "external"   # default: "repo", where Spec Kit puts them
 ```
 
 Then run `paddock spec adopt` once in the repository. It asks, then moves both folders to the loft, `~/.local/share/paddock/loft/<repository key>/tree/`. A store of an earlier paddock moves there by itself. Every sandbox of the repository sees them at `.specify/` and `specs/`, also each `--worktree` sandbox and each worker, with the same content. paddock adds both paths to `.git/info/exclude`, which git does not track, so `git status` does not show them. If the files were committed, adopt tells you how to remove them from the index, and how to remove them from the history. It does not change the history itself.
+
+### How far a feature is: paddock gauge
+
+`paddock gauge` tells you how far a Spec Kit feature is and when it can end. It does not ask an agent for a percentage. It reads the history of `tasks.md`, the task records, the gate results and the mailboxes of the workers.
+
+```sh
+paddock gauge                 # the active feature of the current folder
+paddock gauge 001-albums      # one feature
+paddock gauge --json          # the same numbers as JSON (api_version paddock.gauge/v1)
+paddock gauge --strict        # count only tasks with evidence as finished
+paddock gauge --at 2026-11-08T09:00:00Z   # what the gauge said at that time
+```
+
+Inside a sandbox, a coordinator runs `paddock-host gauge`. The host computes it, because the sandbox cannot see the history of the loft.
+
+The output has these parts:
+
+- done: the done tasks, split into tasks with evidence, tasks that are only checked, and tasks that are not done although their box is checked.
+- discovered: the tasks that appeared after the start, and how many a day.
+- reopened, and fails after done: tasks that went back from done, and gate failures on done tasks.
+- open: each open task with its age.
+- almost done: the time that tasks sat in review, or with a worker that reported `blocked`.
+- forecast: the P50 and P85 of the finish date and of the final task count. P85 means that 85 of 100 simulated futures end by that date.
+- P85 trend: the P85 date at earlier times. A range that narrows is healthy. A date that slips, or a range that widens, is an alarm.
+- appetite: the share of the time budget that the feature used, when it has one.
+- a burn-up chart: `#` is done work, and the `-` line on top is the scope.
+- paddock cannot know: what this project does not show, for example a history before the first snapshot.
+
+#### Done with evidence
+
+A checked box is a claim. A task counts as done with evidence only when a party other than its worker saw the result:
+
+1. Its work is merged. Its branch, or a commit that its result names, is in the history of `HEAD` of the project or of its main work tree.
+2. Or its review passed (`paddock-host spec review T012 pass`).
+3. Or a gate passed for it.
+
+A gate result speaks against a task. If the newest result of a gate is `skip`, the task is not done: a test that did not run proves nothing. If a gate failed after the task was done, the task is not done either. A worker report that says that its tests skipped, and names no passing run, counts as a skipped gate. A report that names both is "partly skipped". The task keeps its evidence, and gauge lists it, because the skipped part still waits for a real run.
+
+The forecast counts a checked task without evidence as finished, and says how many such tasks there are. `--strict` counts it as open.
+
+Record a gate result on the host:
+
+```sh
+paddock spec gate T012 real-sandbox skip --note "no bwrap in the sandbox"
+paddock spec gate T012 real-sandbox pass
+```
+
+The results go to `gates.jsonl` next to the task records. Only the host writes them, never a worker.
+
+#### The forecast
+
+The forecast simulates 10,000 futures. Each simulated day draws how many tasks finish and how many new tasks arrive from a random day of the last 7 days (`--window`). New tasks are discovered and reopened tasks, less removed ones. One history and one seed (`--seed`, default 1) always give the same forecast.
+
+- If new tasks arrive at least as fast as tasks finish, gauge says "not converging" and shows no date. More workers do not help then. Cut scope, or shape the tasks again.
+- Before 5 tasks finished, or with less than three steps of history, gauge shows a wide range that it labels as an early forecast.
+- A history shorter than the window is cut into at least six steps of at least one hour each.
+- If more tasks appear at once than the list had before, gauge takes this as a rewrite of `tasks.md` and measures from there.
+- gauge prints a warning when most tasks were done at the start of the window and the open count did not go down since. This is the "90 % done" trap.
+
+#### Where the history comes from
+
+1. The history of the loft, when the Spec Kit files live there. paddock commits the loft at the end of each run.
+2. The git history of the repository, when git tracks `tasks.md`.
+3. paddock's own state log, `history.jsonl` next to the task records. paddock adds a line each time a task changes state, and each time gauge runs.
+
+A project without git still works. The first gauge has no history: it shows the current state, and it says what it cannot know. From then on, the state log is the history.
+
+#### Appetite
+
+The appetite is the time that you want to spend on a feature, counted from its start.
+
+```sh
+paddock spec appetite 001-albums 3d      # also 36h or 1d12h
+paddock spec appetite 001-albums         # print it
+paddock spec appetite 001-albums off     # remove it
+```
+
+paddock never stops the work because of the appetite. It sends a warning at 50 %, 80 % and 100 % of the appetite, and at every 25 % after that. Each warning comes once, as an `appetite` event in the mailbox of the run that works on the feature: to its starter, and to the coordinator while the run lives. The warning has the forecast and three choices: cut scope, extend the appetite once with a reason, or stop the feature. paddock checks the appetite when a worker ends and each time gauge runs.
+## Turnout: scheduled host checks
+
+Turnout requires Linux and a systemd user manager. It runs host-owned jobs from `~/.config/paddock/config.toml`. A project `paddock.toml` cannot define a job. The check is a host shell command: only exit 0 with `work` on stdout admits the wake. Other output, a failure or a check timeout ends it without mail. Turnout does not call a model.
+
+For example, to test new commits of a local branch, add a job to the user configuration (replace the project path):
+
+```toml
+[turnout.host-checks]
+harness = "none"
+trigger = "git"
+project = "/home/demo/src/paddock"
+branch = "integration"
+poll_interval = "60s"
+check = "echo work"
+check_timeout = "30s"
+suites = ["horse", "horse_e2e", "mail_sandbox", "mail_relay_sandbox", "mail_hooks_sandbox", "detach", "omarchy_agent"]
+suite_timeout = "15m"
+max_runtime = "2h"
+max_mem = "4G"
+quiet_hours = "23:00-07:00"
+max_load = 8.0
+```
+
+Run `paddock turnout ls` and `paddock turnout show host-checks` to inspect the configuration, then `paddock turnout install host-checks` to install its user timer. `paddock turnout remove host-checks` removes it. Git polling is at least 60 seconds apart. The job tests the selected commit in a detached worktree, one suite at a time with `CARGO_BUILD_JOBS=4`, and saves the output under paddock's state directory. Runtime and memory are limited by a systemd user service. A report goes to `paddock mail ls turnout-host-checks`; set `mailbox` to use another mailbox. `paddock turnout log host-checks` prints health records and `paddock turnout health` summarizes them.
+
+For a calendar timer, set `trigger = "timer"` and `schedule` to a systemd calendar expression such as `daily`. `jitter` is a duration; it defaults to one minute. A calendar wake waits for quiet hours and load limits to clear; its recovery service resumes that pending wake when the user systemd manager starts again. A git wake retries at the next poll. `paddock turnout run NAME` starts a wake manually. `paddock turnout pause NAME` stops a job, and `paddock turnout pause` stops all jobs, including later timer wakes. `paddock turnout resume` clears the pause. These commands run on the host and require user systemd for timers and budgeted work. Agent jobs are not yet supported.
+## Trainer (experimental)
+
+A trainer gives a live horse-mode run an independent review. On the host, use `paddock train RUN` or `paddock train RUN --deep`. The worker can request one with `paddock-host train [--deep]`. The trainer starts a separate session with network disabled, no approvals and read-only access to the target worktree. It gets a bounded brief, then can ask for more with its scoped, time-limited `paddock-host peek --grant trainer` grant. `--deep` increases the brief and peek limits; it does not copy the target session into the trainer's context. The target's encrypted session files remain ciphertext in the trainer mount.
+
+A trainer sends structured advice to the worker's mailbox. Normal advice waits for a turn end; severe findings interrupt. The worker decides what to do. Trainers can run periodically during active work, on stall signals, on request and before final completion, subject to the run's frequency cap and budget. If the final review fails, the worker receives the failure and the final report waits for a successful retry. In user config:
+
+```toml
+[trainer]
+enabled = true
+interval = "45m"
+no_commit = "90m"
+min_interval = "5m"
+budget = 8
+```
+
+`paddock train stats` shows recorded advice and follow-up facts for all runs; add a run ID to narrow it. Adoption starts as unknown. Record an explicit decision with `paddock train feedback RUN ADVICE adopted|not-adopted --note TEXT` on the host or `paddock-host train feedback ADVICE adopted|not-adopted [NOTE]` in the worker. Repeated negative feedback reduces the matching automatic trigger. Later check results and commits are observations, not proof that the advice caused them.
+
+## horse (experimental)
+
+In horse mode, paddock keeps the sessions of a run in its own store on the host, `~/.local/share/paddock/horse/` (mode 0700). A horse is a group of sessions with one DNA, a set of traits. paddock reads each session from the native files of the harness and keeps every row, also the rows that the harness later removes or rewrites. During the run, you can queue messages for a session or fork it. You can also ask whether a change keeps the prompt cache of the model.
+
+Horse content in the host store is authenticated and encrypted. The master key is in the host paddock keyring; each horse has a wrapped data key. Back up the master key to a private, secure location and retain it alongside your store backup plan:
+
+```sh
+paddock horse key export /secure/horse-master.key
+paddock horse key import /secure/horse-master.key  # restore a matching key into an empty keyring
+```
+
+A missing or wrong key stops access without deleting the store. Native harness transcripts remain in the harness's own format. An existing plaintext store is never migrated automatically:
+
+```sh
+paddock horse migrate --verify       # copy and verify; retain horse.plain
+paddock horse migrate --drop-plain   # warning: permanently remove the verified plaintext copies
+```
+
+Keep the plaintext backup until you have checked your encrypted store and saved a key backup. Migration refuses active runs, unsafe source files, and records larger than 256 MiB; it leaves the source intact on refusal. A failed migration can be retried.
+
+Horse mode is off by default. Turn it on for one run, or for every run in the user configuration:
+
+```sh
+paddock run codex --horse                     # a new horse
+paddock run dsh --horse-id h-1a2b3c4d5e6f     # continue a horse, resume its newest dsh session
+```
+
+```toml
+[horse]
+enabled = true
+# dsh_model = "deepseek-flash"
+# dsh_provider = "deepseek-official"
+# dsh_effort = "high"
+```
+
+Horse mode works with the harness versions below. Before the run starts, paddock asks the harness for its version. If the version is not in this list, or the harness is not supported, the run fails and says why. This is also true with `enabled = true`. If you run other harnesses or versions, turn horse mode on per run with `--horse`.
+
+| Harness | Version |
+|---|---|
+| dsh | 0.2.1-rc.5 |
+| Claude Code | 2.1.317 |
+| Codex | 0.166.0, 0.167.0 |
+| Grok Build | 1.0.70 |
+| agy | 1.4.12 |
+
+Codex rollout reading supports 0.166.0 and 0.167.0. The codec preserves complete records byte for byte and records the first metadata row's producer version separately from the version used to read it. Later rows may have a different producer. A fork, swap or delivery refuses unknown or unverified records and nested variants, and reports the line. This conservative check also refuses some valid record types until they are validated. A swap refuses a rollout that changed since ingest.
+
+The interactive Codex screen pattern is still limited to 0.166.0. With 0.167.0, the interactive run continues and its session is ingested when it ends, but safe-point message delivery stays unavailable until the screen pattern is verified. The versioned rollout fixtures use upstream types.
+
+`--horse-id` works for dsh only. A detached run (`--detach`) cannot use horse mode yet.
+
+### How paddock holds a run
+
+In custody, paddock delivers your queued messages at a safe point and reads the session into the store after every turn. A safe point is a moment with no running turn. paddock never puts a message into a running turn.
+
+A dsh run starts as `dsh --profile sdk` instead of `dsh web`, so there is no browser page. You type your prompts in the terminal, and paddock prints the answers. A prompt that you type during a reply waits until the reply is complete. Ctrl-D ends the run after the running turn and the queued messages. If the input ends, for example with stdin from `/dev/null`, paddock still delivers the queued messages, and then ends dsh. paddock prints a `horse:` line when the run waits for them. Press Ctrl-D a second time to end the run at once.
+
+A child of `paddock-host spawn` with a task has no terminal (a headless child). paddock gives the task as the first message after the DNA message. It delivers queued messages after each turn. If the child is idle and its inbox is empty, paddock ends it. The output of the custody is the output of the child. An empty task fails before paddock writes to the store. Each harness runs in its own machine mode:
+
+- Claude Code: `claude -p` over stream-json, with a session id that paddock picks.
+- Codex: `codex app-server` on stdio. An approval request of Codex gets the answer that the plain run of the profile gives, never a wider one.
+- Grok Build: `grok agent stdio` over ACP. Tool permissions get the answer of the plain run of the profile.
+- agy: `--input-format stream-json --output-format stream-json`. paddock stops a running turn with SIGINT.
+
+An interactive run keeps its terminal user interface (TUI). paddock relays the terminal through a pty that it owns (the pty relay), and types each queued message into it at a safe point. The hooks or the `notify` program of the harness tell the host about the start and the end of each turn. paddock adds them only to the sandbox copy of the configuration of the harness, and the host copy does not change:
+
+- Claude Code: the `Stop` and `UserPromptSubmit` hooks, and a session id that paddock picks.
+- Codex: the `notify` program in `~/.codex/config.toml`. Your own `notify` still runs after it.
+- Grok Build: the `UserPromptSubmit`, `Stop`, `StopCancelled` and `StopFailure` hooks, and the `idle_prompt` notification.
+- agy: the `PreInvocation` and `Stop` hooks in `.gemini/config/hooks.json`.
+
+paddock types a message only if all three of these are true:
+
+- The last hook says that the turn ended, and no newer user row is in the session file.
+- The screen shows the empty input row of the TUI, and no row shows that a turn runs.
+- The screen did not change for 1.5 seconds.
+
+paddock sends each message as one bracketed paste, then the Enter key. It removes control characters from a message, so a message cannot send keys of its own. While paddock types, your keys wait, and they go to the TUI right after the Enter key. The screen patterns are in the `[horse.pty]` table of each profile. None of them comes from a recorded screen, so `paddock doctor` lists them as unverified. A wrong pattern only holds messages back.
+
+If the user row of a message is in the session file, paddock marks the message landed. If a message does not land within 60 seconds of an idle TUI, paddock types it once more. After a second miss, the message stays recorded but not landed, and `paddock horse status` shows it so. Each step is one line in the device ledger: `pty.deliver`, `pty.interrupt`, `pty.retry` or `pty.lost`. If the screen looks idle but no hook ever came, the line is `pty.no_stop`.
+
+If paddock cannot hold an interactive run, the run goes on, and paddock reads the session files into the store when it ends. Your queued messages stay in the inbox, and the run says why in one line:
+
+```text
+horse: no safe-point delivery for codex 0.166.0 in the TUI (the run has no terminal for paddock's relay); entries stay queued
+```
+
+These are the causes:
+
+- The run has no terminal.
+- The profile has no `[horse.pty]` table for the version.
+- Your command sets what paddock sets itself: `--resume`, `--continue` or `--session-id` for Claude Code, or `-c notify=...` for Codex.
+
+paddock also has a channel path for Claude Code 2.1.318. A channel is an MCP server, `paddock-host channel`, that pushes messages into a running session. A horse run needs Claude Code 2.1.317 today, so paddock does not use the channel yet.
+
+On macOS, the relay, the hooks and the host requests are the same. The `run.end` event of each run names its custody: `live`, `pty`, `channel` or `final-only`. It also has the counts, and `error` if the custody failed.
+
+### Queue a message
+
+On the host:
+
+```sh
+paddock horse status                                   # live sessions, heads, inboxes, guard verdicts
+paddock horse append s-1a2b3c4d5e6f --text "The tests pass on main now."
+paddock horse append s-1a2b3c4d5e6f --role note --text "Use the staging database."
+paddock horse append s-1a2b3c4d5e6f --text "Stop, read the new spec first." --interrupt
+```
+
+A message waits in the inbox of the session. paddock delivers it at the next safe point, as the newest message. The roles are `user`, `system`, `developer` and `note`. A harness that takes only user messages gets the other roles as a user message with a short role tag. `--interrupt` marks a message as urgent: in a TUI, paddock stops the running turn with the interrupt key of the harness, and delivers the message first. dsh has no cancel, so a dsh turn always runs to its end.
+
+### The prefix guard
+
+A model provider keeps the start of a prompt in a cache, so the next request is cheaper and faster. The prefix guard compares what the model sees before and after an operation. It warns if one of these loses the cached prefix: a fork, a message that is not at the end, a change of model, effort, tools, system prompt or cwd, or a long pause. The warning shows the size of the lost part and the cost. Where a message at the end can do the same, it shows that form.
+
+```sh
+paddock horse guard s-1a2b3c4d5e6f --model deepseek-v4-pro
+paddock horse guard s-1a2b3c4d5e6f --fork-at 3f9a2c
+```
+
+For Claude Code, the guard reads the request shape from the transcript. It says if the cache is warm (under 5 minutes), maybe warm (under 1 hour) or cold. Codex keys its cache by the thread id, so a fork under a new id starts cold. For agy, the cache scope is unknown, and a fork with a new conversation id counts as a cold start.
+
+### Forks and swaps
+
+```sh
+paddock horse list                                     # every session in the store
+paddock horse log s-1a2b3c4d5e6f -n 20                 # the last 20 nodes of a session
+paddock horse fork s-1a2b3c4d5e6f --at 3f9a2c          # a new session from that node
+```
+
+A swap continues a Codex or Grok Build session at another branch under the same id. The prompt up to the fork point stays cached. The old head stays in the store as a session of its own:
+
+```sh
+paddock horse swap s-1a2b3c4d5e6f 3f9a2c1b7d4e                  # a session that a headless run holds
+paddock horse swap s-1a2b3c4d5e6f 3f9a2c1b7d4e --interrupt      # stop the running turn first
+paddock horse swap s-1a2b3c4d5e6f s-7e6d5c4b3a21 --codex-home ~/old-sandbox-home/.codex
+paddock horse swap s-2b3c4d5e6f7a 4c5d6e7f8a9b --grok-home ~/old-sandbox-home/.grok
+```
+
+If a headless run holds a Codex session, the swap waits until no turn runs, and Codex loads the thread again. An interactive Codex run cannot load its thread again, so paddock refuses the swap until the run ends. If no run holds the session, name the home folder of the harness. If the guard says that the swap loses cached tokens, add `--yes`.
+
+A warm side branch is a fork of a held Codex session that keeps the cache key. Codex writes no file for it, so paddock stores its turns from the live channel and marks them `live` in `paddock horse log`. paddock cannot write such a session back as a native file. The parent session waits until the side branch closes:
+
+```sh
+paddock horse fork s-1a2b3c4d5e6f --warm      # prints the new session, for example s-9c8b7a6d5e4f
+paddock horse append s-9c8b7a6d5e4f --text "Try the other approach."
+paddock horse fork s-9c8b7a6d5e4f --close     # or the run ends
+```
+
+### Hitch mode
+
+A run in horse mode can start a child that joins its horse as a new session (a hitched child):
+
+```sh
+paddock-host spawn claude --prompt-file task.md --hitch
+```
+
+The result of the child goes into the session of the parent at its next safe point, once: from `paddock-host done TEXT` of the child, or from its end, whichever comes first. A run does not end while one of its hitched children still owes its result, and it prints a `horse:` line that says so. A plain spawn without `--hitch` makes a child horse with the DNA of its parent. `--hitch` outside horse mode is an error. A hitched child sees only its own session in `/dev/paddock/horse`, never the session of its parent or of a sibling.
+
+### DNA
+
+The DNA of a horse is a TOML document with traits, policies and capabilities. The capabilities are recorded only and grant nothing. The first message of every new session tells the model the DNA of its horse. Every change is an event, and the old DNA stays in the store.
+
+```sh
+paddock horse dna show h-1a2b3c4d5e6f
+paddock horse dna set h-1a2b3c4d5e6f dna.toml          # hot-load
+paddock horse dna history h-1a2b3c4d5e6f
+paddock horse dna revert h-1a2b3c4d5e6f HASH           # back to a DNA from history
+paddock horse graft h-1a2b3c4d5e6f h-6f5e4d3c2b1a      # add the traits of the second horse
+paddock horse move s-1a2b3c4d5e6f h-6f5e4d3c2b1a       # move an idle session to another horse
+paddock horse explain h-1a2b3c4d5e6f                   # where each trait comes from
+```
+
+```toml
+[traits]
+style = "careful"
+```
+
+- Inherit: a child horse of a plain spawn starts with the DNA of its parent.
+- Hot-load: after `dna set`, each running session of the horse gets the new DNA as one `system` message at its next safe point. Inside the sandbox, pipe the DNA to `paddock-host horse dna put` to do the same.
+- Graft: the first horse keeps its id, its sessions and its own trait values, and a different value of the second horse becomes an alternative. A different policy, or a capability that the first horse does not have, refuses the graft, and nothing changes. A move grafts the DNA of the old horse into the new one. `paddock horse guard SESSION --move HORSE` shows that a move keeps the cached prefix.
+- Adapt: at the end of each run, three rules set the traits `runs`, `harnesses` and `reliability`.
+- Explain: `explain` shows the origin of each trait, the DNA events and the lineage of each session. `paddock explain` shows the same for a run in horse mode.
+- Revert: `dna revert` sets an earlier DNA from `history` again. The history stays.
+
+### Published DNA (registry)
+
+You can publish a DNA to an index and use it in other horses. An index is a folder on the host, or a git checkout of one. A reference has the form `registry://org/name@version`, `@latest` or `@sha256:HASH`. You keep the signing key, the trusted keys and the index list on the host only, in `~/.local/state/paddock/registry/`. The folder is 0700 and each file is 0600.
+
+```sh
+paddock horse registry key new                          # make the signing key, print its public key
+paddock horse registry trust add acme 3f9a...e1 --name release   # trust this key for the org acme
+paddock horse registry index add team /srv/dna-index    # add an index after the local one
+paddock horse registry publish h-1a2b3c4d5e6f registry://acme/review@1.0.0
+paddock horse registry resolve registry://acme/review@latest     # manifest, verdict, hash; no import
+paddock horse dna use h-6f5e4d3c2b1a registry://acme/review@1.0.0
+paddock horse registry sync team                        # git pull --ff-only, for a git checkout only
+```
+
+The default local registry is encrypted with the horse store. Configured external indexes keep their shared transport format; protect those folders separately.
+
+A publish signs with the key of the host. If there is no key, run `paddock horse registry key new` first, or publish with `--unsigned`. A published version cannot change. By default, the trust policy refuses an unsigned manifest and a manifest that an untrusted key signed. `resolve` prints the verdict. If the policy refuses the reference, it exits 1. `dna use` grafts the DNA into the horse, with the same checks as a graft.
+
+A sandbox in horse mode can ask for published DNA, but each request goes to you first:
+
+```sh
+paddock-host horse registry fetch registry://acme/review@1.0.0 --use
+paddock-host horse registry sync team
+```
+
+If you deny the request, nothing is written, and the command exits 1 with `fetch of <ref> was not approved`. If you approve it, the host resolves the reference with its own indexes and trust policy. With `--use`, the host grafts the DNA into the horse, and the session gets the new traits at its next safe point. The answer to the sandbox holds the reference, the hash, the manifest fields and the verdict. It never holds a path, a key, an index name or the trust list. `sync` is the only network path of the registry, and it runs only after your approval. The device ledger and the audit log get one line for each request.
+
+### The horse device
+
+A sandbox in horse mode sees its own horse at `/dev/paddock/horse/self/`. Files that carry session or DNA content contain ciphertext. Names and IDs remain visible; `edges` and `instances` expose relationship and run metadata, and `ctl` is a command channel. Use the broker to read content deliberately:
+
+```sh
+paddock-host peek ls                      # list node selectors and metadata
+paddock-host peek cat 0                   # content of node 0
+paddock-host peek ls | paddock-host peek cat
+paddock-host peek grep 'error'            # basic regular expression
+paddock-host peek range 0 3              # inclusive node range
+paddock-host peek dna
+paddock-host peek binding
+paddock-host peek inbox                  # queued entries of this run
+printf '[traits]\nstyle = "careful"\n' | paddock-host horse dna put
+```
+
+The output is marked as data. Reads use the run's grant, are counted and logged, and stop when the grant is revoked or exhausted. A trainer grant selects its target with `--grant ID`. A closed output pipe exits cleanly. If the mount is unavailable, the run reports why.
+
+A sandbox can also change the context of its own horse, one command per write to `self/ctl`. It needs your grant first. Without a grant, a write fails with EACCES:
+
+```sh
+paddock horse grant 1a2b3c --allow fork,append,view --commands 20 --tokens 50000   # on the host
+paddock horse grants                                                              # what each grant used
+paddock horse grant 1a2b3c --revoke
+```
+
+```sh
+echo "fork s-1a2b3c4d5e6f" > /dev/paddock/horse/self/ctl          # inside the sandbox
+cat /dev/paddock/horse/self/ctl                                     # the answer: the new session
+echo "view s-1a2b3c4d5e6f errors grep:error" > /dev/paddock/horse/self/ctl
+paddock-host horse ctl append s-1a2b3c4d5e6f note Check the logs.   # the same through the broker
+```
+
+The commands are `fork SESSION [AT_NODE]`, `append SESSION ROLE TEXT`, `move SESSION HORSE`, `view SESSION NAME FILTER` and `disconnect SESSION`. A view is the encrypted read-only file `self/views/NAME`, built from messages that pass the filter: `all`, `role:ROLE`, `last:N` or `grep:TEXT`. `disconnect` ends the custody of a session at its next safe point. `move` can go only to a horse that you named with `--horse`.
+
+The prefix guard judges each command before anything changes. An append at the end passes at once. A command that breaks the cached prefix shows an approval card with the lost tokens and the cost. Its tokens come from the token budget of the grant, so with `--tokens 0` every such command is refused. A command works only on the sessions of the sandbox's own horse, and a hitched child only on its own session. A denied command fails with EPERM and changes nothing. Each command writes one line to the device ledger.
 
 ## Timers
 
@@ -1798,6 +2369,12 @@ paddock ps                                    # shows "frozen 12m"
 
 With a systemd user instance, every bwrap or srt sandbox runs in a scope of its own, `paddock-sb-<id>`, and `paddock freeze` freezes that scope with the cgroup freezer. paddock never freezes a scope that is not its own, such as the one of your terminal. docker and podman sandboxes are paused with `pause` instead. A sandbox that started without a systemd user instance cannot be frozen. The bar panel has a key for it on each row, and shows how long a sandbox has been frozen.
 
+For a systemd scope, paddock sets `memory.high` to 2 GiB by default. This is a soft boundary: the kernel reclaims and throttles above it, and it is not a hard memory limit. Set `[memory] high = "4G"` in `~/.config/paddock/config.toml` to change it, or `high = "max"` to disable it. Spawned child scopes use the same setting alongside any `--mem` hard limit. A run without a systemd scope does not get this boundary. `paddock explain` shows the planned setting; `paddock ps --mem` shows the effective cgroup value when it is available.
+
+When a detached run becomes idle, paddock asks the kernel to reclaim up to 1 GiB of its inactive file cache from its own verified scope. It does not freeze the run. The request normally uses `swappiness=0`; on kernels that reject that option it retries without the override, which can also reclaim anonymous memory. The run note says which request was used. Reclaim is best effort, so the kernel may reclaim less or none.
+
+The memory savings from these changes have not yet been measured in a run started with this version. Compare runs with similar workloads using `paddock ps --mem`; file cache and swap can vary over time.
+
 - `paddock stop` thaws a frozen sandbox first, so that it can end.
 - Each freeze and thaw goes to the audit log, with the reason.
 - The other members of its pasture see the state in paddock kv: `sandbox:<id>` in the `pasture` scope is `{"state": "suspended", ...}` while it is frozen and `running` after.
@@ -1846,14 +2423,14 @@ paddock app run vscode --worktree ~/src/api
 
 To use a worktree on every start, set `worktree = true` in `[apps.NAME]` of `~/.config/paddock/config.toml`. When you start an app from the menu without saved folders, the folder dialog asks whether to open a git repository in a new worktree. "New worktree" is the default button.
 
-When the app exits, paddock prints the commits and the uncommitted changes in the worktree, and the commands to review, merge or remove it. If no terminal shows that text, for example after a start from the menu, a notification gives the branch and the number of commits and changes, with a Merge and a Remove button where the notification server supports buttons. paddock never removes a worktree without your action.
+When the app exits, paddock prints the commits and the uncommitted changes in the worktree, and the commands to review, merge or remove it. If no terminal shows that text, for example after a start from the menu, a notification gives the branch and the number of commits and changes, with a Merge and a Remove button where the notification server supports buttons. If the app made no commit and left no change, paddock removes the worktree and the branch at once. A worktree with work stays until you remove it, or until its work is merged (see [Automatic cleanup](#automatic-cleanup)).
 
 Flatpak apps use worktrees too. paddock gives the app the worktree folder and the repository's `.git` folder read-write, so git in the app can commit there. The `.git` file of the worktree, the `config`, `config.worktree`, `commondir`, `gitdir` and `hooks` of the repository and of the worktree stay read-only.
 
 Later, the commands and the "Worktrees" row of the bar panel do the same:
 
 ```sh
-paddock worktree list                       # branch, unmerged commits, uncommitted changes, in use
+paddock worktree list                       # size, last use, branch, merged state, uncommitted changes, in use
 paddock worktree merge paddock/vscode-20261102-1a2b
 paddock worktree remove ~/.local/share/paddock/worktrees/api/wt-api-1a2b3c [--force]
 ```
@@ -2221,17 +2798,30 @@ The agent can read its own API token and the variables that it inherits. With ne
 
 pasta hides the host addresses that exist when the sandbox starts. If the host gets a new address while a sandbox runs, for example from a VPN that starts later, services on it are reachable from that sandbox until the next start. paddock watches for new addresses, shows a warning in the bar panel, and prints it at exit.
 
-Shared package caches connect the sandboxes of different projects. The shared mise installs are read-only in every project sandbox, and no project file runs while paddock writes them (see mise toolchains). The package caches (cargo, npm, pnpm, bun, yarn, uv, pip, go) are in layers. On the bwrap backend each cache is an overlay. The lower layer under `$XDG_CACHE_HOME/paddock/layers` is shared by all projects, is read-only in every sandbox, and only paddock writes it on the host. The upper layer under `$XDG_CACHE_HOME/paddock/projects` belongs to one project and takes all writes. A file that one project changes in its cache never reaches another project.
+By default, uv and npm share writable caches within a repository or plain project folder. Worktrees, spawn children and trainers use the same project caches; other projects cannot see them. These tools support concurrent cache writers. Other tools keep separate worktree upper layers. Peer caches use the peer and repository identity, so worktrees share a peer cache. When an eligible old worktree cache is idle and the project cache is empty, paddock moves it into the project cache without copying it.
 
-After a bwrap sandbox ends, paddock checks the new downloads in the project's upper layer in the background, for at most two minutes. It copies a package into the shared layer only when its content matches a source that no project can change:
+Choose the sharing boundary in the user configuration (`~/.config/paddock/config.toml`):
+
+```toml
+[cache]
+share = "project" # default; also "verified" or "none"
+```
+
+`verified` gives each run its own writable cache and uses verified read-only lower layers where available. `none` uses only per-run caches. Both choices isolate writable peer caches too. Project files cannot set this option. `paddock explain` shows the choice and layer. `paddock pasture list` names active `lease:cache:TOOL` locks and their runs. GC and limits keep a cache while its lock is held. The host `XDG_CACHE_HOME` is not inherited by default; an explicit `[env] pass` can still pass it.
+
+The srt and Seatbelt backends cannot remap these cache mounts. Their caches stay in the sandbox home, and `[cache] share` does not apply to them. Seatbelt can also refuse a run that requests an overlay. `paddock explain` reports these limitations for the selected backend.
+
+The shared mise installs are read-only in every project sandbox, and no project file runs while paddock writes them (see mise toolchains). On the bwrap backend, other package caches use overlays. The lower layer under `$XDG_CACHE_HOME/paddock/layers` is shared by all projects and is read-only in every sandbox. Only paddock writes it on the host. The upper layer under `$XDG_CACHE_HOME/paddock/projects` belongs to one worktree and takes its writes. A file that one project changes in its cache never reaches another project.
+
+After a bwrap sandbox with worktree overlays ends, paddock checks eligible downloads in the upper layer in the background, for at most two minutes. It copies a package into the shared layer only when its content matches a source that no project can change:
 
 - cargo: a `.crate` file from crates.io, against the `cksum` in the crates.io sparse index, fetched on the host.
-- npm: a file of `_cacache/content-v2`, against the sha512 or sha256 hash in its own path.
+- npm: existing worktree upper-layer files of `_cacache/content-v2`, against the sha512 or sha256 hash in their own paths.
 - go: a module zip and its `go.mod`, against the `h1:` hashes of the checksum database `sum.golang.org`, fetched on the host.
 
-A file that fails the check, or that paddock cannot check (no network, another registry), stays in the project. paddock never replaces a file that is already in the shared layer. The audit log records each result with the cache, the package and the version, never the content. A small record in the paddock state keeps each checked package version, so paddock asks the index only once for it. pip, uv, pnpm, bun and yarn have no shared layer: their packages stay in each project. Unpacked sources and build caches always stay in each project.
+A file that fails the check, or that paddock cannot check (no network, another registry), stays in the project. paddock never replaces a file that is already in the shared layer. The audit log records each result with the cache, the package and the version, never the content. A small record in the paddock state keeps each checked package version, so paddock asks the index only once for it. pip, pnpm, bun and yarn have no shared lower layer. uv and npm normally use the separate project caches described above. Unpacked sources and build caches always stay in each project.
 
-The docker, podman and srt backends have no overlay. They bind the project's own folder, read-write, so each project downloads its packages again. `[storage] layered_caches = false` does the same on the bwrap backend. No setting goes back to one writable cache for all projects.
+The docker and podman backends have no overlay. They bind each worktree's folder read-write. `[storage] layered_caches = false` does the same on the bwrap backend. uv and npm use their project caches on these backends too. No setting gives all projects one writable cache.
 
 Some profile entries come from documentation, not from a test on a real install. `paddock doctor` lists them for each installed harness.
 

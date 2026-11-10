@@ -139,3 +139,171 @@ pub fn main(args: &[String]) -> i32 {
     }
     r.status.exit_code()
 }
+
+pub const GAUGE_HELP: &str = r#"paddock-host gauge: how far the Spec Kit feature of this project is.
+
+  paddock-host gauge [FEATURE] [--seed N] [--window DAYS] [--strict] [--json]
+
+paddock measures the feature on the host, from the history of tasks.md, the
+task records, the gate results and the workers' mailboxes. No agent reports
+a percentage. It prints:
+
+- done with evidence: a task counts only when its work is merged, its review
+  passed or a gate passed, and no gate only skipped or failed after it;
+- tasks discovered per day, reopened tasks, fails after done;
+- the age of each open task, and the time tasks sat almost done (in review,
+  or a worker blocked);
+- the forecast: P50 and P85 of the finish date and of the final task count,
+  or "not converging" when new tasks come as fast as tasks finish;
+- the trend of P85, the appetite share used, and a burn-up chart.
+
+Use it before you start the next worker: when it says "not converging",
+cut scope or shape the tasks again instead of adding workers. --strict
+counts only tasks with evidence as finished.
+"#;
+
+/// `paddock-host gauge`: the gauge of the feature, computed on the host.
+pub fn gauge_main(args: &[String]) -> i32 {
+    if args
+        .iter()
+        .any(|a| matches!(a.as_str(), "-h" | "--help" | "help"))
+    {
+        print!("{GAUGE_HELP}");
+        return 0;
+    }
+    let strict = args.iter().any(|a| a == "--strict");
+    let rest: Vec<String> = args.iter().filter(|a| *a != "--strict").cloned().collect();
+    let p = match super::parse(&rest, &["feature", "seed", "window"]) {
+        Ok(p) if p.rest.len() <= 1 => p,
+        Ok(_) => {
+            eprintln!("paddock-host gauge: at most one FEATURE\nRun `paddock-host gauge --help`.");
+            return super::EXIT_USAGE;
+        }
+        Err(e) => {
+            eprintln!("paddock-host gauge: {e}");
+            return super::EXIT_USAGE;
+        }
+    };
+    let mut a = BTreeMap::new();
+    a.insert("action".into(), serde_json::json!("gauge"));
+    if let Some(f) = p.rest.first().or(p.opts.get("feature")) {
+        a.insert("feature".into(), serde_json::json!(f));
+    }
+    for k in ["seed", "window"] {
+        if let Some(v) = p.opts.get(k) {
+            match v.parse::<u64>() {
+                Ok(n) => {
+                    a.insert(k.into(), serde_json::json!(n));
+                }
+                Err(_) => {
+                    eprintln!("paddock-host gauge: --{k} is a number");
+                    return super::EXIT_USAGE;
+                }
+            }
+        }
+    }
+    if strict {
+        a.insert("strict".into(), serde_json::json!(true));
+    }
+    let r = match send(a) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("paddock-host: {e}\nThis command works only inside a paddock sandbox.");
+            return super::EXIT_NO_HOST;
+        }
+    };
+    if p.json {
+        println!("{}", serde_json::to_string_pretty(&r).unwrap_or_default());
+    } else if r.status != Status::Done {
+        eprintln!("paddock-host gauge: {}", r.message);
+    } else {
+        print!("{}", r.result["text"].as_str().unwrap_or(""));
+    }
+    r.status.exit_code()
+}
+
+/// Route a worker's on-demand trainer request without asking for approval.
+pub fn gauge_or_train_main(command: &str, args: &[String]) -> i32 {
+    if command == "gauge" {
+        return gauge_main(args);
+    }
+    if args
+        .iter()
+        .any(|arg| matches!(arg.as_str(), "-h" | "--help" | "help"))
+    {
+        println!("paddock-host train [--deep]: request an independent review of this run\npaddock-host train feedback ADVICE adopted|not-adopted [NOTE]: record feedback");
+        return 0;
+    }
+    if args.first().is_some_and(|arg| arg == "feedback") {
+        if !(3..=4).contains(&args.len()) || !matches!(args[2].as_str(), "adopted" | "not-adopted")
+        {
+            eprintln!("paddock-host train: use train feedback ADVICE adopted|not-adopted [NOTE]");
+            return super::EXIT_USAGE;
+        }
+        let request = Request {
+            v: PROTOCOL,
+            cap: "train".into(),
+            args: [
+                ("op".into(), serde_json::json!("feedback")),
+                ("advice".into(), serde_json::json!(args[1])),
+                ("adopted".into(), serde_json::json!(args[2] == "adopted")),
+                (
+                    "note".into(),
+                    serde_json::json!(args.get(3).map(String::as_str).unwrap_or("")),
+                ),
+            ]
+            .into(),
+            reason: String::new(),
+        };
+        return match super::send(&request) {
+            Ok(response) => {
+                if response.status == Status::Done {
+                    println!("trainer feedback recorded");
+                } else {
+                    eprintln!("paddock-host train: {}", response.message);
+                }
+                response.status.exit_code()
+            }
+            Err(error) => {
+                eprintln!("paddock-host train: {error}");
+                super::EXIT_NO_HOST
+            }
+        };
+    }
+    if args.iter().any(|arg| arg != "--deep") {
+        eprintln!("paddock-host train: use train [--deep]");
+        return super::EXIT_USAGE;
+    }
+    let seed = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as u64
+        ^ u64::from(std::process::id());
+    let request = Request {
+        v: PROTOCOL,
+        cap: "train".into(),
+        args: [
+            ("request".into(), serde_json::json!(seed)),
+            (
+                "deep".into(),
+                serde_json::json!(args.iter().any(|arg| arg == "--deep")),
+            ),
+        ]
+        .into(),
+        reason: String::new(),
+    };
+    match super::send(&request) {
+        Ok(response) => {
+            if response.status == Status::Done {
+                println!("trainer requested");
+            } else {
+                eprintln!("paddock-host train: {}", response.message);
+            }
+            response.status.exit_code()
+        }
+        Err(error) => {
+            eprintln!("paddock-host train: {error}");
+            super::EXIT_NO_HOST
+        }
+    }
+}
