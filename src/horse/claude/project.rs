@@ -181,8 +181,9 @@ pub fn project(store: &Store, session: &str, config_dir: &Path) -> Result<Projec
     // in the session fields, so they are a chain of their own. `fork_of`
     // and the shared uuids keep the link to the parent.
     let mut head: Option<Hash> = None;
+    let scoped = store.for_horse(&s.horse)?;
     for r in &rows {
-        head = Some(store.put_native(&ORIGIN, head.as_ref(), &super::key(&info(r)?), r)?);
+        head = Some(scoped.put_native(&ORIGIN, head.as_ref(), &super::key(&info(r)?), r)?);
     }
     store.update_session(session, |s| {
         s.head = head;

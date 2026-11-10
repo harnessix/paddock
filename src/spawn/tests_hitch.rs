@@ -18,7 +18,7 @@ fn child_that_writes(secs: &str) -> Vec<OsString> {
 
 /// A parent run in horse mode: its store and its run.
 fn parent_run(s: &Setup) -> (Store, RunHorse) {
-    let store = Store::open(&crate::horse::root(&s.env)).unwrap();
+    let store = Store::open_host(&s.env).unwrap();
     let parent = run::begin(&store, claude::HARNESS, claude::VERSION, None, None).unwrap();
     (store, parent)
 }
@@ -237,4 +237,24 @@ fn hitch_without_horse_mode_is_refused_and_plain_spawn_still_works() {
     let done = sp.wait(&id, Duration::from_secs(10)).unwrap();
     assert_eq!(done.state, State::Exited, "{}", done.message);
     assert!(!crate::horse::root(&s.env).join("lock").exists());
+}
+
+/// Two hitched children of a parent held live.
+mod live;
+
+#[test]
+fn a_hitched_child_that_does_not_start_still_reports_to_the_parent() {
+    let s = setup();
+    let (store, parent) = parent_run(&s);
+    let b = horse_broker(&s, &parent, &store, &["/home/demo/no-such-program"]);
+    let resp = b.handle(&start_hitched("codex"));
+    assert_ne!(resp.status, RStatus::Done, "{}", resp.message);
+    let child = child_session(&store, &parent);
+    assert_eq!(
+        kinds(&store, &parent.horse),
+        vec![EdgeKind::SpawnedFrom, EdgeKind::Append]
+    );
+    let inbox = store.inbox(&parent.session).unwrap();
+    let head = format!("hitched {} (codex) finished\nfailed: ", &child[..8]);
+    assert!(inbox.iter().any(|e| e.text.starts_with(&head)), "{inbox:?}");
 }

@@ -41,3 +41,17 @@ pub(super) fn holds(raw: &[u8], text: &str) -> bool {
             .as_array()
             .is_some_and(|c| c.iter().any(|x| x["text"].as_str() == Some(text)))
 }
+
+/// Check the parent rollout and stored history before delivery.
+pub(super) fn check_delivery(
+    store: &crate::horse::Store,
+    root: &Path,
+    thread: Option<&str>,
+    session: &str,
+) -> anyhow::Result<()> {
+    use anyhow::Context as _;
+    let thread = thread.context("no parent thread is open")?;
+    let path = find_rollout(root, thread).context("no Codex rollout available for delivery")?;
+    crate::horse::codex::check_delivery_file(&path)?;
+    crate::horse::codex::check_mutation_session(store, session)
+}

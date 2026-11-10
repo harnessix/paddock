@@ -334,10 +334,11 @@ fn ingest_impl(
         }
     };
     let old = store.session_nodes(&session)?;
-    let header = store.put_blob("dsh-header", &log.header_raw)?;
+    let scoped = store.for_horse(&session.horse)?;
+    let header = scoped.put_blob("dsh-header", &log.header_raw)?;
     let (mut kept, mut parent) = (0, None::<Hash>);
     for (i, raw) in log.rows.iter().enumerate() {
-        let h = store.put_native(&ORIGIN, parent.as_ref(), &format!("seq:{i}"), raw)?;
+        let h = scoped.put_native(&ORIGIN, parent.as_ref(), &format!("seq:{i}"), raw)?;
         if old.get(i).is_some_and(|n| n.hash == h) {
             kept += 1;
         }
@@ -480,5 +481,7 @@ pub fn view(raw: &[u8]) -> Option<View> {
 mod project;
 pub use project::{fork_rows, project, Projection};
 
+#[cfg(test)]
+mod rewrite_tests;
 #[cfg(test)]
 mod tests;

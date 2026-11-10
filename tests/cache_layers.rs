@@ -223,3 +223,137 @@ fn a_planted_crate_stays_in_its_project_and_a_verified_one_is_shared() {
     let log = String::from_utf8_lossy(&log.stdout);
     assert!(!log.contains("planted code"), "{log}");
 }
+
+/// Host acceptance: the fake harness holds a cache while its controller runs
+/// and while a surviving sandbox process remains after an abrupt stop.
+#[test]
+#[ignore = "requires host bubblewrap"]
+fn active_cache_survives_controller_kill() {
+    use std::collections::BTreeMap;
+    use std::process::{Child, Stdio};
+    use std::time::{Duration, Instant};
+
+    struct Controller(Child);
+    impl Drop for Controller {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+
+    assert!(common::bwrap_works(), "host bubblewrap is required");
+    let tmp = common::tempdir();
+    let root = tmp.path();
+    for d in ["cfg/paddock/harness.d", "home", "project", "run"] {
+        std::fs::create_dir_all(root.join(d)).unwrap();
+    }
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(root.join("run"), std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::fs::write(
+        root.join("project/pyproject.toml"),
+        "[project]\nname='fake'\nversion='0.0.1'\n",
+    )
+    .unwrap();
+    std::fs::write(root.join("cfg/paddock/config.toml"), "[devices]\nmount=false\n[kv]\nenabled=false\n[storage]\nauto_gc=false\nhard_floor_gib=0\nsoft_floor_gib=0\npackage_cache_project_gib=0\npackage_cache_total_gib=0\n").unwrap();
+    let script = "mkdir -p \"$HOME/.cache/uv\"; printf fake > \"$HOME/.cache/uv/in-use\"; printf ready > ready; exec sleep 600";
+    std::fs::write(
+        root.join("cfg/paddock/harness.d/cachetest.toml"),
+        format!(
+            "name='cachetest'\n[locate]\ncommands=['sh']\n[launch]\nargs=['-c', {}]\n",
+            serde_json::to_string(script).unwrap()
+        ),
+    )
+    .unwrap();
+    let log = std::fs::File::create(root.join("controller.log")).unwrap();
+    let mut controller = Controller(
+        cmd(root)
+            .env("PADDOCK_CLEAN_START", "1")
+            .args([
+                "run",
+                "cachetest",
+                "--backend",
+                "bwrap",
+                "--network",
+                "none",
+                "-y",
+            ])
+            .arg(root.join("project"))
+            .current_dir(root.join("project"))
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::from(log))
+            .spawn()
+            .unwrap(),
+    );
+    let vars = BTreeMap::from([
+        (
+            "XDG_CONFIG_HOME".into(),
+            root.join("cfg").display().to_string(),
+        ),
+        (
+            "XDG_DATA_HOME".into(),
+            root.join("data").display().to_string(),
+        ),
+        (
+            "XDG_CACHE_HOME".into(),
+            root.join("cache").display().to_string(),
+        ),
+        (
+            "XDG_STATE_HOME".into(),
+            root.join("state").display().to_string(),
+        ),
+        (
+            "XDG_RUNTIME_DIR".into(),
+            root.join("run").display().to_string(),
+        ),
+    ]);
+    // SAFETY: these functions only return the current process's IDs.
+    let env = paddock::env::HostEnv::from_parts(
+        root.join("home"),
+        "fake".into(),
+        unsafe { libc::getuid() },
+        unsafe { libc::getgid() },
+        vars,
+    );
+    let project = root.join("project");
+    let cache = paddock::storage::package_cache::uv_dir(&env, &project).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let pid = loop {
+        if root.join("project/ready").is_file() {
+            if let Some(run) = paddock::state::Running::list(&env)
+                .into_iter()
+                .find(|r| r.project == project)
+            {
+                break run.pid;
+            }
+        }
+        if controller.0.try_wait().unwrap().is_some() || Instant::now() >= deadline {
+            panic!(
+                "fake run failed: {}",
+                std::fs::read_to_string(root.join("controller.log")).unwrap_or_default()
+            );
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    };
+    assert_eq!(std::fs::read(cache.join("in-use")).unwrap(), b"fake");
+    assert!(paddock::storage::package_cache::lease(&env, cache.parent().unwrap(), true).is_err());
+    paddock::storage::package_cache::limits::trim(&env, 1, 0).unwrap();
+    assert!(cache.join("in-use").is_file(), "active cache was removed");
+    controller.0.kill().unwrap();
+    controller.0.wait().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while paddock::state::alive(pid) {
+        paddock::storage::package_cache::limits::trim(&env, 1, 0).unwrap();
+        assert!(
+            cache.join("in-use").is_file(),
+            "cache was removed while the sandbox was alive"
+        );
+        assert!(
+            Instant::now() < deadline,
+            "sandbox survived the controller too long"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    paddock::storage::package_cache::limits::trim(&env, 1, 0).unwrap();
+    assert!(!cache.exists(), "idle cache was not evicted");
+}

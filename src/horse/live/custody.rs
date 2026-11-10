@@ -94,6 +94,7 @@ pub struct Custodian<W: Write, O: Write> {
     /// What paddock did to end the runtime.
     ending: Ending,
     report: Report,
+    refusals: refusal::Refusals,
 }
 
 /// The end of a dsh runtime, as paddock asks for it.
@@ -133,6 +134,7 @@ impl<W: Write, O: Write> Custodian<W, O> {
             ready: false,
             ending: Ending::No,
             report: Report::default(),
+            refusals: Default::default(),
             set,
         };
         let main = c.set.main.clone();
@@ -215,6 +217,7 @@ impl<W: Write, O: Write> Custodian<W, O> {
                     .and_then(Value::as_str)
                     .unwrap_or_default();
                 if let Some(e) = entry {
+                    self.refusals.taken(&e);
                     self.set.store.record_delivery(&e, head.as_ref(), mid)?;
                     self.report.delivered += 1;
                     self.say(&format!(
@@ -224,10 +227,14 @@ impl<W: Write, O: Write> Custodian<W, O> {
                 }
             }
             (Pending::Prompt { native, entry, .. }, Err(e)) => {
+                // A refused prompt starts no turn, and dsh sends no status.
                 let i = self.live(&native)?;
                 self.sessions[i].prompting = false;
-                let what = entry.map_or("the prompt".to_string(), |x| format!("append {}", x.id));
-                self.say(&format!("paddock: dsh did not take {what}: {e}"));
+                self.sessions[i].idle = true;
+                match entry {
+                    Some(x) => self.refused(x, &e)?,
+                    None => self.say(&format!("paddock: dsh did not take the prompt: {e}")),
+                }
             }
             (Pending::Shutdown, _) => self.ending = Ending::Done,
         }
@@ -262,6 +269,10 @@ impl<W: Write, O: Write> Custodian<W, O> {
         else {
             bail!("session {} is not in this custody", e.session);
         };
+        if self.refusals.waits(&e.session) {
+            // The session is still at a safe point, so the run can end.
+            return Ok(());
+        }
         let v = guard::check(
             &self.set.store,
             &e.session,
@@ -333,7 +344,9 @@ impl<W: Write, O: Write> Custodian<W, O> {
         }
         let st = &self.set.store;
         let locked = st.lock()?;
-        let h = st.put_native(&ORIGIN, head.as_ref(), &format!("seq:{seq}"), raw)?;
+        let h =
+            st.for_session(&sid)?
+                .put_native(&ORIGIN, head.as_ref(), &format!("seq:{seq}"), raw)?;
         locked.update_session(&sid, |x| x.head = Some(h.clone()))?;
         drop(locked);
         let s = &mut self.sessions[i];
@@ -411,13 +424,14 @@ impl<W: Write, O: Write> Custodian<W, O> {
         let st = &self.set.store;
         let locked = st.lock()?;
         let old = st.session_nodes(&st.session(&sid)?)?;
+        let scoped = st.for_session(&sid)?;
         let (mut parent, mut same) = (None::<Hash>, true);
         for (k, r) in log.rows.iter().enumerate() {
-            let h = st.put_native(&ORIGIN, parent.as_ref(), &format!("seq:{k}"), r)?;
+            let h = scoped.put_native(&ORIGIN, parent.as_ref(), &format!("seq:{k}"), r)?;
             same &= old.get(k).is_some_and(|n| n.hash == h);
             parent = Some(h);
         }
-        let header = st.put_blob("dsh-header", &log.header_raw)?;
+        let header = scoped.put_blob("dsh-header", &log.header_raw)?;
         // A file that lags behind the stream keeps the live head.
         let take = !same || log.rows.len() >= old.len();
         let s = locked.update_session(&sid, |s| {
@@ -551,5 +565,10 @@ pub fn find_session_dir(root: &Path, native: &str) -> Option<PathBuf> {
         .find(|p| p.is_dir())
 }
 
+mod refusal;
+
 #[cfg(test)]
 mod fixture_tests;
+
+#[cfg(test)]
+mod refusal_tests;

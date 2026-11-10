@@ -133,7 +133,11 @@ pub fn resolve_branch(store: &Store, s: &Session, spec: &str) -> Result<Hash> {
 /// session.
 fn branch(store: &Store, s: &Session, to: &Hash) -> Result<Vec<Node>> {
     let nodes = store.chain(Some(to))?;
-    for n in &nodes {
+    for (i, n) in store.session_nodes(s)?.iter().enumerate() {
+        super::check_mutation_row(&n.raw, i)?;
+    }
+    for (i, n) in nodes.iter().enumerate() {
+        super::check_mutation_row(&n.raw, i)?;
         let ok = n.meta.kind == "native"
             && n.meta.harness.as_deref() == Some(HARNESS)
             && n.meta.container.as_deref() == Some(CONTAINER);
@@ -218,6 +222,7 @@ fn keep(locked: &Lock<'_>, s: &Session, old: &Hash) -> Result<Option<String>> {
     locked.update_session(&k.id, |k| {
         k.head = Some(old.clone());
         k.native_header = s.native_header.clone();
+        k.codex_reader_version = s.codex_reader_version.clone();
         k.fork_of = Some(ForkOf {
             session: s.id.clone(),
             node: old.clone(),
@@ -274,6 +279,7 @@ pub fn swap_file(store: &Store, session: &str, to: &Hash, codex_home: &Path) -> 
         bail!("session {session} is at node {} already", to.short());
     }
     let rows = raws(&branch(store, &s, to)?);
+    let expected = raws(&store.session_nodes(&s)?);
     let path = rollout_path(store, &s, codex_home)?;
     if !path.is_file() {
         bail!(
@@ -287,13 +293,14 @@ pub fn swap_file(store: &Store, session: &str, to: &Hash, codex_home: &Path) -> 
         path: path.clone(),
     };
     store.write_ref(&journal_ref(session), &serde_json::to_vec(&j)?)?;
-    let backup = match super::project::publish(codex_home, &path, &thread, &rows, true) {
-        Ok(b) => b,
-        Err(e) => {
-            store.remove_ref(&journal_ref(session))?;
-            return Err(e);
-        }
-    };
+    let backup =
+        match super::project::publish(codex_home, &path, &thread, &rows, true, Some(&expected)) {
+            Ok(b) => b,
+            Err(e) => {
+                store.remove_ref(&journal_ref(session))?;
+                return Err(e);
+            }
+        };
     let kept = move_head(&locked, &s, &thread, to)?;
     store.remove_ref(&journal_ref(session))?;
     drop(locked);

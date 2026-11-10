@@ -114,8 +114,9 @@ pub fn project(store: &Store, session: &str, root: &Path, created_ms: u64) -> Re
     // the new header and id belong to the session now.
     let seed = rows.last().expect("fork rows end with the seed");
     let key = format!("seq:{}", rows.len() - 1);
-    let seed = store.put_native(&ORIGIN, s.head.as_ref(), &key, seed)?;
-    let hdr = store.put_blob("dsh-header", &child_raw)?;
+    let scoped = store.for_horse(&s.horse)?;
+    let seed = scoped.put_native(&ORIGIN, s.head.as_ref(), &key, seed)?;
+    let hdr = scoped.put_blob("dsh-header", &child_raw)?;
     store.update_session(session, |s| {
         s.head = Some(seed);
         s.native_header = Some(hdr);

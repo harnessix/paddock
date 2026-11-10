@@ -9,7 +9,6 @@
 //! the same bytes, the same exit code and the same stdin as without the view.
 //! The runtime folder is hidden in every sandbox, so no sandbox reaches the
 //! socket or the logs.
-
 use crate::env::HostEnv;
 use anyhow::{bail, Context, Result};
 use std::ffi::{OsStr, OsString};
@@ -20,7 +19,6 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-
 /// `paddock gc` removes the view of a sandbox that ended this long ago.
 /// `[view] keep_ended` replaces it. Default 2 hours.
 pub const KEEP_ENDED: u64 = 2 * 3600;
@@ -34,7 +32,6 @@ pub const ACTIVITY_TAIL: u64 = 8 << 10;
 pub const ACTIVITY_CHARS: usize = 120;
 /// The capture of a spawn keeps the last 4 MiB, as without the view.
 const CAPTURE_KEEP: usize = 4 << 20;
-
 pub fn socket(env: &HostEnv) -> PathBuf {
     crate::sockpath::named_or_run(env, "", "view.sock")
 }
@@ -49,7 +46,6 @@ pub fn log_file(env: &HostEnv, id: &str) -> PathBuf {
 pub fn end_file(env: &HostEnv, id: &str) -> PathBuf {
     dir(env).join(format!("{id}.end"))
 }
-
 /// A sandbox id names files and tmux sessions: letters, digits, `-`, `_`.
 pub fn valid_id(id: &str) -> bool {
     !id.is_empty()
@@ -58,7 +54,6 @@ pub fn valid_id(id: &str) -> bool {
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
-
 /// `[view]` of `~/.config/paddock/config.toml`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Config {
@@ -94,7 +89,7 @@ impl Config {
     }
 
     pub fn parse(text: &str) -> Result<Self> {
-        let v: toml::Value = toml::from_str(text)?;
+        let v: toml::Value = crate::manifest::user_config_doc(text)?;
         let raw: RawConfig = match v.get("view") {
             Some(t) => t
                 .clone()
@@ -127,20 +122,8 @@ pub enum PaneOutput {
     At(u64),
 }
 
-/// One line of `#{pane_last_output_time},#{window_activity}`.
-pub fn parse_last_output(line: &str) -> PaneOutput {
-    let (pane, window) = line.trim().split_once(',').unwrap_or((line.trim(), ""));
-    let pick = if pane.trim().is_empty() { window } else { pane };
-    let pick = pick.trim();
-    if pick.is_empty() {
-        return PaneOutput::Quiet;
-    }
-    match pick.parse::<u64>() {
-        Ok(0) => PaneOutput::Quiet,
-        Ok(t) => PaneOutput::At(t),
-        Err(_) => PaneOutput::Unknown,
-    }
-}
+mod pane_activity;
+pub use pane_activity::parse_last_output;
 
 /// paddock's own tmux server.
 #[derive(Debug, Clone)]
@@ -190,6 +173,30 @@ impl Tmux {
             .stdout(Stdio::null())
             .stderr(Stdio::null());
         c
+    }
+
+    /// The server has no_new_privs and no live pane.
+    fn tainted_and_idle(&self) -> bool {
+        let Ok(out) = self
+            .cmd()
+            .args(["list-panes", "-a", "-F", "#{pid} #{pane_dead}"])
+            .stdout(Stdio::piped())
+            .output()
+        else {
+            return false;
+        };
+        let text = String::from_utf8_lossy(&out.stdout);
+        let mut lines = text.lines().peekable();
+        let Some(pid) = lines
+            .peek()
+            .and_then(|l| l.split(' ').next())
+            .map(str::to_string)
+        else {
+            return false;
+        };
+        let tainted = std::fs::read_to_string(format!("/proc/{pid}/status")) // not user text
+            .is_ok_and(|s| crate::cleanstart::no_new_privs(&s));
+        tainted && lines.all(|l| l.ends_with(" 1"))
     }
 
     fn run(&self, args: &[&str]) -> bool {
@@ -244,37 +251,6 @@ impl Tmux {
             .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
     }
 
-    /// When the pane last wrote output. `pane_last_output_time` is empty
-    /// until the pane writes something, and tmux before 3.5 does not know it.
-    /// Then `window_activity` counts: each run has one window, and tmux sets
-    /// that time when the window starts and on each output.
-    pub fn last_output(&self, id: &str) -> PaneOutput {
-        if !valid_id(id) || !self.sock.exists() {
-            return PaneOutput::Missing;
-        }
-        let target = format!("={id}");
-        let out = self
-            .cmd()
-            .args([
-                "list-panes",
-                "-t",
-                &target,
-                "-F",
-                "#{pane_last_output_time},#{window_activity}",
-            ])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .output();
-        let Ok(out) = out else {
-            return PaneOutput::Unknown;
-        };
-        if !out.status.success() {
-            return PaneOutput::Missing;
-        }
-        let text = String::from_utf8_lossy(&out.stdout);
-        parse_last_output(text.lines().next().unwrap_or(""))
-    }
-
     /// Start the session of a sandbox: a pane that prints `header` and then
     /// follows `log` until the process `pid` (the paddock that runs the
     /// sandbox) ends, then prints `end`. The pane stays after that.
@@ -325,8 +301,15 @@ impl Tmux {
         .map(OsString::from)
         .collect();
         args.extend(cmd.iter().cloned());
+        // A server with no_new_privs passes the flag to every pane, and a
+        // sandbox start in such a pane fails (cleanstart.rs). With no pane
+        // left alive it is stopped, so a clean one starts.
+        let mut running = self.run(&["list-sessions"]);
+        if running && self.tainted_and_idle() {
+            self.run(&["kill-server"]);
+            running = false;
+        }
         // A new server goes into a scope of its own when it can.
-        let running = self.run(&["list-sessions"]);
         if let (false, Some((run, vars))) = (running, &self.scope) {
             let ok = Command::new(run)
                 .args(["--user", "--scope", "--quiet", "--collect", "--"])

@@ -64,3 +64,123 @@ fn forks_and_swap() {
     assert_eq!(st.session(&s.id).unwrap().head, s.head);
     assert_eq!(ingest(&st, &p, VERSION, None).unwrap().session, f.id);
 }
+
+#[test]
+fn unknown_outer_row_is_preserved_but_fork_is_refused() {
+    let t = tempfile::tempdir().unwrap();
+    let (st, p) = setup(t.path());
+    let unknown = r#"{"timestamp":"2026-11-04T00:00:02Z","type":"future_record","payload":{}}"#;
+    std::fs::write(&p, format!("{META}\n{REASON}\n{unknown}\n")).unwrap();
+    let result = ingest(&st, &p, VERSION, None).unwrap();
+    let out = project(&st, &result.session, &t.path().join("out"), false).unwrap();
+    assert_eq!(std::fs::read(&p).unwrap(), std::fs::read(out.path).unwrap());
+    let session = st.session(&result.session).unwrap();
+    let fork = st
+        .fork(&session.id, session.head.as_ref().unwrap(), None)
+        .unwrap();
+    let error = project(&st, &fork.id, &t.path().join("fork"), false).unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("line 3 has unknown type future_record"));
+}
+
+#[test]
+fn swap_refuses_unknown_outer_row_before_writing() {
+    let t = tempfile::tempdir().unwrap();
+    let (st, p) = setup(t.path());
+    let unknown = r#"{"timestamp":"2026-11-04T00:00:02Z","type":"future_record","payload":{}}"#;
+    std::fs::write(&p, format!("{META}\n{REASON}\n{unknown}\n")).unwrap();
+    let result = ingest(&st, &p, VERSION, None).unwrap();
+    let session = st.session(&result.session).unwrap();
+    let target = session.head.unwrap();
+    let first = st
+        .session_nodes(&st.session(&result.session).unwrap())
+        .unwrap()[0]
+        .hash
+        .clone();
+    st.update_session(&result.session, |s| s.head = Some(first))
+        .unwrap();
+    let before = std::fs::read(&p).unwrap();
+    let error =
+        swap::swap_file(&st, &result.session, &target, &t.path().join("input")).unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("line 3 has unknown type future_record"));
+    assert_eq!(std::fs::read(&p).unwrap(), before);
+}
+
+#[test]
+fn swap_refuses_unknown_outer_row_in_current_history() {
+    let t = tempfile::tempdir().unwrap();
+    let (st, p) = setup(t.path());
+    let unknown = r#"{"timestamp":"2026-11-04T00:00:02Z","type":"future_record","payload":{}}"#;
+    std::fs::write(&p, format!("{META}\n{REASON}\n{unknown}\n")).unwrap();
+    let result = ingest(&st, &p, VERSION, None).unwrap();
+    let session = st.session(&result.session).unwrap();
+    let target = st.session_nodes(&session).unwrap()[0].hash.clone();
+    let before = std::fs::read(&p).unwrap();
+    let error =
+        swap::swap_file(&st, &result.session, &target, &t.path().join("input")).unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("line 3 has unknown type future_record"));
+    assert_eq!(std::fs::read(&p).unwrap(), before);
+}
+
+#[test]
+fn nested_unknown_content_blocks_fork_and_swap() {
+    let t = tempfile::tempdir().unwrap();
+    let (st, p) = setup(t.path());
+    let unknown = r#"{"timestamp":"2026-11-04T00:00:02Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"future_content"}]}}"#;
+    std::fs::write(&p, format!("{META}\n{REASON}\n{unknown}\n")).unwrap();
+    let result = ingest(&st, &p, VERSION, None).unwrap();
+    let session = st.session(&result.session).unwrap();
+    let fork = st
+        .fork(&session.id, session.head.as_ref().unwrap(), None)
+        .unwrap();
+    let error = project(&st, &fork.id, &t.path().join("fork"), false).unwrap_err();
+    assert!(format!("{error:#}").contains("line 3"));
+    let target = st.session_nodes(&session).unwrap()[0].hash.clone();
+    let before = std::fs::read(&p).unwrap();
+    let error = swap::swap_file(&st, &session.id, &target, &t.path().join("input")).unwrap_err();
+    assert!(format!("{error:#}").contains("line 3"));
+    assert_eq!(std::fs::read(&p).unwrap(), before);
+}
+
+#[test]
+fn swap_refuses_a_new_uningested_record_on_disk() {
+    let t = tempfile::tempdir().unwrap();
+    let (st, p) = setup(t.path());
+    let result = ingest(&st, &p, VERSION, None).unwrap();
+    let session = st.session(&result.session).unwrap();
+    let first = st.session_nodes(&session).unwrap()[0].hash.clone();
+    let mut file = std::fs::OpenOptions::new().append(true).open(&p).unwrap();
+    use std::io::Write as _;
+    file.write_all(b"{\"timestamp\":\"t\",\"type\":\"future_record\",\"payload\":{}}\n")
+        .unwrap();
+    let before = std::fs::read(&p).unwrap();
+    let error = swap::swap_file(&st, &session.id, &first, &t.path().join("input")).unwrap_err();
+    assert!(format!("{error:#}").contains("line 3"));
+    assert_eq!(std::fs::read(&p).unwrap(), before);
+    assert_eq!(st.session(&session.id).unwrap().head, session.head);
+}
+
+#[test]
+fn fork_projection_preserves_reader_provenance() {
+    let t = tempfile::tempdir().unwrap();
+    let (st, p) = setup(t.path());
+    let result = ingest(&st, &p, "0.167.0", None).unwrap();
+    let session = st.session(&result.session).unwrap();
+    let fork = st
+        .fork(&session.id, session.head.as_ref().unwrap(), None)
+        .unwrap();
+    project(&st, &fork.id, &t.path().join("fork"), false).unwrap();
+    let fork = st.session(&fork.id).unwrap();
+    assert_eq!(fork.binding.version, "0.166.0");
+    assert_eq!(fork.codex_reader_version.as_deref(), Some("0.167.0"));
+    assert!(st
+        .session_nodes(&fork)
+        .unwrap()
+        .iter()
+        .all(|n| n.meta.version.as_deref() == Some("0.167.0")));
+}

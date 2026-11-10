@@ -29,3 +29,7 @@ Claude Code in a sandbox gets hooks that show its timers and limits. `[status] h
 ## Forage
 
 `paddock forage` shows how much of each account's limits is left and whether it runs out before the reset. `--refresh` asks the services for fresh numbers, at most once in 5 minutes per account.
+
+## Turnout jobs
+
+Turnout jobs are host commands configured in the user configuration, not a project's `paddock.toml`. Read the Turnout section of the README before setting one up. Inspect jobs with `paddock turnout ls` and `show NAME`; install or remove their timers with `install NAME` and `remove NAME`. `paddock turnout pause` stops all jobs, and `resume` clears the pause. `log NAME` and `health` read wake records. The `host-checks` job runs configured test suites on new branch commits and reports to its mailbox. Agent jobs and model calls are not supported yet.

@@ -82,7 +82,6 @@ fn config_defaults_allow_no_harness() {
     };
     assert!(!none.depth_allows(0));
 }
-
 #[test]
 fn config_is_checked() {
     let doc = |t: &str| SpawnCfg::from_doc(&toml::from_str(t).unwrap());
@@ -103,7 +102,6 @@ fn config_is_checked() {
         assert!(doc(bad).is_err(), "{bad}");
     }
 }
-
 #[test]
 fn a_project_file_cannot_enable_spawn() {
     let tmp = tempfile::tempdir().unwrap();
@@ -208,7 +206,6 @@ fn a_child_spec_wider_than_the_parent_is_refused() {
         &|b| b.spec.add_host_port(5432, "manifest network.host_ports"),
         "host port",
     );
-    // Another backend is refused too.
     let b = parent_built(&env, &project);
     assert!(c.check(&b, "docker").is_err());
 
@@ -253,9 +250,10 @@ fn a_child_build_uses_the_snapshot_and_keeps_the_prompt_out_of_argv() {
     let repo = tmp.path().join("repo");
     std::fs::create_dir_all(&repo).unwrap();
     git(&repo, &["init", "-q", "-b", "main"]);
+    std::fs::write(repo.join("pyproject.toml"), "[project]\nname = \"fake\"\n").unwrap();
+    git(&repo, &["add", "pyproject.toml"]);
     git(&repo, &["commit", "-q", "--allow-empty", "-m", "one"]);
     let repo = std::fs::canonicalize(&repo).unwrap();
-    // The parent can edit the project file. The child never reads it.
     std::fs::write(repo.join("paddock.toml"), "[network]\nmode = \"host\"\n").unwrap();
     for (oneshot, file) in [
         ("[oneshot]\nargs = [\"-c\", \"cat\"]\nprompt = \"stdin\"\n", false),
@@ -271,6 +269,7 @@ fn a_child_build_uses_the_snapshot_and_keeps_the_prompt_out_of_argv() {
             base_from: repo.clone(),
             base: None,
             role: Role::Implementer,
+            trainer: false,
         };
         let opts = Options {
             harness: "fake".into(),
@@ -284,8 +283,6 @@ fn a_child_build_uses_the_snapshot_and_keeps_the_prompt_out_of_argv() {
         let privacy = "[privacy]\nenv = { FAKE_TELEMETRY = \"0\" }\nargs = [\"--no-telemetry\"]\n";
         let b = build_with(&env, &opts, fake_harness(&format!("{privacy}{oneshot}"))).unwrap();
         assert_eq!(b.spec.network, Network::None, "the project file was read");
-        // The privacy defaults apply to a child too: its variables, and its
-        // flags before the one-shot arguments.
         assert!(b
             .spec
             .env
@@ -295,6 +292,8 @@ fn a_child_build_uses_the_snapshot_and_keeps_the_prompt_out_of_argv() {
         let w = b.worktree.as_ref().unwrap();
         assert_eq!(w.branch, plan.branch);
         assert_eq!(b.home_key, repo);
+        let cache = crate::storage::package_cache::uv_dir(&env, &repo).unwrap();
+        assert!(b.spec.mounts.iter().any(|m| m.src.as_deref() == Some(cache.as_path())));
         assert!(b.spec.command.iter().all(|a| !a.contains(SECRET_TASK)));
         let rel = prompt_rel(&b.spec.id);
         let named = b
@@ -380,6 +379,7 @@ prompt = \"file\"
             base_from: repo.clone(),
             base: None,
             role: Role::Implementer,
+            trainer: false,
         };
         build_with(
             &env,
@@ -1035,34 +1035,8 @@ fn sizes_times_and_cpus_parse() {
     assert_eq!(c.max_cpu_percent, Some(50));
 }
 
-#[test]
-fn limits_can_only_be_lower_than_the_configuration() {
-    let c = SpawnCfg {
-        timeout: 1800,
-        max_mem: Some(4 << 30),
-        max_cpu_percent: Some(200),
-        ..Default::default()
-    };
-    // Without a request, the child gets the configured limits.
-    let l = c.limits(None, None, None).unwrap();
-    assert_eq!(
-        (l.timeout, l.mem, l.cpu_percent),
-        (1800, Some(4 << 30), Some(200))
-    );
-    let l = c.limits(Some(600), Some(1 << 30), Some(50)).unwrap();
-    assert_eq!(
-        (l.timeout, l.mem, l.cpu_percent),
-        (600, Some(1 << 30), Some(50))
-    );
-    assert!(c.limits(Some(3600), None, None).is_err());
-    assert!(c.limits(Some(0), None, None).is_err());
-    assert!(c.limits(None, Some(8 << 30), None).is_err());
-    assert!(c.limits(None, None, Some(400)).is_err());
-    // With no configured maximum, a request only adds a limit.
-    let open = SpawnCfg::default();
-    let l = open.limits(None, Some(2 << 30), None).unwrap();
-    assert_eq!((l.mem, l.cpu_percent), (Some(2 << 30), None));
-}
+#[path = "memory_tests.rs"]
+mod memory_tests;
 
 #[test]
 fn the_scope_holds_the_limits_and_never_the_prompt() {
@@ -1102,6 +1076,7 @@ fn the_scope_holds_the_limits_and_never_the_prompt() {
         // paddock stops the child at 600 s; the scope is the backstop.
         "RuntimeMaxSec=660",
         "MemoryMax=2147483648",
+        "MemoryHigh=2147483648",
         "MemorySwapMax=0",
         "CPUQuota=150%",
         "/usr/bin/paddock",

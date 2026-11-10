@@ -99,9 +99,11 @@ fn the_pty_custody_hears_the_stop_and_ends_with_the_run() {
     let p = run::setup::prepare(&mut b, Custody::Pty, codex::VERSION)
         .unwrap()
         .unwrap();
-    let store = Store::open(&super::super::root(&env)).unwrap();
+    let store = Store::open_host(&env).unwrap();
     let rh = run::begin(&store, "codex", codex::VERSION, None, None).unwrap();
-    assert!(run::setup::arm(&env, &store, &rh, &b, p).unwrap().is_none());
+    assert!(run::setup::arm(&env, &store, &rh, &mut b, p)
+        .unwrap()
+        .is_none());
     // The relay of the sandbox gets the tap; no stdio hook.
     assert!(live::take_hooks().0.is_none());
     let tap = live::take_pty_tap().expect("the relay tap");
@@ -211,9 +213,11 @@ fn the_claude_pty_custody_binds_its_session_hears_the_stop_and_ends_with_the_run
         .find_map(|a| a.strip_prefix("--session-id="))
         .unwrap()
         .to_string();
-    let store = Store::open(&super::super::root(&env)).unwrap();
+    let store = Store::open_host(&env).unwrap();
     let rh = run::begin(&store, "claude", claude::VERSION, None, None).unwrap();
-    assert!(run::setup::arm(&env, &store, &rh, &b, p).unwrap().is_none());
+    assert!(run::setup::arm(&env, &store, &rh, &mut b, p)
+        .unwrap()
+        .is_none());
     assert_eq!(
         store.session(&rh.session).unwrap().binding.native_id,
         Some(native)

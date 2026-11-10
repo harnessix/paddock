@@ -140,7 +140,8 @@ impl Custodian {
         if self.interrupted || self.broken {
             return Ok(());
         }
-        let Some(e) = urgent_entry(&self.store, &self.session, &self.interrupted_for)? else {
+        let Some(e) = urgent_entry(&self.store, &self.session, &self.interrupted_for, &self.tap)?
+        else {
             return Ok(());
         };
         self.interrupted_for.insert(e.id.clone());
@@ -161,6 +162,7 @@ impl Custodian {
 
 impl Live for Custodian {
     fn pump(&mut self, timeout: Duration) -> Result<Pump> {
+        self.tap.poll_mail(&self.session);
         let p = self.turns.pump(timeout)?;
         // The TUI goes on after an error of the store: try again in the
         // next pass.
@@ -189,10 +191,13 @@ impl Live for Custodian {
         };
         match type_entry(&self.store, &self.tap, &self.idle, &e)? {
             Some((text, head)) => {
+                if text.is_empty() {
+                    return Ok(());
+                }
                 self.turns.track(&e.id, &text, head);
                 self.turns.note(&format!("pty.deliver {}", e.id));
             }
-            None => self.broken = true,
+            None => self.broken = !self.tap.attached(),
         }
         Ok(())
     }

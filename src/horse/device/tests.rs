@@ -162,12 +162,15 @@ fn hitched_views_hide_other_sessions_and_show_only_metadata() {
                 own.session == instance.session
             );
         }
+        let plain = access.plain_tree().unwrap();
+        assert_eq!(tree.paths["self/instances"], plain.paths["self/instances"]);
         let Entry::File(instances) = &tree.paths["self/instances"] else {
             panic!()
         };
         let instances = std::str::from_utf8(instances).unwrap();
         assert!(instances.contains(&format!("{} dsh finished", a.session)));
         assert!(instances.contains(&format!("{} dsh running", b.session)));
+        assert_eq!(tree.paths["self/edges"], plain.paths["self/edges"]);
         let Entry::File(edges) = &tree.paths["self/edges"] else {
             panic!()
         };
@@ -190,12 +193,27 @@ fn dna_toml_reads_the_current_dna_and_a_write_hot_loads() {
         horse: rh.horse.clone(),
         session: rh.session.clone(),
     };
-    let dna_file = || match &setup.tree().unwrap().paths[DNA_PATH] {
-        Entry::File(b) => String::from_utf8(b.clone()).unwrap(),
-        e => panic!("{e:?}"),
+    peek::issue_own(&setup, "sb").unwrap();
+    let dna_file = || {
+        let req = Request {
+            v: PROTOCOL,
+            cap: "horse".into(),
+            args: [
+                ("op".into(), serde_json::json!("peek")),
+                ("command".into(), serde_json::json!("dna")),
+                ("args".into(), serde_json::json!([])),
+                ("grant".into(), serde_json::json!("own")),
+            ]
+            .into(),
+            reason: String::new(),
+        };
+        let response = peek::handle(Some(&setup), "sb", &req);
+        assert_eq!(response.status, Status::Done);
+        String::from_utf8(serde_json::from_value(response.result["bytes"].clone()).unwrap())
+            .unwrap()
     };
     assert!(dna_file().starts_with("# horse DNA\n"));
-    assert!(writable(DNA_PATH) && !writable("self/dna") && !writable("self/id"));
+    assert!(!writable(DNA_PATH) && !writable("self/dna") && !writable("self/id"));
     let request = |op: &str, bytes: Option<&[u8]>| {
         let mut args: std::collections::BTreeMap<String, serde_json::Value> =
             [("op".into(), serde_json::json!(op))].into_iter().collect();
@@ -217,9 +235,6 @@ fn dna_toml_reads_the_current_dna_and_a_write_hot_loads() {
     );
     assert_eq!(ok.status, Status::Done, "{}", ok.message);
     assert!(dna_file().contains("careful"));
-    let read = handle(Some(&setup), &request("dna", None));
-    let bytes: Vec<u8> = serde_json::from_value(read.result["bytes"].clone()).unwrap();
-    assert_eq!(String::from_utf8(bytes).unwrap(), dna_file());
     // The running session gets the hot-load entry after its start entry.
     let inbox = store.inbox(&rh.session).unwrap();
     assert_eq!(inbox.len(), 2);

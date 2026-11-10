@@ -120,4 +120,6 @@ pub fn report_done(access: &Access, status: &str, text: &str) -> bool {
 }
 
 #[cfg(test)]
+mod race_tests;
+#[cfg(test)]
 mod tests;

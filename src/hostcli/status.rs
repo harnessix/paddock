@@ -188,6 +188,9 @@ pub fn main(args: &[String]) -> i32 {
             }
             if hook.is_some() {
                 println!("{}", crate::loft::NOTES_LINE);
+                if let Some(l) = super::mail::session_line() {
+                    println!("{l}");
+                }
             }
         }
         Some("prompt") => {
@@ -211,16 +214,42 @@ pub fn main(args: &[String]) -> i32 {
 /// The harnesses whose hooks paddock fills, and the arguments that add
 /// them. Claude Code merges hooks from every settings source, so these run
 /// beside the user's own hooks.
+///
+/// - The status hooks, unless `[status] hooks = false`.
+/// - The mail hooks (mail/deliver.rs): Stop gives the agent new mail at the
+///   end of its turn, PostToolUse an interrupt after a tool call. They do
+///   not depend on `[status]`: without them, mail waits until the agent
+///   reads it.
 pub fn harness_args(env: &crate::env::HostEnv, harness: &str) -> Vec<String> {
-    if harness != "claude" || !enabled(env) {
+    if harness != "claude" {
         return Vec::new();
     }
-    let hook = |which: &str| serde_json::json!([{"hooks": [{"type": "command", "command": format!("paddock-host status --hook {which}"), "timeout": 20}]}]);
-    let settings = serde_json::json!({"hooks": {
-        "SessionStart": hook("session"),
-        "UserPromptSubmit": hook("prompt"),
-        "PostToolUse": hook("tool"),
-    }});
+    let entry = |command: String| serde_json::json!({"hooks": [{"type": "command", "command": command, "timeout": 20}]});
+    let status = |which: &str| entry(format!("paddock-host status --hook {which}"));
+    let mut hooks = serde_json::Map::new();
+    if enabled(env) {
+        hooks.insert(
+            "SessionStart".into(),
+            serde_json::json!([status("session")]),
+        );
+        hooks.insert(
+            "UserPromptSubmit".into(),
+            serde_json::json!([status("prompt")]),
+        );
+        hooks.insert("PostToolUse".into(), serde_json::json!([status("tool")]));
+    }
+    use crate::mail::deliver::{STOP_COMMAND, TOOL_COMMAND};
+    hooks.insert(
+        "Stop".into(),
+        serde_json::json!([entry(STOP_COMMAND.into())]),
+    );
+    let tool = hooks
+        .entry("PostToolUse")
+        .or_insert_with(|| serde_json::json!([]));
+    if let Some(a) = tool.as_array_mut() {
+        a.push(entry(TOOL_COMMAND.into()));
+    }
+    let settings = serde_json::json!({ "hooks": hooks });
     vec!["--settings".into(), settings.to_string()]
 }
 
@@ -343,7 +372,7 @@ mod tests {
     }
 
     #[test]
-    fn claude_gets_three_hooks_unless_the_user_turns_them_off() {
+    fn claude_gets_the_status_hooks_unless_the_user_turns_them_off() {
         let t = tempfile::tempdir().unwrap();
         let env = crate::env::HostEnv::from_parts(
             t.path().join("home"),
@@ -365,11 +394,36 @@ mod tests {
                 format!("paddock-host status --hook {which}")
             );
         }
+        let mail = |v: &serde_json::Value| {
+            (
+                v["hooks"]["Stop"][0]["hooks"][0]["command"].clone(),
+                v["hooks"]["PostToolUse"]
+                    .as_array()
+                    .unwrap()
+                    .last()
+                    .unwrap()["hooks"][0]["command"]
+                    .clone(),
+            )
+        };
+        let want = (
+            serde_json::json!(crate::mail::deliver::STOP_COMMAND),
+            serde_json::json!(crate::mail::deliver::TOOL_COMMAND),
+        );
+        assert_eq!(mail(&v), want);
+        assert_eq!(
+            crate::mail::deliver::of_command(&a),
+            Some(crate::mail::deliver::HOOKS)
+        );
         assert!(harness_args(&env, "codex").is_empty());
         let cfg = env.paddock_config();
         std::fs::create_dir_all(&cfg).unwrap();
         std::fs::write(cfg.join("config.toml"), "[status]\nhooks = false\n").unwrap();
-        assert!(harness_args(&env, "claude").is_empty());
+        // The mail hooks stay: mail is not a status line.
+        let off: serde_json::Value =
+            serde_json::from_str(&harness_args(&env, "claude")[1]).unwrap();
+        assert!(off["hooks"].get("SessionStart").is_none(), "{off}");
+        assert_eq!(off["hooks"]["PostToolUse"].as_array().unwrap().len(), 1);
+        assert_eq!(mail(&off), want);
     }
 
     #[test]
@@ -400,7 +454,8 @@ mod tests {
         let prompt = v["hooks"]["UserPromptSubmit"].as_array().unwrap();
         assert_eq!(prompt[0], before["hooks"]["UserPromptSubmit"][0]);
         assert_eq!(prompt[1]["hooks"][0]["command"], "p");
-        assert_eq!(v["hooks"]["Stop"][0]["hooks"][0]["command"], "s");
+        assert_eq!(v["hooks"]["Stop"][0], before["hooks"]["Stop"][0]);
+        assert_eq!(v["hooks"]["Stop"][1]["hooks"][0]["command"], "s");
         // No --settings yet: one comes after the executable.
         let mut c = vec!["claude".to_string(), "x".to_string()];
         add_hooks(&mut c, &[("Stop", "s".into())]).unwrap();

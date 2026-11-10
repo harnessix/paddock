@@ -367,6 +367,12 @@ fn a_user_wrapper_is_never_replaced() {
 
 #[test]
 fn an_unknown_agent_runs_unchanged() {
+    // The test removes PADDOCK from its child; a nested run then needs a
+    // host user bus for clean-start. Exercise it on the host instead.
+    if std::env::var_os("PADDOCK").is_some_and(|v| v == "1") {
+        eprintln!("skipping: this test needs the host user bus");
+        return;
+    }
     let w = world();
     write_exec(
         &w.bin.join("someagent"),

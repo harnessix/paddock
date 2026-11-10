@@ -12,7 +12,6 @@ use crate::horse::claude as codec;
 use crate::horse::live::channel::{self, CustodyCtx as TuiCtx, Timing};
 use crate::horse::live::harness::Control;
 use crate::horse::live::tui_state::{run_key, Runs, SafePoint};
-use crate::horse::store::Store;
 use crate::relay::{take_controlling_tty, Relay, Taps};
 use std::os::fd::{FromRawFd as _, RawFd};
 use std::os::unix::process::CommandExt as _;
@@ -102,15 +101,16 @@ fn an_entry_queued_during_a_turn_is_typed_through_the_relay_after_its_stop() {
         .unwrap();
     }
 
-    let store = Store::open(&dir.path().join("store")).unwrap();
+    let (mail_env, store) = super::mail_test_support::setup(dir.path());
     let h = store.new_default_horse().unwrap();
     let s = store
         .new_session(&h.id, codec::binding(Some(NATIVE.into())))
         .unwrap();
+    super::mail_test_support::link(&mail_env, &s.id);
     let runs: &'static Runs = Box::leak(Box::default());
     let key = run_key(&h.id, &s.id);
     let signals = runs.subscribe(&key);
-    let tap = PtyTap::new();
+    let tap = PtyTap::with_mail(&mail_env, super::mail_test_support::RUN);
     let p = crate::profile::builtin("claude").unwrap();
     let mut idle = PtyIdle::of(&p, "claude", codec::VERSION).unwrap();
     idle.quiet = Duration::from_millis(300);
@@ -165,8 +165,7 @@ fn an_entry_queued_during_a_turn_is_typed_through_the_relay_after_its_stop() {
             session: s.id.clone(),
             native: NATIVE.into(),
             config_dir: home.join(".claude"),
-            // As run/setup gives it: the real path (macOS has /tmp a link).
-            cwd: project.canonicalize().unwrap().display().to_string(),
+            cwd: project.display().to_string(),
             version: codec::VERSION.into(),
             run: "relay-run".into(),
             runs,
@@ -204,7 +203,31 @@ fn an_entry_queued_during_a_turn_is_typed_through_the_relay_after_its_stop() {
     wait("turn 1 did not start", &mut child, || {
         lines(&hooks).first().is_some_and(|l| l == "prompt")
     });
-    let entry = store.queue_append(&s.id, "user", "from the test").unwrap();
+    let earlier = super::mail_test_support::send(&mail_env, "given by stop");
+    let taken = crate::mail::deliver::take(
+        &mail_env,
+        super::mail_test_support::RUN,
+        crate::mail::deliver::Via::Stop,
+        crate::mail::deliver::MAX_HOOK_TEXT,
+    )
+    .unwrap();
+    assert_eq!(taken.messages[0].seq, earlier.seq);
+    let message = super::mail_test_support::send(&mail_env, "from the test");
+    assert_eq!(
+        crate::mail::cursor(
+            &mail_env,
+            super::mail_test_support::RUN,
+            crate::mail::Dir::Down,
+            crate::mail::AGENT
+        ),
+        earlier.seq
+    );
+    let entry = store
+        .inbox(&s.id)
+        .unwrap()
+        .into_iter()
+        .find(|e| e.mail_seq == Some(message.seq))
+        .unwrap();
     wait("the entry did not land", &mut child, || {
         store
             .deliveries(&s.id)
@@ -215,8 +238,35 @@ fn an_entry_queued_during_a_turn_is_typed_through_the_relay_after_its_stop() {
     let log = lines(&project.join("tui.log"));
     let at = |l: &str| log.iter().position(|x| x == l);
     let stop1 = at("stop 1").unwrap_or_else(|| panic!("no stop 1: {log:?}"));
-    let got = at("got 2 from the test").unwrap_or_else(|| panic!("no entry: {log:?}"));
+    let got = log
+        .iter()
+        .position(|l| l.starts_with("got 2 paddock:"))
+        .unwrap_or_else(|| panic!("no entry: {log:?}"));
+    assert_eq!(
+        crate::mail::cursor(
+            &mail_env,
+            super::mail_test_support::RUN,
+            crate::mail::Dir::Down,
+            crate::mail::AGENT
+        ),
+        message.seq
+    );
+    let events = crate::mail::read(
+        &mail_env,
+        super::mail_test_support::RUN,
+        crate::mail::Dir::Up,
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| e.via.as_deref() == Some("relay")
+                && e.seqs == [message.seq]
+                && e.text.contains("typed at the idle prompt"))
+            .count(),
+        1
+    );
     assert!(stop1 < got, "{log:?}");
+    assert!(!log.iter().any(|line| line.contains("given by stop")));
 
     std::fs::write(project.join("done"), "").unwrap();
     let deadline = Instant::now() + Duration::from_secs(30);

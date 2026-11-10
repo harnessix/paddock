@@ -2,6 +2,9 @@
 //! writes itself: ingest, list, log, fork at a node, project the fork.
 //! Temporary folders only; no dsh, no network.
 
+#[path = "horse/store_helpers.rs"]
+mod store_helpers;
+
 use paddock::horse::dsh::{encode_file, read_file, session_dir, Header};
 use std::path::Path;
 use std::process::Command;
@@ -29,6 +32,43 @@ fn paddock(tmp: &Path, args: &[&str]) -> String {
         String::from_utf8_lossy(&out.stderr)
     );
     String::from_utf8(out.stdout).unwrap()
+}
+
+fn host_store(tmp: &Path) -> paddock::horse::Store {
+    let vars = [("XDG_DATA_HOME", "data"), ("XDG_STATE_HOME", "state")]
+        .into_iter()
+        .map(|(key, path)| (key.to_string(), tmp.join(path).display().to_string()))
+        .collect();
+    let env = paddock::env::HostEnv::from_parts(tmp.join("home"), "test".into(), 0, 0, vars);
+    paddock::horse::Store::open_host(&env).unwrap()
+}
+
+#[test]
+fn horse_key_commands_refuse_wrong_keys_and_restore_backup() {
+    let tmp = tempfile::tempdir().unwrap();
+    let t = tmp.path();
+    paddock(t, &["list"]);
+    let backup = t.join("horse.key");
+    let backup_arg = backup.to_str().unwrap();
+    paddock(t, &["key", "export", backup_arg]);
+    let check = t.join("data/paddock/horse/key-check");
+    let before = std::fs::read(&check).unwrap();
+    let master = t.join("state/paddock/keyring/horse/master");
+    std::fs::write(&master, [0u8; 32]).unwrap();
+    let out = cmd(t, &["list"]).output().unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("wrong key"));
+    assert_eq!(std::fs::read(&check).unwrap(), before);
+    assert!(!cmd(t, &["key", "import", backup_arg])
+        .output()
+        .unwrap()
+        .status
+        .success());
+    std::fs::remove_file(&master).unwrap();
+    assert!(!cmd(t, &["list"]).output().unwrap().status.success());
+    assert_eq!(std::fs::read(&check).unwrap(), before);
+    paddock(t, &["key", "import", backup_arg]);
+    paddock(t, &["list"]);
 }
 
 #[test]
@@ -157,11 +197,11 @@ fn ingest_fork_and_project_a_dsh_session() {
 
 #[test]
 fn graft_move_explain_and_revert_on_the_command_line() {
-    use paddock::horse::{dna, Binding, Store};
+    use paddock::horse::{dna, Binding};
 
     let tmp = common::tempdir();
     let t = tmp.path();
-    let store = Store::open(&t.join("data/paddock/horse")).unwrap();
+    let store = host_store(t);
     let host = store.new_default_horse().unwrap();
     let donor = store.new_default_horse().unwrap();
     dna::hot_load(&store, &host.id, "[traits]\nstyle = \"short\"\n").unwrap();
@@ -219,14 +259,14 @@ fn graft_move_explain_and_revert_on_the_command_line() {
 
 #[test]
 fn registry_keys_trust_publish_resolve_and_use_on_the_command_line() {
-    use paddock::horse::{dna, Store};
+    use paddock::horse::dna;
     use std::os::unix::fs::PermissionsExt as _;
 
     let tmp = common::tempdir();
     let t = tmp.path();
     let state = t.join("state/paddock/registry");
     // No key yet: a signed publish is refused with the next step.
-    let store = Store::open(&t.join("data/paddock/horse")).unwrap();
+    let store = host_store(t);
     let a = store.new_default_horse().unwrap();
     dna::hot_load(&store, &a.id, "[traits]\nstyle = \"registry-cli\"\n").unwrap();
     let out = cmd(t, &["registry", "publish", &a.id, "registry://t/x@1.0.0"])
@@ -378,20 +418,7 @@ mod common;
 
 /// Bwrap and FUSE work here, so a sandbox test can run.
 fn sandbox_works() -> bool {
-    use std::process::Stdio;
-    let fuse = std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open("/dev/fuse")
-        .is_ok()
-        && ["fusermount3", "fusermount"].iter().any(|name| {
-            Command::new("sh")
-                .args(["-c", &format!("command -v {name}")])
-                .stdout(Stdio::null())
-                .status()
-                .is_ok_and(|s| s.success())
-        });
-    common::bwrap_works() && fuse
+    common::sandbox_works()
 }
 
 /// A test folder whose dsh harness is the fake dsh `fixture`.
@@ -513,7 +540,7 @@ fn run_dsh_for(root: &Path, secs: u64) -> std::process::Output {
 
 #[test]
 fn horse_per_run_and_sandbox_device() {
-    use paddock::horse::{run, Store};
+    use paddock::horse::run;
 
     if !sandbox_works() {
         eprintln!("skipped: needs bwrap and FUSE");
@@ -526,7 +553,7 @@ fn horse_per_run_and_sandbox_device() {
     for count in 1..=2 {
         let out = run_dsh(root);
         assert!(out.status.success(), "{out:?}");
-        let store = Store::open(&store_path).unwrap();
+        let store = store_helpers::open(&store_path).unwrap();
         let horses = store.horses().unwrap();
         assert_eq!(horses.len(), count);
         let sid = std::fs::read_to_string(root.join("project/sessions.txt")).unwrap();
@@ -549,17 +576,14 @@ fn horse_per_run_and_sandbox_device() {
         );
         let device = std::fs::read(root.join("project/device-log.txt")).unwrap();
         assert!(!device.is_empty());
-        assert_eq!(
-            device,
-            std::fs::read(root.join("project/broker-log.txt")).unwrap()
-        );
+        let broker = std::fs::read(root.join("project/broker-log.txt")).unwrap();
+        assert!(String::from_utf8_lossy(&broker).contains("horse test"));
+        assert!(!String::from_utf8_lossy(&device).contains("horse test"));
     }
 }
 
 #[test]
 fn a_dna_edit_in_the_sandbox_hot_loads_at_the_next_idle() {
-    use paddock::horse::Store;
-
     if !sandbox_works() {
         eprintln!("skipped: needs bwrap and FUSE");
         return;
@@ -577,7 +601,7 @@ fn a_dna_edit_in_the_sandbox_hot_loads_at_the_next_idle() {
     assert!(entry.contains("session/prompt"), "{entry}");
     assert!(entry.contains("role=\\\"system\\\""), "{entry}");
     assert!(entry.contains("hot-load"), "{entry}");
-    let store = Store::open(&root.join("data/paddock/horse")).unwrap();
+    let store = host_store(root);
     let sid = std::fs::read_to_string(root.join("project/sessions.txt")).unwrap();
     let horse = store.session(sid.trim()).unwrap().horse;
     let history = paddock(root, &["dna", "history", &horse]);
@@ -590,7 +614,7 @@ fn a_dna_edit_in_the_sandbox_hot_loads_at_the_next_idle() {
 
 #[test]
 fn a_graft_from_the_host_reaches_the_idle_session() {
-    use paddock::horse::{dna, Store};
+    use paddock::horse::dna;
 
     if !sandbox_works() {
         eprintln!("skipped: needs bwrap and FUSE");
@@ -609,7 +633,7 @@ fn a_graft_from_the_host_reaches_the_idle_session() {
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
     let sid = std::fs::read_to_string(&ready).expect("the fake session did not start");
-    let store = Store::open(&root.join("data/paddock/horse")).unwrap();
+    let store = host_store(&root);
     let horse = store.session(sid.trim()).unwrap().horse;
     let donor = store.new_default_horse().unwrap();
     dna::hot_load(&store, &donor.id, "[traits]\nlang = \"graft-e2e\"\n").unwrap();
@@ -672,8 +696,8 @@ fn auto_approve(
 
 #[test]
 fn a_sandbox_fetch_with_use_is_approved_and_reaches_the_idle_session() {
-    use paddock::horse::registry::{artifact_hash, host, trust, FileIndex, Manifest, Transport};
-    use paddock::horse::{dna, Store};
+    use paddock::horse::dna;
+    use paddock::horse::registry::{artifact_hash, host, trust, Manifest, Transport};
 
     if !sandbox_works() {
         eprintln!("skipped: needs bwrap and FUSE");
@@ -699,7 +723,9 @@ fn a_sandbox_fetch_with_use_is_approved_and_reaches_the_idle_session() {
         signature: None,
     };
     m.sign(&key);
-    FileIndex::new("local", host::dir(&state).join("local"))
+    paddock::horse::registry::configured_for_store(&state, &host_store(&root))
+        .unwrap()
+        .remove(0)
         .put(&m, &bytes)
         .unwrap();
     let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -718,7 +744,7 @@ fn a_sandbox_fetch_with_use_is_approved_and_reaches_the_idle_session() {
         .find(|l| l.contains("registry-e2e"))
         .unwrap_or_else(|| panic!("no registry entry: {prompts}"));
     assert!(entry.contains("role=\\\"system\\\""), "{entry}");
-    let store = Store::open(&root.join("data/paddock/horse")).unwrap();
+    let store = host_store(&root);
     let sid = std::fs::read_to_string(root.join("project/sessions.txt")).unwrap();
     let horse = store.session(sid.trim()).unwrap().horse;
     let explained = paddock(&root, &["explain", &horse]);
@@ -742,3 +768,27 @@ mod codex_tui;
 /// An interactive Claude Code run with no channel, through the relay.
 #[path = "horse/claude_tui_pty.rs"]
 mod claude_tui_pty;
+
+/// Hitched children of a run in horse mode.
+#[path = "horse/hitch.rs"]
+mod hitch;
+
+/// The Grok Build codec on the command line.
+#[path = "horse/grok.rs"]
+mod grok;
+
+/// The agy codec on the command line.
+#[path = "horse/agy.rs"]
+mod agy;
+
+/// Grok Build children and the Grok Build TUI in horse mode.
+#[path = "horse/grok_custody.rs"]
+mod grok_custody;
+
+/// agy children and the agy TUI in horse mode.
+#[path = "horse/agy_custody.rs"]
+mod agy_custody;
+
+/// `paddock horse grant` and the ctl file of a granted sandbox.
+#[path = "horse/ctl.rs"]
+mod ctl;

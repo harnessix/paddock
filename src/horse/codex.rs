@@ -1,7 +1,8 @@
-//! Codex 0.166.0 legacy rollout codec. Complete rows stay byte exact.
+//! Codex 0.166.0 and 0.167.0 legacy rollout codec. Complete rows stay byte exact.
 pub mod notify;
 mod project;
 pub mod swap;
+pub(crate) mod writer_lock;
 use super::store::Origin;
 use super::{Binding, Store};
 use anyhow::{bail, Context as _, Result};
@@ -19,8 +20,8 @@ const ORIGIN: Origin = Origin {
 };
 
 pub fn check_version(v: &str) -> Result<()> {
-    if v != VERSION {
-        bail!("Codex {v} is not supported; expected {VERSION}");
+    if !matches!(v, VERSION | "0.167.0") {
+        bail!("Codex {v} is not supported; expected 0.166.0 or 0.167.0");
     }
     Ok(())
 }
@@ -41,6 +42,11 @@ fn parse(raw: &[u8]) -> Result<Value> {
     }
     Ok(v)
 }
+mod mutation;
+use mutation::check as check_mutation_row;
+pub(crate) use mutation::{
+    check_file as check_delivery_file, check_session as check_mutation_session,
+};
 fn key(v: &Value, index: usize) -> String {
     if let Some(n) = v.get("ordinal").and_then(Value::as_u64) {
         return format!("ordinal:{n}");
@@ -54,8 +60,7 @@ fn key(v: &Value, index: usize) -> String {
 }
 fn read(path: &Path) -> Result<(Vec<Vec<u8>>, bool)> {
     let bytes = std::fs::read(path)?;
-    let mut rows: Vec<Vec<u8>> = bytes.split(|b| *b == b'\n').map(<[u8]>::to_vec).collect();
-    let torn = rows.pop().is_some_and(|r| !r.is_empty());
+    let (rows, torn) = super::jsonl::lines(&bytes);
     for r in &rows {
         parse(r)?;
     }
@@ -105,6 +110,9 @@ fn ingest_impl(
     if first["type"] != "session_meta" {
         bail!("first row is not session metadata");
     }
+    let producer = first["payload"]["cli_version"]
+        .as_str()
+        .context("missing Codex producer version")?;
     let id = first["payload"]["id"]
         .as_str()
         .context("missing thread id")?;
@@ -151,7 +159,7 @@ fn ingest_impl(
                     Binding {
                         harness: HARNESS.into(),
                         native_id: Some(id.into()),
-                        version: VERSION.into(),
+                        version: producer.into(),
                         container: CONTAINER.into(),
                     },
                 )?
@@ -175,12 +183,16 @@ fn ingest_impl(
         bail!("Codex rollout was truncated");
     }
     let mut head = session.head.clone();
+    let scoped = store.for_horse(&session.horse)?;
+    let origin = Origin { version, ..ORIGIN };
     for (i, raw) in rows.iter().enumerate().skip(common) {
-        head = Some(store.put_native(&ORIGIN, head.as_ref(), &key(&parse(raw)?, i), raw)?);
+        head = Some(scoped.put_native(&origin, head.as_ref(), &key(&parse(raw)?, i), raw)?);
     }
-    let header = store.put_blob("codex-path", rel.as_bytes())?;
+    let header = scoped.put_blob("codex-path", rel.as_bytes())?;
     locked.update_session(&session.id, |s| {
         s.head = head;
+        s.binding.version = producer.into();
+        s.codex_reader_version = Some(version.into());
         s.native_header = Some(header);
     })?;
     Ok(Ingest {
@@ -190,5 +202,9 @@ fn ingest_impl(
         torn,
     })
 }
+#[cfg(test)]
+mod oracle_tests;
+#[cfg(test)]
+mod rewrite_tests;
 #[cfg(test)]
 mod tests;

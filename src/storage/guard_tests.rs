@@ -184,3 +184,19 @@ fn the_doctor_shows_the_volumes_the_floors_and_the_last_cleanup() {
     assert!(l.contains("cleanup is off"), "{l}");
     assert!(l.contains("soft_floor_gib must be"), "{l}");
 }
+
+#[test]
+fn doctor_marks_nearly_full_filesystems_as_warning() {
+    let (_t, env) = setup();
+    config(
+        &env,
+        "[storage]\nhard_floor_gib = 0\nsoft_floor_gib = 1048576\nsoft_floor_percent = 100\n",
+    );
+    let lines = doctor_lines(&env);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("WARNING") && line.contains(" free of ")),
+        "{lines:?}"
+    );
+}

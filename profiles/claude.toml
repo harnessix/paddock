@@ -4,6 +4,7 @@ description = "Anthropic Claude Code"
 # Entries that come from documentation, not from a test. paddock doctor lists them.
 unverified = [
   "horse.pty: the input row, its placeholder and the busy text of the Claude Code TUI, from the code of Claude Code 2.1.318 (the version after 2.1.317), not from a recorded screen",
+  "folder trust: the screen and its choices have not been recorded; paddock does not answer it",
 ]
 
 [locate]
@@ -60,14 +61,15 @@ shared_keys = [["oauthAccount"], ["userID"]]
 file = ".claude.json"
 path = ["mcpServers"]
 
-[[mcp]]
-file = ".claude.json"
-path = ["projects", "{project}", "mcpServers"]
-
+# Claude takes project scope over user scope, and local scope over both.
 [[mcp]]
 file = ".mcp.json"
 in_project = true
 path = ["mcpServers"]
+
+[[mcp]]
+file = ".claude.json"
+path = ["projects", "{project}", "mcpServers"]
 
 [network]
 endpoints = ["api.anthropic.com", "claude.ai", "console.anthropic.com", "statsig.anthropic.com"]

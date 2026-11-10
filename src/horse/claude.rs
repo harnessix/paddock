@@ -184,7 +184,8 @@ pub struct Log {
 }
 
 /// Read `<id>.jsonl`. A line without its newline is a write in progress
-/// and is left out. Every row must be a JSON object, and every row with a
+/// and is left out, and so is a cut line that a later write ended (see
+/// `jsonl`). Every row must be a JSON object, and every row with a
 /// `version` must have the pinned one.
 pub fn read_file(path: &Path) -> Result<Log> {
     let id = path
@@ -194,8 +195,7 @@ pub fn read_file(path: &Path) -> Result<Log> {
         .with_context(|| format!("{} is not a Claude Code transcript", path.display()))?;
     check_session_id(id)?;
     let bytes = std::fs::read(path).with_context(|| format!("cannot read {}", path.display()))?;
-    let mut rows: Vec<Vec<u8>> = bytes.split(|&b| b == b'\n').map(<[u8]>::to_vec).collect();
-    let torn = rows.pop().is_some_and(|l| !l.is_empty());
+    let (rows, torn) = super::jsonl::lines(&bytes);
     for (i, r) in rows.iter().enumerate() {
         let n = info(r).with_context(|| format!("{}: line {}", path.display(), i + 1))?;
         if let Some(v) = n.version.as_deref().filter(|v| *v != VERSION) {
@@ -397,6 +397,7 @@ fn ingest_impl(
         .collect();
     let (mut kept, mut added) = (start, 0);
     let mut head: Option<Hash> = session.head.clone();
+    let scoped = store.for_horse(&session.horse)?;
     for raw in &log.rows[start..] {
         let n = info(raw)?;
         if n.is_chain() {
@@ -406,7 +407,7 @@ fn ingest_impl(
                 continue;
             }
         }
-        head = Some(store.put_native(&ORIGIN, head.as_ref(), &key(&n), raw)?);
+        head = Some(scoped.put_native(&ORIGIN, head.as_ref(), &key(&n), raw)?);
         added += 1;
     }
     locked.update_session(&session.id, |s| s.head = head)?;
@@ -456,5 +457,7 @@ pub fn view(raw: &[u8]) -> Option<super::dsh::View> {
     Some(super::dsh::View { role, text })
 }
 
+#[cfg(test)]
+mod rewrite_tests;
 #[cfg(test)]
 mod tests;

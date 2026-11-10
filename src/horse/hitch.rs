@@ -92,8 +92,8 @@ pub fn child_finished_locked(
         at_ms: super::now_ms(),
     };
     let text = format!(
-        "hitched {} ({}) finished\n{}",
-        &child.session[..child.session.len().min(8)],
+        "{}{}) finished\n{}",
+        owed::result_head(&child.session),
         child.harness,
         result_text
     );
@@ -122,6 +122,7 @@ pub fn visible_sessions(store: &Store, horse: &str, own_session: &str) -> Vec<St
     }
 }
 
+pub mod owed;
 pub mod wire;
 pub use wire::Hitched;
 

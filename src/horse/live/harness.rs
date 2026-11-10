@@ -1,11 +1,13 @@
 //! The seam between the custody loop and the harnesses that it holds.
 //!
 //! A custodian holds the stdio of one harness process and keeps the store
-//! in step with it. Three custodians implement [`Live`]: dsh
+//! in step with it. Five custodians implement [`Live`]: dsh
 //! (custody.rs, JSON-RPC to an SDK runtime that streams every event),
 //! Claude Code (claude.rs, stream-json to `claude -p`, the transcript file
-//! after each turn) and Codex (codex.rs, `codex app-server`, the rollout
-//! file after each turn).
+//! after each turn), Codex (codex.rs, `codex app-server`, the rollout
+//! file after each turn), Grok Build (grok.rs, ACP to `grok agent
+//! stdio`, the session folder after each turn) and agy (agy.rs,
+//! stream-json, the conversation database after each turn).
 //!
 //! A [`Live`] knows its wire. It reads what the harness sends, ingests
 //! after every turn, answers the requests of the harness, and fails closed
@@ -16,7 +18,11 @@
 //! harnesses share: the controls of the run (typed lines, interrupts, the
 //! end), the delivery of inbox entries only at a safe point, the end of the
 //! custody at a safe point, and the live record that `paddock horse
-//! status` shows. An idle main session is a safe point at once. When the
+//! status` shows. An idle main session is a safe point at once. The
+//! custody does not close while an entry waits in the inbox of the main
+//! session, or while a hitched child of the main session owes its result
+//! (hold.rs): the driver delivers inbox entries until then. A second
+//! `Close` ends it at once. When the
 //! [`Live`] still takes input after it was asked to end, the driver still
 //! delivers inbox entries at the safe points until the harness ends. A
 //! headless run ([`Ends::WhenDone`]) ends when its work is done: the main
@@ -42,6 +48,10 @@ pub enum Harness {
     Claude,
     /// `codex app-server` over stdio (codex.rs).
     Codex,
+    /// `grok agent stdio` over ACP (grok.rs).
+    Grok,
+    /// `agy --input-format stream-json` (agy.rs).
+    Agy,
 }
 
 impl Harness {
@@ -51,6 +61,8 @@ impl Harness {
             crate::horse::dsh::HARNESS => Some(Harness::Dsh),
             crate::horse::claude::HARNESS => Some(Harness::Claude),
             crate::horse::codex::HARNESS => Some(Harness::Codex),
+            crate::horse::grok::HARNESS => Some(Harness::Grok),
+            crate::horse::agy::HARNESS => Some(Harness::Agy),
             _ => None,
         }
     }
@@ -291,6 +303,16 @@ pub struct Driver {
     drain: bool,
     started_ms: u64,
     shown: Option<Vec<Shown>>,
+    /// Hitched children of the main session that still owe their result.
+    owed: usize,
+    /// The custody does not close yet (hold.rs), and it delivers inbox
+    /// entries meanwhile.
+    holding: bool,
+    /// The run said that it holds its end for the queued entries.
+    said_queued: bool,
+    /// The inbox entries that went to the harness once. An entry that the
+    /// harness refused does not hold the end again.
+    tried: std::collections::HashSet<String>,
 }
 
 impl Driver {
@@ -306,6 +328,10 @@ impl Driver {
             drain: false,
             started_ms: crate::horse::now_ms(),
             shown: None,
+            owed: 0,
+            holding: false,
+            said_queued: false,
+            tried: Default::default(),
         }
     }
 
@@ -359,6 +385,10 @@ impl Driver {
                     Err(TryRecvError::Empty) => break,
                 }
             }
+            // A `ctl disconnect` closes like the first Close of the run.
+            if super::disconnect::take(&self.store, live)? {
+                self.closing = true;
+            }
             self.queue_typed(live)?;
             if now && deadline.is_none() {
                 // A second Close: the end comes at once, with no more input.
@@ -373,6 +403,7 @@ impl Driver {
                 };
             }
             if deadline.is_none() {
+                self.flush_turn_end(live);
                 crate::horse::codex::swap::request::serve(&self.store, live, self.tick)?;
                 if self.safe_point(live)? {
                     deadline = Some(self.close(live)?);
@@ -426,7 +457,7 @@ impl Driver {
                 return Ok(true);
             }
         }
-        if !self.closing || self.drain {
+        if !self.closing || self.drain || self.holding {
             self.deliver_entries(live)?;
         }
         Ok(false)
@@ -445,21 +476,28 @@ impl Driver {
                 .position(|e| e.interrupt)
                 .or(inbox.first().map(|_| 0))
             {
-                live.deliver(Input::Entry(inbox.swap_remove(i)))?;
+                let e = inbox.swap_remove(i);
+                self.tried.insert(e.id.clone());
+                live.deliver(Input::Entry(e))?;
             }
         }
         Ok(())
     }
 
-    /// With [`Ends::WhenDone`]: the work is not done. An entry waits in
-    /// the inbox of the main session, or the main session is not known yet.
-    fn waiting(&self, live: &dyn Live) -> Result<bool> {
-        if !self.drain {
-            return Ok(false);
-        }
-        match live.main_session() {
-            Some(m) => Ok(!self.store.inbox(&m)?.is_empty()),
-            None => Ok(true),
+    /// Release normal trainer advice only when the main session is idle.
+    fn flush_turn_end(&self, live: &dyn Live) {
+        let sessions = live.sessions();
+        // An already-idle session is also between turns. Looking at the
+        // current state covers a short turn whose start and end arrived in
+        // one pump, without releasing anything during a running turn.
+        if sessions.first().is_some_and(|current| current.idle) {
+            if let Some(env) = self.store.host_env() {
+                if let Err(error) =
+                    crate::trainer::advice::deliver::flush_if_pending(env, &self.run)
+                {
+                    log::warn!("cannot deliver trainer advice at turn end: {error:#}");
+                }
+            }
         }
     }
 
@@ -493,8 +531,16 @@ impl Driver {
     }
 }
 
+mod hold;
+
 #[cfg(test)]
 mod tests;
 
 #[cfg(test)]
 mod seam_tests;
+
+#[cfg(test)]
+mod hitch_tests;
+
+#[cfg(test)]
+mod window_tests;

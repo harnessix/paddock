@@ -7,7 +7,7 @@
 //! the session, piece by piece, with the request port of the dsh codec
 //! (dsh/request.rs). DeepSeek caches by content prefix, and keeps a prefix
 //! unit at the end of each request input and output (kv_cache guide). The
-//! rules come from the dsh table of the HR0 research, section 2:
+//! rules for dsh:
 //! - an edit or insert before the tail breaks from that point,
 //! - a model or provider change makes the whole cache cold,
 //! - a tool-set change breaks from the tools; on a model with
@@ -22,8 +22,10 @@
 //! A Claude Code session takes its shape and its cache time from the
 //! requests that Claude Code records (guard/claude.rs).
 
+pub mod agy;
 pub mod claude;
 pub mod codex;
+pub mod grok;
 
 use super::dsh::request::{build, prompt_pieces, J};
 use super::dsh::Header;
@@ -237,7 +239,13 @@ fn load(store: &Store, s: &Session) -> Result<Prompt> {
             .map(|t| Hash::of(t.text().as_bytes())),
         system_hash: pieces.first().map(|p| Hash::of(p.as_bytes())),
         cwd,
-        harness_version: s.binding.version.clone(),
+        harness_version: if s.binding.harness == crate::horse::codex::HARNESS {
+            s.codex_reader_version
+                .clone()
+                .unwrap_or_else(|| s.binding.version.clone())
+        } else {
+            s.binding.version.clone()
+        },
         native_id: s.binding.native_id.clone(),
         last_request_ms: last_reply.and_then(|i| num(rows[i].get("time"))),
     };
@@ -258,6 +266,9 @@ fn load(store: &Store, s: &Session) -> Result<Prompt> {
 
 /// The state tuple of a session.
 pub fn tuple(store: &Store, s: &Session) -> Result<Tuple> {
+    if s.binding.harness == agy::HARNESS {
+        return Ok(agy::tuple(s));
+    }
     Ok(load(store, s)?.tuple)
 }
 
@@ -298,6 +309,12 @@ impl Prompt {
 pub fn check(store: &Store, session: &str, op: &Op, now_ms: u64) -> Result<Verdict> {
     let s = store.session(session)?;
     if let Some(v) = codex::check(store, &s, op, now_ms)? {
+        return Ok(v);
+    }
+    if let Some(v) = grok::check(store, &s, op, now_ms)? {
+        return Ok(v);
+    }
+    if let Some(v) = agy::check(store, &s, op, now_ms)? {
         return Ok(v);
     }
     let p = load(store, &s)?;

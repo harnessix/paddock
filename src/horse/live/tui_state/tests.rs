@@ -276,6 +276,7 @@ fn a_custody_hears_the_hooks_and_can_give_an_entry_back() {
     let heard = |kind, thread: Option<&str>| Heard {
         kind,
         thread: thread.map(String::from),
+        turn: None,
     };
     assert_eq!(
         rx.try_iter().collect::<Vec<_>>(),

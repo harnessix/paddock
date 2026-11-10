@@ -25,8 +25,11 @@
 //! writes them after the submit key, in order. An urgent entry (`paddock
 //! horse append --interrupt`) first gets the harness's interrupt key.
 
+pub mod agy;
 pub mod claude;
 pub mod codex;
+pub mod files;
+pub mod grok;
 
 use crate::horse::inbox::Entry;
 use crate::horse::store::{Hash, Store};
@@ -120,7 +123,10 @@ impl PtyIdle {
 
     pub fn from_table(t: &PtyTable) -> Result<PtyIdle> {
         let key = |name: &str, what: &str| {
-            crate::screens::key_bytes(name)
+            // Ctrl+C stops a Grok Build turn; screens.rs has no key for it.
+            let ctrl_c = (name == "ctrl-c").then(|| vec![0x03]);
+            ctrl_c
+                .or_else(|| crate::screens::key_bytes(name))
                 .with_context(|| format!("[horse.pty] {what} {name:?} is not a key name"))
         };
         if t.prompt.trim().is_empty() {
@@ -284,7 +290,7 @@ pub fn keys(text: &str, p: &PtyIdle) -> Vec<Vec<u8>> {
     out
 }
 
-type Writer = Box<dyn FnMut(&[u8]) -> io::Result<()> + Send>;
+type Writer = Box<dyn FnMut(&[u8], Instant) -> io::Result<()> + Send>;
 
 struct ScreenState {
     parser: Option<vt100::Parser>,
@@ -298,6 +304,8 @@ pub struct PtyTap {
     screen: Mutex<ScreenState>,
     /// `None` before `attach` and after `finish`.
     write: Mutex<Option<Writer>>,
+    mail: Option<(crate::env::HostEnv, String)>,
+    mail_poll: Mutex<Instant>,
 }
 
 impl PtyTap {
@@ -309,7 +317,39 @@ impl PtyTap {
                 caller: -1,
             }),
             write: Mutex::new(None),
+            mail: None,
+            mail_poll: Mutex::new(Instant::now()),
         })
+    }
+
+    /// Create a tap linked to the run's mailbox.
+    pub fn with_mail(env: &crate::env::HostEnv, id: &str) -> Arc<PtyTap> {
+        let mut tap = Self::new();
+        Arc::get_mut(&mut tap).expect("new tap is unique").mail =
+            Some((env.clone(), id.to_string()));
+        tap
+    }
+
+    /// Retry queueing unread mail after a transient store error.
+    fn poll_mail(&self, session: &str) {
+        let Some((env, id)) = &self.mail else {
+            return;
+        };
+        let mut last = self.mail_poll.lock().unwrap();
+        if last.elapsed() < Duration::from_secs(2) {
+            return;
+        }
+        *last = Instant::now();
+        drop(last);
+        if !crate::mail::run_info(env, id).is_some_and(|info| {
+            info.delivery.as_deref() == Some(crate::mail::deliver::RELAY)
+                && info.horse_session.as_deref() == Some(session)
+        }) {
+            return;
+        }
+        if let Err(e) = crate::mail::deliver::queue_relay(env, id, session) {
+            log::warn!("sandbox {id}: cannot queue relay mail: {e:#}");
+        }
     }
 
     /// Attach to a writer of the pty and a screen of `rows` x `cols`
@@ -324,7 +364,8 @@ impl PtyTap {
         st.parser = Some(parser(rows, cols));
         st.changed = Instant::now();
         drop(st);
-        *self.write.lock().unwrap() = Some(Box::new(w));
+        let mut w = w;
+        *self.write.lock().unwrap() = Some(Box::new(move |b, _| w(b)));
     }
 
     /// The screen now, and how long it is unchanged. `None` before the
@@ -343,24 +384,62 @@ impl PtyTap {
     /// Type `text` and submit it. The keys of the user wait until the
     /// submit key went out.
     pub fn deliver(&self, text: &str, p: &PtyIdle) -> io::Result<()> {
-        self.send(&keys(text, p), p.submit_gap)
+        self.send(&keys(text, p), p.submit_gap, None)
     }
 
     /// Send the interrupt key.
     pub fn interrupt(&self, p: &PtyIdle) -> io::Result<()> {
-        self.send(std::slice::from_ref(&p.interrupt_key), Duration::ZERO)
+        self.send(std::slice::from_ref(&p.interrupt_key), Duration::ZERO, None)
     }
 
-    fn send(&self, writes: &[Vec<u8>], gap: Duration) -> io::Result<()> {
+    fn deliver_mail(
+        &self,
+        text: &str,
+        p: &PtyIdle,
+        env: &crate::env::HostEnv,
+        id: &str,
+        seq: u64,
+        token: u128,
+    ) -> io::Result<()> {
+        self.send(&keys(text, p), p.submit_gap, Some((env, id, seq, token)))
+    }
+
+    fn send(
+        &self,
+        writes: &[Vec<u8>],
+        gap: Duration,
+        mail: Option<(&crate::env::HostEnv, &str, u64, u128)>,
+    ) -> io::Result<()> {
         let mut w = self.write.lock().unwrap();
         let w = w
             .as_mut()
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotConnected, "the relay is gone"))?;
+        let deadline = Instant::now() + Duration::from_secs(10);
         for (i, b) in writes.iter().enumerate() {
             if i > 0 && !gap.is_zero() {
                 std::thread::sleep(gap);
             }
-            w(b)?;
+            let result = if i + 1 == writes.len() {
+                if let Some((env, id, seq, token)) = mail {
+                    crate::mail::deliver::relay_submit(env, id, seq, token, || {
+                        w(b, deadline.min(Instant::now() + Duration::from_millis(50)))
+                            .map_err(Into::into)
+                    })
+                    .map_err(io::Error::other)
+                } else {
+                    w(b, deadline)
+                }
+            } else {
+                w(b, deadline)
+            };
+            if let Err(err) = result {
+                // End a partial bracketed paste and clear the input line.
+                // Do not send the submit key after a failed write.
+                if mail.is_some() {
+                    let _ = w(b"\x1b[201~\x15", Instant::now() + Duration::from_secs(2));
+                }
+                return Err(err);
+            }
         }
         Ok(())
     }
@@ -379,8 +458,8 @@ impl Tap for PtyTap {
         st.changed = Instant::now();
         st.caller = caller;
         drop(st);
-        *self.write.lock().unwrap() = Some(Box::new(move |b: &[u8]| {
-            crate::relay::write_all_fd(master, b)
+        *self.write.lock().unwrap() = Some(Box::new(move |b: &[u8], deadline| {
+            write_until(master, b, deadline)
         }));
     }
 
@@ -400,7 +479,7 @@ impl Tap for PtyTap {
     fn write_user(&self, master: RawFd, data: &[u8]) -> io::Result<()> {
         let mut w = self.write.lock().unwrap();
         match w.as_mut() {
-            Some(w) => w(data),
+            Some(w) => w(data, Instant::now() + Duration::from_secs(10)),
             None => crate::relay::write_all_fd(master, data),
         }
     }
@@ -442,16 +521,38 @@ pub(crate) fn type_entry(
 ) -> Result<Option<(String, Option<Hash>)>> {
     let text = terminal_text(&e.wire_text());
     let head = store.session(&e.session)?.head;
-    store.record_delivery(e, head.as_ref(), &e.id)?;
-    if let Err(err) = tap.deliver(&text, idle) {
-        log::warn!(
-            "horse pty: cannot type entry {} into the TUI ({err}); it stays queued",
-            e.id
-        );
-        store.retract_delivery(&e.session, &e.id)?;
-        return Ok(None);
+    let write = |token| -> Result<bool> {
+        store.record_delivery(e, head.as_ref(), &e.id)?;
+        let result = match (e.mail_seq, &tap.mail) {
+            (Some(seq), Some((env, id))) => tap.deliver_mail(&text, idle, env, id, seq, token),
+            _ => tap.deliver(&text, idle),
+        };
+        if let Err(err) = result {
+            log::warn!(
+                "horse pty: cannot type entry {} into the TUI ({err}); it stays queued",
+                e.id
+            );
+            store.retract_delivery(&e.session, &e.id)?;
+            return Ok(false);
+        }
+        Ok(true)
+    };
+    let sent = match (e.mail_seq, &tap.mail) {
+        (Some(seq), Some((env, id))) => crate::mail::deliver::relay_send(env, id, seq, write)?,
+        (Some(_), None) => false,
+        (None, _) => write(0)?,
+    };
+    if sent {
+        return Ok(Some((text, head)));
     }
-    Ok(Some((text, head)))
+    if let (Some(seq), Some((env, id))) = (e.mail_seq, &tap.mail) {
+        if crate::mail::cursor(env, id, crate::mail::Dir::Down, crate::mail::AGENT) >= seq {
+            store.drop_entry(&e.session, &e.id)?;
+            // A skipped entry did not start a turn.
+            return Ok(Some((String::new(), head)));
+        }
+    }
+    Ok(None)
 }
 
 /// The oldest urgent entry (`paddock horse append --interrupt`) of
@@ -461,16 +562,66 @@ pub(crate) fn urgent_entry(
     store: &Store,
     session: &str,
     sent: &HashSet<String>,
+    tap: &PtyTap,
 ) -> Result<Option<Entry>> {
     let done: HashSet<String> = store
         .deliveries(session)?
         .into_iter()
         .map(|d| d.entry.id)
         .collect();
-    Ok(store
-        .inbox(session)?
-        .into_iter()
-        .find(|e| e.interrupt && !done.contains(&e.id) && !sent.contains(&e.id)))
+    for e in store.inbox(session)? {
+        if let (Some(seq), Some((env, id))) = (e.mail_seq, &tap.mail) {
+            if crate::mail::cursor(env, id, crate::mail::Dir::Down, crate::mail::AGENT) >= seq {
+                store.drop_entry(session, &e.id)?;
+                continue;
+            }
+        }
+        if e.interrupt && !done.contains(&e.id) && !sent.contains(&e.id) {
+            return Ok(Some(e));
+        }
+    }
+    Ok(None)
+}
+
+/// Write to the relay's nonblocking master until the deadline.
+fn write_until(fd: RawFd, mut data: &[u8], deadline: Instant) -> io::Result<()> {
+    while !data.is_empty() {
+        if Instant::now() >= deadline {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "terminal write timed out",
+            ));
+        }
+        // SAFETY: data points to a readable buffer of the given length.
+        let n = unsafe { libc::write(fd, data.as_ptr().cast(), data.len()) };
+        if n > 0 {
+            data = &data[n as usize..];
+            continue;
+        }
+        if n == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::WriteZero,
+                "terminal write wrote nothing",
+            ));
+        }
+        let e = io::Error::last_os_error();
+        if e.kind() == io::ErrorKind::Interrupted {
+            continue;
+        }
+        if e.kind() != io::ErrorKind::WouldBlock {
+            return Err(e);
+        }
+        let mut p = libc::pollfd {
+            fd,
+            events: libc::POLLOUT,
+            revents: 0,
+        };
+        // SAFETY: p is one initialized pollfd and lives through the call.
+        unsafe {
+            libc::poll(&mut p, 1, 20);
+        }
+    }
+    Ok(())
 }
 
 fn winsize(fd: RawFd) -> Option<(u16, u16)> {
@@ -495,3 +646,45 @@ mod relay_tests;
 
 #[cfg(test)]
 mod codex_relay_tests;
+
+#[cfg(test)]
+mod mail_test_support {
+    use crate::{
+        env::HostEnv,
+        horse::store::Store,
+        mail::{self, RunInfo, Starter},
+    };
+    use std::path::Path;
+    pub const RUN: &str = "test-run-123abc";
+    pub fn setup(dir: &Path) -> (HostEnv, Store) {
+        let env = crate::privfs::tests::env_in(dir);
+        mail::create(&env, RUN, &Starter::host()).unwrap();
+        let store = Store::open_host(&env).unwrap();
+        (env, store)
+    }
+    pub fn link(env: &HostEnv, session: &str) {
+        mail::set_run_info(
+            env,
+            &RunInfo {
+                id: RUN.into(),
+                harness: "fake".into(),
+                project: env.home.clone(),
+                pid: std::process::id(),
+                pid_start: mail::events::proc_start(std::process::id()),
+                started: crate::state::now(),
+                detached: false,
+                delivery: Some(mail::deliver::RELAY.into()),
+                horse_session: Some(session.into()),
+            },
+        )
+        .unwrap();
+    }
+    pub fn send(env: &HostEnv, text: &str) -> mail::Message {
+        mail::send_down(
+            env,
+            RUN,
+            mail::Message::new(mail::HOST, mail::Kind::Say, text),
+        )
+        .unwrap()
+    }
+}

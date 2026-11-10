@@ -49,6 +49,9 @@ pub struct Session {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub head: Option<Hash>,
     pub binding: Binding,
+    /// Codex version selected for this run or used for its latest ingest, if known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codex_reader_version: Option<String>,
     /// The native session header as a blob, when the harness has one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_header: Option<Hash>,
@@ -89,7 +92,7 @@ impl Store {
 impl Store {
     pub(super) fn save_horse(&self, h: &Horse) -> Result<()> {
         check_id(&h.id)?;
-        self.write_ref(
+        self.for_horse(&h.id)?.write_ref(
             &format!("horses/{}.json", h.id),
             &serde_json::to_vec_pretty(h)?,
         )
@@ -97,7 +100,7 @@ impl Store {
 
     pub(super) fn save_session(&self, s: &Session) -> Result<()> {
         check_id(&s.id)?;
-        self.write_ref(
+        self.for_horse(&s.horse)?.write_ref(
             &format!("sessions/{}.json", s.id),
             &serde_json::to_vec_pretty(s)?,
         )
@@ -216,6 +219,7 @@ impl Store {
                 native_id: None,
                 ..src.binding.clone()
             },
+            codex_reader_version: src.codex_reader_version.clone(),
             native_header: src.native_header.clone(),
             fork_of: Some(ForkOf {
                 session: src.id.clone(),

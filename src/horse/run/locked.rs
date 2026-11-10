@@ -11,8 +11,16 @@ pub fn record_event_locked(
     extra: Value,
 ) -> Result<Hash> {
     let session = locked.store.session(&rh.session)?;
+    let version = if rh.harness == codex::HARNESS {
+        session
+            .codex_reader_version
+            .as_deref()
+            .unwrap_or(&session.binding.version)
+    } else {
+        &session.binding.version
+    };
     let mut body = json!({"type": kind, "horse": rh.horse, "session": rh.session,
-        "sandbox": sandbox, "harness": rh.harness, "version": session.binding.version,
+        "sandbox": sandbox, "harness": rh.harness, "version": version,
         "at_ms": super::super::now_ms()});
     if let Some(extra) = extra.as_object() {
         for (key, value) in extra {

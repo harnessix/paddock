@@ -13,7 +13,6 @@ use super::{PtyIdle, PtyTap};
 use crate::horse::codex as codec;
 use crate::horse::live::harness::Control;
 use crate::horse::live::tui_state::{run_key, Runs};
-use crate::horse::store::Store;
 use crate::horse::Binding;
 use crate::relay::{take_controlling_tty, Relay, Taps};
 use std::os::fd::{FromRawFd as _, RawFd};
@@ -102,7 +101,7 @@ fn an_entry_queued_during_a_codex_turn_is_typed_through_the_relay_after_its_noti
         .unwrap();
     }
 
-    let store = Store::open(&dir.path().join("store")).unwrap();
+    let (mail_env, store) = super::mail_test_support::setup(dir.path());
     let h = store.new_default_horse().unwrap();
     let s = store
         .new_session(
@@ -115,10 +114,11 @@ fn an_entry_queued_during_a_codex_turn_is_typed_through_the_relay_after_its_noti
             },
         )
         .unwrap();
+    super::mail_test_support::link(&mail_env, &s.id);
     let runs: &'static Runs = Box::leak(Box::default());
     let key = run_key(&h.id, &s.id);
     let signals = runs.subscribe(&key);
-    let tap = PtyTap::new();
+    let tap = PtyTap::with_mail(&mail_env, super::mail_test_support::RUN);
     // The table of the profile as it ships.
     let p = crate::profile::builtin("codex").unwrap();
     let idle = PtyIdle::of(&p, codec::HARNESS, codec::VERSION).unwrap();
@@ -231,7 +231,22 @@ fn an_entry_queued_during_a_codex_turn_is_typed_through_the_relay_after_its_noti
     wait("the TUI did not start", &mut || {
         std::fs::read_to_string(&log).is_ok()
     });
-    let entry = store.queue_append(&s.id, "user", "from the test").unwrap();
+    let message = super::mail_test_support::send(&mail_env, "from the test");
+    assert_eq!(
+        crate::mail::cursor(
+            &mail_env,
+            super::mail_test_support::RUN,
+            crate::mail::Dir::Down,
+            crate::mail::AGENT
+        ),
+        0
+    );
+    let entry = store
+        .inbox(&s.id)
+        .unwrap()
+        .into_iter()
+        .find(|e| e.mail_seq == Some(message.seq))
+        .unwrap();
     wait("the entry did not land", &mut || {
         store
             .deliveries(&s.id)
@@ -242,7 +257,33 @@ fn an_entry_queued_during_a_codex_turn_is_typed_through_the_relay_after_its_noti
     let tui = lines(&log);
     let at = |l: &str| tui.iter().position(|x| x == l);
     let notify1 = at("notify 1").unwrap_or_else(|| panic!("no notify 1: {tui:?}"));
-    let got = at("got 2 from the test").unwrap_or_else(|| panic!("no entry: {tui:?}"));
+    let got = tui
+        .iter()
+        .position(|l| l.starts_with("got 2 paddock:"))
+        .unwrap_or_else(|| panic!("no entry: {tui:?}"));
+    assert_eq!(
+        crate::mail::cursor(
+            &mail_env,
+            super::mail_test_support::RUN,
+            crate::mail::Dir::Down,
+            crate::mail::AGENT
+        ),
+        message.seq
+    );
+    let events = crate::mail::read(
+        &mail_env,
+        super::mail_test_support::RUN,
+        crate::mail::Dir::Up,
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|e| e.via.as_deref() == Some("relay")
+                && e.seqs == [message.seq]
+                && e.text.contains("typed at the idle prompt"))
+            .count(),
+        1
+    );
     assert!(notify1 < got, "{tui:?}");
     wait("no notify 2", &mut || {
         lines(&log).iter().any(|l| l == "notify 2")

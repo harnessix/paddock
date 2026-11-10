@@ -520,7 +520,7 @@ pub fn new_child_horse_locked(locked: &Lock<'_>, parent: &str) -> Result<Horse> 
     let pevent = current_event(store, &p)?;
     let mut dna = inherit(&pdna, parent, &pevent);
     dna.origin.parent_dna = Some(p.dna.clone());
-    let h = put(store, &dna)?;
+    let h = put(&store.for_horse(parent)?, &dna)?;
     let child = locked.new_horse(&h)?;
     set_horse_dna_locked(
         locked,
@@ -549,8 +549,9 @@ pub fn hot_load(store: &Store, horse: &str, text: &str) -> Result<Option<Hash>> 
     if new.hash() == h.dna {
         return Ok(None);
     }
-    store.put_blob(INPUT_MEDIA, text.as_bytes())?;
-    let to = put(store, &new)?;
+    let scoped = store.for_horse(horse)?;
+    scoped.put_blob(INPUT_MEDIA, text.as_bytes())?;
+    let to = put(&scoped, &new)?;
     set_horse_dna_locked(&locked, horse, &to, DnaEvent::Edit { input: Some(input) })?;
     Ok(Some(to))
 }

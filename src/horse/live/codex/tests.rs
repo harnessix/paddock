@@ -112,6 +112,7 @@ fn start_with(w: &World, session: &str, f: impl FnOnce(&mut Fake), pol: Policy) 
         unsubscribe: true,
         persist_forks: false,
         raw_items: true,
+        server_version: VERSION,
         seen: seen.clone(),
     };
     f(&mut fk);
@@ -483,6 +484,7 @@ fn the_server_exit_ends_the_custody() {
         unsubscribe: true,
         persist_forks: false,
         raw_items: true,
+        server_version: VERSION,
         seen: seen.clone(),
     };
     let server = std::thread::spawn(move || fk.serve(fake_r, fake_w));
@@ -625,3 +627,46 @@ fn find_rollout_takes_only_rollout_files_of_the_thread() {
 
 #[path = "side_tests.rs"]
 mod side;
+
+#[test]
+fn unknown_nested_content_prevents_delivery_and_keeps_the_entry() {
+    let w = world();
+    let sid = w.projected();
+    let path = find_rollout(&w.root, OLD_THREAD).unwrap();
+    let mut file = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+    file.write_all(b"{\"timestamp\":\"t\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"type\":\"future_content\"}]}}\n").unwrap();
+    let entry = w.st.queue_append(&sid, "user", "wait here").unwrap();
+    let live = start(&w, &sid);
+    let seen = live.seen.clone();
+    let error = live.join.join().unwrap().unwrap_err();
+    assert!(format!("{error:#}").contains("line 3"));
+    assert_eq!(count(&seen, wire::TURN_START), 0);
+    assert!(w.st.inbox(&sid).unwrap().iter().any(|e| e.id == entry.id));
+    assert!(w.st.deliveries(&sid).unwrap().is_empty());
+}
+
+#[test]
+fn resumed_thread_records_server_reader_separately_from_producer() {
+    let w = world();
+    let sid = w.projected();
+    let live = start_with(&w, &sid, |fake| fake.server_version = "0.167.0", bypass());
+    w.st.queue_append(&sid, "user", "read with a newer server")
+        .unwrap();
+    until("the new reader to ingest", || {
+        w.st.session(&sid).unwrap().codex_reader_version.as_deref() == Some("0.167.0")
+    });
+    let session = w.st.session(&sid).unwrap();
+    assert_eq!(session.binding.version, "0.166.0");
+    live.close();
+}
+
+#[test]
+fn unsupported_server_version_fails_before_opening_a_thread() {
+    let w = world();
+    let sid = w.fresh();
+    let live = start_with(&w, &sid, |fake| fake.server_version = "0.168.0", bypass());
+    let seen = live.seen.clone();
+    let error = live.join.join().unwrap().unwrap_err();
+    assert!(format!("{error:#}").contains("0.168.0"));
+    assert_eq!(count(&seen, wire::THREAD_START), 0);
+}

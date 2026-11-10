@@ -8,7 +8,7 @@ use super::*;
 
 #[test]
 fn a_claude_tui_without_a_channel_gets_entries_between_turns_through_the_relay() {
-    use paddock::horse::{run, Store};
+    use paddock::horse::run;
     use std::process::Stdio;
 
     if !sandbox_works() {
@@ -82,7 +82,7 @@ fn a_claude_tui_without_a_channel_gets_entries_between_turns_through_the_relay()
         }
     };
     let session = || {
-        Store::open(&store_path)
+        store_helpers::open(&store_path)
             .ok()?
             .sessions()
             .ok()?
@@ -94,7 +94,7 @@ fn a_claude_tui_without_a_channel_gets_entries_between_turns_through_the_relay()
     // Turn 1 thinks for 3 s: the entry is queued while it runs.
     paddock(root, &["append", &sid, "--text", "from the test"]);
     let landed = || {
-        Store::open(&store_path)
+        store_helpers::open(&store_path)
             .and_then(|s| s.deliveries(&sid))
             .is_ok_and(|d| {
                 d.iter()
@@ -134,7 +134,7 @@ fn a_claude_tui_without_a_channel_gets_entries_between_turns_through_the_relay()
         ),
         "{stderr}"
     );
-    let store = Store::open(&store_path).unwrap();
+    let store = store_helpers::open(&store_path).unwrap();
     let s = store.session(&sid).unwrap();
     // paddock picked the session id and gave no channel.
     assert!(s.binding.native_id.is_some());

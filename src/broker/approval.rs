@@ -374,6 +374,8 @@ pub fn write_pending(env: &HostEnv, p: &Pending) -> std::io::Result<PathBuf> {
     let p = &p.cleaned();
     let pending = approvals_dir(env).join(format!("{}.json", p.id));
     crate::privfs::write(&pending, serde_json::to_string(p).unwrap_or_default())?;
+    // The run's starter hears that the run waits for the user.
+    crate::mail::events::card(env, p);
     Ok(pending)
 }
 

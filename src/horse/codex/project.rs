@@ -6,10 +6,7 @@ use crate::horse::{
 use anyhow::{bail, Context as _, Result};
 use std::{
     io::Write,
-    os::unix::{
-        fs::{DirBuilderExt, OpenOptionsExt},
-        io::AsRawFd,
-    },
+    os::unix::fs::{DirBuilderExt, OpenOptionsExt},
     path::{Path, PathBuf},
 };
 
@@ -27,12 +24,19 @@ pub fn project(store: &Store, session: &str, config: &Path, swap: bool) -> Resul
         bail!("not a Codex session");
     }
     check_version(&s.binding.version)?;
-    let mut rows: Vec<Vec<u8>> = store
+    let nodes = store
         .native_chain(s.head.as_ref())
-        .with_context(|| format!("session {} cannot be projected", s.id))?
-        .into_iter()
-        .map(|n| n.raw)
+        .with_context(|| format!("session {} cannot be projected", s.id))?;
+    let mut versions: Vec<String> = nodes
+        .iter()
+        .map(|n| {
+            n.meta
+                .version
+                .clone()
+                .unwrap_or_else(|| s.binding.version.clone())
+        })
         .collect();
+    let mut rows: Vec<Vec<u8>> = nodes.into_iter().map(|n| n.raw).collect();
     let meta = parse(rows.first().context("empty session")?)?;
     let parent_id = meta["payload"]["id"]
         .as_str()
@@ -52,6 +56,11 @@ pub fn project(store: &Store, session: &str, config: &Path, swap: bool) -> Resul
         bail!("invalid rollout path");
     }
     let forked = s.binding.native_id.is_none();
+    if forked {
+        for (i, row) in rows.iter().enumerate() {
+            super::check_mutation_row(row, i)?;
+        }
+    }
     if swap && !forked {
         bail!("swap requires an unprojected fork");
     }
@@ -82,6 +91,7 @@ pub fn project(store: &Store, session: &str, config: &Path, swap: bool) -> Resul
         )?;
         let new_meta = json::edit(&rows[0], &[("payload", String::from_utf8(changed)?)], &[])?;
         rows.insert(0, new_meta);
+        versions.insert(0, versions[0].clone());
         let name = path
             .file_name()
             .unwrap()
@@ -89,16 +99,32 @@ pub fn project(store: &Store, session: &str, config: &Path, swap: bool) -> Resul
             .replace(&parent_id, &id);
         path.set_file_name(name);
     }
-    let backup = publish(config, &path, &id, &rows, swap)?;
+    let expected = if swap {
+        let parent = s.fork_of.as_ref().context("swap fork has no parent")?;
+        let parent = store.session(&parent.session)?;
+        let nodes = store.session_nodes(&parent)?;
+        for (i, node) in nodes.iter().enumerate() {
+            super::check_mutation_row(&node.raw, i)?;
+        }
+        Some(nodes.into_iter().map(|n| n.raw).collect::<Vec<_>>())
+    } else {
+        None
+    };
+    let backup = publish(config, &path, &id, &rows, swap, expected.as_deref())?;
     if forked {
+        let scoped = store.for_horse(&s.horse)?;
         let mut head = None;
         for (i, r) in rows.iter().enumerate() {
-            head = Some(store.put_native(&ORIGIN, head.as_ref(), &key(&parse(r)?, i), r)?);
+            let origin = crate::horse::store::Origin {
+                version: &versions[i],
+                ..ORIGIN
+            };
+            head = Some(scoped.put_native(&origin, head.as_ref(), &key(&parse(r)?, i), r)?);
         }
         let rel = path
             .strip_prefix(config.join("sessions"))?
             .to_string_lossy();
-        let header = store.put_blob("codex-path", rel.as_bytes())?;
+        let header = scoped.put_blob("codex-path", rel.as_bytes())?;
         store.update_session(session, |s| {
             s.head = head;
             s.native_header = Some(header);
@@ -127,6 +153,7 @@ pub(super) fn publish(
     id: &str,
     rows: &[Vec<u8>],
     replace: bool,
+    expected: Option<&[Vec<u8>]>,
 ) -> Result<Option<PathBuf>> {
     let lock_dir = config.join("thread-writer-locks");
     std::fs::DirBuilder::new()
@@ -139,8 +166,20 @@ pub(super) fn publish(
         .truncate(false)
         .mode(0o600)
         .open(lock_dir.join(format!("{id}.lock")))?;
-    if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } != 0 {
+    if !super::writer_lock::take(&lock, super::writer_lock::WAIT) {
         bail!("Codex thread is locked by a writer");
+    }
+    if let Some(expected) = expected {
+        super::check_delivery_file(path)?;
+        let current = std::fs::read(path).context("cannot read current rollout")?;
+        let mut known = Vec::new();
+        for row in expected {
+            known.extend_from_slice(row);
+            known.push(b'\n');
+        }
+        if current != known {
+            bail!("Codex rollout changed since ingest; cannot replace history");
+        }
     }
     let dir = path.parent().context("rollout path has no folder")?;
     std::fs::DirBuilder::new()

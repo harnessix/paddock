@@ -13,10 +13,11 @@ printf '{"jsonrpc":"2.0","id":%s,"result":{"serverInfo":{"name":"fake","version"
 paddock-host horse sessions > sessions.txt
 sid=$(cat sessions.txt)
 test -n "$sid"
-native=$(sed -n 's/.*"native_id":"\([^"]*\)".*/\1/p' "/dev/paddock/horse/self/sessions/$sid/binding")
+# When the device has no binding, show what it has: the test fails below.
+native=$(paddock-host peek binding | sed -n 's/.*"native_id":"\([^"]*\)".*/\1/p')
 test -n "$native"
-printf '[traits]\nstyle = "careful-e2e"\n' > /dev/paddock/horse/self/dna.toml
-grep -q careful-e2e /dev/paddock/horse/self/dna.toml
+printf '[traits]\nstyle = "careful-e2e"\n' | paddock-host horse dna put
+paddock-host peek dna | grep -q careful-e2e
 idle() {
     printf '{"jsonrpc":"2.0","method":"session.status","params":{"sessionId":"%s","status":"idle"}}\n' "$native"
 }

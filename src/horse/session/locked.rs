@@ -14,6 +14,9 @@ impl super::super::store::Lock<'_> {
             sessions: Vec::new(),
             created_ms: super::super::now_ms(),
         };
+        if let Some(keys) = &store.keyring {
+            keys.create_horse_key(&h.id)?;
+        }
         store.save_horse(&h)?;
         Ok(h)
     }
@@ -31,6 +34,18 @@ impl super::super::store::Lock<'_> {
 
     /// Create a session while holding the store writer lock.
     pub fn new_session(&self, horse: &str, binding: Binding) -> Result<Session> {
+        self.new_session_first(horse, binding, None)
+    }
+
+    /// Create a session whose inbox holds `first` (role, text) before the
+    /// session can be seen: `paddock horse append` takes no lock, so an
+    /// entry that it queues comes after this one.
+    pub fn new_session_first(
+        &self,
+        horse: &str,
+        binding: Binding,
+        first: Option<(&str, &str)>,
+    ) -> Result<Session> {
         let store = self.store;
         let mut h = store.horse(horse)?;
         let s = Session {
@@ -38,6 +53,7 @@ impl super::super::store::Lock<'_> {
             horse: h.id.clone(),
             head: None,
             binding,
+            codex_reader_version: None,
             native_header: None,
             fork_of: None,
             lineage: vec![LineageStep {
@@ -48,6 +64,11 @@ impl super::super::store::Lock<'_> {
             }],
             created_ms: super::super::now_ms(),
         };
+        if let Some((role, text)) = first {
+            store
+                .for_horse(&h.id)?
+                .write_entry(&s.id, role, text, false)?;
+        }
         store.save_session(&s)?;
         h.sessions.push(s.id.clone());
         store.save_horse(&h)?;

@@ -3,11 +3,9 @@
 //! Layout under the store root (all folders 0700, all files 0600):
 //!
 //! - `objects/ab/cdef...`: one object per file, named by the sha256 of its
-//!   bytes. An object is one line of JSON metadata, a newline, and the body.
-//!   A native node has the raw row of the harness as its body and the hash
-//!   of its parent node in the metadata, so equal rows on equal parents are
-//!   one object (dedupe), and a node pins its whole history.
-//! - `sessions/<id>.json`, `horses/<id>.json`: the small mutable objects.
+//!   plaintext metadata and body. Authenticated index metadata stays clear;
+//!   the full object is encrypted. Equal rows on equal parents deduplicate.
+//! - `sessions/<id>.json`, `horses/<id>.json`: encrypted mutable objects.
 //! - `tmp/`: files that are not complete yet.
 //! - `lock`: the writer lock for the mutable objects.
 //!
@@ -26,6 +24,9 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
+
+mod encryption;
+mod index;
 
 /// A temporary file older than this is left over from a crash.
 const STALE_TMP: Duration = Duration::from_secs(3600);
@@ -85,7 +86,10 @@ pub struct Meta {
     /// The container format of the row, for example `dsh-session-v4-jsonl`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub container: Option<String>,
-    /// The harness version that wrote the row.
+    /// The origin version supplied by the adapter. For Codex native rows
+    /// added by the current codec, this is the ingest reader version and
+    /// projected rows retain that context. Legacy nodes can lack reliable
+    /// reader provenance; row writer versions are generally unknown.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -107,6 +111,16 @@ pub struct Node {
     pub raw: Vec<u8>,
 }
 
+/// Authenticated, non-content metadata used to navigate an encrypted DAG.
+#[derive(Clone, Debug)]
+pub(crate) struct IndexedNode {
+    pub hash: Hash,
+    pub kind: String,
+    pub parent: Option<Hash>,
+    pub size: u64,
+    pub time: Option<u64>,
+}
+
 impl Node {
     /// paddock built the node from a live channel ([`LIVE`]).
     pub fn is_live(&self) -> bool {
@@ -126,6 +140,10 @@ pub struct Origin<'a> {
 #[derive(Clone, Debug)]
 pub struct Store {
     root: PathBuf,
+    pub(crate) keyring: Option<super::keys::Keyring>,
+    encrypted: bool,
+    owner: Option<String>,
+    host_env: Option<crate::env::HostEnv>,
 }
 
 /// The writer lock of the store. It is released on drop.
@@ -135,22 +153,173 @@ pub struct Lock<'a> {
 }
 
 impl Store {
-    /// Open the store, and create it when it is missing. Old temporary files
-    /// from a crash are removed.
+    /// Open an encrypted standalone store, with its keyring beside the root.
+    /// Host callers should use `open_host` to use the user's paddock keyring.
     pub fn open(root: &Path) -> Result<Store> {
+        let keys = super::keys::Keyring::for_standalone(root)?;
+        Self::open_keyed(root, keys)
+    }
+
+    fn open_without_cleanup(root: &Path) -> Result<Store> {
         for d in ["", "objects", "sessions", "horses", "tmp"] {
             privfs::dir(&root.join(d))
                 .with_context(|| format!("cannot create {}", root.join(d).display()))?;
         }
         let s = Store {
             root: root.to_path_buf(),
+            keyring: None,
+            encrypted: false,
+            owner: None,
+            host_env: None,
         };
-        s.clean_tmp();
         Ok(s)
+    }
+
+    /// Read an existing plaintext store during explicit migration. This does
+    /// not create directories or remove temporary files.
+    pub(crate) fn open_plain_for_migration(root: &Path) -> Result<Store> {
+        if !std::fs::symlink_metadata(root).is_ok_and(|meta| meta.file_type().is_dir())
+            || encryption::is_encrypted(root)?
+            || encryption::contains_encrypted_records(root)?
+        {
+            bail!("the migration source is missing or contains encrypted records");
+        }
+        Ok(Store {
+            root: root.to_path_buf(),
+            keyring: None,
+            encrypted: false,
+            owner: None,
+            host_env: None,
+        })
+    }
+
+    pub(crate) fn is_encrypted_path(root: &Path) -> Result<bool> {
+        encryption::is_encrypted(root)
+    }
+
+    /// Open a host store only after checking its master key. Initialization is
+    /// serialized with the existing store writer lock.
+    pub fn open_host(env: &crate::env::HostEnv) -> Result<Store> {
+        let keys = super::keys::Keyring::for_host(env);
+        let root = super::root(env);
+        if !root.exists()
+            && (super::migrate::backup_path(&root)?.exists()
+                || super::migrate::stage_root(&root)?.exists())
+        {
+            bail!("horse migration is interrupted; run paddock horse migrate --verify to recover; no store was changed");
+        }
+        let mut store = Self::open_keyed(&root, keys)?;
+        let mut safe_env = env.clone();
+        safe_env.vars.clear();
+        store.host_env = Some(safe_env);
+        Ok(store)
+    }
+
+    pub(crate) fn host_env(&self) -> Option<&crate::env::HostEnv> {
+        self.host_env.as_ref()
+    }
+
+    pub(crate) fn open_migration_stage(env: &crate::env::HostEnv, root: &Path) -> Result<Store> {
+        let keys = super::keys::Keyring::for_store(env, root.to_path_buf());
+        Self::open_keyed(root, keys)
+    }
+
+    fn open_keyed(root: &Path, keys: super::keys::Keyring) -> Result<Store> {
+        let _initialization = keys.initialization_lock()?;
+        keys.preflight()?;
+        let encrypted = encryption::is_encrypted(root)?;
+        if !encrypted {
+            encryption::require_empty(root)?;
+        } else if !keys.has_check()? {
+            bail!("horse key check is missing; encrypted store was not changed");
+        } else if !keys.keys_ready()? {
+            encryption::require_empty(root)?;
+        }
+        if encrypted && keys.has_check()? && keys.keys_ready()? {
+            keys.horse_key("shared")?;
+            let existing = Store {
+                root: root.to_path_buf(),
+                keyring: Some(keys.clone()),
+                encrypted,
+                owner: None,
+                host_env: None,
+            };
+            for horse in existing.horses()? {
+                keys.horse_key(&horse.id)?;
+            }
+        }
+        let mut store = Store::open_without_cleanup(root)?;
+        store.keyring = Some(keys.clone());
+        store.encrypted = encrypted;
+        {
+            let _lock = store.lock()?;
+            keys.initialize()?;
+            encryption::initialize(&store)?;
+            let ready = keys.keys_ready()?;
+            let encrypted_store = Store {
+                encrypted: true,
+                ..store.clone()
+            };
+            for horse in encrypted_store.horses()? {
+                if ready {
+                    keys.horse_key(&horse.id)?;
+                } else {
+                    keys.ensure_horse_key(&horse.id)?;
+                }
+            }
+            if !ready {
+                keys.mark_keys_ready()?;
+            }
+        }
+        store.encrypted = true;
+        store.clean_tmp();
+        Ok(store)
     }
 
     pub fn root(&self) -> &Path {
         &self.root
+    }
+
+    /// Select the horse data key for new content. Existing shared objects
+    /// keep the key of their first writer so their plaintext hashes remain
+    /// stable across forks and moves.
+    pub fn for_horse(&self, horse: &str) -> Result<Store> {
+        if let Some(keys) = &self.keyring {
+            keys.horse_key(horse)?;
+        }
+        let mut scoped = self.clone();
+        scoped.owner = Some(horse.to_string());
+        Ok(scoped)
+    }
+
+    pub(crate) fn for_session(&self, session: &str) -> Result<Store> {
+        if self.owner.is_some() {
+            return Ok(self.clone());
+        }
+        self.for_horse(&self.session(session)?.horse)
+    }
+
+    pub(crate) fn seal_registry(&self, name: &str, bytes: &[u8]) -> Result<Vec<u8>> {
+        if self.encrypted {
+            encryption::seal(self, "registry", name, bytes)
+        } else {
+            Ok(bytes.to_vec())
+        }
+    }
+
+    pub(crate) fn open_registry(&self, name: &str, bytes: &[u8]) -> Result<Vec<u8>> {
+        if self.encrypted {
+            encryption::open(self, "registry", name, bytes)
+        } else {
+            Ok(bytes.to_vec())
+        }
+    }
+
+    pub(crate) fn seal_mount(&self, horse: &str, path: &str, bytes: &[u8]) -> Result<Vec<u8>> {
+        if !self.encrypted {
+            bail!("horse mount requires an encrypted store");
+        }
+        encryption::seal(&self.for_horse(horse)?, "mount", path, bytes)
     }
 
     fn clean_tmp(&self) {
@@ -228,7 +397,12 @@ impl Store {
         }
         let dir = path.parent().expect("object path has a parent");
         privfs::dir(dir)?;
-        let tmp = self.write_tmp(&bytes)?;
+        let stored = if self.encrypted {
+            index::seal(self, &h, meta, raw, &bytes)?
+        } else {
+            bytes
+        };
+        let tmp = self.write_tmp(&stored)?;
         let linked = std::fs::hard_link(&tmp, &path);
         let _ = std::fs::remove_file(&tmp);
         match linked {
@@ -289,8 +463,13 @@ impl Store {
     /// Read an object and check its hash. A damaged object is an error.
     pub fn get(&self, h: &Hash) -> Result<Node> {
         let path = self.object_path(h);
-        let bytes = std::fs::read(&path)
+        let stored = std::fs::read(&path)
             .with_context(|| format!("no node {} in the horse store", h.short()))?;
+        let (bytes, public) = if self.encrypted {
+            index::open(self, h, &stored)?
+        } else {
+            (stored, None)
+        };
         if Hash::of(&bytes) != *h {
             bail!(
                 "node {} is damaged: its content does not match its hash",
@@ -303,11 +482,15 @@ impl Store {
             .with_context(|| format!("node {} has no metadata line", h.short()))?;
         let meta: Meta = serde_json::from_slice(&bytes[..nl])
             .with_context(|| format!("node {} has bad metadata", h.short()))?;
-        Ok(Node {
+        let node = Node {
             hash: h.clone(),
             meta,
             raw: bytes[nl + 1..].to_vec(),
-        })
+        };
+        if let Some(public) = public {
+            index::verify_node(&public, &node)?;
+        }
+        Ok(node)
     }
 
     /// The nodes from the root to `head`, root first.
@@ -321,6 +504,57 @@ impl Store {
         }
         out.reverse();
         Ok(out)
+    }
+
+    pub(crate) fn object_stored_size(&self, hash: &Hash) -> Result<u64> {
+        Ok(std::fs::metadata(self.object_path(hash))?.len())
+    }
+
+    pub(crate) fn object_ciphertext(&self, hash: &Hash) -> Result<Vec<u8>> {
+        if !self.encrypted {
+            bail!("horse object is not encrypted");
+        }
+        Ok(std::fs::read(self.object_path(hash))?)
+    }
+
+    pub(crate) fn indexed_chain(
+        &self,
+        head: Option<&Hash>,
+        limit: u64,
+        inspected: &mut u64,
+    ) -> Result<Vec<IndexedNode>> {
+        let mut out = Vec::new();
+        let mut next = head.cloned();
+        while let Some(hash) = next {
+            let item = match index::read(self, &hash)? {
+                Some(info) => info,
+                None => {
+                    let node = self.get_bounded(&hash, limit, inspected)?;
+                    IndexedNode {
+                        hash,
+                        kind: node.meta.kind,
+                        parent: node.meta.parent,
+                        size: node.raw.len() as u64,
+                        time: None,
+                    }
+                }
+            };
+            next = item.parent.clone();
+            out.push(item);
+        }
+        out.reverse();
+        Ok(out)
+    }
+
+    pub(crate) fn get_bounded(&self, hash: &Hash, limit: u64, inspected: &mut u64) -> Result<Node> {
+        let total = inspected
+            .checked_add(self.object_stored_size(hash)?)
+            .context("peek byte count overflow")?;
+        if total > limit {
+            bail!("peek grant byte limit reached");
+        }
+        *inspected = total;
+        self.get(hash)
     }
 
     /// The nodes from the root to `head` for a projection: every node must
@@ -343,7 +577,12 @@ impl Store {
         let path = self.root.join(rel);
         let dir = path.parent().expect("ref path has a parent").to_path_buf();
         privfs::dir(&dir)?;
-        let tmp = self.write_tmp(bytes)?;
+        let stored = if self.encrypted {
+            encryption::seal(self, "ref", rel, bytes)?
+        } else {
+            bytes.to_vec()
+        };
+        let tmp = self.write_tmp(&stored)?;
         if let Err(e) = std::fs::rename(&tmp, &path) {
             let _ = std::fs::remove_file(&tmp);
             return Err(e).with_context(|| format!("cannot write {}", path.display()));
@@ -353,6 +592,7 @@ impl Store {
 
     pub(crate) fn read_ref(&self, rel: &str) -> Result<Option<Vec<u8>>> {
         match std::fs::read(self.root.join(rel)) {
+            Ok(b) if self.encrypted => Ok(Some(encryption::open(self, "ref", rel, &b)?)),
             Ok(b) => Ok(Some(b)),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(e).with_context(|| format!("cannot read {rel} in the horse store")),
@@ -516,7 +756,10 @@ mod tests {
         bytes.truncate(bytes.len() - 2);
         std::fs::write(&p, bytes).unwrap();
         let err = s.get(&h).unwrap_err().to_string();
-        assert!(err.contains("damaged"), "{err}");
+        assert!(
+            err.contains("authentication") || err.contains("damaged"),
+            "{err}"
+        );
     }
 
     #[test]

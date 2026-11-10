@@ -16,8 +16,6 @@ use super::wire;
 use crate::profile::Profile;
 use anyhow::{bail, Context as _, Result};
 use serde_json::{json, Value};
-use std::io::Write;
-use std::os::unix::fs::OpenOptionsExt;
 
 /// The approval and sandbox settings of the plain run.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -146,29 +144,19 @@ pub fn ledger_line(method: &str, params: &Value, answer: &Answer, policy: &Polic
 
 /// Append a line to `approvals/<session>.jsonl` of the store, and sync it.
 pub fn append_ledger(store: &crate::horse::Store, session: &str, line: &Value) -> Result<()> {
-    let dir = store.root().join("approvals");
-    crate::privfs::dir(&dir).with_context(|| format!("cannot create {}", dir.display()))?;
-    let path = dir.join(format!("{session}.jsonl"));
-    let mut f = std::fs::OpenOptions::new()
-        .append(true)
-        .create(true)
-        .mode(crate::privfs::FILE_MODE)
-        .open(&path)
-        .with_context(|| format!("cannot open {}", path.display()))?;
-    let mut b = serde_json::to_vec(line)?;
+    let _lock = store.lock()?;
+    let path = format!("approvals/{session}.jsonl");
+    let mut b = store.read_ref(&path)?.unwrap_or_default();
+    b.extend_from_slice(&serde_json::to_vec(line)?);
     b.push(b'\n');
-    f.write_all(&b)
-        .and_then(|_| f.sync_data())
-        .with_context(|| format!("cannot write {}", path.display()))
+    store.for_session(session)?.write_ref(&path, &b)
 }
 
 /// The ledger of a session, oldest first.
 pub fn ledger(store: &crate::horse::Store, session: &str) -> Result<Vec<Value>> {
-    let path = store.root().join(format!("approvals/{session}.jsonl"));
-    let b = match std::fs::read(&path) {
-        Ok(b) => b,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => return Err(e).with_context(|| format!("cannot read {}", path.display())),
+    let path = format!("approvals/{session}.jsonl");
+    let Some(b) = store.read_ref(&path)? else {
+        return Ok(Vec::new());
     };
     b.split(|c| *c == b'\n')
         .filter(|l| !l.is_empty())

@@ -1,0 +1,74 @@
+#!/usr/bin/python3
+"""A fake, offline Claude trainer used only by the real sandbox test."""
+import json
+import os
+import re
+import subprocess
+import sys
+
+if sys.argv[1:2] == ["--version"]:
+    print("2.1.317 (Claude Code)")
+    sys.exit(0)
+if sys.argv[1:2] == ["--help"]:
+    print("-p --print --dangerously-skip-permissions --input-format --output-format")
+    sys.exit(0)
+args = sys.argv
+native = args[args.index("--session-id") + 1]
+dirname = re.sub(r"[^A-Za-z0-9]", "-", os.getcwd())
+folder = os.path.join(os.environ["HOME"], ".claude", "projects", dirname)
+os.makedirs(folder, exist_ok=True)
+transcript = os.path.join(folder, native + ".jsonl")
+parent = None
+
+def row(kind, message, uid):
+    global parent
+    value = {"parentUuid": parent, "isSidechain": False, "type": kind,
+             "message": message, "uuid": uid, "timestamp": "2026-01-01T00:00:00Z",
+             "userType": "external", "entrypoint": "sdk-cli", "cwd": os.getcwd(),
+             "sessionId": native, "version": "2.1.317", "gitBranch": "main"}
+    with open(transcript, "a", encoding="utf-8") as stream:
+        stream.write(json.dumps(value) + "\n")
+    parent = uid
+
+def emit(value):
+    print(json.dumps(value), flush=True)
+
+for number, line in enumerate(sys.stdin, 1):
+    request = json.loads(line)
+    message = request["message"]
+    prompt = " ".join(item.get("text", "") for item in message.get("content", []) if item.get("type") == "text")
+    emit({"type": "system", "subtype": "init", "session_id": native})
+    row("user", message, "user-" + str(number))
+    if "Review the target run independently" in prompt:
+        print("fake trainer: review received", file=sys.stderr, flush=True)
+        match = re.search(r'id "([A-Za-z0-9_-]+)"', prompt)
+        if not match:
+            sys.exit(21)
+        try:
+            with open("canary", "w", encoding="utf-8") as canary:
+                canary.write("changed")
+            sys.exit(22)
+        except OSError:
+            pass
+        print("fake trainer: write refused", file=sys.stderr, flush=True)
+        mount = "/dev/paddock/horse/peek/trainer"
+        files = [os.path.join(root, name) for root, _, names in os.walk(mount) for name in names]
+        if not files or any(b"walk the horse" in open(path, "rb").read() for path in files):
+            sys.exit(23)
+        print("fake trainer: mount checked", file=sys.stderr, flush=True)
+        peek = subprocess.run(["paddock-host", "peek", "--grant", "trainer", "grep", "walk the horse"], capture_output=True, stdin=subprocess.DEVNULL, timeout=15)
+        print("fake trainer: peek completed", file=sys.stderr, flush=True)
+        if peek.returncode != 0 or b"walk the horse" not in peek.stdout:
+            print("fake trainer: peek failed: " + peek.stderr.decode("utf-8", "replace"), file=sys.stderr, flush=True)
+            sys.exit(24)
+        item = {"text": "check the remaining work", "confidence": 0.9}
+        reply = json.dumps({"id": match.group(1), "severe": True, "drift": item,
+                            "waste": item, "risks": item, "next_steps": [item], "stop": item})
+    else:
+        reply = "ready"
+    answer = {"id": "msg_" + str(number), "type": "message", "role": "assistant",
+              "model": "fake", "content": [{"type": "text", "text": reply}], "stop_reason": "end_turn"}
+    print("fake trainer: replying", file=sys.stderr, flush=True)
+    emit({"type": "assistant", "message": answer, "session_id": native, "uuid": "assistant-" + str(number)})
+    row("assistant", answer, "assistant-" + str(number))
+    emit({"type": "result", "subtype": "success", "is_error": False, "session_id": native})

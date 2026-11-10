@@ -13,9 +13,10 @@ pub(crate) enum DnaCmd {
         #[arg(long, value_name = "HASH")]
         at: Option<String>,
     },
-    /// Set the DNA of a horse from a TOML file, or restore an earlier DNA
-    /// by its hash. Each running session gets the new DNA at its next safe
-    /// point.
+    /// Set the DNA of a horse from a TOML file or a hash, and hot-load it.
+    ///
+    /// SOURCE is a TOML file, or the hash of an earlier DNA. Each running
+    /// session gets the new DNA at its next safe point.
     Set {
         horse: String,
         /// A DNA TOML file, or the hash of an earlier DNA.
@@ -24,10 +25,12 @@ pub(crate) enum DnaCmd {
     /// List the DNA events of a horse, root first, with their hashes.
     History { horse: String },
     /// Set the DNA of a horse back to an earlier hash (see `history`).
+    ///
     /// The history stays, and running sessions get the DNA as one entry.
     Revert { horse: String, hash: String },
-    /// Graft published DNA (registry://org/name@version) into a horse. The
-    /// trust policy and the compatibility check come first.
+    /// Graft published DNA (registry://org/name@version) into a horse.
+    ///
+    /// The trust policy and the compatibility check come first.
     Use {
         horse: String,
         reference: String,

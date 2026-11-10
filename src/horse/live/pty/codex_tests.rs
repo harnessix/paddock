@@ -4,6 +4,7 @@
 //! the oldest inbox entry when the session is at a safe point.
 
 use super::*;
+use crate::horse::codex as codec;
 use crate::horse::live::codex::fake::{message, meta, rollout_path, row, write_rollout};
 use crate::horse::live::pty::tests::{codex_idle, BUSY, IDLE};
 use crate::horse::Binding;
@@ -438,4 +439,28 @@ fn an_idle_screen_with_no_stop_ever_says_so_once_and_keeps_the_entries() {
     // The stop comes late: the entry goes out.
     w.stop(Some(THREAD));
     assert!(pass(&w, &mut c));
+}
+
+#[test]
+fn unknown_nested_content_blocks_typing_and_keeps_the_entry() {
+    let (w, mut c) = world(timing(), true);
+    w.first_turn();
+    w.append(&[row(
+        "response_item",
+        json!({"type":"message","role":"user","content":[{"type":"future_content"}]}),
+    )]);
+    let entry = w.store.queue_append(&w.session, "user", "queued").unwrap();
+    w.screen(IDLE);
+    w.stop(Some(THREAD));
+    c.pump(Duration::from_millis(1)).unwrap();
+    assert!(c.safe(Some(&w.session)));
+    let error = c.deliver(Input::Entry(entry.clone())).unwrap_err();
+    assert!(format!("{error:#}").contains("line 6"));
+    assert!(w.typed().is_empty());
+    assert!(w
+        .store
+        .inbox(&w.session)
+        .unwrap()
+        .iter()
+        .any(|e| e.id == entry.id));
 }

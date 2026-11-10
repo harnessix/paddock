@@ -87,7 +87,7 @@ impl RecoveryCfg {
 
     pub fn parse(text: &str) -> Result<Self> {
         // Other tables belong to other readers; read only [recovery].
-        let v: toml::Value = toml::from_str(text)?;
+        let v: toml::Value = crate::manifest::user_config_doc(text)?;
         let raw: RawCfg = match v.get("recovery") {
             Some(r) => r.clone().try_into()?,
             None => RawCfg::default(),

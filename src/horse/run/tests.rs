@@ -191,7 +191,7 @@ fn setup_holds_dsh_and_headless_claude_and_codex_live() {
     assert_eq!(custody(claude::HARNESS, false, channel), Custody::Channel);
     assert_eq!(custody(claude::HARNESS, false, "2.1.1"), Custody::Pty);
     assert_eq!(custody(codex::HARNESS, false, codex::VERSION), Custody::Pty);
-    assert_eq!(custody("agy", true, "1"), Custody::FinalOnly);
+    assert_eq!(custody("opencode", true, "1"), Custody::FinalOnly);
     assert_eq!(Custody::Live.label(), "live");
     assert_eq!(Custody::FinalOnly.label(), "final-only");
     assert_eq!(Custody::Channel.label(), "channel");
@@ -396,4 +396,29 @@ fn the_run_end_report_of_a_pty_custody() {
     assert_eq!(r["landed"], 1);
     assert_eq!(r["not_landed"], json!(["e2"]));
     assert_eq!(r["other_stops"], 0);
+}
+
+#[test]
+fn final_codex_ingest_uses_run_reader_not_rollout_producer() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("store")).unwrap();
+    let home = dir.path().join("home");
+    let run = begin(&store, codex::HARNESS, "0.167.0", None, None).unwrap();
+    let before = snapshot::Snapshot::capture(&home, codex::HARNESS).unwrap();
+    let id = "01900000-0000-7000-8000-000000000001";
+    let path = home.join(format!(
+        ".codex/sessions/2026/01/01/rollout-2026-01-01T00-00-00-{id}.jsonl"
+    ));
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &path,
+        include_bytes!("../../../tests/fixtures/horse/codex-rollouts/0.166.0.jsonl"),
+    )
+    .unwrap();
+    final_only::end(&store, &run, "test", &home, &before, true, None).unwrap();
+    let session = store.session(&run.session).unwrap();
+    assert_eq!(session.binding.version, "0.166.0");
+    assert_eq!(session.codex_reader_version.as_deref(), Some("0.167.0"));
+    let end = events(&store, &run.horse).unwrap();
+    assert_eq!(end.last().unwrap()["version"], "0.167.0");
 }

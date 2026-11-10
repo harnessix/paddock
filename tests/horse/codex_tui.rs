@@ -32,7 +32,7 @@ pub(crate) fn pty() -> (std::fs::File, std::fs::File) {
 
 #[test]
 fn a_codex_tui_in_horse_mode_gets_entries_between_turns_through_the_relay() {
-    use paddock::horse::{run, Store};
+    use paddock::horse::run;
     use std::process::Stdio;
 
     if !sandbox_works() {
@@ -106,7 +106,7 @@ fn a_codex_tui_in_horse_mode_gets_entries_between_turns_through_the_relay() {
         }
     };
     let session = || {
-        Store::open(&store_path)
+        store_helpers::open(&store_path)
             .ok()?
             .sessions()
             .ok()?
@@ -118,7 +118,7 @@ fn a_codex_tui_in_horse_mode_gets_entries_between_turns_through_the_relay() {
     // Turn 1 thinks for 3 s: the entry is queued while it runs.
     paddock(root, &["append", &sid, "--text", "from the test"]);
     let landed = || {
-        Store::open(&store_path)
+        store_helpers::open(&store_path)
             .and_then(|s| s.deliveries(&sid))
             .is_ok_and(|d| {
                 d.iter()
@@ -156,7 +156,7 @@ fn a_codex_tui_in_horse_mode_gets_entries_between_turns_through_the_relay() {
         stderr.contains("paddock types them into the TUI"),
         "{stderr}"
     );
-    let store = Store::open(&store_path).unwrap();
+    let store = store_helpers::open(&store_path).unwrap();
     let s = store.session(&sid).unwrap();
     assert_eq!(
         s.binding.native_id.as_deref(),

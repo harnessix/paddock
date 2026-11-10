@@ -1,5 +1,5 @@
 //! Run ownership, native transcript attribution and final reconciliation.
-use super::{claude, codex, dsh, live, run, Store};
+use super::{agy, claude, codex, dsh, grok, live, run, Store};
 use crate::{build::Built, env::HostEnv};
 use anyhow::{bail, Context, Result};
 use run::setup::Custody;
@@ -34,6 +34,17 @@ pub fn end(l: Option<Lifecycle>, code: i32, out: Option<String>) -> Option<Strin
     out.or_else(|| said.map(|c| c.text()))
 }
 
+fn mail_relay_enabled(
+    custody: Custody,
+    profile: &crate::profile::Profile,
+    harness: &str,
+    version: &str,
+) -> bool {
+    custody == Custody::Pty
+        && live::pty::PtyIdle::of(profile, harness, version)
+            .is_ok_and(|idle| idle.submit_key.len() == 1 && idle.bracketed_paste)
+}
+
 /// Capture the private home after shadow setup and before launching the sandbox.
 pub fn start(env: &HostEnv, built: &mut Built) -> Result<Option<Lifecycle>> {
     if !built.horse {
@@ -46,6 +57,8 @@ pub fn start(env: &HostEnv, built: &mut Built) -> Result<Option<Lifecycle>> {
         "dsh" => (dsh::VERSION, dsh::check_version),
         "claude" => (claude::VERSION, claude::check_version),
         "codex" => (codex::VERSION, codex::check_version),
+        "grok" => (grok::VERSION, grok::check_version),
+        "agy" => (agy::VERSION, agy::check_version),
         other => bail!("no pinned horse codec for {other}"),
     };
     let output = std::process::Command::new(&built.harness_exe)
@@ -88,11 +101,22 @@ pub fn start(env: &HostEnv, built: &mut Built) -> Result<Option<Lifecycle>> {
     if built.spec.harness == dsh::HARNESS {
         live::sdk_command(&mut built.spec.command, &built.profile.launch.args)?;
     }
-    let store = Store::open(&super::root(env))?;
+    let store = Store::open_host(env)?;
+    // `--horse-id`: the run continues that horse and its newest session.
+    let continued = match &built.spec.intent.horse_id {
+        Some(id) => Some(run::resume::continue_dsh(
+            &store,
+            id,
+            &built.spec.harness,
+            &home.join(".dsh/sessions"),
+        )?),
+        None => None,
+    };
     // A hitched child: the parent's paddock made its session already.
     let hitched = built.spawn.as_ref().and_then(|c| c.hitch.clone());
-    let rh = match &hitched {
-        Some(h) => {
+    let rh = match (&continued, &hitched) {
+        (Some(c), _) => c.run.clone(),
+        (None, Some(h)) => {
             let rh = h.run();
             let session = store.session(&rh.session)?;
             anyhow::ensure!(
@@ -101,11 +125,15 @@ pub fn start(env: &HostEnv, built: &mut Built) -> Result<Option<Lifecycle>> {
             );
             rh
         }
-        None => {
+        (None, None) => {
             // A plain spawn from a run in horse mode: a child horse.
-            let parent = match &built.spawn {
-                Some(c) => run::by_sandbox::find(&store, &c.parent)?.map(|p| p.horse),
-                None => None,
+            let parent = if super::device::peek::grant::is_trainer(&store, &built.spec.id)? {
+                None
+            } else {
+                match &built.spawn {
+                    Some(c) => run::by_sandbox::find(&store, &c.parent)?.map(|p| p.horse),
+                    None => None,
+                }
             };
             run::begin(
                 &store,
@@ -117,16 +145,34 @@ pub fn start(env: &HostEnv, built: &mut Built) -> Result<Option<Lifecycle>> {
         }
     };
     run::by_sandbox::record(&store, &built.spec.id, &rh)?;
+    // Mail needs one atomic submit byte and a single paste for multiline text.
+    let mail_pty = mail_relay_enabled(custody, &built.profile, &built.spec.harness, expected);
+    if mail_pty {
+        if let Some(mut info) = crate::mail::run_info(env, &built.spec.id) {
+            info.delivery = Some(crate::mail::deliver::RELAY.into());
+            info.horse_session = Some(rh.session.clone());
+            crate::mail::set_run_info(env, &info)?;
+            crate::mail::deliver::queue_relay(env, &built.spec.id, &rh.session)?;
+        }
+    }
     run::record_event(&store, &rh, "run.begin", &built.spec.id, json!({}))?;
     if rh.harness == dsh::HARNESS {
         let cfg = live::settings(env)?;
-        let main = format!("session-{}", super::uuid_v4()?);
-        store.lock()?.bind_native(&rh.session, &main)?;
+        let resumed = continued.and_then(|c| c.native);
+        let resume = resumed.is_some();
+        let main = match resumed {
+            Some(native) => native,
+            None => {
+                let main = format!("session-{}", super::uuid_v4()?);
+                store.lock()?.bind_native(&rh.session, &main)?;
+                main
+            }
+        };
         live::arm(live::Setup {
             store: store.clone(),
             horse: rh.horse.clone(),
             main,
-            resume: false,
+            resume,
             sessions_root: Some(home.join(".dsh/sessions")),
             cwd: built.spec.workdir.display().to_string(),
             provider: cfg.dsh_provider,
@@ -154,11 +200,13 @@ pub fn start(env: &HostEnv, built: &mut Built) -> Result<Option<Lifecycle>> {
 
 impl Lifecycle {
     pub(crate) fn access(&self) -> Result<super::device::Access> {
-        Ok(super::device::Access {
-            store: Store::open(&super::root(&self.env))?,
+        let access = super::device::Access {
+            store: Store::open_host(&self.env)?,
             horse: self.run.horse.clone(),
             session: self.run.session.clone(),
-        })
+        };
+        super::device::peek::issue_own(&access, &self.sandbox)?;
+        Ok(access)
     }
     fn finish(&self) -> Result<()> {
         let (custody, report) = match self.custody {
@@ -168,7 +216,7 @@ impl Lifecycle {
             }
             Custody::FinalOnly => (Ok(()), None),
         };
-        let store = Store::open(&super::root(&self.env))?;
+        let store = Store::open_host(&self.env)?;
         let ok = self.exit == Some(0);
         run::final_only::end(
             &store,
@@ -191,11 +239,17 @@ impl Drop for Lifecycle {
 }
 
 #[cfg(test)]
+mod agy_tests;
+#[cfg(test)]
 mod channel_tests;
+#[cfg(test)]
+mod grok_tests;
 #[cfg(test)]
 mod live_tests;
 #[cfg(test)]
 mod pty_tests;
+#[cfg(test)]
+mod resume_tests;
 #[cfg(test)]
 mod tests;
 

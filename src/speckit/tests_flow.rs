@@ -280,6 +280,21 @@ fn two_parallel_tasks_start_at_once_each_claimed_once_with_results_and_checkboxe
     assert_eq!(status.result["ready"], serde_json::json!(["T002"]));
     assert_eq!(status.result["feature"], "001-albums");
     assert!(status.result["text"].as_str().unwrap().contains("T001"));
+
+    // `paddock-host gauge`: the state log saw the review, and the pass is
+    // evidence.
+    let g = b.handle(&req("spec", serde_json::json!({"action": "gauge"})));
+    assert_eq!(g.status, Status::Done, "{}", g.message);
+    assert_eq!(g.result["api_version"], "paddock.gauge/v1");
+    assert_eq!(g.result["sources"][0], "paddock's task state log");
+    assert!(g.result["snapshots"].as_u64().unwrap() >= 3, "{}", g.result);
+    assert_eq!(g.result["counts"]["done"], 1);
+    assert_eq!(g.result["counts"]["proven"], 1);
+    let text = g.result["text"].as_str().unwrap();
+    assert!(
+        text.contains("done         1 of 3 tasks: 1 with evidence"),
+        "{text}"
+    );
 }
 
 #[test]

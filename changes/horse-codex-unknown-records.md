@@ -1,0 +1,1 @@
+Codex rollout reading and unchanged projection retain unknown records. Fork, swap, and delivery check history before changing it and report the line when a record or nested variant is unknown or unverified. Some known Codex record types are conservatively refused for mutation until their semantics are validated.

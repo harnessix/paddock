@@ -366,7 +366,7 @@ fn hold_a_mount() {
 }
 
 #[test]
-fn horse_mount_reads_views_and_writes_memory() {
+fn horse_mount_exposes_ciphertext_and_refuses_content_writes() {
     use crate::horse::{self as hs, live::fake};
     let env = HostEnv::detect().unwrap();
     if let Err(why) = fuse_available(&env) {
@@ -409,28 +409,16 @@ fn horse_mount_reads_views_and_writes_memory() {
         return;
     };
     let path = mount_path.join(format!("horse/self/sessions/{session}/log"));
-    assert!(std::fs::read_to_string(path)
-        .unwrap()
-        .contains("user hello"));
-    std::fs::write(mount_path.join("horse/self/memory/note"), b"hello memory").unwrap();
-    assert_eq!(
-        std::fs::read(mount_path.join("horse/self/memory/note")).unwrap(),
-        b"hello memory"
-    );
-    assert!(std::fs::write(mount_path.join("horse/self/id"), b"bad").is_err());
-    // dna.toml: a whole write hot-loads at close, an invalid one is EINVAL.
+    let ciphertext = std::fs::read(path).unwrap();
+    assert!(!ciphertext
+        .windows(b"user hello".len())
+        .any(|w| w == b"user hello"));
     let dna = mount_path.join("horse/self/dna.toml");
-    std::fs::write(&dna, b"[traits]\nstyle = \"careful\"\n").unwrap();
-    assert!(std::fs::read_to_string(&dna).unwrap().contains("careful"));
-    let before = store.horse(&h.id).unwrap().dna;
-    // The error comes from close(2), which a dropped File ignores.
-    let mut f = std::fs::File::create(&dna).unwrap();
-    std::io::Write::write_all(&mut f, b"not = [toml").unwrap();
-    let fd = std::os::fd::IntoRawFd::into_raw_fd(f);
-    assert_eq!(unsafe { libc::close(fd) }, -1);
-    assert_eq!(
-        std::io::Error::last_os_error().raw_os_error(),
-        Some(libc::EINVAL)
-    );
-    assert_eq!(store.horse(&h.id).unwrap().dna, before);
+    let ciphertext = std::fs::read(&dna).unwrap();
+    assert!(!ciphertext
+        .windows(b"[traits]".len())
+        .any(|w| w == b"[traits]"));
+    assert!(std::fs::write(&dna, b"[traits]\nstyle = \"careful\"\n").is_err());
+    assert!(std::fs::write(mount_path.join("horse/self/memory/note"), b"hello memory").is_err());
+    assert!(std::fs::write(mount_path.join("horse/self/id"), b"bad").is_err());
 }

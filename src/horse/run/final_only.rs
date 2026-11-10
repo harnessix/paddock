@@ -1,6 +1,8 @@
 //! Final attribution of every changed native transcript to this run's horse.
 use super::setup::Custody;
-use super::{claude, codex, dsh, record_event_locked, snapshot::Snapshot, RunHorse, Store};
+use super::{
+    agy, claude, codex, dsh, grok, record_event_locked, snapshot::Snapshot, RunHorse, Store,
+};
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
 use std::path::Path;
@@ -32,6 +34,28 @@ pub fn end(
         Ok(n)
     };
     let had = count()?;
+    let mut changed = changed;
+    if run.harness == grok::HARNESS {
+        // One ingest per session folder, whichever of its files changed.
+        changed = changed
+            .into_iter()
+            .filter_map(|p| p.parent().map(std::path::Path::to_path_buf))
+            .collect();
+        changed.sort();
+        changed.dedup();
+    }
+    if run.harness == agy::HARNESS {
+        // One ingest per database, whether it or its WAL changed.
+        changed = changed
+            .into_iter()
+            .map(|p| match p.to_str().and_then(|s| s.strip_suffix("-wal")) {
+                Some(db) => std::path::PathBuf::from(db),
+                None => p,
+            })
+            .collect();
+        changed.sort();
+        changed.dedup();
+    }
     for path in changed {
         let native = match run.harness.as_str() {
             claude::HARNESS => claude::read_file(&path)?.session_id,
@@ -49,15 +73,23 @@ pub fn end(
                     .to_owned()
             }
             dsh::HARNESS => dsh::read_file(&path)?.header.id,
+            grok::HARNESS => grok::read_summary_id(&path)?,
+            agy::HARNESS => agy::read_id(&path)?,
             _ => bail!("no codec for {}", run.harness),
         };
-        let existing = store.sessions()?.into_iter().find(|s| {
-            s.horse == run.horse
-                && s.binding.harness == run.harness
-                && s.binding.native_id.as_deref() == Some(&native)
-        });
-        if existing.is_none() && store.session(&run.session)?.binding.native_id.is_none() {
-            // A new run owns a new session even when it resumes the same native id.
+        let matches: Vec<_> = store
+            .sessions()?
+            .into_iter()
+            .filter(|s| {
+                s.binding.harness == run.harness && s.binding.native_id.as_deref() == Some(&native)
+            })
+            .collect();
+        let own = matches.iter().any(|s| s.horse == run.horse);
+        let main_bound = store.session(&run.session)?.binding.native_id.is_some();
+        if !own && !matches.is_empty() && main_bound {
+            continue;
+        }
+        if !own && !main_bound {
             locked.update_session(&run.session, |s| s.binding.native_id = Some(native.clone()))?;
         }
         let actual = match run.harness.as_str() {
@@ -66,10 +98,20 @@ pub fn end(
                     .session
             }
             codex::HARNESS => {
-                codex::ingest_run_locked(&locked, &path, &main.binding.version, &run.horse)?.session
+                let reader = main
+                    .codex_reader_version
+                    .as_deref()
+                    .context("Codex reader version is unavailable for final ingest")?;
+                codex::ingest_run_locked(&locked, &path, reader, &run.horse)?.session
             }
             dsh::HARNESS => {
                 dsh::ingest_run_locked(&locked, &path, &main.binding.version, &run.horse)?.session
+            }
+            grok::HARNESS => {
+                grok::ingest_run_locked(&locked, &path, &main.binding.version, &run.horse)?.session
+            }
+            agy::HARNESS => {
+                agy::ingest_run_locked(&locked, &path, &main.binding.version, &run.horse)?.session
             }
             _ => unreachable!(),
         };
@@ -92,3 +134,6 @@ pub fn end(
     super::adapt_after(&locked, run, run_ok, &end);
     Ok(())
 }
+
+#[cfg(test)]
+mod ownership_tests;

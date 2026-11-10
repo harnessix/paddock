@@ -21,6 +21,25 @@ pub struct Access {
 
 impl Access {
     pub fn tree(&self) -> Result<Tree> {
+        let mut tree = self.plain_tree()?;
+        for (path, entry) in &mut tree.paths {
+            if let Entry::File(bytes) = entry {
+                if path == ctl::PATH
+                    || path == "self/id"
+                    || path == "self/dna"
+                    || path == "self/edges"
+                    || path == "self/instances"
+                    || (path.starts_with("self/sessions/") && path.ends_with("/head"))
+                {
+                    continue;
+                }
+                *bytes = self.store.seal_mount(&self.horse, path, bytes)?;
+            }
+        }
+        Ok(tree)
+    }
+
+    fn plain_tree(&self) -> Result<Tree> {
         build(
             &self.store,
             &self.horse,
@@ -69,6 +88,9 @@ pub fn build(store: &Store, horse: &str, grants: &Grants) -> Result<Tree> {
         t.file(DNA_PATH, dna.encode());
     }
     metadata::add(store, &h, &mut t)?;
+    // Always there: a write without a grant is EACCES, not ENOENT.
+    t.file(ctl::PATH, Vec::new());
+    ctl::view::add(store, &h, &mut t)?;
     let mut lineage = String::new();
     for id in &h.sessions {
         if !grants.sessions.contains(id) {
@@ -104,7 +126,15 @@ pub fn build(store: &Store, horse: &str, grants: &Grants) -> Result<Tree> {
         );
         let mut log = String::new();
         let mut jsonl = String::new();
-        for n in store.session_nodes(&s)? {
+        t.dir(&format!("{base}/nodes"));
+        for (index, n) in store.session_nodes(&s)?.into_iter().enumerate() {
+            t.file(
+                &format!(
+                    "{base}/nodes/{}",
+                    peek::node_name(index, &n.meta.kind, n.raw.len() as u64)
+                ),
+                n.raw.clone(),
+            );
             let view = match s.binding.harness.as_str() {
                 "dsh" => dsh::view(&n.raw),
                 "claude" => claude::view(&n.raw),
@@ -158,7 +188,7 @@ pub const DNA_PATH: &str = "self/dna.toml";
 
 /// Whether a sandbox may write this path of the tree.
 pub fn writable(path: &str) -> bool {
-    path.starts_with("self/memory/") || path == DNA_PATH
+    path == ctl::PATH
 }
 
 /// A write of `self/dna.toml`: it hot-loads (`dna::hot_load`). The caller
@@ -176,16 +206,21 @@ pub fn write_memory(store: &Store, horse: &str, name: &str, bytes: &[u8]) -> Res
     }
     let _lock = store.lock()?;
     store.horse(horse)?;
-    let hash = store.put_blob("text/plain", bytes)?;
-    store.write_ref(
+    let scoped = store.for_horse(horse)?;
+    let hash = scoped.put_blob("text/plain", bytes)?;
+    scoped.write_ref(
         &format!("{}/{name}", memory_dir(horse)),
         hash.as_str().as_bytes(),
     )
 }
 
+pub mod ctl;
 mod metadata;
+pub mod peek;
 pub mod registry;
 
+#[cfg(test)]
+mod encrypted_tests;
 #[cfg(test)]
 mod tests;
 
@@ -232,7 +267,7 @@ pub(crate) fn handle(
             write_memory(&setup.store, &setup.horse, name, &bytes)?;
             return Ok(serde_json::json!({"bytes": []}));
         }
-        let tree = setup.tree()?;
+        let tree = setup.plain_tree()?;
         let session = req
             .args
             .get("session")

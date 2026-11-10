@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 /// process.
 pub(super) static ARMS: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-fn fixture(name: &str) -> std::path::PathBuf {
+pub(super) fn fixture(name: &str) -> std::path::PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/horse")
         .join(name)
@@ -48,7 +48,7 @@ fn child_of(b: &mut Built, prompt: &str) {
 
 /// Start the rewritten command of `b` as the sandbox would, with the
 /// pipes that the armed custody takes.
-fn spawn_armed(b: &Built, env: &[(&str, &str)]) -> std::process::Child {
+pub(super) fn spawn_armed(b: &Built, env: &[(&str, &str)]) -> std::process::Child {
     let (hook, _) = crate::horse::live::take_hooks();
     let home = &b.spec.home_src;
     std::fs::create_dir_all(home).unwrap();
@@ -70,7 +70,7 @@ fn spawn_armed(b: &Built, env: &[(&str, &str)]) -> std::process::Child {
     child
 }
 
-fn wait_until(what: &str, mut f: impl FnMut() -> bool) {
+pub(super) fn wait_until(what: &str, mut f: impl FnMut() -> bool) {
     let deadline = Instant::now() + Duration::from_secs(60);
     while !f() {
         assert!(Instant::now() < deadline, "timed out waiting for {what}");
@@ -90,7 +90,7 @@ fn a_headless_claude_run_is_held_live_and_gets_entries_after_a_result() {
         b.stdin.is_none(),
         "the task goes into the inbox, not on stdin"
     );
-    let store = Store::open(&crate::horse::root(&env)).unwrap();
+    let store = Store::open_host(&env).unwrap();
     // The session id is bound before the harness starts.
     let native = store
         .session(&l.run.session)
@@ -176,7 +176,7 @@ fn an_interactive_claude_run_without_a_pty_table_stays_final_only() {
     let l = start(&env, &mut b).unwrap().unwrap();
     assert_eq!(l.custody, Custody::FinalOnly);
     assert_eq!(b.spec.command, before);
-    let store = Store::open(&crate::horse::root(&env)).unwrap();
+    let store = Store::open_host(&env).unwrap();
     assert!(store
         .session(&l.run.session)
         .unwrap()
@@ -239,7 +239,7 @@ fn a_headless_codex_run_is_held_live_and_ends_when_its_inbox_is_empty() {
     let l = start(&env, &mut b).unwrap().unwrap();
     assert_eq!(l.custody, Custody::Live);
     assert_eq!(b.spec.command[1], "app-server");
-    let store = Store::open(&crate::horse::root(&env)).unwrap();
+    let store = Store::open_host(&env).unwrap();
     let session = l.run.session.clone();
     let horse = l.run.horse.clone();
     let mut child = spawn_armed(&b, &[("FAKE_CODEX_STEP", "0")]);
@@ -293,7 +293,7 @@ fn a_custody_that_did_not_start_says_so_in_the_run_end() {
     let (env, mut b) = super::tests::setup(t.path(), "claude", claude::VERSION);
     child_of(&mut b, "do the task");
     let l = start(&env, &mut b).unwrap().unwrap();
-    let store = Store::open(&crate::horse::root(&env)).unwrap();
+    let store = Store::open_host(&env).unwrap();
     let horse = l.run.horse.clone();
     // The sandbox never starts: nobody takes the hook.
     assert_eq!(end(Some(l), 1, None).as_deref(), Some(""));

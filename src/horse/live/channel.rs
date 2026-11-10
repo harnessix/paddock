@@ -702,12 +702,6 @@ impl Live for Custodian {
     }
 
     fn finish(&mut self, _end: End) -> Result<()> {
-        // Hooks that came before the close still count.
-        while let Ok(k) = self.signals.try_recv() {
-            if let Err(e) = self.signal(k.kind) {
-                log::warn!("horse channel: {e:#}");
-            }
-        }
         // The TUI is gone: its transcript is complete now.
         if let Err(e) = self.tail.look() {
             log::warn!("horse channel: {e:#}");

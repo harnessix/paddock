@@ -47,8 +47,8 @@ impl HostPolicy {
         let Ok(text) = std::fs::read_to_string(&file) else {
             return Ok(p);
         };
-        let doc: toml::Value =
-            toml::from_str(&text).with_context(|| format!("{} is invalid", file.display()))?;
+        let doc: toml::Value = crate::manifest::user_config_doc(&text)
+            .with_context(|| format!("{} is invalid", file.display()))?;
         let Some(host) = doc.get("host").and_then(|h| h.as_table()) else {
             return Ok(p);
         };

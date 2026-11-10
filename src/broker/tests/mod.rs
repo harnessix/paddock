@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 mod approval;
 mod borrow;
 mod channel;
+mod ctl;
 #[path = "forge.rs"]
 mod forge_run;
 #[path = "git.rs"]

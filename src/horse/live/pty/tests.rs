@@ -29,6 +29,9 @@ fn the_codex_profile_has_the_table_and_another_version_refuses() {
     assert!(idle.empty_input && idle.bracketed_paste);
     assert_eq!(idle.interrupt_key, b"\x1b");
     assert_eq!(idle.submit_key, b"\r");
+    // The rollout codec and the screen pattern have separate compatibility gates.
+    crate::horse::codex::check_version("0.167.0").unwrap();
+    assert!(crate::horse::codex::check_version("0.168.0").is_err());
     let e = PtyIdle::of(&p, "codex", "0.167.0").unwrap_err();
     assert_eq!(
         format!("{e:#}"),
@@ -177,4 +180,162 @@ fn the_tap_follows_the_screen_and_fails_after_the_relay_ends() {
     Tap::finish(&*tap);
     assert!(!tap.attached());
     assert!(tap.interrupt(&codex_idle()).is_err());
+}
+
+#[test]
+fn mail_stays_unread_when_terminal_write_fails_and_a_hook_can_take_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let (env, store) = super::mail_test_support::setup(dir.path());
+    let horse = store.new_default_horse().unwrap();
+    let session = store
+        .new_session(
+            &horse.id,
+            crate::horse::Binding {
+                harness: crate::horse::codex::HARNESS.into(),
+                native_id: None,
+                version: crate::horse::codex::VERSION.into(),
+                container: crate::horse::codex::CONTAINER.into(),
+            },
+        )
+        .unwrap();
+    super::mail_test_support::link(&env, &session.id);
+    let message = super::mail_test_support::send(&env, "mail that waits");
+    let entry = store.inbox(&session.id).unwrap().pop().unwrap();
+    let tap = PtyTap::with_mail(&env, super::mail_test_support::RUN);
+    let profile = crate::profile::builtin("codex").unwrap();
+    let idle = PtyIdle::of(&profile, "codex", crate::horse::codex::VERSION).unwrap();
+    assert!(super::type_entry(&store, &tap, &idle, &entry)
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        crate::mail::cursor(
+            &env,
+            super::mail_test_support::RUN,
+            crate::mail::Dir::Down,
+            crate::mail::AGENT
+        ),
+        0
+    );
+    assert_eq!(store.inbox(&session.id).unwrap().len(), 1);
+    let taken = crate::mail::deliver::take(
+        &env,
+        super::mail_test_support::RUN,
+        crate::mail::deliver::Via::Stop,
+        crate::mail::deliver::MAX_HOOK_TEXT,
+    )
+    .unwrap();
+    assert_eq!(taken.messages[0].seq, message.seq);
+    assert_eq!(
+        super::type_entry(&store, &tap, &idle, &entry)
+            .unwrap()
+            .unwrap()
+            .0,
+        ""
+    );
+    assert!(store.inbox(&session.id).unwrap().is_empty());
+}
+
+#[test]
+fn a_terminal_that_stops_reading_has_a_write_deadline() {
+    use std::os::fd::RawFd;
+    let (mut master, mut slave): (RawFd, RawFd) = (0, 0);
+    assert_eq!(
+        unsafe {
+            libc::openpty(
+                &mut master,
+                &mut slave,
+                std::ptr::null_mut(),
+                std::ptr::null(),
+                std::ptr::null(),
+            )
+        },
+        0
+    );
+    let mut term = unsafe { std::mem::zeroed::<libc::termios>() };
+    assert_eq!(unsafe { libc::tcgetattr(slave, &mut term) }, 0);
+    unsafe {
+        libc::cfmakeraw(&mut term);
+    }
+    assert_eq!(unsafe { libc::tcsetattr(slave, libc::TCSANOW, &term) }, 0);
+    let flags = unsafe { libc::fcntl(master, libc::F_GETFL) };
+    assert_eq!(
+        unsafe { libc::fcntl(master, libc::F_SETFL, flags | libc::O_NONBLOCK) },
+        0
+    );
+    let start = std::time::Instant::now();
+    let err = super::write_until(
+        master,
+        &vec![b'x'; 1024 * 1024],
+        start + Duration::from_millis(100),
+    )
+    .unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::TimedOut);
+    assert!(start.elapsed() < Duration::from_secs(2));
+    unsafe {
+        libc::close(master);
+        libc::close(slave);
+    }
+}
+
+#[test]
+fn a_failed_mail_write_clears_the_partial_input() {
+    let dir = tempfile::tempdir().unwrap();
+    let (env, store) = super::mail_test_support::setup(dir.path());
+    let horse = store.new_default_horse().unwrap();
+    let session = store
+        .new_session(
+            &horse.id,
+            crate::horse::Binding {
+                harness: crate::horse::codex::HARNESS.into(),
+                native_id: None,
+                version: crate::horse::codex::VERSION.into(),
+                container: crate::horse::codex::CONTAINER.into(),
+            },
+        )
+        .unwrap();
+    super::mail_test_support::link(&env, &session.id);
+    let message = super::mail_test_support::send(&env, "partial input");
+    let entry = store.inbox(&session.id).unwrap().pop().unwrap();
+    let tap = PtyTap::with_mail(&env, super::mail_test_support::RUN);
+    let writes = std::sync::Arc::new(std::sync::Mutex::new(Vec::<Vec<u8>>::new()));
+    let saved = writes.clone();
+    tap.attach_with(24, 80, move |b| {
+        let mut writes = saved.lock().unwrap();
+        writes.push(b.to_vec());
+        if writes.len() == 1 {
+            Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "test timeout",
+            ))
+        } else {
+            Ok(())
+        }
+    });
+    let profile = crate::profile::builtin("codex").unwrap();
+    let idle = PtyIdle::of(&profile, "codex", crate::horse::codex::VERSION).unwrap();
+    assert!(super::type_entry(&store, &tap, &idle, &entry)
+        .unwrap()
+        .is_none());
+    assert_eq!(writes.lock().unwrap().last().unwrap(), b"\x1b[201~\x15");
+    assert_eq!(
+        crate::mail::cursor(
+            &env,
+            super::mail_test_support::RUN,
+            crate::mail::Dir::Down,
+            crate::mail::AGENT
+        ),
+        0
+    );
+    assert_eq!(
+        crate::mail::deliver::take(
+            &env,
+            super::mail_test_support::RUN,
+            crate::mail::deliver::Via::Stop,
+            10000
+        )
+        .unwrap()
+        .messages[0]
+            .seq,
+        message.seq
+    );
 }

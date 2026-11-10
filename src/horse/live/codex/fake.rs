@@ -79,6 +79,7 @@ pub struct Fake {
     pub persist_forks: bool,
     /// Send the items of an ephemeral thread as `rawResponseItem/completed`.
     pub raw_items: bool,
+    pub server_version: &'static str,
     pub seen: Arc<Mutex<Seen>>,
 }
 
@@ -124,7 +125,6 @@ pub fn write_rollout(root: &Path, id: &str, rows: &[Vec<u8>]) -> PathBuf {
 
 /// Take the writer lock of a thread, as Codex does while it holds it.
 fn writer_lock(root: &Path, thread: &str) -> std::fs::File {
-    use std::os::unix::io::AsRawFd;
     let dir = root.parent().unwrap().join("thread-writer-locks");
     std::fs::create_dir_all(&dir).unwrap();
     let f = std::fs::OpenOptions::new()
@@ -133,9 +133,13 @@ fn writer_lock(root: &Path, thread: &str) -> std::fs::File {
         .truncate(false)
         .open(dir.join(format!("{thread}.lock")))
         .unwrap();
-    // SAFETY: flock on an fd that `f` owns.
-    let r = unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-    assert_eq!(r, 0, "the writer lock of thread {thread} is taken");
+    // Another thread of the test process that starts a process can hold a
+    // copy of a lock that its owner closed, for a few milliseconds.
+    let wait = crate::horse::codex::writer_lock::WAIT;
+    assert!(
+        crate::horse::codex::writer_lock::take(&f, wait),
+        "the writer lock of thread {thread} is taken"
+    );
     f
 }
 
@@ -289,7 +293,7 @@ impl<O: Write> Server<O> {
                 self.ok(
                     &id,
                     json!({ "codexHome": "/home/demo/.codex", "platformFamily": "unix",
-                    "platformOs": "linux", "userAgent": format!("codex_cli_rs/{VERSION} (fake)") }),
+                    "platformOs": "linux", "userAgent": format!("paddock/{} (fake)", self.f.server_version) }),
                 );
             }
             wire::THREAD_START => {

@@ -1,7 +1,7 @@
 //! `registry.fetch` through the broker: the card, the ledger row and the
 //! audit line.
 use super::*;
-use crate::horse::registry::{artifact_hash, host as rhost, trust::new_keypair, FileIndex};
+use crate::horse::registry::{artifact_hash, host as rhost, trust::new_keypair};
 use crate::horse::registry::{Manifest, Transport as _};
 
 fn rows(b: &Broker) -> Vec<(String, String)> {
@@ -37,7 +37,9 @@ fn give_horse(b: &Broker, tmp: &Path) -> crate::horse::Hash {
         signature: None,
     };
     m.sign(&key);
-    FileIndex::new("local", rhost::dir(&state).join("local"))
+    crate::horse::registry::configured_for_store(&state, &store)
+        .unwrap()
+        .remove(0)
         .put(&m, &bytes)
         .unwrap();
     b.horse
@@ -111,4 +113,105 @@ fn an_approved_fetch_grafts_and_the_ledger_row_names_the_hash() {
     let audit = std::fs::read_to_string(audit_file(&b.env)).unwrap();
     let line: serde_json::Value = serde_json::from_str(audit.lines().last().unwrap()).unwrap();
     assert_eq!(line["decision"], "allowed once");
+}
+
+#[test]
+fn trainer_broker_denies_approvals_and_all_non_peek_requests() {
+    let (tmp, broker, fixed) = setup(Some(Answer::Once), HostPolicy::default());
+    let store = crate::horse::Store::open(&tmp.path().join("trainer-store")).unwrap();
+    let target = store.new_default_horse().unwrap();
+    let session = store
+        .new_session(
+            &target.id,
+            crate::horse::Binding {
+                harness: "codex".into(),
+                native_id: None,
+                version: "test".into(),
+                container: "test".into(),
+            },
+        )
+        .unwrap();
+    let own = store.new_default_horse().unwrap();
+    let own_session = store
+        .new_session(
+            &own.id,
+            crate::horse::Binding {
+                harness: "codex".into(),
+                native_id: None,
+                version: "test".into(),
+                container: "test".into(),
+            },
+        )
+        .unwrap();
+    crate::horse::device::peek::grant::issue_trainer(
+        &store,
+        &broker.ctx.id,
+        "trainer",
+        &target.id,
+        &session.id,
+        crate::horse::now_ms() + 60_000,
+        100_000,
+    )
+    .unwrap();
+    broker
+        .horse
+        .set(crate::horse::device::Access {
+            store: store.clone(),
+            horse: own.id,
+            session: own_session.id,
+        })
+        .ok()
+        .unwrap();
+    assert_eq!(broker.handle(&fetch()).status, Status::Denied);
+    assert_eq!(broker.handle(&exec(&["true"])).status, Status::Denied);
+    assert_eq!(fixed.asked.load(Ordering::SeqCst), 0);
+    let peek = req(
+        "horse",
+        serde_json::json!({"op":"peek", "command":"ls", "grant":"trainer", "args":[]}),
+    );
+    assert_eq!(broker.handle(&peek).status, Status::Done);
+    crate::horse::device::peek::grant::revoke_one(&store, &broker.ctx.id, "trainer").unwrap();
+    assert_eq!(broker.handle(&fetch()).status, Status::Denied);
+    assert_ne!(broker.handle(&peek).status, Status::Done);
+    assert_eq!(fixed.asked.load(Ordering::SeqCst), 0);
+}
+
+#[test]
+fn worker_trainer_request_reserves_once_and_never_asks() {
+    let (tmp, broker, fixed) = setup(Some(Answer::Once), HostPolicy::default());
+    let store = crate::horse::Store::open(&tmp.path().join("worker-store")).unwrap();
+    let horse = store.new_default_horse().unwrap();
+    let session = store
+        .new_session(
+            &horse.id,
+            crate::horse::Binding {
+                harness: "codex".into(),
+                native_id: None,
+                version: "test".into(),
+                container: "test".into(),
+            },
+        )
+        .unwrap();
+    broker
+        .horse
+        .set(crate::horse::device::Access {
+            store: store.clone(),
+            horse: horse.id,
+            session: session.id,
+        })
+        .ok()
+        .unwrap();
+    let request = req("train", serde_json::json!({"request": 5, "deep": false}));
+    assert_eq!(broker.handle(&request).status, Status::Done);
+    assert_eq!(broker.handle(&request).status, Status::Done);
+    assert_eq!(
+        broker
+            .handle(&req("train", serde_json::json!({"request": 6})))
+            .status,
+        Status::Denied
+    );
+    assert_eq!(fixed.asked.load(Ordering::SeqCst), 0);
+    let state =
+        crate::trainer::triggers::transact(&store, &broker.ctx.id, |state| state.clone()).unwrap();
+    assert_eq!(state.launches, 1);
 }

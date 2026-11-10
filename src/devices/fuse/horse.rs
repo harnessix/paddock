@@ -2,7 +2,6 @@
 use crate::devices::{ledger, DeviceCtx};
 use crate::horse::device::{self, Access, Entry};
 use std::sync::Mutex;
-
 pub(super) const FIRST: u64 = 1 << 40;
 pub(super) struct HorseFs {
     setup: Access,
@@ -10,6 +9,8 @@ pub(super) struct HorseFs {
     paths: Mutex<Vec<String>>,
     /// Open handles of `self/dna.toml` with writes that are not loaded yet.
     dirty: Mutex<std::collections::HashSet<u64>>,
+    /// The answer to the last `self/ctl` command (ctl.rs).
+    ctl_last: Mutex<Vec<u8>>,
 }
 impl HorseFs {
     pub(super) fn new(setup: Access, ctx: DeviceCtx) -> Self {
@@ -18,10 +19,13 @@ impl HorseFs {
             ctx,
             paths: Mutex::new(vec![String::new()]),
             dirty: Mutex::default(),
+            ctl_last: Mutex::default(),
         }
     }
     pub(super) fn tree(&self) -> anyhow::Result<device::Tree> {
-        self.setup.tree()
+        let mut tree = self.setup.tree()?;
+        device::peek::add_mount(&self.setup, &self.ctx.sandbox, &mut tree)?;
+        Ok(tree)
     }
     pub(super) fn path(&self, ino: u64) -> Option<String> {
         self.paths
@@ -42,14 +46,31 @@ impl HorseFs {
         if path.is_empty() {
             return Some(Entry::Dir);
         }
-        self.tree().ok()?.paths.remove(path)
+        match self.tree() {
+            Ok(mut t) => t.paths.remove(path),
+            // The file system answers ENOENT; the log says why.
+            Err(e) => {
+                log::warn!("horse device: cannot build the tree for {path}: {e:#}");
+                None
+            }
+        }
     }
     pub(super) fn write(&self, name: &str, data: &[u8]) -> anyhow::Result<()> {
+        if crate::horse::device::peek::grant::has_trainer(&self.setup.store, &self.ctx.sandbox)
+            .unwrap_or(true)
+        {
+            anyhow::bail!("trainer horse device is read-only");
+        }
         device::write_memory(&self.setup.store, &self.setup.horse, name, data)
     }
     /// Load a whole `self/dna.toml`: invalid DNA is EINVAL and stores
     /// nothing.
     pub(super) fn load_dna(&self, data: &[u8]) -> Result<(), Errno> {
+        if crate::horse::device::peek::grant::has_trainer(&self.setup.store, &self.ctx.sandbox)
+            .unwrap_or(true)
+        {
+            return Err(Errno::EACCES);
+        }
         let text = std::str::from_utf8(data).map_err(|_| Errno::EINVAL)?;
         crate::horse::dna::parse(text).map_err(|_| Errno::EINVAL)?;
         device::write_dna(&self.setup.store, &self.setup.horse, data).map_err(|e| {
@@ -81,9 +102,9 @@ impl HorseFs {
         }
     }
 }
-
 use super::*;
-
+use crate::horse::device::ctl::PATH as CTL;
+mod ctl;
 impl DeviceFs {
     /// Load the writes of a `self/dna.toml` handle, once.
     fn dna_close(&self, fh: u64) -> Result<(), Errno> {
@@ -103,7 +124,6 @@ impl DeviceFs {
         horse.load_dna(&bytes)
     }
 }
-
 impl Filesystem for DeviceFs {
     fn lookup(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEntry) {
         if u64::from(parent) >= horse::FIRST {
@@ -126,10 +146,20 @@ impl Filesystem for DeviceFs {
                 None => reply.error(Errno::ENOENT),
             };
         }
+        let names = self.names();
         let ino = match u64::from(parent) {
             ROOT => None,
             SECRET_DIR_INO => name.to_str().and_then(|n| self.secret_ino(n)),
-            _ => return reply.error(Errno::ENOENT),
+            d => {
+                let found = folders::dir_name(&names, d)
+                    .zip(name.to_str())
+                    .and_then(|(dir, n)| folders::find(&names, Some(&dir), n))
+                    .and_then(|i| self.attr(FIRST_DEVICE_INO + i as u64));
+                return match found {
+                    Some(a) => reply.entry(&TTL, &a, fuser::Generation(0)),
+                    None => reply.error(Errno::ENOENT),
+                };
+            }
         };
         let ino = if ino.is_some() {
             ino
@@ -137,15 +167,15 @@ impl Filesystem for DeviceFs {
             None
         } else if name == "horse" && self.inner.horse.is_some() {
             Some(horse::FIRST)
+        } else if let Some(d) = name.to_str().and_then(|n| folders::dir_ino(&names, n)) {
+            Some(d)
         } else if name == CATALOG {
             Some(CATALOG_INO)
         } else if name == SECRET_DIR && !self.inner.secrets.names().is_empty() {
             Some(SECRET_DIR_INO)
         } else {
-            self.inner
-                .devices
-                .iter()
-                .position(|d| OsStr::new(d.name()) == name)
+            name.to_str()
+                .and_then(|n| folders::find(&names, None, n))
                 .map(|i| FIRST_DEVICE_INO + i as u64)
         };
         match ino.and_then(|i| self.attr(i)) {
@@ -153,14 +183,12 @@ impl Filesystem for DeviceFs {
             None => reply.error(Errno::ENOENT),
         }
     }
-
     fn getattr(&self, _req: &Request, ino: INodeNo, _fh: Option<FileHandle>, reply: ReplyAttr) {
         match self.attr(ino.into()) {
             Some(a) => reply.attr(&TTL, &a),
             None => reply.error(Errno::ENOENT),
         }
     }
-
     /// Only the truncation that `open(O_TRUNC)` and shell redirections do,
     /// on a device file. Nothing else changes.
     #[allow(clippy::too_many_arguments)]
@@ -197,7 +225,7 @@ impl Filesystem for DeviceFs {
                 return reply.error(Errno::EACCES);
             }
             // A write of dna.toml replaces the whole document at close.
-            if let (Some(size), false) = (size, path == device::DNA_PATH) {
+            if let (Some(size), false) = (size, path == device::DNA_PATH || path == CTL) {
                 if size > 1024 * 1024 {
                     return reply.error(Errno::EFBIG);
                 }
@@ -232,7 +260,6 @@ impl Filesystem for DeviceFs {
             None => reply.error(Errno::ENOENT),
         }
     }
-
     fn open(&self, _req: &Request, ino: INodeNo, flags: OpenFlags, reply: ReplyOpen) {
         let ino = u64::from(ino);
         let kind = match ino {
@@ -251,7 +278,9 @@ impl Filesystem for DeviceFs {
                         if flags.acc_mode() != OpenAccMode::O_RDONLY && !writable {
                             return reply.error(Errno::EROFS);
                         }
-                        if writable && path == device::DNA_PATH {
+                        if path == CTL {
+                            bytes = horse.ctl_last();
+                        } else if writable && path == device::DNA_PATH {
                             // A writer gives the whole DNA; it loads at close.
                             bytes.clear();
                         } else if writable && flags.0 & libc::O_TRUNC != 0 {
@@ -297,7 +326,9 @@ impl Filesystem for DeviceFs {
             n if self.attr(n).is_some() && n >= FIRST_DEVICE_INO => {
                 Kind::Device((n - FIRST_DEVICE_INO) as usize)
             }
-            ROOT => return reply.error(Errno::EISDIR),
+            n if n == ROOT || folders::dir_name(&self.names(), n).is_some() => {
+                return reply.error(Errno::EISDIR)
+            }
             _ => return reply.error(Errno::ENOENT),
         };
         let mut h = self.inner.handles.lock().unwrap();
@@ -323,7 +354,6 @@ impl Filesystem for DeviceFs {
             FopenFlags::FOPEN_DIRECT_IO | FopenFlags::FOPEN_NONSEEKABLE,
         );
     }
-
     #[allow(clippy::too_many_arguments)]
     fn write(
         &self,
@@ -344,6 +374,10 @@ impl Filesystem for DeviceFs {
         if let Kind::Horse(path, bytes, writable) = &mut handle.kind {
             if !*writable {
                 return reply.error(Errno::EROFS);
+            }
+            if path == CTL {
+                drop(h);
+                return self.ctl_write(u64::from(fh), data, reply);
             }
             let offset = _offset as usize;
             let Some(end) = offset.checked_add(data.len()).filter(|n| *n <= 1024 * 1024) else {
@@ -380,7 +414,6 @@ impl Filesystem for DeviceFs {
         handle.request.extend_from_slice(data);
         reply.written(data.len() as u32);
     }
-
     #[allow(clippy::too_many_arguments)]
     fn read(
         &self,
@@ -447,9 +480,8 @@ impl Filesystem for DeviceFs {
             }
         }
     }
-
-    /// A close: a written `self/dna.toml` hot-loads now, and an invalid
-    /// one fails the close with EINVAL.
+    /// A close. A device that `sends_on_close` runs a request that was
+    /// written but never read, here, so `echo TEXT > FILE` sends it.
     fn flush(
         &self,
         _req: &Request,
@@ -458,12 +490,49 @@ impl Filesystem for DeviceFs {
         _lock_owner: LockOwner,
         reply: ReplyEmpty,
     ) {
-        match self.dna_close(u64::from(fh)) {
-            Err(e) => reply.error(e),
-            Ok(()) => reply.ok(),
+        if let Err(e) = self.dna_close(u64::from(fh)) {
+            return reply.error(e);
+        }
+        let mut h = self.inner.handles.lock().unwrap();
+        let Some(handle) = h.get_mut(&u64::from(fh)) else {
+            return reply.ok();
+        };
+        let dev = match handle.kind {
+            Kind::Device(i) if matches!(handle.phase, Phase::Collect) => {
+                self.inner.devices[i].clone()
+            }
+            _ => return reply.ok(),
+        };
+        if !dev.sends_on_close() || handle.request.is_empty() {
+            return reply.ok();
+        }
+        let request = std::mem::take(&mut handle.request);
+        handle.phase = Phase::Running;
+        drop(h);
+        let call = Call {
+            sandbox: self.inner.sandbox.clone(),
+            deadline: Instant::now() + Duration::from_secs(dev.info().limits.deadline_seconds),
+            cancel: Arc::new(AtomicBool::new(false)),
+        };
+        let result = dev.call(&call, &request).map(Arc::new);
+        let errno = result.as_ref().err().map(|e| Errno::from_i32(e.errno()));
+        log::info!(
+            "sandbox {}: device {}: request of {} bytes at close, {}",
+            self.inner.sandbox,
+            dev.name(),
+            request.len(),
+            errno.map_or("done".to_string(), |e| format!("error {}", i32::from(e)))
+        );
+        Self::finish(
+            &self.inner,
+            u64::from(fh),
+            result.map_err(|e| Errno::from_i32(e.errno())),
+        );
+        match errno {
+            Some(e) => reply.error(e),
+            None => reply.ok(),
         }
     }
-
     /// The last close. A request that still runs is cancelled.
     fn release(
         &self,
@@ -487,7 +556,6 @@ impl Filesystem for DeviceFs {
         }
         reply.ok();
     }
-
     fn opendir(&self, _req: &Request, ino: INodeNo, _flags: OpenFlags, reply: ReplyOpen) {
         if u64::from(ino) >= horse::FIRST {
             return match self.attr(ino.into()) {
@@ -497,12 +565,13 @@ impl Filesystem for DeviceFs {
                 _ => reply.error(Errno::ENOTDIR),
             };
         }
-        if !matches!(u64::from(ino), ROOT | SECRET_DIR_INO) {
+        if !matches!(u64::from(ino), ROOT | SECRET_DIR_INO)
+            && folders::dir_name(&self.names(), ino.into()).is_none()
+        {
             return reply.error(Errno::ENOTDIR);
         }
         reply.opened(FileHandle(0), FopenFlags::empty());
     }
-
     fn readdir(
         &self,
         _req: &Request,
@@ -564,6 +633,8 @@ impl Filesystem for DeviceFs {
             return reply.ok();
         }
         let names = self.inner.secrets.names();
+        let devs = self.names();
+        let folder = folders::dir_name(&devs, ino.into());
         let mut entries: Vec<(u64, FileType, String)> = match u64::from(ino) {
             ROOT => {
                 let mut e = vec![
@@ -577,10 +648,18 @@ impl Filesystem for DeviceFs {
                 if !names.is_empty() {
                     e.push((SECRET_DIR_INO, FileType::Directory, SECRET_DIR.into()));
                 }
+                for d in folders::dirs(&devs) {
+                    let i = folders::dir_ino(&devs, d).unwrap_or(ROOT);
+                    e.push((i, FileType::Directory, d.into()));
+                }
                 e
             }
             SECRET_DIR_INO => vec![
                 (SECRET_DIR_INO, FileType::Directory, ".".into()),
+                (ROOT, FileType::Directory, "..".into()),
+            ],
+            n if folder.is_some() => vec![
+                (n, FileType::Directory, ".".into()),
                 (ROOT, FileType::Directory, "..".into()),
             ],
             _ => return reply.error(Errno::ENOTDIR),
@@ -592,12 +671,8 @@ impl Filesystem for DeviceFs {
                 }
             }
         } else {
-            for (i, d) in self.inner.devices.iter().enumerate() {
-                entries.push((
-                    FIRST_DEVICE_INO + i as u64,
-                    FileType::RegularFile,
-                    d.name().to_string(),
-                ));
+            for (i, name) in folders::entries(&devs, folder.as_deref()) {
+                entries.push((FIRST_DEVICE_INO + i as u64, FileType::RegularFile, name));
             }
         }
         for (n, (ino, kind, name)) in entries.into_iter().enumerate().skip(offset as usize) {
@@ -607,7 +682,6 @@ impl Filesystem for DeviceFs {
         }
         reply.ok();
     }
-
     fn create(
         &self,
         _req: &Request,
@@ -619,46 +693,10 @@ impl Filesystem for DeviceFs {
         reply: ReplyCreate,
     ) {
         if u64::from(_parent) >= horse::FIRST {
-            let Some(horse) = &self.inner.horse else {
-                return reply.error(Errno::ENOENT);
-            };
-            if horse.path(_parent.into()).as_deref() != Some("self/memory") {
-                return reply.error(Errno::EROFS);
-            }
-            let Some(name) = _name.to_str() else {
-                return reply.error(Errno::EINVAL);
-            };
-            if horse.write(name, &[]).is_err() {
-                return reply.error(Errno::EINVAL);
-            }
-            let path = format!("self/memory/{name}");
-            let ino = horse.ino(&path);
-            let Some(attr) = self.attr(ino) else {
-                return reply.error(Errno::EIO);
-            };
-            let fh = self.inner.next_fh.fetch_add(1, Ordering::SeqCst);
-            self.inner.handles.lock().unwrap().insert(
-                fh,
-                Handle {
-                    kind: Kind::Horse(path, Vec::new(), true),
-                    request: Vec::new(),
-                    phase: Phase::Collect,
-                    waiting: Vec::new(),
-                    cursor: 0,
-                    cancel: Arc::new(AtomicBool::new(false)),
-                },
-            );
-            return reply.created(
-                &TTL,
-                &attr,
-                fuser::Generation(0),
-                FileHandle(fh),
-                FopenFlags::FOPEN_DIRECT_IO,
-            );
+            return reply.error(Errno::EROFS);
         }
         reply.error(Errno::EACCES);
     }
-
     fn mknod(
         &self,
         _req: &Request,
@@ -675,7 +713,6 @@ impl Filesystem for DeviceFs {
             Errno::EACCES
         });
     }
-
     fn mkdir(
         &self,
         _req: &Request,
@@ -691,7 +728,6 @@ impl Filesystem for DeviceFs {
             Errno::EACCES
         });
     }
-
     fn unlink(&self, _req: &Request, _parent: INodeNo, _name: &OsStr, reply: ReplyEmpty) {
         reply.error(if u64::from(_parent) >= horse::FIRST {
             Errno::EROFS
@@ -699,7 +735,6 @@ impl Filesystem for DeviceFs {
             Errno::EACCES
         });
     }
-
     fn rmdir(&self, _req: &Request, _parent: INodeNo, _name: &OsStr, reply: ReplyEmpty) {
         reply.error(if u64::from(_parent) >= horse::FIRST {
             Errno::EROFS
@@ -707,7 +742,6 @@ impl Filesystem for DeviceFs {
             Errno::EACCES
         });
     }
-
     fn rename(
         &self,
         _req: &Request,
@@ -724,7 +758,6 @@ impl Filesystem for DeviceFs {
             Errno::EACCES
         });
     }
-
     fn setxattr(
         &self,
         _req: &Request,

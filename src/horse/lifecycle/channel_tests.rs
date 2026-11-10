@@ -47,7 +47,7 @@ fn an_interactive_claude_run_on_a_channel_version_gets_the_channel() {
         stop.last().unwrap()["hooks"][0]["command"],
         live::channel::STOP_HOOK
     );
-    let store = Store::open(&super::super::root(&env)).unwrap();
+    let store = Store::open_host(&env).unwrap();
     let native = store.session(&l.run.session).unwrap().binding.native_id;
     assert_eq!(native.as_deref(), Some(value(c, "--session-id")));
     // A hook through the broker reaches the custody of this run.

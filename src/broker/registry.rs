@@ -9,10 +9,10 @@ use std::cell::RefCell;
 use std::path::PathBuf;
 use std::time::Duration;
 
-struct BrokerHost<'a> {
-    broker: &'a Broker,
+pub(super) struct BrokerHost<'a> {
+    pub(super) broker: &'a Broker,
     /// The card id and the decision, for the audit line.
-    asked: RefCell<Option<(String, &'static str)>>,
+    pub(super) asked: RefCell<Option<(String, &'static str)>>,
 }
 
 impl Host for BrokerHost<'_> {
@@ -69,6 +69,122 @@ impl Host for BrokerHost<'_> {
             ledger::Ledger::open(&ledger::path(&b.env)).and_then(|l| l.record(&payer, line))
         {
             log::warn!("horse ledger: {e:#}");
+        }
+    }
+}
+
+impl Broker {
+    /// Trainers have no host capabilities except the scoped peek reader.
+    pub(super) fn handle_trainer(&self, req: &Request) -> Option<Response> {
+        let Some(access) = self.horse.get() else {
+            return (req.cap == "train")
+                .then(|| Response::new(super::Status::Disabled, "this run has no horse session"));
+        };
+        let trainer = crate::horse::device::peek::grant::has_trainer(&access.store, &self.ctx.id)
+            .unwrap_or(true);
+        if trainer
+            && !(req.cap == "horse" && req.args.get("op").and_then(|v| v.as_str()) == Some("peek"))
+        {
+            return Some(Response::new(
+                super::Status::Denied,
+                "trainer sandboxes can only request peek reads",
+            ));
+        }
+        if req.cap == "train" {
+            return Some(self.request_trainer(req, access));
+        }
+        if req.cap == "done"
+            && req
+                .args
+                .get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("ok")
+                == "ok"
+        {
+            let text = req.args.get("text").and_then(|v| v.as_str()).unwrap_or("");
+            match crate::trainer::completion::ready(&self.env, &self.ctx.id, text) {
+                Ok(true) => {},
+                Ok(false) => return Some(Response::new(super::Status::Waiting, "a trainer is reviewing this final report; wait for advice and then submit done again")),
+                Err(error) => return Some(Response::new(super::Status::Failed, format!("trainer review: {error:#}"))),
+            }
+        }
+        None
+    }
+
+    fn request_trainer(&self, req: &Request, access: &crate::horse::device::Access) -> Response {
+        use crate::trainer::triggers::{Config, RequestReservation};
+        if req.v != super::PROTOCOL {
+            return Response::new(super::Status::Invalid, "unsupported protocol version");
+        }
+        if req.args.get("op").and_then(|v| v.as_str()) == Some("feedback") {
+            let Some(id) = req.args.get("advice").and_then(|v| v.as_str()) else {
+                return Response::new(super::Status::Invalid, "feedback needs an advice id");
+            };
+            let Some(adopted) = req.args.get("adopted").and_then(|v| v.as_bool()) else {
+                return Response::new(
+                    super::Status::Invalid,
+                    "feedback needs an adoption decision",
+                );
+            };
+            let note = req.args.get("note").and_then(|v| v.as_str()).unwrap_or("");
+            return match crate::trainer::learning::feedback(
+                &access.store,
+                &self.ctx.id,
+                id,
+                adopted,
+                note,
+            ) {
+                Ok(()) => Response::done(serde_json::json!({"recorded": true})),
+                Err(error) => Response::new(super::Status::Failed, format!("{error:#}")),
+            };
+        }
+        let Some(id) = req.args.get("request").and_then(|v| v.as_u64()) else {
+            return Response::new(super::Status::Invalid, "trainer request needs an id");
+        };
+        let deep = req
+            .args
+            .get("deep")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let config = match Config::load(&self.env) {
+            Ok(config) => config,
+            Err(error) => return Response::new(super::Status::Failed, format!("{error:#}")),
+        };
+        let reserved = crate::trainer::triggers::transact(&access.store, &self.ctx.id, |state| {
+            state.reserve_request(id, crate::horse::now_ms(), &config)
+        });
+        match reserved {
+            Ok(RequestReservation::Already) => Response::done(serde_json::json!({"queued":true})),
+            Ok(RequestReservation::Capped) => Response::new(
+                super::Status::Denied,
+                "trainer frequency cap or budget reached",
+            ),
+            Err(error) => Response::new(super::Status::Failed, format!("{error:#}")),
+            Ok(RequestReservation::Reserved) => {
+                let env = self.env.clone();
+                let run = self.ctx.id.clone();
+                std::thread::spawn(move || {
+                    if let Err(error) = crate::trainer::sandbox::run_reserved(
+                        &env,
+                        &run,
+                        None,
+                        deep,
+                        "worker requested review",
+                    ) {
+                        log::warn!("requested trainer failed: {error:#}");
+                        let _ = crate::mail::append(
+                            &env,
+                            &run,
+                            crate::mail::Dir::Up,
+                            crate::mail::Message::event(
+                                "trainer-failed",
+                                format!("trainer request failed: {error:#}"),
+                            ),
+                        );
+                    }
+                });
+                Response::done(serde_json::json!({"queued":true}))
+            }
         }
     }
 }

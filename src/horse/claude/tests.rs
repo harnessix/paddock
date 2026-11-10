@@ -303,8 +303,8 @@ fn a_rewrite_of_a_big_file_keeps_the_dropped_rows() {
     assert_eq!(load(&frows).unwrap().leaf, "a1");
 }
 
-/// What `--fork-session` writes for the same path, as the research reads
-/// it: the rows with the new session id and no fork marker.
+/// What `--fork-session` writes for the same path, as Claude Code
+/// writes it: the rows with the new session id and no fork marker.
 fn native_fork_session(parent: &[Vec<u8>], uuids: &[&str], sid: &str) -> Vec<Vec<u8>> {
     let mut out = Vec::new();
     for u in uuids {

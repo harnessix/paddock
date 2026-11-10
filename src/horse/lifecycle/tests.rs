@@ -49,7 +49,7 @@ pub(super) fn setup(dir: &Path, harness: &str, version: &str) -> (HostEnv, Built
 #[test]
 fn disabled_never_opens_store_and_unsupported_fails_closed() {
     let t = tempfile::tempdir().unwrap();
-    let (env, mut b) = setup(t.path(), "agy", "1");
+    let (env, mut b) = setup(t.path(), "opencode", "1");
     assert!(start(&env, &mut b).unwrap().is_none());
     assert!(!super::super::root(&env).exists());
     b.horse = true;
@@ -57,7 +57,7 @@ fn disabled_never_opens_store_and_unsupported_fails_closed() {
         .err()
         .unwrap()
         .to_string()
-        .contains("no pinned horse codec for agy"));
+        .contains("no pinned horse codec for opencode"));
     assert!(!super::super::root(&env).exists());
 }
 
@@ -77,7 +77,7 @@ fn claude_attributes_multiple_transcripts() {
     }
     let horse = lifecycle.run.horse.clone();
     drop(lifecycle);
-    let store = Store::open(&super::super::root(&env)).unwrap();
+    let store = Store::open_host(&env).unwrap();
     assert_eq!(store.horses().unwrap().len(), 1);
     assert_eq!(store.horse(&horse).unwrap().sessions.len(), 2);
     let events = run_events(&store, &horse).unwrap();
@@ -95,7 +95,7 @@ fn dsh_final_ingest_uses_the_live_horse() {
     let (env, mut b) = setup(t.path(), "dsh", dsh::VERSION);
     b.horse = true;
     let lifecycle = start(&env, &mut b).unwrap().unwrap();
-    let store = Store::open(&super::super::root(&env)).unwrap();
+    let store = Store::open_host(&env).unwrap();
     let native = store
         .session(&lifecycle.run.session)
         .unwrap()
@@ -134,7 +134,7 @@ fn resumed_transcript_belongs_to_each_runs_own_horse() {
     std::fs::write(&path, format!("{}{}", row("one"), row("two"))).unwrap();
     let horse2 = second.run.horse.clone();
     drop(second);
-    let store = Store::open(&super::super::root(&env)).unwrap();
+    let store = Store::open_host(&env).unwrap();
     for (horse, count) in [(horse1, 1), (horse2, 2)] {
         let sessions = store.horse(&horse).unwrap().sessions;
         assert_eq!(sessions.len(), 1);
@@ -161,7 +161,7 @@ fn codex_attributes_new_transcript() {
     std::fs::write(dir.join(format!("rollout-2026-11-04T00-00-00-{id}.jsonl")), format!("{{\"type\":\"session_meta\",\"payload\":{{\"id\":\"{id}\",\"cli_version\":\"{}\"}}}}\n", codex::VERSION)).unwrap();
     let horse = lifecycle.run.horse.clone();
     drop(lifecycle);
-    let store = Store::open(&super::super::root(&env)).unwrap();
+    let store = Store::open_host(&env).unwrap();
     let sessions = store.horse(&horse).unwrap().sessions;
     assert_eq!(sessions.len(), 1);
     assert_eq!(
@@ -216,7 +216,7 @@ fn a_hitched_child_runs_in_the_session_its_parent_made() {
     let (env, mut parent) = setup(t.path(), "claude", claude::VERSION);
     parent.horse = true;
     let parent_lifecycle = start(&env, &mut parent).unwrap().unwrap();
-    let store = Store::open(&super::super::root(&env)).unwrap();
+    let store = Store::open_host(&env).unwrap();
     let hitched = wire::begin(&store, &parent_lifecycle.run, "claude").unwrap();
     let (_, mut child) = setup(t.path(), "claude", claude::VERSION);
     child.horse = true;
@@ -277,7 +277,7 @@ fn a_plain_spawn_from_a_horse_run_inherits_the_parent_dna() {
     let (env, mut parent) = setup(t.path(), "claude", claude::VERSION);
     parent.horse = true;
     let parent_lifecycle = start(&env, &mut parent).unwrap().unwrap();
-    let store = Store::open(&super::super::root(&env)).unwrap();
+    let store = Store::open_host(&env).unwrap();
     let parent_horse = parent_lifecycle.run.horse.clone();
     dna::hot_load(&store, &parent_horse, "[traits]\nstyle = \"short\"\n").unwrap();
     let (_, mut child) = setup(t.path(), "claude", claude::VERSION);
@@ -298,11 +298,11 @@ fn a_plain_spawn_from_a_horse_run_inherits_the_parent_dna() {
     let d = dna::get(&store, &store.horse(&child_horse).unwrap().dna).unwrap();
     assert_eq!(d.origin.parent.as_deref(), Some(parent_horse.as_str()));
     assert_eq!(d.traits["style"].value, "short");
-    // The device of the child shows the inherited DNA.
+    // The device contains ciphertext, while the host store has the inherited DNA.
     let tree = child_lifecycle.access().unwrap().tree().unwrap();
     match &tree.paths[crate::horse::device::DNA_PATH] {
         crate::horse::device::Entry::File(b) => {
-            assert!(String::from_utf8_lossy(b).contains("short"))
+            assert!(!String::from_utf8_lossy(b).contains("short"))
         }
         e => panic!("{e:?}"),
     }
@@ -353,7 +353,7 @@ fn a_headless_codex_run_gets_the_app_server_and_its_task_in_the_inbox() {
     );
     // The task goes to the custody, not to the stdin of the sandbox.
     assert_eq!(b.stdin, None);
-    let store = Store::open(&super::super::root(&env)).unwrap();
+    let store = Store::open_host(&env).unwrap();
     let inbox = store.inbox(&lifecycle.run.session).unwrap();
     assert_eq!(inbox.len(), 2, "{inbox:?}");
     assert_eq!(inbox[0].role, "system");
@@ -377,11 +377,47 @@ fn an_interactive_codex_run_keeps_its_command_and_final_only_custody() {
     let lifecycle = start(&env, &mut b).unwrap().unwrap();
     assert_eq!(lifecycle.custody, run::setup::Custody::FinalOnly);
     assert_eq!(b.spec.command, before);
-    let store = Store::open(&super::super::root(&env)).unwrap();
+    let store = Store::open_host(&env).unwrap();
     let horse = lifecycle.run.horse.clone();
     drop(lifecycle);
     assert_eq!(
         run_events(&store, &horse).unwrap()[1]["custody"],
         "final-only"
     );
+}
+
+#[test]
+fn mail_relay_requires_a_pinned_single_paste_and_atomic_submit() {
+    let mut profile = crate::profile::builtin("codex").unwrap();
+    let version = crate::horse::codex::VERSION;
+    assert!(mail_relay_enabled(Custody::Pty, &profile, "codex", version));
+    assert!(!mail_relay_enabled(
+        Custody::FinalOnly,
+        &profile,
+        "codex",
+        version
+    ));
+    assert!(!mail_relay_enabled(
+        Custody::Pty,
+        &profile,
+        "codex",
+        "different"
+    ));
+    let table = profile.horse.as_mut().unwrap().pty.as_mut().unwrap();
+    table.bracketed_paste = false;
+    assert!(!mail_relay_enabled(
+        Custody::Pty,
+        &profile,
+        "codex",
+        version
+    ));
+    let table = profile.horse.as_mut().unwrap().pty.as_mut().unwrap();
+    table.bracketed_paste = true;
+    table.submit_key = "up".into();
+    assert!(!mail_relay_enabled(
+        Custody::Pty,
+        &profile,
+        "codex",
+        version
+    ));
 }

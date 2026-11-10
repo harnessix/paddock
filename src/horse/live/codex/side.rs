@@ -176,6 +176,13 @@ impl<W: Write> Codex<W> {
         // The fork copies the thread as it is: its head must be current.
         self.ingest()?;
         let st = self.ctx.store.clone();
+        let path = super::find_rollout(&self.ctx.sessions_root, &thread)
+            .context("no Codex rollout available for fork")?;
+        if let Err(e) = crate::horse::codex::check_delivery_file(&path)
+            .and_then(|()| crate::horse::codex::check_mutation_session(&st, &self.ctx.session))
+        {
+            return self.side_answer(r, Some(format!("{e:#}")));
+        }
         let s = st.session(&self.ctx.session)?;
         let Some(head) = s.head.clone() else {
             let e = format!("session {} has no rows to fork", s.id);
@@ -314,7 +321,17 @@ impl<W: Write> Codex<W> {
             Some(id) => format!("response:{id}"),
             None => format!("live:{k}"),
         };
-        let h = st.put_live(&ORIGIN, s.head.as_ref(), &key, &raw)?;
+        let reader = self
+            .reader_version
+            .as_deref()
+            .context("missing Codex reader version")?;
+        let origin = Origin {
+            version: reader,
+            ..ORIGIN
+        };
+        let h = st
+            .for_session(&s.session)?
+            .put_live(&origin, s.head.as_ref(), &key, &raw)?;
         s.head = Some(h.clone());
         st.update_session(&s.session, |x| x.head = Some(h))?;
         Ok(k)

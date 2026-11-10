@@ -38,6 +38,20 @@ pub fn child_main(env: &HostEnv, job_file: &Path) -> Result<i32> {
 
 fn run_child(env: &HostEnv, job: &Job, prompt: Vec<u8>, result: &mut ChildResult) -> Result<()> {
     let c = &job.ceiling;
+    let trainer = if c.horse {
+        let store = crate::horse::Store::open_host(env)?;
+        crate::horse::device::peek::grant::is_trainer(&store, &job.sandbox_id)?
+    } else {
+        false
+    };
+    if trainer
+        && (job.role != super::Role::Reviewer
+            || c.network != crate::spec::Network::None
+            || c.auth != format!("isolated:trainer-{}", job.sandbox_id)
+            || job.hitch.is_some())
+    {
+        bail!("trainer sandbox settings are not restricted");
+    }
     let factory = crate::profile::HarnessFactory::new(env)?;
     let harness = factory.create(&job.harness)?;
     let oneshot = harness
@@ -45,7 +59,6 @@ fn run_child(env: &HostEnv, job: &Job, prompt: Vec<u8>, result: &mut ChildResult
         .oneshot
         .clone()
         .with_context(|| format!("the {} profile has no [oneshot] command", job.harness))?;
-    crate::storage::guard::before_run(env, Some(&c.repo), true)?;
     let opts = crate::build::Options {
         harness: job.harness.clone(),
         project: Some(c.repo.clone()),
@@ -56,7 +69,7 @@ fn run_child(env: &HostEnv, job: &Job, prompt: Vec<u8>, result: &mut ChildResult
         // harness's own variables pass.
         inherit_env: Some(false),
         auth: Some(c.auth.clone()),
-        worktree: true,
+        worktree: !trainer,
         child: Some(ChildPlan {
             id: job.sandbox_id.clone(),
             manifest: c.manifest.clone(),
@@ -64,15 +77,41 @@ fn run_child(env: &HostEnv, job: &Job, prompt: Vec<u8>, result: &mut ChildResult
             base_from: c.head_from.clone(),
             base: job.base.clone(),
             role: job.role,
+            trainer,
         }),
         args: job.pick.args(&oneshot),
         ..Default::default()
     };
     let mut built = crate::build::build_with(env, &opts, harness)?;
     built.horse = c.horse;
+    if trainer {
+        built.spec.intent.horse_id = None;
+        // The trainer can inspect the target's current files, including dirty
+        // changes, but only through a read-only mount. Its private home stays
+        // writable so the harness can keep its own state.
+        crate::trainer::sandbox::restrict_mounts(&mut built.spec, &c.head_from);
+    }
     let wt = built.worktree.clone();
     if let Some(w) = &wt {
         result.base = w.base.clone();
+    }
+    if built.horse {
+        // Preserve the original task and the guard's effective masks in the
+        // encrypted store before the per-run prompt is removed.
+        let anchor = crate::trainer::anchor::Anchor {
+            goal: String::from_utf8_lossy(&prompt).into_owned(),
+            base: wt.as_ref().map(|w| w.base.clone()),
+            hidden: crate::trainer::anchor::hidden_for(env, &built),
+            ceiling: None,
+        };
+        if let Err(error) = crate::horse::Store::open_host(env)
+            .and_then(|store| crate::trainer::anchor::save(&store, &job.sandbox_id, &anchor))
+        {
+            log::warn!(
+                "cannot record trainer anchor for {}: {error:#}",
+                job.sandbox_id
+            );
+        }
     }
     let outcome = (|| -> Result<crate::run::Outcome> {
         let backend = crate::run::select_backend(env, &built)?;
@@ -131,15 +170,6 @@ fn run_child(env: &HostEnv, job: &Job, prompt: Vec<u8>, result: &mut ChildResult
             })
             .unwrap_or_default();
         result.stat = tail(&stat, MAX_STAT).0;
-        // Nothing to review: the worktree and the branch go at once.
-        if commits == 0 && uncommitted == Some(0) {
-            if let Err(e) = crate::worktree::reclaim_if_empty(env, w) {
-                log::warn!(
-                    "cannot remove the empty worktree {}: {e:#}",
-                    w.path.display()
-                );
-            }
-        }
     }
     let o = outcome?;
     result.exit_code = Some(o.code);
@@ -150,6 +180,22 @@ fn run_child(env: &HostEnv, job: &Job, prompt: Vec<u8>, result: &mut ChildResult
 }
 
 impl super::Spawner {
+    /// A child that did not start leaves the list. When it was hitched, its
+    /// parent gets that result now: the parent's run waits for a result of
+    /// each hitched child, and this child sends none.
+    pub(super) fn forget(&self, id: &str, why: &anyhow::Error) {
+        let removed = self.children.lock().unwrap().remove(id);
+        let Some(hitched) = removed.and_then(|e| e.hitch) else {
+            return;
+        };
+        let text = format!("failed: the child did not start: {why:#}");
+        let sent = crate::horse::Store::open_host(&self.env)
+            .and_then(|st| crate::horse::hitch::wire::finish_once(&st, &hitched, &text));
+        if let Err(e) = sent {
+            log::warn!("spawn {id}: cannot queue the result to the parent: {e:#}");
+        }
+    }
+
     /// The end of a hitched child: its result goes to the parent's session,
     /// unless the child's own `paddock-host done` already sent it.
     pub(super) fn hitch_end(
@@ -164,7 +210,7 @@ impl super::Spawner {
             text.push('\n');
             text.push_str(r.output.trim_end());
         }
-        let sent = crate::horse::Store::open(&crate::horse::root(&self.env))
+        let sent = crate::horse::Store::open_host(&self.env)
             .and_then(|st| crate::horse::hitch::wire::finish_once(&st, hitched, &text));
         match sent {
             Ok(Some(_)) => log::info!("spawn {}: the result goes to the parent's horse", s.id),

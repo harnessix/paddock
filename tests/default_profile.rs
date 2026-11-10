@@ -180,3 +180,163 @@ fn a_container_backend_refuses_the_default_profile() {
     let runs = root.join("data/paddock/shadow/runs");
     assert_eq!(std::fs::read_dir(&runs).map(|r| r.count()).unwrap_or(0), 0);
 }
+
+#[test]
+fn codex_mcp_filter_changes_only_the_shadow_copy() {
+    let tmp = common::tempdir();
+    let root = tmp.path();
+    if !common::bwrap_works() || !overlay_works(root) {
+        eprintln!("skipped: bwrap cannot start with an overlay here");
+        return;
+    }
+    for d in [
+        "cfg/paddock/harness.d",
+        "home/.codex",
+        "p/.codex",
+        "run",
+        "tools/bin",
+    ] {
+        std::fs::create_dir_all(root.join(d)).unwrap();
+    }
+    std::fs::set_permissions(
+        root.join("run"),
+        std::os::unix::fs::PermissionsExt::from_mode(0o700),
+    )
+    .unwrap();
+    let harness = root.join("tools/bin/codex");
+    std::fs::write(&harness, "#!/bin/sh\nif [ \"$1\" = mcp ]; then echo '[{\"name\":\"paddock_probe\",\"enabled\":false}]'; exit 0; fi\nfor arg do [ \"$arg\" = mcp_servers.apple.enabled=false ] && echo yes > seen-override; done\ncat \"$HOME/.codex/config.toml\" > seen-mcp\n").unwrap();
+    std::fs::set_permissions(
+        &harness,
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("p/.codex/config.toml"),
+        "[mcp_servers.apple]\nenabled = true\n",
+    )
+    .unwrap();
+    let config = root.join("home/.codex/config.toml");
+    let original = "[mcp_servers.apple]\ncommand = \"npx\"\nargs = [\"xcodebuildmcp@latest\"]\n[mcp_servers.keep]\ncommand = \"other\"\n";
+    std::fs::write(&config, original).unwrap();
+    std::fs::write(
+        root.join("cfg/paddock/config.toml"),
+        "[devices]\nmount = false\n[kv]\nenabled = false\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("cfg/paddock/harness.d/codex.toml"),
+        "name = \"codex\"\n[locate]\ncommands = [\"codex\"]\n[state]\ndata = [\".codex\"]\n[[mcp]]\nfile = \".codex/config.toml\"\nformat = \"toml\"\npath = [\"mcp_servers\"]\n[[mcp]]\nfile = \".codex/config.toml\"\nin_project = true\nformat = \"toml\"\npath = [\"mcp_servers\"]\n",
+    )
+    .unwrap();
+    let project = root.join("p");
+    let path = std::env::join_paths(std::iter::once(root.join("tools/bin")).chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+    ))
+    .unwrap();
+    let out = cmd(root)
+        .env("PATH", path)
+        .args([
+            "run",
+            "codex",
+            "--profile",
+            "default",
+            "--backend",
+            "bwrap",
+            "--network",
+            "none",
+            "-y",
+        ])
+        .arg(&project)
+        .current_dir(&project)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let seen: toml::Value = std::fs::read_to_string(project.join("seen-mcp"))
+        .unwrap()
+        .parse()
+        .unwrap();
+    if cfg!(target_os = "linux") {
+        assert_eq!(
+            std::fs::read_to_string(project.join("seen-override")).unwrap(),
+            "yes\n"
+        );
+    }
+    assert!(seen["mcp_servers"]["apple"].get("enabled").is_none());
+    assert!(seen["mcp_servers"]["keep"].get("enabled").is_none());
+    assert_eq!(std::fs::read_to_string(config).unwrap(), original);
+}
+
+#[test]
+fn gemini_mcp_filter_keeps_project_config_untouched() {
+    let tmp = common::tempdir();
+    let root = tmp.path();
+    if !common::bwrap_works() || !overlay_works(root) {
+        eprintln!("skipped: bwrap cannot start with an overlay here");
+        return;
+    }
+    for d in ["cfg/paddock/harness.d", "home/.gemini", "p/.gemini", "run"] {
+        std::fs::create_dir_all(root.join(d)).unwrap();
+    }
+    std::fs::set_permissions(
+        root.join("run"),
+        std::os::unix::fs::PermissionsExt::from_mode(0o700),
+    )
+    .unwrap();
+    let user_config = root.join("home/.gemini/settings.json");
+    let project_config = root.join("p/.gemini/settings.json");
+    let user_original =
+        r#"{"mcpServers":{"apple":{"command":"xcodebuildmcp"}},"mcp":{"excluded":["prior"]}}"#;
+    let project_original = r#"{"mcpServers":{"other":{"command":"other"}}}"#;
+    std::fs::write(&user_config, user_original).unwrap();
+    std::fs::write(&project_config, project_original).unwrap();
+    std::fs::write(
+        root.join("p/paddock.toml"),
+        "[mcp.servers.other]\nstart = \"never\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        root.join("cfg/paddock/config.toml"),
+        "[devices]\nmount = false\n[kv]\nenabled = false\n",
+    )
+    .unwrap();
+    std::fs::write(root.join("cfg/paddock/harness.d/gemini.toml"), "name = \"gemini\"\n[locate]\ncommands = [\"sh\"]\n[launch]\nargs = [\"-c\", \"cat $HOME/.gemini/settings.json > seen-mcp\"]\n[state]\ndata = [\".gemini\"]\n[[mcp]]\nfile = \".gemini/settings.json\"\npath = [\"mcpServers\"]\n[[mcp]]\nfile = \".gemini/settings.json\"\nin_project = true\npath = [\"mcpServers\"]\n").unwrap();
+    let project = root.join("p");
+    let out = cmd(root)
+        .args([
+            "run",
+            "gemini",
+            "--profile",
+            "default",
+            "--backend",
+            "bwrap",
+            "--network",
+            "none",
+            "-y",
+        ])
+        .arg(&project)
+        .current_dir(&project)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let seen: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(project.join("seen-mcp")).unwrap()).unwrap();
+    let exclusions = seen["mcp"]["excluded"].as_array().unwrap();
+    assert!(exclusions.contains(&serde_json::json!("prior")));
+    assert!(exclusions.contains(&serde_json::json!("other")));
+    if cfg!(target_os = "linux") {
+        assert!(exclusions.contains(&serde_json::json!("apple")));
+    }
+    assert_eq!(std::fs::read_to_string(user_config).unwrap(), user_original);
+    assert_eq!(
+        std::fs::read_to_string(project_config).unwrap(),
+        project_original
+    );
+}

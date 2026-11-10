@@ -10,18 +10,26 @@
 //!
 //! The store folder is 0700 and is never mounted into a sandbox.
 
+pub mod agy;
 pub mod claude;
 pub mod codex;
+mod crypto;
 pub mod device;
 pub mod dna;
 pub mod dsh;
+pub mod grok;
 pub mod guard;
 pub mod hitch;
 pub mod inbox;
+pub(crate) mod jsonl;
+pub mod keys;
 pub mod lifecycle;
 pub mod lineage;
 pub mod live;
+pub mod migrate;
 pub mod registry;
+#[cfg(test)]
+pub(crate) mod rewrite_check;
 pub mod run;
 pub mod session;
 pub mod store;

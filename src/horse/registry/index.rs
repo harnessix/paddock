@@ -38,6 +38,7 @@ pub trait Transport {
 pub struct FileIndex {
     pub name: String,
     pub root: PathBuf,
+    protected: Option<crate::horse::Store>,
 }
 
 fn check_path(org: &str, name: &str) -> Result<()> {
@@ -92,6 +93,30 @@ impl FileIndex {
         FileIndex {
             name: name.into(),
             root: root.into(),
+            protected: None,
+        }
+    }
+
+    fn read_record(&self, path: &Path) -> Result<Option<Vec<u8>>> {
+        let Some(bytes) = read_opt(path)? else {
+            return Ok(None);
+        };
+        match &self.protected {
+            Some(store) => {
+                let rel = path.strip_prefix(&self.root)?.to_string_lossy();
+                Ok(Some(store.open_registry(&rel, &bytes)?))
+            }
+            None => Ok(Some(bytes)),
+        }
+    }
+
+    fn write_record(&self, path: &Path, bytes: &[u8]) -> Result<bool> {
+        match &self.protected {
+            Some(store) => {
+                let rel = path.strip_prefix(&self.root)?.to_string_lossy();
+                write_once(path, &store.seal_registry(&rel, bytes)?)
+            }
+            None => write_once(path, bytes),
         }
     }
 
@@ -150,7 +175,7 @@ impl Transport for FileIndex {
             bail!("{version:?} is not a version");
         }
         let path = self.manifest_path(org, name, version);
-        let Some(b) = read_opt(&path)? else {
+        let Some(b) = self.read_record(&path)? else {
             return Ok(None);
         };
         Manifest::parse(&b)
@@ -183,7 +208,7 @@ impl Transport for FileIndex {
     }
 
     fn object(&self, h: &Hash) -> Result<Option<Vec<u8>>> {
-        read_opt(&self.object_path(h))
+        self.read_record(&self.object_path(h))
     }
 
     fn put(&self, m: &Manifest, bytes: &[u8]) -> Result<()> {
@@ -193,9 +218,10 @@ impl Transport for FileIndex {
         }
         check_artifact(m, bytes)?;
         let obj = self.object_path(&m.hash);
-        if !write_once(&obj, bytes)? {
-            let there =
-                std::fs::read(&obj).with_context(|| format!("cannot read {}", obj.display()))?;
+        if !self.write_record(&obj, bytes)? {
+            let there = self
+                .read_record(&obj)?
+                .with_context(|| format!("cannot read {}", obj.display()))?;
             if artifact_hash(&there) != m.hash {
                 bail!(
                     "index {}: {} is damaged: its content does not have that hash; remove it and publish again",
@@ -205,11 +231,12 @@ impl Transport for FileIndex {
             }
         }
         let path = self.manifest_path(org, name, &m.version);
-        if write_once(&path, &m.encode())? {
+        if self.write_record(&path, &m.encode())? {
             return Ok(());
         }
-        let there =
-            std::fs::read(&path).with_context(|| format!("cannot read {}", path.display()))?;
+        let there = self
+            .read_record(&path)?
+            .with_context(|| format!("cannot read {}", path.display()))?;
         let old = Manifest::parse(&there)
             .with_context(|| format!("index {}: {}", self.name, path.display()))?;
         if old.hash != m.hash {
@@ -252,6 +279,32 @@ pub(super) struct IndexEntry {
 /// the file: one index `local` at `<state_dir>/registry/local`.
 pub fn open_indexes(state_dir: &Path) -> Result<Vec<Box<dyn Transport>>> {
     Ok(configured(state_dir)?
+        .into_iter()
+        .map(|i| Box::new(i) as Box<dyn Transport>)
+        .collect())
+}
+
+/// The default local index is private horse content. User-configured external
+/// indexes retain their transport format for sharing with other hosts.
+pub fn configured_for_store(
+    state_dir: &Path,
+    store: &crate::horse::Store,
+) -> Result<Vec<FileIndex>> {
+    let mut indexes = configured(state_dir)?;
+    let local = state_dir.join("registry/local");
+    for index in &mut indexes {
+        if index.root == local {
+            index.protected = Some(store.clone());
+        }
+    }
+    Ok(indexes)
+}
+
+pub fn open_indexes_for_store(
+    state_dir: &Path,
+    store: &crate::horse::Store,
+) -> Result<Vec<Box<dyn Transport>>> {
+    Ok(configured_for_store(state_dir, store)?
         .into_iter()
         .map(|i| Box::new(i) as Box<dyn Transport>)
         .collect())

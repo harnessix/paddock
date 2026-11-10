@@ -10,8 +10,12 @@ use anyhow::{bail, Context, Result};
 use sha2::{Digest, Sha256};
 use std::io::{IsTerminal, Read};
 mod capped;
+mod end;
 mod host_tools;
+mod mcp;
+mod memory_scope;
 use capped::read_capped;
+use end::EndOfRun;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -538,47 +542,6 @@ pub struct Outcome {
     pub stdout: Option<String>,
 }
 
-/// Cleans the run folder, the borrow copies, kv, devices, the pasture
-/// member and the session record, even when `run` returns early.
-struct EndOfRun<'a> {
-    env: &'a HostEnv,
-    id: String,
-    project: PathBuf,
-    snapshot: bool,
-    quiet: bool,
-    kv: Option<crate::kv::Served>,
-    devices: Option<crate::devices::Devices>,
-    bridge: Option<PathBuf>,
-    harness: String,
-    /// This run copied output to a view log.
-    view: bool,
-}
-
-impl Drop for EndOfRun<'_> {
-    fn drop(&mut self) {
-        // Unmount first: the removal must not walk into the device mount.
-        self.devices.take();
-        if let Some(k) = self.kv.take() {
-            k.finish();
-        }
-        if let Some(base) = &self.bridge {
-            crate::pasture::bridge::forget_member(base, &self.id);
-        }
-        // Before the run folder goes: quota peers keep the end of this run.
-        crate::timer::end_runs(self.env, &self.id, crate::state::now());
-        crate::sockpath::end_run(&self.env.paddock_run(), self.env.uid, &self.id);
-        crate::borrow::end(self.env, &self.id);
-        crate::recover::Session::end(self.env, &self.id);
-        if self.view {
-            crate::detach::record_view_end(self.env, &self.id, &self.harness, &self.project);
-        }
-        if self.snapshot {
-            crate::snapshot::after_end(self.env, &self.project, &self.id, self.quiet);
-        }
-        crate::loft::end_of_run(self.env, &self.project, &self.id, &self.harness);
-    }
-}
-
 /// Run the sandbox. With `capture`, stdout is collected instead of shown.
 pub fn run(
     env: &HostEnv,
@@ -587,24 +550,16 @@ pub fn run(
     capture: bool,
     quiet: bool,
 ) -> Result<Outcome> {
+    let _package_cache_lease = crate::storage::package_cache::RunCache::start(env, &built.spec)?;
+    mcp::validate(env, &built)?;
     // SIGTERM and SIGHUP must leave time for the device mount, login and
     // history copies, and session record to finish.
     // Before launch, paddock notes the signal and stops. After launch it
     // forwards the signal and waits. A frozen sandbox is thawed first.
     crate::loft::push::start_notice(env, &built);
     let forwarding = Forward::install();
-    let mut end = EndOfRun {
-        env,
-        id: built.spec.id.clone(),
-        project: built.spec.project.clone(),
-        snapshot: false,
-        quiet,
-        kv: None,
-        devices: None,
-        bridge: None,
-        harness: built.spec.harness.clone(),
-        view: false,
-    };
+    // The mailbox comes first: the devices serve it.
+    let mut end = EndOfRun::new(env, &built, quiet);
     // `--profile default`: the private snapshot of the data roots, before
     // anything else starts. The run folder goes when `run` returns.
     let shadow = built.spec.shadow.clone().map(ShadowRun);
@@ -774,6 +729,7 @@ pub fn run(
         broker.as_ref(),
     )?;
     start_api_proxy(env, &mut built, backend.name())?;
+    mcp::prepare(env, &mut built, backend.name())?;
     let launch = backend.render(env, &built.spec, interactive)?;
     write_files(&launch)?;
 
@@ -817,6 +773,7 @@ pub fn run(
             log::warn!("{w}");
         }
     }
+    mcp::apply(env, &built, backend.name())?;
     let auth = AuthSync::copy_in(env, &built.profile, &built.auth, &spec.home_src)?;
     // The keeper refreshes the logins that the sandbox got without their
     // refresh token (keeper.rs), as long as this process runs.
@@ -1021,23 +978,7 @@ pub fn run(
     if let Some(r) = relay.as_mut() {
         r.close_slave();
     }
-    let unit = match new_scope {
-        Some(name) => {
-            let moved = crate::freeze::wait_stopped(child.id())
-                .and_then(|_| crate::freeze::move_to_scope(env, child.id(), &name, &spec.id));
-            // It continues in any case; without the scope it only cannot be
-            // frozen.
-            crate::freeze::resume(child.id());
-            match moved {
-                Ok(()) => Some(name),
-                Err(e) => {
-                    log::debug!("no scope for the sandbox, so it cannot be frozen: {e:#}");
-                    None
-                }
-            }
-        }
-        None => inherited,
-    };
+    let unit = memory_scope::establish(env, child.id(), new_scope, inherited, spec, quiet);
     forwarding.set_child(child.id());
     if let Some(l) = view.as_mut() {
         if let Some(o) = child.stdout.take().filter(|_| l.tee_out) {
@@ -1177,6 +1118,7 @@ pub fn run(
     let code = status
         .code()
         .unwrap_or_else(|| 128 + status.signal().unwrap_or(0));
+    end.code = Some(code);
     if let Some(r) = relay.take() {
         r.finish();
     }
@@ -1198,7 +1140,6 @@ pub fn run(
         // steps half way.
         quiet_stdio();
     }
-
     // The children of this sandbox end with it.
     if let Some(s) = &spawner {
         s.stop_all(Duration::from_secs(30));
@@ -1374,8 +1315,7 @@ fn start_broker(
     let spawner = match crate::spawn::SpawnCfg::load(env) {
         Ok(cfg) => {
             let mut ceiling = crate::spawn::Ceiling::of(built, backend, &policy.modes);
-            ceiling.devices =
-                crate::devices::names_for(env, built.test_devices, built.device_ceiling.as_deref());
+            crate::trainer::sandbox::capture_ceiling(env, built, &mut ceiling);
             match crate::spawn::Spawner::new(env, cfg, ceiling, &built.spec.project) {
                 Ok(mut s) => {
                     // The card at a child's time limit waits as long as

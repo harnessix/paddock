@@ -11,15 +11,17 @@ printf '{"jsonrpc":"2.0","id":%s,"result":{"serverInfo":{"name":"fake","version"
 paddock-host horse sessions > sessions.txt
 sid=$(cat sessions.txt)
 test -n "$sid"
-native=$(sed -n 's/.*"native_id":"\([^"]*\)".*/\1/p' "/dev/paddock/horse/self/sessions/$sid/binding")
+# When the device has no binding, show what it has: the test fails below.
+native=$(paddock-host peek binding | sed -n 's/.*"native_id":"\([^"]*\)".*/\1/p')
 test -n "$native"
 printf '{"jsonrpc":"2.0","method":"session.event","params":{"sessionId":"%s","event":{"type":"user/message","seq":0,"time":1793000000200,"data":{"content":[{"type":"text","text":"horse test"}],"source":{"kind":"user"},"role":"user","id":"m1"},"surfaceOp":"append"}}}\n' "$native"
 i=0
 while [ "$i" -lt 100 ]; do
+    paddock-host peek ls | paddock-host peek cat > broker-log.txt
     cat "/dev/paddock/horse/self/sessions/$sid/log" > device-log.txt
-    if [ -s device-log.txt ]; then break; fi
+    if grep -q "horse test" broker-log.txt; then break; fi
     i=$((i + 1))
     sleep 0.05
 done
 test -s device-log.txt
-paddock-host horse log "$sid" > broker-log.txt
+paddock-host peek ls | paddock-host peek cat > broker-log.txt

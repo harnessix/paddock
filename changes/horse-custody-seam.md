@@ -1,2 +1,0 @@
-- Changed: (experimental) The dsh, Claude Code and Codex custodies of horse mode run in one custody loop. In a dsh run, a prompt that you type during a reply now waits until the reply is complete, and Ctrl-D ends the run after the running turn.
-- Changed: (experimental) A Codex custody now writes the live record, so `paddock horse status` shows its thread.

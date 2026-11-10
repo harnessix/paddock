@@ -22,6 +22,8 @@ fn layout(harness: &str) -> Result<&'static str> {
         "dsh" => Ok(".dsh/sessions"),
         "claude" => Ok(".claude/projects"),
         "codex" => Ok(".codex/sessions"),
+        "grok" => Ok(".grok/sessions"),
+        "agy" => Ok(".gemini/antigravity-cli/conversations"),
         _ => bail!("no native transcript layout for {harness}"),
     }
 }
@@ -36,6 +38,19 @@ fn matches(harness: &str, path: &Path) -> bool {
             .strip_suffix(".jsonl")
             .is_some_and(|id| super::super::claude::check_session_id(id).is_ok()),
         "codex" => name.starts_with("rollout-") && name.ends_with(".jsonl"),
+        // Each file of a session folder: the codec reads the folder.
+        "grok" => [
+            super::super::grok::UPDATES_FILE,
+            super::super::grok::CHAT_FILE,
+            super::super::grok::SUMMARY_FILE,
+        ]
+        .contains(&name),
+        // A conversation database, and the WAL beside it that holds its
+        // newest steps until agy checkpoints.
+        "agy" => name
+            .strip_suffix(".db")
+            .or_else(|| name.strip_suffix(".db-wal"))
+            .is_some_and(|id| super::super::claude::check_session_id(id).is_ok()),
         _ => false,
     }
 }
@@ -165,6 +180,6 @@ mod tests {
         let session = dir.join("01934b20-1111-7777-8888-123456789abc.jsonl");
         std::fs::write(&session, b"x").unwrap();
         assert_eq!(snapshot.changed(t.path(), "claude").unwrap(), vec![session]);
-        assert!(Snapshot::capture(t.path(), "grok").is_err());
+        assert!(Snapshot::capture(t.path(), "opencode").is_err());
     }
 }

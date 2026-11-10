@@ -1,1 +1,0 @@
-- (experimental) Horse mode can now hold a Claude Code session over stream-json: paddock starts the session with an id that it picks, delivers inbox entries only between turns, can interrupt a turn, and reads the transcript into the horse store after every turn. `paddock run claude --horse` does not use it yet.

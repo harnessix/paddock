@@ -123,7 +123,8 @@ fn import_locked(locked: &Lock<'_>, r: &Resolved, horse: Option<&str>) -> Result
     if let Some(h) = horse {
         store.horse(h)?;
     }
-    let hash = store.put_blob(MEDIA, &r.bytes)?;
+    let scoped = horse.map(|h| store.for_horse(h)).transpose()?;
+    let hash = scoped.as_ref().unwrap_or(store).put_blob(MEDIA, &r.bytes)?;
     if hash != r.manifest.hash {
         // check_artifact compared the same hash function: a bug.
         bail!(
@@ -194,7 +195,7 @@ pub fn use_in(store: &Store, horse: &str, r: &Resolved) -> Result<Hash> {
     if new.hash() == h.dna {
         return Ok(h.dna);
     }
-    let to = put(store, &new)?;
+    let to = put(&store.for_horse(horse)?, &new)?;
     let why = DnaEvent::Graft {
         donor_horse: reference,
         donor_dna: Some(hash),
@@ -357,7 +358,7 @@ pub fn resolve_on_host(
     r: &Reference,
     only: Option<&str>,
 ) -> Result<Resolved> {
-    use crate::horse::registry::{host, open_indexes, resolve, Trust};
+    use crate::horse::registry::{host, open_indexes_for_store, resolve, Trust};
     if let Version::Hash(h) = &r.version {
         if let Some(bytes) = local_object(store, h)? {
             let manifest = Manifest {
@@ -378,7 +379,7 @@ pub fn resolve_on_host(
             });
         }
     }
-    let mut indexes = open_indexes(state_dir)?;
+    let mut indexes = open_indexes_for_store(state_dir, store)?;
     if let Some(name) = only {
         indexes.retain(|t| t.name() == name);
         if indexes.is_empty() {

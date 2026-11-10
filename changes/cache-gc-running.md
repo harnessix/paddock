@@ -1,0 +1,1 @@
+- Fixed: `paddock gc` removes idle project caches while unrelated sandboxes run, and names the run using a retained cache.

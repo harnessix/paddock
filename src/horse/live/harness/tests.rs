@@ -256,7 +256,7 @@ fn inbox_typed_lines_wait_for_the_main_session_then_queue() {
 }
 
 #[test]
-fn close_waits_for_the_safe_point_after_the_held_lines() {
+fn close_waits_for_the_held_lines_and_the_queued_entries() {
     let mut r = rig(known_busy(), None);
     r.st.queue_append(&r.sid, "user", "stays").unwrap();
     r.ctl.send(Control::User("last".into())).unwrap();
@@ -267,10 +267,15 @@ fn close_waits_for_the_safe_point_after_the_held_lines() {
     wait_for("the held line", || r.delivered().len() == 1);
     assert_eq!(r.delivered()[0], Input::Typed("last".into()));
     assert!(!r.with(|s| s.input_closed));
+    // The entry queued before the end goes out before the close.
+    r.end_turn();
+    wait_for("the queued entry", || r.delivered().len() == 2);
+    assert!(matches!(&r.delivered()[1], Input::Entry(e) if e.text == "stays"));
+    assert!(!r.with(|s| s.input_closed));
     r.end_turn();
     assert_eq!(r.end().unwrap(), End::Closed);
-    assert_eq!(r.delivered().len(), 1, "no entry goes out while closing");
-    assert_eq!(r.st.inbox(&r.sid).unwrap().len(), 1);
+    assert_eq!(r.delivered().len(), 2);
+    assert!(r.st.inbox(&r.sid).unwrap().is_empty());
     assert_eq!(r.with(|s| s.finished), Some(End::Closed));
 }
 
@@ -527,4 +532,57 @@ fn read_user_ends_with_close() {
             Control::Close
         ]
     );
+}
+
+#[test]
+fn trainer_normal_advice_is_released_only_after_turn_end() -> Result<()> {
+    use crate::trainer::advice::{Advice, Finding};
+    let temp = tempfile::tempdir()?;
+    let env = crate::privfs::tests::env_in(temp.path());
+    let store = Store::open_host(&env)?;
+    let horse = store.new_default_horse()?;
+    let session = store.new_session(
+        &horse.id,
+        Binding {
+            harness: "dsh".into(),
+            native_id: Some(NATIVE.into()),
+            version: crate::horse::dsh::VERSION.into(),
+            container: crate::horse::dsh::CONTAINER.into(),
+        },
+    )?;
+    crate::mail::create(&env, "sbx-script", &crate::mail::Starter::host())?;
+    let state = Arc::new(Mutex::new(State {
+        busy: true,
+        known: true,
+        ..Default::default()
+    }));
+    let live = Script {
+        st: store.clone(),
+        sid: session.id,
+        s: state.clone(),
+    };
+    let mut driver = Driver::new(store.clone(), &horse.id, "sbx-script", TICK);
+    driver.show(&live)?;
+    let item = Finding {
+        text: "check the result".into(),
+        confidence: 0.8,
+    };
+    let advice = Advice {
+        id: "item-1".into(),
+        severe: false,
+        drift: item.clone(),
+        waste: item.clone(),
+        risks: item.clone(),
+        next_steps: vec![item.clone()],
+        stop: item,
+    };
+    crate::trainer::advice::deliver::submit(&env, &store, "sbx-script", &advice)?;
+    driver.flush_turn_end(&live);
+    assert!(crate::mail::read(&env, "sbx-script", crate::mail::Dir::Down).is_empty());
+    state.lock().unwrap().busy = false;
+    driver.flush_turn_end(&live);
+    let messages = crate::mail::read(&env, "sbx-script", crate::mail::Dir::Down);
+    assert_eq!(messages.len(), 1);
+    assert!(!messages[0].interrupt);
+    Ok(())
 }

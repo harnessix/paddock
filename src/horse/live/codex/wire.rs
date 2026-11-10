@@ -381,3 +381,21 @@ pub fn thread_of(result: &Value) -> Option<(String, Option<String>)> {
     let t = result.get("thread")?;
     Some((text(t, "id")?, text(t, "cliVersion")))
 }
+
+/// Read the actual app-server version from its initialize response.
+pub(super) fn reader_version(result: &Value) -> Result<String> {
+    let agent = result
+        .get("userAgent")
+        .and_then(Value::as_str)
+        .context("codex app-server did not identify its version")?;
+    let product = agent
+        .split_whitespace()
+        .next()
+        .context("empty codex app-server user agent")?;
+    let (name, version) = product
+        .split_once('/')
+        .context("unrecognized codex app-server user agent")?;
+    anyhow::ensure!(!name.is_empty(), "missing codex app-server user agent name");
+    crate::horse::codex::check_version(version)?;
+    Ok(version.into())
+}

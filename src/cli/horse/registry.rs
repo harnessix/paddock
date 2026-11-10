@@ -9,8 +9,7 @@ use std::path::{Path, PathBuf};
 
 #[derive(Subcommand)]
 pub(crate) enum RegistryCmd {
-    /// The signing key of this host: `new` makes one, `show` prints its
-    /// public key.
+    /// The signing key of this host: `new` makes one, `show` prints it.
     Key {
         #[command(subcommand)]
         cmd: KeyCmd,
@@ -30,8 +29,9 @@ pub(crate) enum RegistryCmd {
         #[arg(value_name = "ORG/NAME")]
         name: Option<String>,
     },
-    /// Resolve a reference: print its manifest, the trust verdict and the
-    /// hash. Nothing is imported. Exits 1 when the trust policy refuses it.
+    /// Print the manifest, the trust verdict and the hash of a reference.
+    ///
+    /// Nothing is imported. Exits 1 when the trust policy refuses it.
     Resolve {
         reference: String,
         /// Search only this index.
@@ -50,8 +50,9 @@ pub(crate) enum RegistryCmd {
         #[arg(long)]
         unsigned: bool,
     },
-    /// Pull an index that is a git checkout (`git pull --ff-only`). A
-    /// plain folder has nothing to pull.
+    /// Pull an index that is a git checkout (`git pull --ff-only`).
+    ///
+    /// A plain folder has nothing to pull.
     Sync { index: String },
 }
 
@@ -130,7 +131,7 @@ pub(crate) fn run(state: &Path, st: &Store, cmd: RegistryCmd) -> Result<i32> {
             host::add_index(state, &name, &path)?;
             println!("index {name} at {}", path.display());
         }
-        RegistryCmd::List { name } => list(state, name.as_deref())?,
+        RegistryCmd::List { name } => list(state, st, name.as_deref())?,
         RegistryCmd::Resolve { reference, index } => {
             let r: Reference = reference.parse()?;
             return Ok(resolve(st, state, &r, index.as_deref()));
@@ -149,7 +150,7 @@ pub(crate) fn run(state: &Path, st: &Store, cmd: RegistryCmd) -> Result<i32> {
             } else {
                 bail!("run paddock horse registry key new first, or publish with --unsigned");
             };
-            let indexes = registry::configured(state)?;
+            let indexes = registry::configured_for_store(state, st)?;
             let target = match &index {
                 Some(n) => indexes.iter().find(|i| &i.name == n).with_context(|| {
                     format!("there is no index {n}: `paddock horse registry list` shows them")
@@ -189,8 +190,8 @@ fn load_key(state: &Path) -> Result<registry::Keypair> {
     trust::load_keypair(&path)
 }
 
-fn list(state: &Path, name: Option<&str>) -> Result<()> {
-    let indexes = registry::configured(state)?;
+fn list(state: &Path, st: &Store, name: Option<&str>) -> Result<()> {
+    let indexes = registry::configured_for_store(state, st)?;
     let Some(name) = name else {
         for i in &indexes {
             println!("index {} {}", i.name, i.root.display());

@@ -19,6 +19,18 @@
 //!   `[horse.pty]` table of its profile: the pty custody
 //!   (live/pty/claude.rs). Its `Stop` and `UserPromptSubmit` hooks give
 //!   the safe points, and paddock types the entries in.
+//! - Grok Build, headless (as `grok --prompt-file` takes its task): live
+//!   over ACP, `grok agent stdio` (live/grok.rs, run/grok_setup.rs).
+//! - Grok Build, interactive, with a `[horse.pty]` table of its profile for
+//!   the pinned version: the pty custody (live/pty/grok.rs). Its `Stop`
+//!   and `UserPromptSubmit` hooks give the safe points, and paddock types
+//!   the entries in.
+//! - agy, headless (as `agy --print` takes its task file): live over
+//!   stream-json (live/agy.rs, run/agy_setup.rs).
+//! - agy, interactive, with a `[horse.pty]` table of its profile for the
+//!   pinned version: the pty custody (live/pty/agy.rs). Its
+//!   `PreInvocation` and `Stop` hooks give the safe points, and paddock
+//!   types the entries in.
 //! - Every other run, and a TUI without its safe-point path: final-only.
 //!   paddock reads the native files when the run ends. A TUI says so in
 //!   one line.
@@ -69,7 +81,8 @@ impl Custody {
 /// The run got its task up front and has no terminal: a spawned child
 /// whose prompt comes on stdin.
 pub fn headless(built: &Built) -> bool {
-    built.spawn.is_some() && built.stdin.is_some()
+    built.spawn.is_some()
+        && (built.stdin.is_some() || super::grok_setup::task_file(built).is_some())
 }
 
 /// The custody of a run of `harness` at `version`. An interactive run
@@ -79,9 +92,11 @@ pub fn headless(built: &Built) -> bool {
 pub fn custody(harness: &str, headless: bool, version: &str) -> Custody {
     match Harness::of(harness) {
         Some(Harness::Dsh) => Custody::Live,
-        Some(Harness::Claude | Harness::Codex) if headless => Custody::Live,
+        Some(Harness::Claude | Harness::Codex | Harness::Grok | Harness::Agy) if headless => {
+            Custody::Live
+        }
         Some(Harness::Claude) if claude::channel_pin(version).is_some() => Custody::Channel,
-        Some(Harness::Claude | Harness::Codex) => Custody::Pty,
+        Some(Harness::Claude | Harness::Codex | Harness::Grok | Harness::Agy) => Custody::Pty,
         None => Custody::FinalOnly,
     }
 }
@@ -98,7 +113,10 @@ pub fn choose(built: &Built, version: &str) -> (Custody, Option<String>) {
 pub fn choose_with(built: &Built, version: &str, terminal: bool) -> (Custody, Option<String>) {
     let headless = headless(built);
     let harness = built.spec.harness.as_str();
-    let tui = matches!(Harness::of(harness), Some(Harness::Claude | Harness::Codex)) && !headless;
+    let tui = matches!(
+        Harness::of(harness),
+        Some(Harness::Claude | Harness::Codex | Harness::Grok | Harness::Agy)
+    ) && !headless;
     let line = |why: &str| {
         format!("horse: no safe-point delivery for {harness} {version} in the TUI{why}; entries stay queued")
     };
@@ -113,6 +131,7 @@ pub fn choose_with(built: &Built, version: &str, terminal: bool) -> (Custody, Op
                 fallback(format!("{e:#}"))
             } else if let Some(why) = match Harness::of(harness) {
                 Some(Harness::Claude) => live::channel::conflict_session(&built.spec.command),
+                Some(Harness::Grok | Harness::Agy) => None,
                 _ => codex::notify::conflict(&built.spec.command),
             } {
                 fallback(why)
@@ -187,6 +206,14 @@ enum Wire {
     ClaudeTui(String, Option<live::pty::PtyIdle>),
     /// A Codex TUI through the relay.
     Pty(live::pty::PtyIdle),
+    /// A headless Grok Build over ACP.
+    Grok(live::grok::Policy),
+    /// A Grok Build TUI through the relay.
+    GrokTui(live::pty::PtyIdle),
+    /// A headless agy over stream-json.
+    Agy,
+    /// An agy TUI through the relay.
+    AgyTui(live::pty::PtyIdle),
 }
 
 /// A live or channel run before its horse exists: the custody and the
@@ -220,6 +247,20 @@ pub fn prepare(built: &mut Built, custody: Custody, version: &str) -> Result<Opt
         live::channel::apply(&mut built.spec.command, &s)?;
         return Ok(Some(Prepared {
             wire: Wire::ClaudeTui(native, Some(idle)),
+            task: None,
+        }));
+    }
+    if custody == Custody::Pty && built.spec.harness == crate::horse::grok::HARNESS {
+        let idle = super::grok_setup::prepare_tui(built, version)?;
+        return Ok(Some(Prepared {
+            wire: Wire::GrokTui(idle),
+            task: None,
+        }));
+    }
+    if custody == Custody::Pty && built.spec.harness == crate::horse::agy::HARNESS {
+        let idle = super::agy_setup::prepare_tui(built, version)?;
+        return Ok(Some(Prepared {
+            wire: Wire::AgyTui(idle),
             task: None,
         }));
     }
@@ -257,6 +298,20 @@ pub fn prepare(built: &mut Built, custody: Custody, version: &str) -> Result<Opt
             let args = live::codex::args(&built.profile)?;
             live_command(&mut built.spec.command, &oneshot, &args)?;
             Wire::Codex(policy)
+        }
+        Some(Harness::Grok) => {
+            let (policy, task) = super::grok_setup::prepare_live(built)?;
+            return Ok(Some(Prepared {
+                wire: Wire::Grok(policy),
+                task: Some(task),
+            }));
+        }
+        Some(Harness::Agy) => {
+            let task = super::agy_setup::prepare_live(built)?;
+            return Ok(Some(Prepared {
+                wire: Wire::Agy,
+                task: Some(task),
+            }));
         }
         Some(Harness::Dsh) | None => return Ok(None),
     };
@@ -305,20 +360,11 @@ pub fn arm(
     env: &HostEnv,
     store: &Store,
     rh: &RunHorse,
-    built: &Built,
+    built: &mut Built,
     p: Prepared,
 ) -> Result<Option<Captured>> {
     let out = Captured::default();
-    // Claude Code names its transcript folder after the real path of its
-    // cwd. Seatbelt runs it on the host's paths, where /tmp and /var are
-    // links on macOS. Under bwrap the workdir is a mount point: as is.
-    let cwd = if cfg!(target_os = "macos") {
-        std::fs::canonicalize(&built.spec.workdir).unwrap_or_else(|_| built.spec.workdir.clone())
-    } else {
-        built.spec.workdir.clone()
-    }
-    .display()
-    .to_string();
+    let cwd = built.spec.workdir.display().to_string();
     let tick = Duration::from_millis(200);
     let task = p.task.unwrap_or_default();
     match p.wire {
@@ -345,7 +391,7 @@ pub fn arm(
                     live::pty::claude::CustodyCtx {
                         tui,
                         idle,
-                        tap: live::pty::PtyTap::new(),
+                        tap: live::pty::PtyTap::with_mail(env, &built.spec.id),
                     },
                     close,
                 ),
@@ -369,7 +415,7 @@ pub fn arm(
                     control,
                     timing: live::pty::Timing::default(),
                     idle,
-                    tap: live::pty::PtyTap::new(),
+                    tap: live::pty::PtyTap::with_mail(env, &built.spec.id),
                 },
                 close,
             );
@@ -378,7 +424,7 @@ pub fn arm(
         Wire::Claude(start) => {
             anyhow::ensure!(rh.harness == claude::HARNESS, "expected a claude run");
             store.lock()?.bind_native(&rh.session, &start.native)?;
-            store.queue_append(&rh.session, "user", &task)?;
+            store.queue_task(&rh.session, &task)?;
             live::arm_claude(live::claude::CustodyCtx {
                 store: store.clone(),
                 horse: rh.horse.clone(),
@@ -395,9 +441,21 @@ pub fn arm(
                 wait: None,
             });
         }
+        Wire::Grok(policy) => {
+            super::grok_setup::arm_live(store, rh, built, policy, &task, &out)?;
+        }
+        Wire::Agy => super::agy_setup::arm_live(store, rh, built, &task, &out)?,
+        Wire::AgyTui(idle) => {
+            super::agy_setup::arm_tui(env, store, rh, built, idle, ledger(env, built))?;
+            return Ok(None);
+        }
+        Wire::GrokTui(idle) => {
+            super::grok_setup::arm_tui(env, store, rh, built, idle, ledger(env, built))?;
+            return Ok(None);
+        }
         Wire::Codex(policy) => {
             anyhow::ensure!(rh.harness == codex::HARNESS, "expected a codex run");
-            store.queue_append(&rh.session, "user", &task)?;
+            store.queue_task(&rh.session, &task)?;
             live::arm_codex(
                 live::codex::CustodyCtx {
                     store: store.clone(),
@@ -463,6 +521,21 @@ pub fn report(done: &live::Done) -> Value {
             "ingest_errors": r.ingest_errors,
             "exited": r.exited,
         }),
+        live::Done::Grok(r) => json!({
+            "session_id": r.native_id,
+            "turns": r.turns,
+            "cancelled": r.cancelled,
+            "deliveries": r.deliveries,
+            "landed": r.landed,
+            "interrupts": r.interrupts,
+            "answers": r.answers,
+            "unknown": r.unknown,
+            "bad": r.malformed,
+            "ingest_errors": r.ingest_errors,
+            "exited": r.exited,
+        }),
+        live::Done::PtyGrok(r) | live::Done::PtyAgy(r) => super::grok_setup::tui_report(r),
+        live::Done::Agy(r) => super::agy_setup::report(r),
         live::Done::Channel(r) => json!({
             "stops": r.stops,
             "prompts": r.prompts,

@@ -84,6 +84,38 @@ pub fn bwrap_works() -> bool {
         .is_ok_and(|s| s.success())
 }
 
+/// A real FUSE mount works here: paddock mounts an empty device file
+/// system in a test folder, the mount answers, and paddock unmounts it.
+/// A host shell with NoNewPrivs has /dev/fuse and fusermount3, but the
+/// setuid helper cannot mount there. The check runs once per test binary.
+#[allow(dead_code)]
+pub fn fuse_mount_works() -> bool {
+    static WORKS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *WORKS.get_or_init(|| {
+        use std::os::unix::fs::MetadataExt;
+        let dir = tempdir();
+        let mp = dir.path().join("dev");
+        let fs = paddock::devices::DeviceFs::new("fuse-check", Vec::new());
+        let Ok(m) = paddock::devices::mount(&mp, fs) else {
+            return false;
+        };
+        // The mount point is on another file system now, and it answers.
+        let dev = |p: &Path| std::fs::metadata(p).map(|m| m.dev()).ok();
+        let mounted = dev(&mp).is_some() && dev(&mp) != dev(dir.path());
+        let answers = std::fs::read_dir(&mp).is_ok();
+        m.unmount();
+        mounted && answers
+    })
+}
+
+/// bubblewrap starts a sandbox and a FUSE mount works, so paddock can give
+/// a sandbox its /dev/paddock. The check runs once per test binary.
+#[allow(dead_code)]
+pub fn sandbox_works() -> bool {
+    static WORKS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *WORKS.get_or_init(|| bwrap_works() && fuse_mount_works())
+}
+
 /// A systemd user instance runs, and the session bus is known.
 #[allow(dead_code)]
 pub fn systemd_user() -> bool {

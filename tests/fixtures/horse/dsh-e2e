@@ -1,0 +1,119 @@
+#!/bin/sh
+# A fake `dsh --profile sdk` for the end-to-end walk of horse mode. It
+# contacts nothing.
+#
+# The session: $FAKE_DSH_NATIVE and $FAKE_DSH_SEQ outside a sandbox,
+# else the binding and the log of /dev/paddock/horse. A session that has
+# rows is resumed: the fake answers `session/resume` first and writes no
+# new first message. A new session in a sandbox spawns a plain claude
+# child and a hitched claude child.
+#
+# Each prompt becomes a user message, then the session is idle again. A
+# prompt with "long turn" in it holds its turn until the file turn-go
+# exists. trace.txt has one line per idle, prompt, turn start and turn
+# end, in order. The fake ends at the end of its input, or at `shutdown`.
+# In a sandbox, whose run has no input, `shutdown` comes at the first idle
+# after the result of the hitched child: the fake answers it after a
+# prompt once the file stop exists.
+set -eu
+export LC_ALL=C
+if [ "${1:-}" = "--version" ]; then
+    echo 'dsh 0.2.1-rc.5'
+    exit 0
+fi
+[ "$1" = --profile ] && [ "$2" = sdk ]
+id_of() { printf '%s' "$1" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p'; }
+answer() { printf '{"jsonrpc":"2.0","id":%s,"result":%s}\n' "$1" "$2"; }
+IFS= read -r request
+answer "$(id_of "$request")" '{"serverInfo":{"name":"fake","version":"1"}}'
+device=/dev/paddock/horse/self
+native=${FAKE_DSH_NATIVE:-}
+if [ -n "$native" ]; then
+    seq=${FAKE_DSH_SEQ:-0}
+    sandbox=
+else
+    sid=$(paddock-host horse sessions | head -n 1)
+    test -n "$sid"
+    printf '%s\n' "$sid" > sessions.txt
+    native=$(paddock-host peek binding | sed -n 's/.*"native_id":"\([^"]*\)".*/\1/p')
+    test -n "$native"
+    seq=$(paddock-host peek ls | grep -c "^[0-9]" || true)
+    sandbox=1
+    # dsh keeps its session files in its home.
+    mkdir -p "$HOME/.dsh/sessions"
+    printf '%s\n' "$PWD" > cwd.txt
+fi
+# message ID TEXT: a user message row; TEXT is a JSON string.
+message() {
+    printf '{"jsonrpc":"2.0","method":"session.event","params":{"sessionId":"%s","event":{"type":"user/message","seq":%s,"time":%s,"data":{"content":[{"type":"text","text":%s}],"source":{"kind":"user"},"role":"user","id":"%s"},"surfaceOp":"append"}}}\n' \
+        "$native" "$seq" "$((1793000000200 + seq))" "$2" "$1"
+    seq=$((seq + 1))
+}
+status() {
+    printf '{"jsonrpc":"2.0","method":"session.status","params":{"sessionId":"%s","status":"%s"}}\n' "$native" "$1"
+}
+idle() {
+    echo idle >> trace.txt
+    status idle
+}
+touch trace.txt prompts.txt
+if [ "$seq" -gt 0 ]; then
+    IFS= read -r request
+    case "$request" in
+    *'"session/resume"'*"\"$native\""*) ;;
+    *) echo "no resume: $request" >&2; exit 41 ;;
+    esac
+    echo "resume $native" >> trace.txt
+    answer "$(id_of "$request")" '{}'
+else
+    message m0 '"walk the horse"'
+    if [ -n "$sandbox" ]; then
+        paddock-host spawn claude --prompt-file task.md --reason plain > plain.txt
+        paddock-host spawn claude --hitch --prompt-file task.md --reason hitched > hitched.txt
+    fi
+fi
+idle
+n=0
+down=
+while IFS= read -r line; do
+    case "$line" in
+    *'"session/prompt"'*)
+        n=$((n + 1))
+        printf '%s\n' "$line" >> prompts.txt
+        text=$(printf '%s' "$line" | sed -n 's/.*"text":\("\([^"\\]\|\\.\)*"\).*/\1/p')
+        [ -n "$text" ] || text='"?"'
+        echo "prompt $(printf '%s' "$text" | cut -c 2-100)" >> trace.txt
+        answer "$(id_of "$line")" "{\"messageId\":\"m-$n\"}"
+        status running
+        case "$text" in
+        *'long turn'*)
+            echo turn-start >> trace.txt
+            : > turn-running
+            i=0
+            while [ ! -e turn-go ] && [ "$i" -lt 2400 ]; do
+                i=$((i + 1))
+                sleep 0.05
+            done
+            echo turn-end >> trace.txt
+            ;;
+        esac
+        message "m-$n" "$text"
+        idle
+        if [ -n "$down" ] && [ -e stop ]; then
+            answer "$down" '{}'
+            exit 0
+        fi
+        ;;
+    *'"method":"shutdown"'*)
+        echo shutdown >> trace.txt
+        if [ -z "$sandbox" ] || [ -e stop ]; then
+            answer "$(id_of "$line")" '{}'
+            exit 0
+        fi
+        down=$(id_of "$line")
+        ;;
+    *'"method":'*'"id":'* | *'"id":'*'"method":'*)
+        answer "$(id_of "$line")" '{}'
+        ;;
+    esac
+done

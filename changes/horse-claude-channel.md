@@ -1,1 +1,0 @@
-- (experimental) New: `paddock-host channel` is an MCP channel server for an interactive Claude Code in horse mode. It pushes the inbox entries of the run's own session when the TUI is idle. `paddock-host horse safe-point stop|prompt` lets the hooks tell the host when a reply is complete and when a turn starts. Nothing starts Claude Code with the channel yet.

@@ -171,6 +171,7 @@ fn codex_case(resume_as: Option<&str>) -> Case {
         unsubscribe: true,
         persist_forks: false,
         raw_items: true,
+        server_version: crate::horse::codex::VERSION,
         seen: seen.clone(),
     };
     let ctx = codex::CustodyCtx {

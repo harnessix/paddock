@@ -138,7 +138,7 @@ pub fn at_run_end(
     let Some(new) = adapt(&dna, &o, end) else {
         return Ok(None);
     };
-    let to = put(store, &new)?;
+    let to = put(&store.for_horse(&rh.horse)?, &new)?;
     let why = DnaEvent::Adapt {
         rules: rules(&dna, &new),
         run_event: end.clone(),

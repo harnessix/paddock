@@ -316,6 +316,8 @@ pub struct SandboxSpec {
     /// Project files that host tools run automatically. Paddock warns when they change.
     pub watch: Vec<PathBuf>,
     pub warnings: Vec<String>,
+    /// Planned systemd memory.high, in bytes; None disables it.
+    pub memory_high: Option<u64>,
     /// Shell lines for the provision step, a short run in this sandbox before
     /// the harness starts. It has the same rights as the harness.
     pub provision: Vec<String>,
@@ -379,6 +381,8 @@ pub struct Intent {
     pub shell: bool,
     pub no_yolo: bool,
     pub args: Vec<String>,
+    /// `--horse-id`: the horse that this run continues in horse mode.
+    pub horse_id: Option<String>,
 }
 
 impl SandboxSpec {
@@ -427,6 +431,7 @@ impl SandboxSpec {
             workdir: project.to_path_buf(),
             watch: Vec::new(),
             warnings: Vec::new(),
+            memory_high: None,
             provision: Vec::new(),
             mise_shared: Vec::new(),
             bus_socket: None,

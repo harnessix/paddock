@@ -18,6 +18,11 @@ fn main() {
     {
         std::process::exit(paddock::freeze::scope_exec(&argv[2..]));
     }
+    // A sandbox start from a shell with no_new_privs starts again without
+    // it (cleanstart.rs); a nested user namespace fails with the flag.
+    if let Some(code) = paddock::cleanstart::again(&argv[1..]) {
+        std::process::exit(code);
+    }
     match real_main() {
         Ok(code) => std::process::exit(code),
         Err(e) => {
@@ -75,6 +80,8 @@ fn real_main() -> Result<i32> {
         | Cmd::Inbound
         | Cmd::Portal
         | Cmd::DetachRun { .. } => unreachable!(),
+        Cmd::Train(args) => cli::train::run(&env, args),
+        Cmd::Exclave { cmd } => cli::exclave::run(&env, cmd),
         Cmd::SpawnChild { job } => cli::run::spawn_child(&env, job),
         Cmd::Vm { cmd } => cli::vm::run(&env, cmd),
         Cmd::VmAgent(_) => unreachable!(),
@@ -84,6 +91,8 @@ fn real_main() -> Result<i32> {
         Cmd::Approvals { json, cmd } => cli::approver::approvals(&env, json, cmd),
         Cmd::Worktree { cmd } => cli::worktree::run(&env, cmd),
         Cmd::Spec { cmd } => cli::spec::run(&env, cmd),
+        Cmd::Gauge(a) => cli::gauge::run(&env, a),
+        Cmd::Turnout { cmd } => cli::turnout::run(&env, cmd),
         Cmd::Loft { cmd } => cli::loft::run(&env, cmd),
         Cmd::Horse { cmd } => cli::horse::run(&env, cmd),
         Cmd::Log { json, lines } => cli::approver::log(&env, json, lines),
@@ -115,7 +124,7 @@ fn real_main() -> Result<i32> {
             cli::status::freeze(&env, paddock::ids::resolve(&env, &id)?, tree, reason)
         }
         Cmd::Thaw { id, tree } => cli::status::thaw(&env, paddock::ids::resolve(&env, &id)?, tree),
-        Cmd::Ps { json } => cli::status::ps(&env, json),
+        Cmd::Ps { json, mem } => cli::status::ps(&env, json, mem),
         Cmd::Files { id, json } => cli::storage::files_cmd(
             &env,
             id.as_deref()
@@ -131,6 +140,7 @@ fn real_main() -> Result<i32> {
             force,
         } => cli::storage::undo(&env, session, list, yes, force),
         Cmd::Kv { cmd } => cli::kv::run(&env, cmd),
+        Cmd::Mail { cmd } => cli::mail::run(&env, cmd),
         Cmd::Du { json } => cli::storage::du_cmd(&env, json),
         Cmd::Gc {
             yes,

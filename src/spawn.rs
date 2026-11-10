@@ -442,8 +442,8 @@ pub struct ChildPlan {
     /// (`--from-head`). None: HEAD of `base_from`.
     pub base: Option<String>,
     pub role: Role,
+    pub trainer: bool,
 }
-
 /// The host modes for a child: the user configuration as it is now, and at
 /// most what the parent had.
 pub fn child_modes(
@@ -900,7 +900,7 @@ impl Spawner {
             );
         }
         let fail = |e: anyhow::Error| {
-            self.children.lock().unwrap().remove(&id);
+            self.forget(&id, &e);
             let _ = std::fs::remove_dir_all(&job_dir);
             e
         };
@@ -918,7 +918,7 @@ impl Spawner {
         };
         crate::privfs::dir(&job_dir).map_err(|e| fail(e.into()))?;
         if let Some(parent) = &o.hitch {
-            let hitched = crate::horse::Store::open(&crate::horse::root(&self.env))
+            let hitched = crate::horse::Store::open_host(&self.env)
                 .and_then(|st| crate::horse::hitch::wire::begin(&st, parent, harness))
                 .context("--hitch")
                 .map_err(fail)?;
@@ -997,10 +997,7 @@ impl Spawner {
                     c.arg("-p")
                         .arg(format!("RuntimeMaxSec={}", limits.timeout + 60));
                 }
-                if let Some(m) = limits.mem {
-                    c.arg("-p").arg(format!("MemoryMax={m}"));
-                    c.arg("-p").arg("MemorySwapMax=0");
-                }
+                crate::memory::limit::apply_spawn(&mut c, &self.env, limits.mem)?;
                 if let Some(p) = limits.cpu_percent {
                     c.arg("-p").arg(format!("CPUQuota={p}%"));
                 }

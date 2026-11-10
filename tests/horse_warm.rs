@@ -66,7 +66,15 @@ fn a_side_branch_is_logged_as_live_and_never_projected() {
 
     // A side branch as the custody leaves it: a fork at the head with one
     // live row on top, bound to the ephemeral thread.
-    let st = Store::open(&t.join("data/paddock/horse")).unwrap();
+    let vars = [
+        ("XDG_DATA_HOME", t.join("data")),
+        ("XDG_STATE_HOME", t.join("state")),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), v.display().to_string()))
+    .collect();
+    let env = paddock::env::HostEnv::from_parts(t.join("home"), "test".into(), 0, 0, vars);
+    let st = Store::open_host(&env).unwrap();
     let s = st.session(&parent).unwrap();
     let head = s.head.clone().unwrap();
     let side = st.fork(&parent, &head, None).unwrap();

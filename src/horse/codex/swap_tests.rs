@@ -76,6 +76,7 @@ impl World {
             unsubscribe: true,
             persist_forks: false,
             raw_items: true,
+            server_version: crate::horse::codex::VERSION,
             seen: seen.clone(),
         }
     }

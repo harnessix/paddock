@@ -15,6 +15,11 @@
 //!   attached: then the user has the run.
 //! - `paddock wait ID` blocks until the run ends.
 
+#[cfg(test)]
+mod mail_acceptance;
+mod mail_watch;
+mod screen_idle;
+
 use crate::env::HostEnv;
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -23,7 +28,6 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
-
 mod stuck;
 pub use stuck::{add_note, idle_done_text, Detector, Event, Stuck, STUCK_AFTER};
 
@@ -47,9 +51,7 @@ pub const EXIT_TIMEOUT: i32 = 124;
 pub const NOTICE_WRITER: &str = "paddock: the agent says it is done; close the view to end the run";
 /// Shown in the view when an idle run has a write client, so the run stays.
 pub const NOTICE_IDLE: &str = "paddock: this run is idle. Close the view to end it.";
-/// How often a detached run reads its pane.
 const POLL: Duration = Duration::from_secs(2);
-/// Quiet time before a detached run counts as idle. `[detach] idle_after`.
 pub const IDLE_AFTER: u64 = 10 * 60;
 /// Quiet time after it is idle before paddock ends it. `0` leaves it.
 /// `[detach] idle_timeout`.
@@ -100,7 +102,7 @@ impl IdleCfg {
     }
 
     pub fn parse(text: &str) -> Result<Self> {
-        let v: toml::Value = toml::from_str(text)?;
+        let v: toml::Value = crate::manifest::user_config_doc(text)?;
         let raw: RawIdle = match v.get("detach") {
             Some(t) => t.clone().try_into().context(
                 "[detach] keys: idle_after, idle_timeout and stuck_after, for example 10m or 0",
@@ -132,7 +134,6 @@ pub fn idle_end_text(secs: u64) -> String {
     }
 }
 
-/// Unix time when the detached run became idle, if it is idle now.
 pub fn idle_since(env: &HostEnv, id: &str) -> Option<u64> {
     Record::load(env, id).and_then(|r| r.idle_since)
 }
@@ -599,6 +600,8 @@ impl Ctl {
         let mut told = false;
         let mut held = false;
         let mut det = Detector::default();
+        let mut screen_idle = screen_idle::ScreenIdle::default();
+        let mut mail_watch = mail_watch::MailWatch::default();
         loop {
             std::thread::sleep(POLL);
             let Some(rec) = Record::load(&self.env, &self.id) else {
@@ -610,18 +613,24 @@ impl Ctl {
             let Some(tmux) = self.tmux() else {
                 continue;
             };
+            if mail_watch.poll(
+                &self.env,
+                &self.id,
+                crate::state::now(),
+                tmux.clients(&self.id) > 0,
+            ) {
+                (self.stop)();
+                return;
+            }
             let cfg = IdleCfg::load(&self.env);
             self.poll_stuck(&tmux, &mut det, &rec, cfg.stuck);
-            let last = match tmux.last_output(&self.id) {
-                // A failed tmux query is not an end. The run record ends the loop.
-                crate::view::PaneOutput::Missing | crate::view::PaneOutput::Unknown => continue,
-                crate::view::PaneOutput::Quiet => {
-                    self.clear_idle(&mut told, &mut held);
-                    continue;
-                }
-                crate::view::PaneOutput::At(t) => t,
+            let Some(screen) = tmux.pane_tail(&self.id) else {
+                continue;
             };
             let now = crate::state::now();
+            let last = screen_idle.observe(&screen, now);
+            // Quiet with unread mail: the starter hears it (mail/events.rs).
+            crate::mail::events::idle(&self.env, &self.id, now.saturating_sub(last));
             if last > now || now.saturating_sub(last) < cfg.after {
                 self.clear_idle(&mut told, &mut held);
                 continue;
@@ -636,7 +645,14 @@ impl Ctl {
             }
             if !told {
                 told = true;
+                crate::reclaim::on_idle(&self.env, &self.id, since);
                 self.notify_idle(&rec);
+                mail_watch::idle(
+                    &self.env,
+                    &self.id,
+                    now.saturating_sub(last),
+                    &format!("{} waits for input: view it or stop it", who(&rec)),
+                );
             }
             if cfg.timeout == 0 || now.saturating_sub(since) < cfg.timeout {
                 continue;

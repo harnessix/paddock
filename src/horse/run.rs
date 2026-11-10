@@ -3,7 +3,7 @@
 //! These are deliberately separate from custody: the native session belongs
 //! to the run even when the harness has no live protocol integration.
 
-use super::{claude, codex, dsh, Binding, Hash, Store};
+use super::{agy, claude, codex, dsh, grok, Binding, Hash, Store};
 use anyhow::{bail, Result};
 use serde_json::Value;
 
@@ -41,6 +41,14 @@ pub fn begin(
             codex::check_version(version)?;
             codex::CONTAINER
         }
+        grok::HARNESS => {
+            grok::check_version(version)?;
+            grok::CONTAINER
+        }
+        agy::HARNESS => {
+            agy::check_version(version)?;
+            agy::CONTAINER
+        }
         _ => bail!("no pinned horse codec for {harness}"),
     };
     let locked = store.lock()?;
@@ -58,7 +66,10 @@ pub fn begin(
             None => super::dna::new_default_horse_locked(&locked)?,
         },
     };
-    let session = locked.new_session(
+    // The DNA entry goes in with the session, so it is the first entry
+    // also when another process appends at once.
+    let dna = super::dna::get_or_default(store, &horse.dna);
+    let session = locked.new_session_first(
         &horse.id,
         Binding {
             harness: harness.into(),
@@ -66,13 +77,13 @@ pub fn begin(
             version: version.into(),
             container: container.into(),
         },
+        Some(("system", &super::dna::render_entry(&dna, "start"))),
     )?;
-    let dna = super::dna::get_or_default(store, &horse.dna);
-    store.queue_append(
-        &session.id,
-        "system",
-        &super::dna::render_entry(&dna, "start"),
-    )?;
+    if harness == codex::HARNESS {
+        locked.update_session(&session.id, |s| {
+            s.codex_reader_version = Some(version.into())
+        })?;
+    }
     Ok(RunHorse {
         horse: horse.id,
         session: session.id,
@@ -123,7 +134,9 @@ pub fn append_horse_event_locked(
         key: None,
         media: Some("application/json".into()),
     };
-    let hash = store.put(&meta, &serde_json::to_vec(body)?)?;
+    let hash = store
+        .for_horse(horse)?
+        .put(&meta, &serde_json::to_vec(body)?)?;
     store.write_ref(&path, &serde_json::to_vec(&hash)?)?;
     Ok(hash)
 }
@@ -166,12 +179,18 @@ pub(crate) fn adapt_after(
     }
 }
 
+pub mod agy_setup;
 pub mod by_sandbox;
 pub mod final_only;
+pub mod grok_setup;
 mod locked;
+pub mod resume;
 pub mod setup;
 pub mod snapshot;
 pub use locked::{end_dsh, record_event_locked};
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod begin_tests;

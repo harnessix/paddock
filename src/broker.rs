@@ -16,13 +16,14 @@ use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-
 mod approval;
 mod audit;
 mod capture;
 mod channel;
 mod compacted;
+mod ctl;
 mod describe;
+mod exclave;
 mod fetch;
 pub mod forge;
 pub mod git;
@@ -57,7 +58,8 @@ pub const SOCKET_IN_SANDBOX: &str = "/run/paddock/host.sock";
 /// Results land here, inside the project.
 pub const INBOX: &str = ".paddock/inbox";
 
-const MAX_REQUEST: usize = 64 * 1024;
+/// A mail message (64 KiB of text, JSON-escaped) must fit.
+const MAX_REQUEST: usize = 512 * 1024;
 
 pub const CAPABILITIES: &[(&str, &str)] = &[
     (
@@ -144,6 +146,7 @@ pub struct Broker {
     /// Capabilities that the backend of this run cannot give, with the
     /// reason. They are off, never asked (a Seatbelt run has no borrow).
     pub refused: Vec<(&'static str, &'static str)>,
+    exclave_jobs: crate::exclave::jobs::Jobs,
     grants: Mutex<Vec<String>>,
     /// "Deny for this session": the keys of the request and the user's note.
     denials: Mutex<Vec<(String, Option<String>)>>,
@@ -169,6 +172,7 @@ impl Broker {
             kv: std::sync::OnceLock::new(),
             horse: std::sync::OnceLock::new(),
             refused: Vec::new(),
+            exclave_jobs: Default::default(),
             grants: Mutex::new(Vec::new()),
             denials: Mutex::new(Vec::new()),
         }
@@ -268,8 +272,10 @@ impl Broker {
             Err(e) => Response::new(Status::Failed, format!("{e:#}")),
         }
     }
-
     pub fn handle(&self, req: &Request) -> Response {
+        if let Some(r) = self.handle_trainer(req) {
+            return r;
+        }
         if let Some(r) = self.handle_horse_live(req) {
             return r;
         }
@@ -281,6 +287,43 @@ impl Broker {
                 .is_some_and(crate::horse::device::registry::is_registry_op)
         {
             return self.handle_registry(req);
+        }
+        if req.cap == "horse"
+            && req.args.get("op").and_then(|v| v.as_str()) == Some(crate::horse::device::ctl::OP)
+        {
+            return self.handle_ctl(req);
+        }
+        if req.cap == "horse" && req.args.get("op").and_then(|v| v.as_str()) == Some("peek") {
+            let response = crate::horse::device::peek::handle(self.horse.get(), &self.ctx.id, req);
+            if response.status == Status::Done {
+                let command = req
+                    .args
+                    .get("command")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("?");
+                let project = self.ctx.project.to_string_lossy();
+                let payer = crate::devices::ledger::Payer {
+                    sandbox: &self.ctx.id,
+                    root: crate::devices::ledger::root_of(&self.ctx.id, &self.ctx.chain),
+                    project: &project,
+                    device: "horse",
+                };
+                if let Err(error) =
+                    crate::devices::ledger::Ledger::open(&crate::devices::ledger::path(&self.env))
+                        .and_then(|ledger| ledger.record_read(&payer, &format!("peek/{command}")))
+                {
+                    log::warn!("horse ledger: {error:#}");
+                }
+            }
+            return response;
+        }
+        if req.cap == "horse"
+            && matches!(
+                req.args.get("op").and_then(|v| v.as_str()),
+                Some("log" | "dna" | "inbox")
+            )
+        {
+            return Response::new(Status::Denied, "use paddock-host peek for session content");
         }
         if req.cap == "horse" {
             let response = crate::horse::device::handle(self.horse.get(), req);
@@ -336,6 +379,14 @@ impl Broker {
         // Spec Kit tasks: a read, or a review of this sandbox's own workers.
         if req.cap == "spec" {
             return self.spec(req);
+        }
+        // The run's own mailbox (`paddock-host mail`): it carries no
+        // capability, so it is never asked.
+        if req.cap == "exclave" {
+            return self.handle_exclave(req);
+        }
+        if req.cap == "mail" {
+            return crate::mail::serve::handle(&self.env, &self.ctx.id, req);
         }
         // The sandbox reads its own boundary log: a read, never asked.
         if req.cap == "boundary" {

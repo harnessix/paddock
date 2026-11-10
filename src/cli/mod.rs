@@ -9,12 +9,15 @@ pub(crate) mod catalog;
 pub(crate) mod credentials;
 pub(crate) mod devices;
 pub(crate) mod env;
+pub(crate) mod exclave;
 pub(crate) mod forage;
 pub(crate) mod gateway;
+pub(crate) mod gauge;
 pub(crate) mod horse;
 pub(crate) mod kv;
 pub(crate) mod loft;
 pub(crate) mod logins;
+pub(crate) mod mail;
 pub(crate) mod monitor;
 pub(crate) mod pasture;
 pub(crate) mod run;
@@ -26,6 +29,8 @@ pub(crate) mod status;
 pub(crate) mod storage;
 pub(crate) mod timer;
 pub(crate) mod tools;
+pub(crate) mod train;
+pub(crate) mod turnout;
 pub(crate) mod update;
 pub(crate) mod vm;
 pub(crate) mod vm_run;
@@ -54,6 +59,13 @@ pub(crate) struct Cli {
 
 #[derive(Subcommand)]
 pub(crate) enum Cmd {
+    /// Review a live run in an independent trainer sandbox.
+    Train(train::TrainArgs),
+    /// Run commands on a configured peer.
+    Exclave {
+        #[command(subcommand)]
+        cmd: exclave::ExclaveCmd,
+    },
     /// Start a harness in a sandbox (the same as `paddock <harness>`).
     Run(RunArgs),
     /// Print the sandbox that `run` would start, with the origin of each entry.
@@ -128,6 +140,9 @@ pub(crate) enum Cmd {
     Ps {
         #[arg(long)]
         json: bool,
+        /// Show cgroup memory and largest processes.
+        #[arg(long)]
+        mem: bool,
     },
     /// Show what the sandbox boundary denied, grouped by kind and target.
     Boundary {
@@ -434,6 +449,12 @@ pub(crate) enum Cmd {
         #[command(subcommand)]
         cmd: devices::DevicesCmd,
     },
+    /// The mailbox of a run: send messages to its agent and watch what it
+    /// sends back, with paddock's events (ended, gone, idle, card waiting).
+    Mail {
+        #[command(subcommand)]
+        cmd: mail::MailCmd,
+    },
     /// Read what agents wrote to paddock kv, and free their leases.
     Kv {
         #[command(subcommand)]
@@ -448,7 +469,7 @@ pub(crate) enum Cmd {
         #[arg(short = 'n', long, default_value_t = 20)]
         lines: usize,
     },
-    /// Experimental: the horse store of harness sessions (list, show, log, fork).
+    /// Experimental: the sessions of runs in horse mode, their DNA and the registry.
     #[command(hide = true)]
     Horse {
         #[command(subcommand)]
@@ -458,6 +479,13 @@ pub(crate) enum Cmd {
     Loft {
         #[command(subcommand)]
         cmd: loft::LoftCmd,
+    },
+    /// How far a Spec Kit feature is: done with evidence, new and reopened tasks, open ages, and a forecast of its finish date with a burn-up chart.
+    Gauge(gauge::GaugeArgs),
+    /// Inspect scheduled host jobs.
+    Turnout {
+        #[command(subcommand)]
+        cmd: turnout::TurnoutCmd,
     },
     /// Spec Kit projects: the tasks of the active feature, and the external spec store.
     Spec {
@@ -711,7 +739,7 @@ pub(crate) struct RunArgs {
     #[arg(long)]
     #[serde(default)]
     horse: bool,
-    /// Continuing an existing horse is not supported by the run lifecycle.
+    /// Continue the horse ID in horse mode: dsh resumes its newest session.
     #[arg(long, value_name = "ID")]
     #[serde(default)]
     horse_id: Option<String>,

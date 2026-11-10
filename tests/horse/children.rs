@@ -25,7 +25,7 @@ fn claude_setup() -> tempfile::TempDir {
 
 #[test]
 fn a_spawned_claude_child_in_horse_mode_is_held_live() {
-    use paddock::horse::{run, Store};
+    use paddock::horse::run;
     use std::process::Stdio;
 
     if !sandbox_works() {
@@ -56,7 +56,7 @@ fn a_spawned_claude_child_in_horse_mode_is_held_live() {
     // (the parent runs final-only and binds none).
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(90);
     let child = loop {
-        let found = Store::open(&store_path).ok().and_then(|st| {
+        let found = store_helpers::open(&store_path).ok().and_then(|st| {
             st.sessions()
                 .ok()?
                 .into_iter()
@@ -85,7 +85,7 @@ fn a_spawned_claude_child_in_horse_mode_is_held_live() {
     }
     let out = parent.wait_with_output().unwrap();
     assert!(out.status.success(), "{out:?}");
-    let store = Store::open(&store_path).unwrap();
+    let store = store_helpers::open(&store_path).unwrap();
     let session = store.session(&child.id).unwrap();
     assert_eq!(
         store.horse(&session.horse).unwrap().sessions,
@@ -334,6 +334,13 @@ fn the_fake_app_server_swaps_between_turns_under_custody() {
     let to = wait_for("the first turn in the store", 30, || {
         first_turn_end(&store, &sid)
     });
+    // Ask once the second turn moved the head on. A request that the
+    // custody takes between the turns finds the session at `to` already,
+    // and refuses it: there is nothing to swap.
+    wait_for("the second turn in the store", 30, || {
+        let head = store.session(&sid).ok()?.head;
+        (head.is_some() && head.as_ref() != Some(&to)).then_some(())
+    });
     let r = request::ask(&store, &sid, &to, false, Duration::from_secs(30)).unwrap();
     let a = wait_for("the answer of the custody", 40, || {
         request::answer(&store, &sid, &r.id).unwrap()
@@ -385,7 +392,7 @@ fn codex_spawn_setup() -> tempfile::TempDir {
 
 #[test]
 fn a_headless_codex_child_runs_under_live_custody_and_swaps_between_turns() {
-    use paddock::horse::{live, run as runs, Store};
+    use paddock::horse::{live, run as runs};
 
     if !sandbox_works() {
         eprintln!("skipped: needs bwrap and FUSE");
@@ -397,7 +404,7 @@ fn a_headless_codex_child_runs_under_live_custody_and_swaps_between_turns() {
         let root = root.clone();
         std::thread::spawn(move || run_dsh_for(&root, 180))
     };
-    let store = Store::open(&root.join("data/paddock/horse")).unwrap();
+    let store = host_store(&root);
     // The child's custody writes a live record once its thread is open.
     let sid = wait_for("the live record of the codex child", 90, || {
         live::records(&store).ok()?.into_iter().find_map(|r| {

@@ -6,12 +6,34 @@ use paddock::horse::{self, claude, codex, dsh, Store};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+mod agy;
 mod dna;
+mod grant;
+mod grok;
+mod key;
+mod migrate;
 mod registry;
 mod swap;
 
 #[derive(Subcommand)]
 pub(crate) enum HorseCmd {
+    /// Verify and encrypt a legacy store, or remove its verified plaintext copy.
+    Migrate {
+        #[arg(
+            long,
+            required_unless_present = "drop_plain",
+            conflicts_with = "drop_plain"
+        )]
+        verify: bool,
+        /// Permanently remove the retained plaintext copies after verification.
+        #[arg(long, required_unless_present = "verify", conflicts_with = "verify")]
+        drop_plain: bool,
+    },
+    /// Export or restore the key needed to open this horse store.
+    Key {
+        #[command(subcommand)]
+        cmd: key::KeyCmd,
+    },
     /// List the sessions in the horse store.
     List {
         #[arg(long)]
@@ -19,26 +41,31 @@ pub(crate) enum HorseCmd {
     },
     /// List the edges of a horse.
     Edges { horse: String },
-    /// The DNA of a horse: show, set (hot-load) and history.
+    /// The DNA of a horse: show, set (hot-load), history, revert and use.
     Dna {
         #[command(subcommand)]
         cmd: dna::DnaCmd,
     },
-    /// Published DNA: the signing key, trusted keys, indexes, resolve,
-    /// publish and sync.
+    /// Published DNA: keys, trust, indexes, resolve, publish and sync.
     Registry {
         #[command(subcommand)]
         cmd: registry::RegistryCmd,
     },
-    /// Move SESSION to HORSE. The DNA of its old horse grafts into HORSE,
-    /// unless the two DNAs are incompatible. The session gets the DNA of
-    /// HORSE as one entry at the end.
+    /// Move an idle SESSION to HORSE, and graft the DNA of its old horse.
+    ///
+    /// The DNA of its old horse grafts into HORSE, unless the two DNAs are
+    /// incompatible. The session gets the DNA of HORSE as one entry at the
+    /// end.
     Move { session: String, horse: String },
-    /// Combine two horses: HOST keeps its id and sessions and gains the
-    /// traits of DONOR. Incompatible DNAs are refused.
+    /// Graft the traits of DONOR into HOST.
+    ///
+    /// HOST keeps its id, its sessions and its own trait values, and gains
+    /// the traits of DONOR. Incompatible DNAs are refused.
     Graft { host: String, donor: String },
-    /// Show where each trait of a horse comes from, its DNA events and
-    /// the lineage of its sessions.
+    /// Show where each trait of a horse comes from, and its history.
+    ///
+    /// The output has the origin of each trait, the DNA events and the
+    /// lineage of each session.
     Explain { horse: String },
     /// Show a session, its horse and its lineage.
     Show {
@@ -78,12 +105,15 @@ pub(crate) enum HorseCmd {
         #[arg(long, default_value_t = 600)]
         wait: u64,
     },
-    /// Continue a Codex SESSION at another branch under the same thread
-    /// id, so the cached prefix up to the fork point stays warm. BRANCH is
+    /// Continue a Codex or Grok Build SESSION at another branch, under the same id.
+    ///
+    /// The cached prefix up to the fork point stays warm. BRANCH is
     /// a node (a hash of at least 6 digits) or a session whose head is
     /// the branch head. When a run holds the session, the swap waits until
     /// no turn runs and the run loads the thread again; else the rollout
-    /// under --codex-home is swapped. The old head stays in the store.
+    /// under --codex-home is swapped. A Grok SESSION continues under the
+    /// same session id: its files under --grok-home are swapped. The old
+    /// head stays in the store.
     Swap {
         session: String,
         branch: String,
@@ -96,12 +126,17 @@ pub(crate) enum HorseCmd {
         /// The Codex home of a session that no run holds (it has sessions/).
         #[arg(long)]
         codex_home: Option<PathBuf>,
+        /// The Grok home of a Grok session (it has sessions/).
+        #[arg(long)]
+        grok_home: Option<PathBuf>,
         /// Swap also when the prefix guard says the swap loses cache.
         #[arg(long)]
         yes: bool,
     },
-    /// Queue an entry for SESSION. A run in horse mode delivers it at the
-    /// next safe point (the session is idle), as the newest entry.
+    /// Queue an entry for SESSION, for its next safe point.
+    ///
+    /// A run in horse mode delivers it at the next safe point (the session
+    /// is idle), as the newest entry.
     Append {
         session: String,
         /// user, system, developer or note.
@@ -110,12 +145,11 @@ pub(crate) enum HorseCmd {
         #[arg(long)]
         text: String,
         /// Urgent: an interactive TUI run stops the running turn with the
-        /// harness's interrupt key and delivers the entry at once.
+        /// harness's interrupt key and delivers this entry first.
         #[arg(long)]
         interrupt: bool,
     },
-    /// The live sessions of horse-mode runs, their heads, inboxes and the
-    /// last verdict of the prefix guard.
+    /// The live sessions of horse-mode runs, with heads, inboxes and guard verdicts.
     Status {
         #[arg(long)]
         json: bool,
@@ -148,6 +182,32 @@ pub(crate) enum HorseCmd {
         #[arg(long = "move", value_name = "HORSE")]
         move_to: Option<String>,
     },
+    /// Let SANDBOX change the context of its own horse through ctl.
+    ///
+    /// SANDBOX is an id of `paddock ps`. The sandbox writes commands to
+    /// /dev/paddock/horse/self/ctl or runs `paddock-host horse ctl`. A new
+    /// grant replaces the old one and its counters.
+    Grant {
+        sandbox: String,
+        /// The commands: fork, append, move, view, disconnect.
+        #[arg(long, value_delimiter = ',', default_value = "fork,append,view")]
+        allow: Vec<String>,
+        /// A horse that `move` may go to. Repeat for more.
+        #[arg(long = "horse")]
+        horses: Vec<String>,
+        /// How many commands may run.
+        #[arg(long, default_value_t = 20)]
+        commands: u64,
+        /// How many tokens of cached prefix the approved breaks may lose
+        /// together. With 0, every cache-breaking command is refused.
+        #[arg(long, default_value_t = 0)]
+        tokens: u64,
+        /// Remove the grant instead.
+        #[arg(long, conflicts_with_all = ["horses"])]
+        revoke: bool,
+    },
+    /// The ctl grants of sandboxes and what each used.
+    Grants,
     /// Read a dsh session file or session folder into the store.
     IngestDsh {
         path: PathBuf,
@@ -181,6 +241,43 @@ pub(crate) enum HorseCmd {
         #[arg(long)]
         swap: bool,
     },
+    /// Read a Grok Build session folder (sessions/<cwd>/<id>) into the store.
+    IngestGrok {
+        path: PathBuf,
+        /// The Grok Build version that wrote the session. Only the pinned version works.
+        #[arg(long)]
+        grok_version: String,
+        /// Put a new session into this horse. Default: a new horse.
+        #[arg(long)]
+        horse: Option<String>,
+    },
+    /// Write a session as a Grok Build session folder under a Grok home.
+    ProjectGrok {
+        session: String,
+        /// The Grok home, for example the sandbox's ~/.grok.
+        #[arg(long)]
+        grok_home: PathBuf,
+        /// A fork replaces the files of its parent under the same id.
+        #[arg(long)]
+        swap: bool,
+    },
+    /// Read an agy conversation database (conversations/<id>.db) into the store.
+    IngestAgy {
+        path: PathBuf,
+        /// The agy version that wrote the database. Only the pinned version works.
+        #[arg(long)]
+        agy_version: String,
+        /// Put a new session into this horse. Default: a new horse.
+        #[arg(long)]
+        horse: Option<String>,
+    },
+    /// Write a session as an agy conversation database under an agy home.
+    ProjectAgy {
+        session: String,
+        /// The agy home, for example the sandbox's ~/.gemini/antigravity-cli.
+        #[arg(long)]
+        agy_home: PathBuf,
+    },
     /// Read a Claude Code transcript (<session id>.jsonl) into the store.
     IngestClaude {
         path: PathBuf,
@@ -201,8 +298,15 @@ pub(crate) enum HorseCmd {
 }
 
 pub(crate) fn run(env: &HostEnv, cmd: HorseCmd) -> Result<i32> {
-    let st = Store::open(&horse::root(env))?;
+    let cmd = match cmd {
+        HorseCmd::Migrate { verify, drop_plain } => return migrate::run(env, verify, drop_plain),
+        HorseCmd::Key { cmd } => return key::run(env, cmd),
+        other => other,
+    };
+    let st = Store::open_host(env)?;
     match cmd {
+        HorseCmd::Migrate { .. } => unreachable!("migration handled before opening store"),
+        HorseCmd::Key { .. } => unreachable!("key commands handled before opening store"),
         HorseCmd::List { json } => {
             let all = st.sessions()?;
             if json {
@@ -296,6 +400,8 @@ pub(crate) fn run(env: &HostEnv, cmd: HorseCmd) -> Result<i32> {
                             .map(|i| i.ty)
                             .unwrap_or_else(|_| "?".into()),
                     },
+                    ("grok", _) => horse::grok::replay::describe(n),
+                    ("agy", _) => horse::agy::describe(n),
                     _ => format!("{} bytes", n.raw.len()),
                 };
                 let line: String = line.chars().take(100).collect();
@@ -339,8 +445,14 @@ pub(crate) fn run(env: &HostEnv, cmd: HorseCmd) -> Result<i32> {
             interrupt,
             wait,
             codex_home,
+            grok_home,
             yes,
-        } => return swap::run(&st, &session, &branch, interrupt, wait, codex_home, yes),
+        } => {
+            if st.session(&session)?.binding.harness == horse::grok::HARNESS {
+                return grok::swap(&st, &session, &branch, grok_home, yes);
+            }
+            return swap::run(&st, &session, &branch, interrupt, wait, codex_home, yes);
+        }
         HorseCmd::Append {
             session,
             role,
@@ -357,6 +469,15 @@ pub(crate) fn run(env: &HostEnv, cmd: HorseCmd) -> Result<i32> {
             }
         }
         HorseCmd::Status { json } => status(&st, json)?,
+        HorseCmd::Grant {
+            sandbox,
+            allow,
+            horses,
+            commands,
+            tokens,
+            revoke,
+        } => return grant::run(&st, &sandbox, allow, horses, commands, tokens, revoke),
+        HorseCmd::Grants => return grant::list(&st),
         HorseCmd::Guard {
             session,
             fork_at,
@@ -447,6 +568,22 @@ pub(crate) fn run(env: &HostEnv, cmd: HorseCmd) -> Result<i32> {
                 println!("This fork starts with a cold cache.");
             }
         }
+        HorseCmd::IngestGrok {
+            path,
+            grok_version,
+            horse,
+        } => grok::ingest(&st, &path, &grok_version, horse.as_deref())?,
+        HorseCmd::ProjectGrok {
+            session,
+            grok_home,
+            swap,
+        } => grok::project(&st, &session, &grok_home, swap)?,
+        HorseCmd::IngestAgy {
+            path,
+            agy_version,
+            horse,
+        } => agy::ingest(&st, &path, &agy_version, horse.as_deref())?,
+        HorseCmd::ProjectAgy { session, agy_home } => agy::project(&st, &session, &agy_home)?,
         HorseCmd::IngestClaude {
             path,
             claude_version,

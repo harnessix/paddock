@@ -9,7 +9,7 @@ use super::*;
 
 #[test]
 fn a_claude_tui_in_horse_mode_gets_entries_between_turns() {
-    use paddock::horse::{claude, run, Store};
+    use paddock::horse::{claude, run};
     use std::process::Stdio;
 
     if !sandbox_works() {
@@ -59,7 +59,7 @@ fn a_claude_tui_in_horse_mode_gets_entries_between_turns() {
         }
     };
     let session = || {
-        Store::open(&store_path)
+        store_helpers::open(&store_path)
             .ok()?
             .sessions()
             .ok()?
@@ -87,7 +87,7 @@ fn a_claude_tui_in_horse_mode_gets_entries_between_turns() {
     let out = tui.wait_with_output().unwrap();
     assert!(out.status.success(), "{out:?}");
     let stderr = String::from_utf8_lossy(&out.stderr);
-    let store = Store::open(&store_path).unwrap();
+    let store = store_helpers::open(&store_path).unwrap();
     let s = store.session(&sid).unwrap();
     let end = run::events(&store, &s.horse)
         .unwrap()

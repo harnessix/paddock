@@ -22,23 +22,25 @@
 //! has a delivery record like any entry.
 
 mod approve;
+mod driver;
 mod reload;
 pub(crate) mod rollout;
 pub mod side;
 pub mod wire;
 
-pub use approve::{args, ledger, policy, Answer, Policy};
+pub use approve::{append_ledger, args, ledger, policy, Answer, Policy};
+pub use driver::run;
 pub use rollout::find_rollout;
 use rollout::holds;
 
-use super::harness::{ChannelIo, Driver, End, Ends, Input, Live, LiveSession, Pump, Typed};
-use crate::horse::codex::{self as codec, check_version, HARNESS, VERSION};
+use super::harness::{End, Input, Live, LiveSession, Pump, Typed};
+use crate::horse::codex::{self as codec, check_version, HARNESS};
 use crate::horse::inbox::Entry;
 use crate::horse::store::Hash;
 use anyhow::{bail, Context as _, Result};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
@@ -108,22 +110,6 @@ enum Wait {
     Closed,
 }
 
-/// Run the custody until it ends (`ends`) or the server exits.
-pub fn run<R, W>(io: ChannelIo<R, W>, ctx: CustodyCtx, policy: Policy, ends: Ends) -> Result<Report>
-where
-    R: Read + Send + 'static,
-    W: Write,
-{
-    let (tx, rx) = std::sync::mpsc::channel();
-    wire::read_server(io.from, tx);
-    let mut d = Driver::new(ctx.store.clone(), &ctx.horse, &ctx.run, ctx.tick)
-        .close_wait(ctx.close_timeout)
-        .ends(ends);
-    let mut c = Codex::start(io.to, rx, ctx, policy)?;
-    d.drive(&mut c, &io.control)?;
-    Ok(c.report())
-}
-
 enum Pending {
     Init,
     Thread {
@@ -182,6 +168,7 @@ pub struct Codex<W: Write> {
     /// A refused entry waits until a turn ends, or until this time.
     retry_at: Option<Instant>,
     rollout: Option<PathBuf>,
+    reader_version: Option<String>,
     logged: HashSet<String>,
     closed: bool,
     /// A reload runs: the thread is closed or not open yet.
@@ -239,6 +226,7 @@ impl<W: Write> Codex<W> {
             unlanded: Vec::new(),
             retry_at: None,
             rollout: None,
+            reader_version: None,
             logged: HashSet::new(),
             closed: false,
             reloading: None,
@@ -386,7 +374,10 @@ impl<W: Write> Codex<W> {
 
     fn response(&mut self, w: Waiting, r: std::result::Result<Value, String>) -> Result<()> {
         match (w.pending, r) {
-            (Pending::Init, Ok(_)) => Ok(()),
+            (Pending::Init, Ok(v)) => {
+                self.reader_version = Some(wire::reader_version(&v)?);
+                Ok(())
+            }
             (Pending::Init, Err(e)) => bail!("codex app-server refused initialize: {e}"),
             (Pending::Thread { resume }, Ok(v)) => self.opened(resume, &v),
             (Pending::Thread { resume: Some(id) }, Err(e)) => {
@@ -602,9 +593,16 @@ impl<W: Write> Codex<W> {
         };
         self.rollout = Some(path.clone());
         let st = self.ctx.store.clone();
-        let r = st
-            .lock()
-            .and_then(|l| codec::ingest_run_locked(&l, &path, VERSION, &self.ctx.horse));
+        let r = st.lock().and_then(|l| {
+            codec::ingest_run_locked(
+                &l,
+                &path,
+                self.reader_version
+                    .as_deref()
+                    .context("missing Codex reader version")?,
+                &self.ctx.horse,
+            )
+        });
         let i = match r {
             Ok(i) => i,
             Err(e) => {
@@ -675,6 +673,12 @@ impl<W: Write> Codex<W> {
             bail!("session {} does not run in this custody now", e.session);
         }
         let thread = thread.context("no thread is open")?.to_string();
+        rollout::check_delivery(
+            &self.ctx.store,
+            &self.ctx.sessions_root,
+            self.thread.as_deref(),
+            &e.session,
+        )?;
         let head = self.ctx.store.session(&e.session)?.head;
         self.side_sent(e);
         let text = e.wire_text();

@@ -327,6 +327,20 @@ impl Layout {
     /// read-only, this repository writable, no network, a throwaway home.
     /// Whatever the repository's configuration starts runs in there.
     pub fn sandboxed(&self, env: &HostEnv, args: &[&str]) -> Result<Option<String>> {
+        self.sandboxed_mode(env, args, false)
+    }
+
+    /// Inspect the work tree with all repository mounts read-only.
+    pub fn sandboxed_read_only(&self, env: &HostEnv, args: &[&str]) -> Result<Option<String>> {
+        self.sandboxed_mode(env, args, true)
+    }
+
+    fn sandboxed_mode(
+        &self,
+        env: &HostEnv,
+        args: &[&str],
+        read_only: bool,
+    ) -> Result<Option<String>> {
         let Some(bwrap) = env.which("bwrap") else {
             return Ok(None);
         };
@@ -379,13 +393,13 @@ impl Layout {
                 self.common_dir.display().to_string(),
             ]);
             a.extend([
-                "--bind".to_string(),
+                if read_only { "--ro-bind" } else { "--bind" }.to_string(),
                 self.git_dir.display().to_string(),
                 self.git_dir.display().to_string(),
             ]);
         }
         a.extend([
-            "--bind".to_string(),
+            if read_only { "--ro-bind" } else { "--bind" }.to_string(),
             self.work_tree.display().to_string(),
             self.work_tree.display().to_string(),
         ]);
@@ -406,14 +420,13 @@ impl Layout {
         Ok(run(&mut cmd).ok())
     }
 
-    /// Every git directory of this repository whose files the host reads or
-    /// runs: this one, the common one, each registered worktree and each
-    /// submodule.
+    /// Every git directory of this work tree whose files the host reads or
+    /// runs: this one, the common one and their submodules. Other worktrees
+    /// are not in the list: a sandbox sees `worktrees` read-only.
     pub fn protected_dirs(&self) -> Vec<PathBuf> {
         let mut out = vec![self.common_dir.clone(), self.git_dir.clone()];
-        for sub in ["worktrees", "modules"] {
-            collect_git_dirs(&self.common_dir.join(sub), 0, &mut out);
-        }
+        collect_git_dirs(&self.common_dir.join("modules"), 0, &mut out);
+        collect_git_dirs(&self.git_dir.join("modules"), 0, &mut out);
         out.sort();
         out.dedup();
         out

@@ -30,16 +30,15 @@
 //! the oldest entry when [`Live::safe`] says the TUI is idle, writes the
 //! live record, and ends the custody when the run ends.
 
+use super::files::{Codex, Files, Mark};
 use super::{is_idle, PtyIdle, PtyTap};
-use crate::horse::codex as codec;
-use crate::horse::live::codex::rollout::find_rollout;
 use crate::horse::live::harness::{Control, Driver, End, Input, Live, LiveSession, Pump};
 use crate::horse::live::tui_state::{run_key, Runs, SafePoint, SignalRx};
 use crate::horse::store::{Hash, Store};
 use anyhow::{bail, Context as _, Result};
-use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::io::{Read as _, Seek as _, SeekFrom};
+use std::marker::PhantomData;
 use std::os::unix::fs::MetadataExt as _;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
@@ -120,33 +119,11 @@ pub struct Report {
     pub ingest_errors: usize,
 }
 
-/// A row of the rollout that the loop acts on.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Mark {
-    /// A user message: a turn starts.
-    User,
-    /// The end of a turn, `aborted` after an interrupt.
-    End { aborted: bool },
-}
-
-fn mark(raw: &[u8]) -> Option<Mark> {
-    let v: Value = serde_json::from_slice(raw).ok()?;
-    if v["type"] != "event_msg" {
-        return None;
-    }
-    match v["payload"]["type"].as_str()? {
-        "user_message" => Some(Mark::User),
-        "task_complete" => Some(Mark::End { aborted: false }),
-        "turn_aborted" => Some(Mark::End { aborted: true }),
-        _ => None,
-    }
-}
-
 /// The rollout file, read as it grows. A new inode or a shorter file is
 /// read again from the top, and a torn last line waits for its newline.
-#[derive(Default)]
 struct Tail {
     path: Option<PathBuf>,
+    mark: fn(&[u8]) -> Option<Mark>,
     /// (dev, inode, size, mtime ns) of the last look.
     seen: Option<(u64, u64, u64, i128)>,
     offset: u64,
@@ -154,6 +131,16 @@ struct Tail {
 }
 
 impl Tail {
+    fn new(mark: fn(&[u8]) -> Option<Mark>) -> Tail {
+        Tail {
+            path: None,
+            mark,
+            seen: None,
+            offset: 0,
+            partial: Vec::new(),
+        }
+    }
+
     /// The marks of the rows that came since the last look.
     fn look(&mut self) -> Result<Vec<Mark>> {
         let Some(path) = self.path.clone() else {
@@ -189,7 +176,7 @@ impl Tail {
         let mut out = Vec::new();
         while let Some(at) = self.partial.iter().position(|&b| b == b'\n') {
             let line: Vec<u8> = self.partial.drain(..=at).collect();
-            out.extend(mark(&line[..line.len() - 1]));
+            out.extend((self.mark)(&line[..line.len() - 1]));
         }
         Ok(out)
     }
@@ -204,8 +191,9 @@ struct Pending {
     quiet_since: Instant,
 }
 
-/// One Codex TUI run in custody.
-pub struct Custodian {
+/// One TUI run in custody, with the session files `F`.
+pub struct Custodian<F: Files = Codex> {
+    files: PhantomData<F>,
     ctx: CustodyCtx,
     signals: SignalRx,
     key: String,
@@ -214,6 +202,10 @@ pub struct Custodian {
     head: Option<Hash>,
     /// A `stop` of the thread came, and no user row since.
     stopped: bool,
+    /// The turn of the newest `prompt` that named one: a `stop` of
+    /// another turn comes late (Grok sends the report of a cancelled turn
+    /// after the next prompt) and is ignored.
+    turn: Option<String>,
     /// The file showed a turn end that no `stop` covered yet.
     end_seen: Option<Instant>,
     /// The interrupt key went out, and no safe point came since.
@@ -235,25 +227,31 @@ pub struct Custodian {
 
 /// Hold the TUI run until the run ends (two `Close`s on the control
 /// channel), then ingest a last time.
-pub fn run(mut ctx: CustodyCtx, signals: SignalRx) -> Result<Report> {
-    codec::check_version(&ctx.version)?;
+pub fn run(ctx: CustodyCtx, signals: SignalRx) -> Result<Report> {
+    run_files::<Codex>(ctx, signals)
+}
+
+/// [`run`] for the session files `F`.
+pub fn run_files<F: Files>(mut ctx: CustodyCtx, signals: SignalRx) -> Result<Report> {
+    F::check_version(&ctx.version)?;
     let (_keep, dummy) = std::sync::mpsc::channel();
     let control = std::mem::replace(&mut ctx.control, dummy);
     let mut d = Driver::new(ctx.store.clone(), &ctx.horse, &ctx.run, ctx.timing.tick);
-    let mut c = Custodian::new(ctx, signals)?;
+    let mut c = Custodian::<F>::new(ctx, signals)?;
     let r = d.drive(&mut c, &control);
     c.ctx.runs.forget(&c.key);
     r?;
     Ok(std::mem::take(&mut c.report))
 }
 
-impl Custodian {
+impl<F: Files> Custodian<F> {
     pub fn new(ctx: CustodyCtx, signals: SignalRx) -> Result<Self> {
         let s = ctx.store.session(&ctx.session)?;
-        if s.horse != ctx.horse || s.binding.harness != codec::HARNESS {
+        if s.horse != ctx.horse || s.binding.harness != F::HARNESS {
             bail!(
-                "session {} is not a Codex session of horse {}",
+                "session {} is not a {} session of horse {}",
                 ctx.session,
+                F::HARNESS,
                 ctx.horse
             );
         }
@@ -261,11 +259,13 @@ impl Custodian {
         // The channel server of the sandbox gets none of these entries.
         ctx.runs.typed(&key);
         let mut c = Custodian {
+            files: PhantomData,
             key,
-            tail: Tail::default(),
+            tail: Tail::new(F::mark),
             thread: None,
             head: s.head,
             stopped: false,
+            turn: None,
             end_seen: None,
             interrupted: false,
             interrupted_for: HashSet::new(),
@@ -283,7 +283,7 @@ impl Custodian {
         };
         // A session that has its thread already (a resumed session).
         if let Some(t) = s.binding.native_id {
-            c.tail.path = find_rollout(&c.ctx.sessions_root, &t);
+            c.tail.path = F::find(&c.ctx.sessions_root, &t);
             c.report.thread = Some(t.clone());
             c.thread = Some(t);
         }
@@ -311,17 +311,17 @@ impl Custodian {
     /// Bind the session of the run to `thread`, the first thread that a
     /// `stop` names and that has a rollout file of the TUI.
     fn bind(&mut self, thread: &str) -> Result<bool> {
-        let Some(path) = find_rollout(&self.ctx.sessions_root, thread) else {
+        let Some(path) = F::find(&self.ctx.sessions_root, thread) else {
             self.say_once(
                 &format!("no-rollout:{thread}"),
                 &format!(
-                    "a stop names thread {thread}, which has no rollout under {}",
+                    "a stop names thread {thread}, which has no session file under {}",
                     self.ctx.sessions_root.display()
                 ),
             );
             return Ok(false);
         };
-        if sub_agent(&path) {
+        if F::sub_agent(&path) {
             return Ok(false);
         }
         self.ctx
@@ -335,11 +335,28 @@ impl Custodian {
         Ok(true)
     }
 
-    fn signal(&mut self, kind: SafePoint, thread: Option<String>) -> Result<()> {
+    fn signal(
+        &mut self,
+        kind: SafePoint,
+        thread: Option<String>,
+        turn: Option<String>,
+    ) -> Result<()> {
         if kind == SafePoint::Prompt {
+            if turn.is_some() {
+                self.turn = turn;
+            }
             self.stopped = false;
             self.activity();
             return Ok(());
+        }
+        if let (Some(t), Some(newest)) = (&turn, &self.turn) {
+            if t != newest {
+                self.say_once(
+                    &format!("late:{t}"),
+                    &format!("a stop of turn {t} came after the prompt of turn {newest}; ignored"),
+                );
+                return Ok(());
+            }
         }
         match (&self.thread, &thread) {
             (None, Some(t)) => {
@@ -425,7 +442,10 @@ impl Custodian {
                 self.report.missed_stops += 1;
                 self.say_once(
                     "missed",
-                    "a turn ended in the rollout with no stop from Codex's notify program",
+                    &format!(
+                        "a turn ended in the session file with no stop from {}",
+                        F::SIGNAL
+                    ),
                 );
                 self.stopped = true;
                 self.end_seen = None;
@@ -460,8 +480,9 @@ impl Custodian {
         self.say_once(
             "no-stop",
             &format!(
-                "the TUI looks idle, but Codex's notify program never told the host that a turn ended; the entries stay queued (look at notify in {} of the sandbox)",
-                codec::notify::CONFIG
+                "the TUI looks idle, but {} never told the host that a turn ended; the entries stay queued ({})",
+                F::SIGNAL,
+                F::HINT
             ),
         );
         Ok(())
@@ -473,8 +494,12 @@ impl Custodian {
         if self.stopped || self.interrupted || self.broken || self.thread.is_none() {
             return Ok(());
         }
-        let Some(e) =
-            super::urgent_entry(&self.ctx.store, &self.ctx.session, &self.interrupted_for)?
+        let Some(e) = super::urgent_entry(
+            &self.ctx.store,
+            &self.ctx.session,
+            &self.interrupted_for,
+            &self.ctx.tap,
+        )?
         else {
             return Ok(());
         };
@@ -551,10 +576,11 @@ impl Custodian {
     /// file again.
     fn ingest(&mut self) {
         self.last_ingest = Instant::now();
-        let Some(path) = self.tail.path.clone().filter(|p| p.is_file()) else {
+        let source = self.tail.path.as_deref().map(F::source);
+        let Some(path) = source.filter(|p| p.is_file()) else {
             return;
         };
-        if self.ingested.is_some() && self.ingested == self.tail.seen {
+        if F::ONE_FILE && self.ingested.is_some() && self.ingested == self.tail.seen {
             self.land_or_warn();
             return;
         }
@@ -574,11 +600,10 @@ impl Custodian {
 
     fn ingest_now(&mut self, path: &Path) -> Result<()> {
         let st = self.ctx.store.clone();
-        let got = codec::ingest_run_locked(&st.lock()?, path, &self.ctx.version, &self.ctx.horse)?;
-        if got.session != self.ctx.session {
+        let got = F::ingest(&st.lock()?, path, &self.ctx.version, &self.ctx.horse)?;
+        if got != self.ctx.session {
             bail!(
-                "the rollout went into session {}, not {}",
-                got.session,
+                "the session file went into session {got}, not {}",
                 self.ctx.session
             );
         }
@@ -609,7 +634,7 @@ impl Custodian {
                 .and_then(|h| nodes.iter().position(|n| n.hash == *h))
                 .map_or(0, |i| i + 1);
             let at = (from..nodes.len())
-                .find(|k| !claimed.contains(k) && user_row_holds(&nodes[*k].raw, &p.text));
+                .find(|k| !claimed.contains(k) && F::user_row_holds(&nodes[*k].raw, &p.text));
             match at {
                 Some(k) => {
                     claimed.insert(k);
@@ -625,11 +650,15 @@ impl Custodian {
     }
 
     fn deliver_entry(&mut self, e: &crate::horse::inbox::Entry) -> Result<()> {
+        F::check_delivery(self.tail.path.as_deref())?;
         let typed = super::type_entry(&self.ctx.store, &self.ctx.tap, &self.ctx.idle, e)?;
         let Some((text, head)) = typed else {
-            self.broken = true;
+            self.broken = !self.ctx.tap.attached();
             return Ok(());
         };
+        if text.is_empty() {
+            return Ok(());
+        }
         (self.ctx.ledger)(&format!("pty.deliver {}", e.id));
         self.report.typed += 1;
         // The entry starts a turn: busy until its `stop`.
@@ -644,43 +673,12 @@ impl Custodian {
     }
 }
 
-/// The rollout is the one of a sub-agent thread, not of the TUI.
-fn sub_agent(path: &Path) -> bool {
-    use std::io::BufRead as _;
-    let mut line = String::new();
-    let read = std::fs::File::open(path)
-        .map(std::io::BufReader::new)
-        .and_then(|mut r| r.read_line(&mut line));
-    let first = read
-        .ok()
-        .and_then(|_| serde_json::from_str::<Value>(&line).ok());
-    let src = first.as_ref().map(|v| &v["payload"]["source"]);
-    src.is_some_and(|s| s.get("subagent").is_some() || s == "subagent")
-}
-
-/// A user message row of the rollout with `text`.
-fn user_row_holds(raw: &[u8], text: &str) -> bool {
-    let Ok(v) = serde_json::from_slice::<Value>(raw) else {
-        return false;
-    };
-    let want = text.trim();
-    v["type"] == "response_item"
-        && v["payload"]["type"] == "message"
-        && v["payload"]["role"] == "user"
-        && v["payload"]["content"].as_array().is_some_and(|c| {
-            c.iter().any(|x| {
-                x["text"]
-                    .as_str()
-                    .is_some_and(|t| t.trim() == want || (!want.is_empty() && t.contains(want)))
-            })
-        })
-}
-
-impl Live for Custodian {
+impl<F: Files> Live for Custodian<F> {
     fn pump(&mut self, timeout: Duration) -> Result<Pump> {
         if self.closed {
             return Ok(Pump::Closed);
         }
+        self.ctx.tap.poll_mail(&self.ctx.session);
         let mut next = match self.signals.recv_timeout(timeout) {
             Ok(k) => Some(k),
             Err(RecvTimeoutError::Timeout) => None,
@@ -691,7 +689,7 @@ impl Live for Custodian {
             }
         };
         while let Some(h) = next.take() {
-            if let Err(e) = self.signal(h.kind, h.thread) {
+            if let Err(e) = self.signal(h.kind, h.thread, h.turn) {
                 let e = format!("{e:#}");
                 self.say_once(&e, &e);
             }

@@ -1,6 +1,6 @@
 use super::*;
 use crate::horse::registry::{
-    artifact_hash, host as rhost, trust::new_keypair, FileIndex, Keypair, Manifest, Transport,
+    artifact_hash, host as rhost, trust::new_keypair, Keypair, Manifest, Transport,
 };
 use crate::horse::Store;
 use std::path::{Path, PathBuf};
@@ -54,7 +54,13 @@ fn world() -> World {
 
 /// Publish `text` as `t/x@<version>` into the default local index of
 /// `state`, signed by `key` when given.
-fn publish(state: &Path, key: Option<&Keypair>, version: &str, text: &str) -> Manifest {
+fn publish(
+    state: &Path,
+    store: &Store,
+    key: Option<&Keypair>,
+    version: &str,
+    text: &str,
+) -> Manifest {
     let bytes = dna::parse(text).unwrap().encode().into_bytes();
     let mut m = Manifest {
         name: "t/x".into(),
@@ -68,7 +74,9 @@ fn publish(state: &Path, key: Option<&Keypair>, version: &str, text: &str) -> Ma
     if let Some(k) = key {
         m.sign(k);
     }
-    FileIndex::new("local", rhost::dir(state).join("local"))
+    crate::horse::registry::configured_for_store(state, store)
+        .unwrap()
+        .remove(0)
         .put(&m, &bytes)
         .unwrap();
     m
@@ -120,7 +128,7 @@ fn a_denied_fetch_writes_nothing_and_one_denied_line() {
     let w = world();
     let key = new_keypair();
     rhost::trust_add(&w.state, "t", &key.public_hex(), None).unwrap();
-    publish(&w.state, Some(&key), "1.0.0", TEXT);
+    publish(&w.state, &w.store, Some(&key), "1.0.0", TEXT);
     let before = w.store.horse(&w.access.horse).unwrap().dna;
     let events = kinds(&w);
     let host = stub(&w.state, Answer::Denied);
@@ -146,7 +154,7 @@ fn an_approved_fetch_with_use_changes_the_dna_and_names_the_hash() {
     let w = world();
     let key = new_keypair();
     rhost::trust_add(&w.state, "t", &key.public_hex(), Some("ci")).unwrap();
-    let m = publish(&w.state, Some(&key), "1.0.0", TEXT);
+    let m = publish(&w.state, &w.store, Some(&key), "1.0.0", TEXT);
     let before = w.store.horse(&w.access.horse).unwrap().dna;
     let host = stub(&w.state, Answer::Approved);
     let resp = handle(Some(&w.access), &fetch_req(REF, true), &host);
@@ -190,7 +198,7 @@ fn an_approved_fetch_without_use_only_stores_the_artifact() {
     let w = world();
     let key = new_keypair();
     rhost::trust_add(&w.state, "t", &key.public_hex(), None).unwrap();
-    let m = publish(&w.state, Some(&key), "1.2.0", TEXT);
+    let m = publish(&w.state, &w.store, Some(&key), "1.2.0", TEXT);
     let before = w.store.horse(&w.access.horse).unwrap().dna;
     let host = stub(&w.state, Answer::Approved);
     let resp = handle(
@@ -218,7 +226,7 @@ fn an_approved_fetch_without_use_only_stores_the_artifact() {
 fn a_trust_refusal_names_only_the_verdict_after_the_approval() {
     let w = world();
     // Unsigned, and the default policy requires a signature.
-    publish(&w.state, None, "1.0.0", TEXT);
+    publish(&w.state, &w.store, None, "1.0.0", TEXT);
     let host = stub(&w.state, Answer::Approved);
     let resp = handle(Some(&w.access), &fetch_req(REF, true), &host);
     assert_eq!(resp.status, Status::Failed);
@@ -233,7 +241,7 @@ fn a_trust_refusal_names_only_the_verdict_after_the_approval() {
     );
     // An untrusted key: the key itself stays out of the answer.
     let other = new_keypair();
-    publish(&w.state, Some(&other), "2.0.0", TEXT);
+    publish(&w.state, &w.store, Some(&other), "2.0.0", TEXT);
     let resp = handle(
         Some(&w.access),
         &fetch_req("registry://t/x@2.0.0", true),
@@ -310,7 +318,13 @@ fn an_incompatible_dna_is_refused_with_its_conflicts() {
     let w = world();
     let key = new_keypair();
     rhost::trust_add(&w.state, "t", &key.public_hex(), None).unwrap();
-    publish(&w.state, Some(&key), "1.0.0", "capabilities = [\"net\"]\n");
+    publish(
+        &w.state,
+        &w.store,
+        Some(&key),
+        "1.0.0",
+        "capabilities = [\"net\"]\n",
+    );
     let before = w.store.horse(&w.access.horse).unwrap().dna;
     let host = stub(&w.state, Answer::Approved);
     let resp = handle(Some(&w.access), &fetch_req(REF, true), &host);

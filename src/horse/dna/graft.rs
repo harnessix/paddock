@@ -128,7 +128,7 @@ pub fn graft_horses_locked(
     if new.hash() == h.dna {
         return Ok(None);
     }
-    let to = put(store, &new)?;
+    let to = put(&store.for_horse(host)?, &new)?;
     let why = DnaEvent::Graft {
         donor_horse: donor.into(),
         donor_dna: Some(d.dna.clone()),

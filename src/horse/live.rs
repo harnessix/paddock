@@ -11,10 +11,13 @@
 //!
 //! Runs without horse mode do not change: nothing here runs for them.
 
+pub mod agy;
 pub mod channel;
 pub mod claude;
 pub mod codex;
 pub mod custody;
+pub mod disconnect;
+pub mod grok;
 pub mod harness;
 pub mod headless;
 pub mod pty;
@@ -50,7 +53,10 @@ pub const MODEL: &str = "deepseek-flash";
 
 /// Read `[horse]` from the text of the user configuration.
 pub fn settings_in(text: &str) -> Result<Settings> {
-    let v: toml::Table = toml::from_str(text).context("the user configuration is not TOML")?;
+    let v = crate::manifest::user_config_doc(text)?;
+    let v = v
+        .as_table()
+        .context("the user configuration is not a table")?;
     let h = v.get("horse").and_then(toml::Value::as_table);
     let s = |k: &str| -> Result<Option<String>> {
         match h.and_then(|t| t.get(k)) {
@@ -100,6 +106,8 @@ type Hook = Box<dyn FnOnce(ChildStdin, ChildStdout) + Send>;
 static DEVICE_SETUP: Mutex<Option<Setup>> = Mutex::new(None);
 
 static HOOK: Mutex<Option<Hook>> = Mutex::new(None);
+/// The process id of the sandbox whose pipes the custody hook takes.
+static CHILD: Mutex<Option<u32>> = Mutex::new(None);
 static JOIN: Mutex<Option<JoinHandle<Result<Done>>>> = Mutex::new(None);
 /// The control channel of a custody that holds no stdio (a TUI run).
 static CLOSE: Mutex<Option<std::sync::mpsc::Sender<harness::Control>>> = Mutex::new(None);
@@ -116,6 +124,14 @@ pub enum Done {
     Pty(pty::Report),
     /// An interactive Claude Code run through the pty relay.
     PtyClaude(pty::claude::Report),
+    /// A headless Grok Build run over ACP.
+    Grok(grok::Report),
+    /// An interactive Grok Build run through the pty relay.
+    PtyGrok(pty::Report),
+    /// A headless agy run over stream-json.
+    Agy(agy::Report),
+    /// An interactive agy run through the pty relay.
+    PtyAgy(pty::Report),
 }
 
 /// Arm `hook` for the next sandbox that this process starts: the sandbox
@@ -167,6 +183,54 @@ pub fn arm_codex(ctx: codex::CustodyCtx, policy: codex::Policy) {
             harness::Ends::WhenDone,
         )
         .map(Done::Codex)
+    });
+}
+
+/// The custody of the next sandbox that this process starts, for a
+/// headless Grok Build run (`grok agent stdio`), as for [`arm_claude`].
+pub fn arm_grok(ctx: grok::CustodyCtx, policy: grok::Policy) {
+    arm_with(move |stdin, stdout| {
+        grok::run(
+            headless::io(stdout, stdin),
+            ctx,
+            policy,
+            harness::Ends::WhenDone,
+        )
+        .map(Done::Grok)
+    });
+}
+
+/// The custody of the next sandbox that this process starts, for a
+/// headless agy run over stream-json, as for [`arm_claude`]. The
+/// interrupt is SIGINT to the process under the sandbox that reads the
+/// custody pipe (agy/signal.rs).
+pub fn arm_agy(mut ctx: agy::CustodyCtx) {
+    arm_with(move |stdin, stdout| {
+        let root = CHILD.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if let (Some(root), Some(pipe)) = (root, agy::signal::pipe_of(&stdin)) {
+            ctx.interrupt = Some(Box::new(move || {
+                agy::signal::interrupt(root, pipe).map(|_| ())
+            }));
+        }
+        agy::run(headless::io(stdout, stdin), ctx, harness::Ends::WhenDone).map(Done::Agy)
+    });
+}
+
+/// [`arm_pty`] for an interactive agy run.
+pub fn arm_pty_agy(ctx: pty::CustodyCtx, close: std::sync::mpsc::Sender<harness::Control>) {
+    let key = tui_state::run_key(&ctx.horse, &ctx.session);
+    let (runs, tap) = (ctx.runs, ctx.tap.clone());
+    arm_tui(runs, &key, tap, close, move |signals| {
+        pty::agy::run(ctx, signals).map(Done::PtyAgy)
+    });
+}
+
+/// [`arm_pty`] for an interactive Grok Build run.
+pub fn arm_pty_grok(ctx: pty::CustodyCtx, close: std::sync::mpsc::Sender<harness::Control>) {
+    let key = tui_state::run_key(&ctx.horse, &ctx.session);
+    let (runs, tap) = (ctx.runs, ctx.tap.clone());
+    arm_tui(runs, &key, tap, close, move |signals| {
+        pty::grok::run(ctx, signals).map(Done::PtyGrok)
     });
 }
 
@@ -255,7 +319,9 @@ pub fn take_device_setup() -> Option<Setup> {
 pub(crate) fn handoff(hook: Option<Hook>, child: &mut std::process::Child) {
     if let Some(hook) = hook {
         if let (Some(stdin), Some(stdout)) = (child.stdin.take(), child.stdout.take()) {
+            *CHILD.lock().unwrap_or_else(|e| e.into_inner()) = Some(child.id());
             hook(stdin, stdout);
+            CHILD.lock().unwrap_or_else(|e| e.into_inner()).take();
         }
     }
 }
@@ -289,6 +355,8 @@ pub fn prepare(
         // start them yet.
         Some(Harness::Claude) => bail!("horse mode does not work with claude runs yet"),
         Some(Harness::Codex) => bail!("horse mode does not work with codex runs yet"),
+        Some(Harness::Grok) => bail!("horse mode does not work with grok runs yet"),
+        Some(Harness::Agy) => bail!("horse mode does not work with agy runs yet"),
         None => bail!(
             "horse mode works with dsh only, not with {}",
             built.spec.harness
@@ -299,7 +367,7 @@ pub fn prepare(
     }
     let cfg = settings(env)?;
     sdk_command(&mut built.spec.command, &built.profile.launch.args)?;
-    let store = Store::open(&super::root(env))?;
+    let store = Store::open_host(env)?;
     let sessions_root = built.spec.home_src.join(".dsh/sessions");
     let (horse, main, resume) = match horse_id {
         None => {

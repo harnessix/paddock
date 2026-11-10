@@ -1,0 +1,2 @@
+- Changed: paddock answers known agy and Codex folder trust screens for the run's project and reports screens that name another folder.
+- Changed: Codex hooks review uses the keyboard selection and reports when changed hooks remain untrusted.

@@ -4,18 +4,28 @@ use std::io::{Read, Write};
 
 #[path = "channel.rs"]
 pub(crate) mod channel;
+#[path = "peek.rs"]
+mod peek;
 #[path = "safe_point.rs"]
 pub(crate) mod safe_point;
 
 pub fn main(args: &[String]) -> i32 {
     let mut values = std::collections::BTreeMap::new();
     let usage = || {
-        eprintln!("usage: paddock-host horse {{sessions|lineage|log SESSION [--last N]|inbox SESSION|memory put NAME|dna|dna put|registry fetch REF [--use] [--index NAME]|registry sync INDEX|safe-point stop|prompt [JSON]}}");
+        eprintln!("usage: paddock-host horse {{sessions|lineage|log SESSION [--last N]|inbox SESSION|memory put NAME|dna|dna put|registry fetch REF [--use] [--index NAME]|registry sync INDEX|ctl COMMAND...|safe-point stop|prompt [JSON]}}");
         2
     };
     // A hook of an interactive run: the reply is complete, or a turn starts.
     if args.first().map(String::as_str) == Some("safe-point") {
         return safe_point::main(&args[1..]);
+    }
+    // A context transform: the rest of the line is one ctl command.
+    if args.first().map(String::as_str) == Some("ctl") {
+        if args.len() < 2 {
+            return usage();
+        }
+        values.insert("op".into(), serde_json::json!("ctl"));
+        values.insert("command".into(), serde_json::json!(args[1..].join(" ")));
     }
     if args.first().map(String::as_str) == Some("registry") {
         match registry_args(&args[1..]) {
@@ -44,6 +54,7 @@ pub fn main(args: &[String]) -> i32 {
             "log"
         }
         ["registry", ..] => crate::horse::device::registry::FETCH,
+        ["ctl", ..] => crate::horse::device::ctl::OP,
         ["dna"] => "dna",
         ["dna", "put"] => {
             let mut bytes = Vec::new();
@@ -151,6 +162,7 @@ pub(super) fn dispatch(cmd: &str, rest: &[String]) -> Option<i32> {
         "gh" => git::gh_main(rest),
         "kv" => kv::main(rest),
         "horse" => main(rest),
+        "peek" => peek::main(rest),
         "channel" => channel::main(rest),
         "timer" => timer::main(rest),
         "pasture" => pasture::main(rest),

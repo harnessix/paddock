@@ -69,6 +69,9 @@ impl Default for TuiState {
 pub struct Heard {
     pub kind: SafePoint,
     pub thread: Option<String>,
+    /// The turn that the report is about, when the hook names one (Grok
+    /// Build's `promptId`).
+    pub turn: Option<String>,
 }
 
 /// A thread id as a hook may name it: 1 to 64 letters, digits, `-` or `_`.
@@ -181,12 +184,18 @@ impl Runs {
 
     /// A report that names the thread of the harness.
     pub fn mark_thread(&self, key: &str, kind: SafePoint, thread: Option<&str>) {
+        self.mark_turn(key, kind, thread, None);
+    }
+
+    /// A report that names the thread and the turn of the harness.
+    pub fn mark_turn(&self, key: &str, kind: SafePoint, thread: Option<&str>, turn: Option<&str>) {
         let run = self.run(key);
         mark(&mut run.state.lock().unwrap(), kind, crate::horse::now_ms());
         run.changed.notify_all();
         let heard = Heard {
             kind,
             thread: thread.map(String::from),
+            turn: turn.map(String::from),
         };
         run.hear
             .lock()
@@ -324,10 +333,11 @@ pub(crate) fn handle_in(
                 .ok_or_else(|| anyhow!("missing safe point kind"))?
                 .parse()?;
             let thread = req.args.get("thread").and_then(|v| v.as_str());
-            if let Some(t) = thread {
+            let turn = req.args.get("turn").and_then(|v| v.as_str());
+            for t in thread.iter().chain(turn.iter()) {
                 check_thread(t)?;
             }
-            runs.mark_thread(&key(access), kind, thread);
+            runs.mark_turn(&key(access), kind, thread, turn);
             return Ok(serde_json::json!({"bytes": []}));
         }
         let since = req.args.get("since").and_then(|v| v.as_u64()).unwrap_or(0);

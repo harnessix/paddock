@@ -61,19 +61,34 @@ turn() {
     fi
     idle
 }
+# Wait up to $1 seconds for a whole line, into `got`. A read that times
+# out in the middle of a line keeps what it read (bash 4.4 and later), and
+# the next call goes on from there: no byte of a typed line is lost.
+pending=""
+poll() {
+    local part=""
+    if IFS= read -r -t "$1" part; then
+        got="$pending$part"
+        pending=""
+        return 0
+    fi
+    pending="$pending$part"
+    return 1
+}
 turn 1 hi 3
 n=1
-for _ in $(seq 120); do
-    # Whole seconds: bash 3.2 has no fractional timeout.
+for _ in $(seq 1200); do
     [ -e done ] && exit 0
-    if IFS= read -r -t 1 got; then
+    if poll 0.1; then
         # A bracketed paste is one input, also over more than one line.
         case "$got" in
         $'\e[200~'*)
-            while [[ "$got" != *$'\e[201~'* ]]; do
-                IFS= read -r -t 5 more || break
-                got="$got"$'\n'"$more"
+            first=$got
+            while [[ "$first" != *$'\e[201~'* ]]; do
+                poll 5 || break
+                first="$first"$'\n'"$got"
             done
+            got=$first
             got=${got#$'\e[200~'}
             got=${got%$'\e[201~'*}
             ;;

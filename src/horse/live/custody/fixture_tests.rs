@@ -63,7 +63,7 @@ fn rig(name: &str) -> (Rig, Setup) {
     )
     .unwrap();
     let host = bin.join("paddock-host");
-    std::fs::write(&host, format!("#!/bin/sh\necho {}\n", rh.session)).unwrap();
+    std::fs::write(&host, format!("#!/bin/sh\ncase \"$1 $2 $3\" in\n'horse sessions ') echo '{}' ;;\n'peek binding ') cat '{}' ;;\n'horse dna put') cat > '{}' ;;\n'peek dna ') cat '{}' ;;\nesac\n", rh.session, binding.join("binding").display(), device.join("dna.toml").display(), device.join("dna.toml").display())).unwrap();
     std::fs::set_permissions(&host, std::fs::Permissions::from_mode(0o755)).unwrap();
     let src = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests/fixtures/horse")

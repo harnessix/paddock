@@ -9,6 +9,8 @@ unverified = [
   "network.endpoints: the hosts for the allowlist network mode",
   "compaction: the note on the first PostToolUse after a PostCompact, from the source of grok-build",
   "hooks.folder_trust: the format of trusted_folders.toml, from the grok-build source (1.0.45). The 1.0.70 user guide names the same file",
+  "horse.pty: the input row and the busy spinner of the Grok Build TUI, from the grok-build source (1.0.45), not from a recorded 1.0.70 screen",
+  "horse hooks: the JSON event on the stdin of a hook (sessionId, promptId, subagentType), from the 1.0.70 user guide",
 ]
 
 [locate]
@@ -136,3 +138,21 @@ into = ".grok/hooks/paddock-compaction.json"
 [hooks.folder_trust]
 file = ".grok/trusted_folders.toml"
 drop_hooks = [".grok/config.toml"]
+
+# Horse mode (src/horse/live/pty/grok.rs). paddock has no checked push path
+# into the Grok Build TUI, so it types queued entries into the pty of its
+# relay when the TUI is idle. Its hooks say when a turn starts and ends
+# (run/grok_setup.rs). The composer row starts with "❯" and shows no
+# placeholder while it has the focus; the turn status row (a braille
+# spinner, the timers and "[stop]") shows only while a turn runs. Ctrl+C
+# stops a turn when the composer is empty; Esc never does. User guide,
+# Keyboard shortcuts -> Escape.
+[horse.pty]
+version = "1.0.70"
+prompt = "❯"
+empty_input = true
+busy = ["[stop]", "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+quiet_ms = 1500
+interrupt_key = "ctrl-c"
+submit_key = "enter"
+bracketed_paste = true

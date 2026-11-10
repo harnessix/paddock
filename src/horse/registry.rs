@@ -14,7 +14,9 @@ pub mod manifest;
 pub mod reference;
 pub mod trust;
 
-pub use index::{configured, open_indexes, FileIndex, Transport};
+pub use index::{
+    configured, configured_for_store, open_indexes, open_indexes_for_store, FileIndex, Transport,
+};
 pub use manifest::Manifest;
 pub use reference::{Reference, Version};
 pub use trust::{Keypair, Trust, TrustedKey, Verdict};

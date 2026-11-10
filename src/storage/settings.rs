@@ -43,6 +43,12 @@ pub struct Settings {
     pub build_cache: bool,
     /// The size of all build caches together, in GiB. 0: no limit.
     pub build_cache_gib: u64,
+    /// Package-cache limits in GiB; zero disables a limit.
+    pub package_cache_project_gib: u64,
+    pub package_cache_total_gib: u64,
+    /// Cargo builds in a sandbox write less: no incremental folder, and
+    /// line tables instead of full debug information.
+    pub lean_builds: bool,
 }
 
 impl Default for Settings {
@@ -61,6 +67,9 @@ impl Default for Settings {
             },
             build_cache: true,
             build_cache_gib: 40,
+            package_cache_project_gib: 20,
+            package_cache_total_gib: 100,
+            lean_builds: true,
         }
     }
 }
@@ -98,6 +107,7 @@ impl Settings {
         };
         boolean("auto_gc", &mut s.auto_gc);
         boolean("build_cache", &mut s.build_cache);
+        boolean("lean_builds", &mut s.lean_builds);
         let mut number = |key: &str, slot: &mut u64, max: u64| match t.get(key) {
             None => {}
             Some(toml::Value::Integer(n)) if *n >= 0 && (*n as u64) <= max => *slot = *n as u64,
@@ -112,6 +122,16 @@ impl Settings {
         number("soft_floor_gib", &mut s.soft.gib, 1 << 20);
         number("soft_floor_percent", &mut s.soft.percent, 100);
         number("build_cache_gib", &mut s.build_cache_gib, 1 << 20);
+        number(
+            "package_cache_project_gib",
+            &mut s.package_cache_project_gib,
+            1 << 20,
+        );
+        number(
+            "package_cache_total_gib",
+            &mut s.package_cache_total_gib,
+            1 << 20,
+        );
         (s, warn)
     }
 }

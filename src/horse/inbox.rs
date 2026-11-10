@@ -24,6 +24,8 @@ pub struct Entry {
     /// interrupt key of a TUI) does so, and delivers at that safe point.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub interrupt: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mail_seq: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -90,6 +92,106 @@ impl Store {
             bail!("the text of an append must not be empty");
         }
         self.session(session)?;
+        self.write_entry(session, role, text, interrupt)
+    }
+
+    /// Queue one mailbox message, preserving its sequence for acknowledgement.
+    pub fn queue_mail(
+        &self,
+        session: &str,
+        text: &str,
+        interrupt: bool,
+        seq: u64,
+    ) -> Result<Entry> {
+        let _l = self.lock()?;
+        let pending = self.inbox(session)?;
+        if let Some(e) = pending.iter().find(|e| e.mail_seq == Some(seq)).cloned() {
+            return Ok(e);
+        }
+        if let Some(e) = self
+            .deliveries(session)?
+            .into_iter()
+            .find(|d| d.entry.mail_seq == Some(seq))
+            .map(|d| d.entry)
+        {
+            return Ok(e);
+        }
+        self.session(session)?;
+        // Keep mailbox entries in sequence even if the wall clock moves back.
+        let last = pending
+            .iter()
+            .filter_map(|e| e.id.get(..20)?.parse::<u128>().ok())
+            .max()
+            .unwrap_or(0);
+        let timestamp = now_ns().max(last.saturating_add(1));
+        let e = Entry {
+            id: format!(
+                "{:020}-{}",
+                timestamp,
+                super::hex(&super::random_bytes::<3>()?)
+            ),
+            session: session.into(),
+            role: "user".into(),
+            text: text.into(),
+            queued_ms: super::now_ms(),
+            interrupt,
+            mail_seq: Some(seq),
+        };
+        self.for_session(session)?.write_ref(
+            &format!("{}/{}.json", dir(session), e.id),
+            &serde_json::to_vec_pretty(&e)?,
+        )?;
+        Ok(e)
+    }
+
+    /// Queue the task of a spawned child as a `user` entry that goes out
+    /// right after the start entry of the session, before every entry
+    /// that another process appended in between. The session of a child
+    /// can be seen before its run queues the task (a hitched child gets
+    /// its session when its parent spawns it), and its custody delivers
+    /// nothing before the task is queued. So the task takes the place
+    /// after the first pending entry when that is the start entry
+    /// (`system`), else the first place.
+    pub fn queue_task(&self, session: &str, text: &str) -> Result<Entry> {
+        if text.is_empty() {
+            bail!("the text of an append must not be empty");
+        }
+        let _l = self.lock()?;
+        self.session(session)?;
+        let pending = self.inbox(session)?;
+        let tag = super::hex(&super::random_bytes::<3>()?);
+        let id = match pending.first() {
+            // A longer id with the same start sorts right after it, and
+            // before every id with a later time.
+            Some(first) if first.role == "system" => format!("{}_task-{tag}", first.id),
+            _ => format!("{:020}-task-{tag}", 0),
+        };
+        let e = Entry {
+            id,
+            session: session.into(),
+            role: "user".into(),
+            text: text.into(),
+            queued_ms: super::now_ms(),
+            interrupt: false,
+            mail_seq: None,
+        };
+        self.for_session(session)?.write_ref(
+            &format!("{}/{}.json", dir(session), e.id),
+            &serde_json::to_vec_pretty(&e)?,
+        )?;
+        Ok(e)
+    }
+
+    /// Write an entry with no check that its session exists: the first
+    /// entry of a new session goes in before the session can be seen
+    /// (session/locked.rs), so no other append comes before it.
+    pub(crate) fn write_entry(
+        &self,
+        session: &str,
+        role: &str,
+        text: &str,
+        interrupt: bool,
+    ) -> Result<Entry> {
         let now = super::now_ms();
         let e = Entry {
             id: format!(
@@ -102,8 +204,9 @@ impl Store {
             text: text.into(),
             queued_ms: now,
             interrupt,
+            mail_seq: None,
         };
-        self.write_ref(
+        self.for_session(session)?.write_ref(
             &format!("{}/{}.json", dir(session), e.id),
             &serde_json::to_vec_pretty(&e)?,
         )?;
@@ -147,7 +250,8 @@ impl Store {
             key: Some(format!("append:{}", e.id)),
             media: Some("horse-append".into()),
         };
-        let node = self.put(&meta, &serde_json::to_vec(e)?)?;
+        let scoped = self.for_horse(&self.session(&e.session)?.horse)?;
+        let node = scoped.put(&meta, &serde_json::to_vec(e)?)?;
         let d = Delivery {
             entry: e.clone(),
             node,
@@ -204,7 +308,7 @@ impl Store {
             return Ok(None);
         };
         let d = all.remove(at);
-        self.write_ref(
+        self.for_session(session)?.write_ref(
             &format!("{}/{}.json", dir(session), d.entry.id),
             &serde_json::to_vec_pretty(&d.entry)?,
         )?;
@@ -221,13 +325,14 @@ impl Store {
     }
 
     fn save_deliveries(&self, session: &str, all: &[Delivery]) -> Result<()> {
-        self.session(session)?;
-        self.write_ref(
+        self.for_session(session)?.write_ref(
             &format!("deliveries/{session}.json"),
             &serde_json::to_vec_pretty(all)?,
         )
     }
 }
+
+mod drop;
 
 #[cfg(test)]
 mod tests {

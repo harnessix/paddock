@@ -10,6 +10,7 @@ fn entry(n: u32, role: &str) -> Entry {
         text: format!("text {n}"),
         queued_ms: n as u64,
         interrupt: false,
+        mail_seq: None,
     }
 }
 

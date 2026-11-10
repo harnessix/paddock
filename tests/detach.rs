@@ -12,12 +12,13 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-/// The fake harness: `$0` is the prompt file (`[detach] args`). It records
-/// what it got in the project, then acts on the task.
+/// The fake harness: `$0` is the prompt file (`[detach] args`). Its first
+/// line is the task; the mailbox reminder follows. It records what it got
+/// in the project, then acts on the task.
 const SCRIPT: &str = r#"f="$0"
 if test -t 0 && test -t 1; then tty=yes; else tty=no; fi
-{ echo "tty $tty"; test -r "$f" && echo "readable"; echo "task $(cat "$f")"; } > .detach-result
-case "$(cat "$f")" in
+{ echo "tty $tty"; test -r "$f" && echo "readable"; echo "task $(head -n1 "$f")"; grep -c "paddock-host mail wait" "$f"; } > .detach-result
+case "$(head -n1 "$f")" in
   ok) paddock-host done --status ok "all good" ;;
   failed) paddock-host done --status failed "it broke" ;;
   late) while [ ! -e .go ]; do sleep 0.2; done; paddock-host done "late but fine" ;;
@@ -114,11 +115,15 @@ impl World {
         );
         let text = String::from_utf8(out.stdout).unwrap();
         let lines: Vec<&str> = text.lines().collect();
-        assert_eq!(lines.len(), 2, "{text}");
+        assert_eq!(lines.len(), 3, "{text}");
         let id = lines[0].to_string();
         assert_eq!(
             lines[1],
             format!("paddock view {} --write", paddock::ids::short(&id))
+        );
+        assert_eq!(
+            lines[2],
+            format!("mail: paddock mail watch {}", paddock::ids::short(&id))
         );
         assert!(self.has_session(&id), "no tmux session {id}");
         id
@@ -318,7 +323,23 @@ fn done_ends_the_run_and_wait_reports_it() {
     let r = w.result();
     assert!(r.contains("tty yes"), "{r}");
     assert!(r.contains("readable"), "{r}");
-    assert!(r.contains("task ok"), "{r}");
+    assert!(
+        r.contains("task ok\n1\n"),
+        "the prompt ends with the mailbox reminder: {r}"
+    );
+    // The mailbox saw the run from its start to its end.
+    let out = w
+        .paddock()
+        .args(["mail", "watch", &id, "--timeout", "20s"])
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert!(text.contains("event started:"), "{text}");
+    assert!(
+        text.contains("event ended: the sandbox ended with exit code"),
+        "{text}"
+    );
 
     let w = World::new(true);
     let id = w.detach("failed");
