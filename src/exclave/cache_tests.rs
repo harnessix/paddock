@@ -48,6 +48,23 @@ fn fixture_crate_reuses_project_cache_offline() {
         "pub fn answer() -> u32 { 42 }\n",
     )
     .unwrap();
+    // Sources written in the same moment as the first build can look newer
+    // than its outputs on a fast runner, so the second build would not be
+    // fresh. Date them before the first build.
+    let past = std::time::SystemTime::now() - std::time::Duration::from_secs(60);
+    for file in [
+        "Cargo.toml",
+        "src/lib.rs",
+        "dependency/Cargo.toml",
+        "dependency/src/lib.rs",
+    ] {
+        fs::File::options()
+            .write(true)
+            .open(project.join(file))
+            .unwrap()
+            .set_modified(past)
+            .unwrap();
+    }
     for run in 0..2 {
         // Each nested build has its own memory check. The outer test runner holds
         // the tree-wide cargo lease for both runs.
