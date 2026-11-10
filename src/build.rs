@@ -549,7 +549,7 @@ pub fn build_with(env: &HostEnv, opts: &Options, harness: Harness) -> Result<Bui
             count += 1;
             spec.set_env(k, v.clone(), "host env (inherited)");
         }
-        for d in &env.path {
+        for d in crate::tack::tackshims::host_path(env) {
             spec.inherit_path.push(d.clone());
         }
         // Names only, never values.

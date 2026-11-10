@@ -21,7 +21,8 @@ pub const PROJECT_FILE: &str = "paddock.toml";
 /// (gatewayd.rs), `[storage]` (storage/dedupe.rs), `[snapshot]`
 /// (snapshot.rs), `[profiles]` (shadow.rs), `[detach]` (detach.rs),
 /// `[compaction]` (compaction.rs), `[hooks]` (hooks.rs), `[speckit]`
-/// (speckit.rs), `[loft]` (loft.rs), `[horse]` (horse/live.rs). A project
+/// (speckit.rs), `[loft]` (loft.rs), `[horse]` (horse/live.rs), and
+/// `[tack]` (tack/config.rs). A project
 /// `paddock.toml` with one of them is invalid.
 pub const USER_ONLY: &[&str] = &[
     "devices",
@@ -47,6 +48,7 @@ pub const USER_ONLY: &[&str] = &[
     "horse",
     "turnout",
     "exclave",
+    "tack",
 ];
 
 /// Parse host user TOML without exposing private source lines in errors.
@@ -286,6 +288,18 @@ impl Manifest {
         let text = String::from_utf8(bytes)
             .with_context(|| format!("{} is not UTF-8 text", path.display()))?;
         if !follow {
+            // A clear refusal of a table that only the user file may have,
+            // before the schema names it an unknown field.
+            let v: Option<toml::Value> = toml::from_str(&text).ok();
+            if let Some(k) = USER_ONLY
+                .iter()
+                .find(|k| v.as_ref().is_some_and(|v| v.get(**k).is_some()))
+            {
+                bail!(
+                    "{}: [{k}] is only read from the user configuration (~/.config/paddock/config.toml); a project paddock.toml cannot set it, because an agent in the sandbox can edit the project",
+                    path.display()
+                );
+            }
             return toml::from_str(&text).with_context(|| format!("{} is invalid", path.display()));
         }
         Self::parse_user(&text).with_context(|| format!("{} is invalid", path.display()))
@@ -689,6 +703,12 @@ mod tests {
         let p = t.path().join(PROJECT_FILE);
         std::fs::write(&p, text).unwrap();
         assert!(Manifest::read(&p).is_err());
+        std::fs::write(&p, "[tack.secrets.GH_TOKEN]\n").unwrap();
+        let e = format!("{:#}", Manifest::read(&p).unwrap_err());
+        assert!(
+            e.contains("[tack] is only read from the user configuration"),
+            "{e}"
+        );
     }
 
     #[test]

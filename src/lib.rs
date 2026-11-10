@@ -82,6 +82,7 @@ pub mod spec;
 pub mod speckit;
 pub mod state;
 pub mod storage;
+pub mod tack;
 #[cfg(test)]
 mod testutil;
 pub mod timer;

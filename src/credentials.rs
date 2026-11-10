@@ -19,6 +19,8 @@
 //! `[exec]`. Values are read when they are needed, never written to disk.
 
 pub mod channels;
+mod command;
+pub(crate) use command::run_command;
 pub mod gateway;
 pub mod secret;
 pub mod sshagent;
@@ -512,8 +514,8 @@ pub fn host_vars(all: &BTreeMap<String, Credential>) -> Vec<String> {
 /// The capability name on the approval card.
 pub const CAPABILITY: &str = "credentials";
 /// The most bytes that a command source may print.
-const MAX_VALUE: usize = 64 * 1024;
-const COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+pub(crate) const MAX_VALUE: usize = 64 * 1024;
+pub(crate) const COMMAND_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// The credentials of a run: what to deliver, and what to say about the rest.
 #[derive(Debug, Default)]
@@ -720,7 +722,7 @@ pub fn read(env: &HostEnv, plan: &Plan) -> (Vec<Value>, Vec<String>) {
                 .var(c.host_var(name))
                 .map(secret::Secret::from)
                 .ok_or_else(|| anyhow::anyhow!("{} is not set", c.host_var(name))),
-            Source::Command => run_command(&c.command),
+            Source::Command => run_command(&c.command, &|_| {}),
         };
         match value {
             Ok(v) => out.push((name.clone(), c.sandbox_var(name).to_string(), v)),
@@ -728,57 +730,6 @@ pub fn read(env: &HostEnv, plan: &Plan) -> (Vec<Value>, Vec<String>) {
         }
     }
     (out, notices)
-}
-
-fn run_command(cmd: &[String]) -> Result<secret::Secret> {
-    use std::process::{Command, Stdio};
-    let mut child = Command::new(&cmd[0])
-        .args(&cmd[1..])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .with_context(|| format!("cannot run {}", cmd[0]))?;
-    let reader = crate::broker::Pipe::read(child.stdout.take().expect("piped"), MAX_VALUE + 1);
-    let start = std::time::Instant::now();
-    let status = loop {
-        if let Some(s) = child.try_wait()? {
-            break s;
-        }
-        if start.elapsed() > COMMAND_TIMEOUT {
-            let _ = child.kill();
-            let _ = child.wait();
-            bail!(
-                "{} did not finish in {} seconds",
-                cmd[0],
-                COMMAND_TIMEOUT.as_secs()
-            );
-        }
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    };
-    // Locked and wiped from here on, whatever the outcome.
-    // A process left behind can keep stdout open: the value is not
-    // whole then.
-    let deadline =
-        (start + COMMAND_TIMEOUT).min(std::time::Instant::now() + crate::broker::PIPE_GRACE);
-    let (out, ended) = reader.finish(deadline);
-    let buf = secret::Secret::new(out);
-    if !ended {
-        bail!("{} left its output open after it ended", cmd[0]);
-    }
-    if !status.success() {
-        bail!("{} failed ({status})", cmd[0]);
-    }
-    if buf.len() > MAX_VALUE {
-        bail!("{} printed more than {MAX_VALUE} bytes", cmd[0]);
-    }
-    let mut v = std::str::from_utf8(buf.as_bytes()).context("the value is not UTF-8")?;
-    v = v.strip_suffix('\n').unwrap_or(v);
-    v = v.strip_suffix('\r').unwrap_or(v);
-    if v.is_empty() {
-        bail!("{} printed nothing", cmd[0]);
-    }
-    Ok(secret::Secret::from(v))
 }
 
 /// One line in the audit log of host requests. Names only.
@@ -1019,7 +970,7 @@ mod tests {
     fn a_process_left_behind_does_not_hang_a_value_command() {
         let start = std::time::Instant::now();
         let cmd = ["sh", "-c", "echo v; sleep 30 &"].map(String::from);
-        let e = run_command(&cmd).unwrap_err();
+        let e = run_command(&cmd, &|_| {}).unwrap_err();
         assert!(format!("{e:#}").contains("left its output open"), "{e:#}");
         assert!(start.elapsed() < std::time::Duration::from_secs(10));
     }

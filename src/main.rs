@@ -6,6 +6,13 @@ mod cli;
 use cli::{Cli, Cmd};
 
 fn main() {
+    // The exec wrapper of tack's protect = "uid" (tack/wrap.rs): a link to
+    // this binary in the wrapper folder. Before anything else, so the
+    // program's arguments are not read as paddock's.
+    #[cfg(target_os = "linux")]
+    if let Some(code) = paddock::tack::wrap::intercept() {
+        std::process::exit(code);
+    }
     // The start of a sandbox in a scope of its own (freeze.rs): stop, let
     // paddock move this process into the scope, then become the sandbox.
     // Before anything else, so the environment and the arguments pass as
@@ -58,6 +65,20 @@ fn real_main() -> Result<i32> {
     } = &cli.cmd
     {
         return cli::run::relay(listen, socket, forward, ready_file.as_deref());
+    }
+    // tackd: root, started by the service manager, before HostEnv::detect.
+    if let Cmd::Tack {
+        cmd: cli::tack::TackCmd::Serve,
+    } = &cli.cmd
+    {
+        return paddock::tack::daemon::main(&paddock::tack::service::Paths::system());
+    }
+    // An ACL grant that tackd runs as the user, with an empty environment.
+    if let Cmd::Tack {
+        cmd: cli::tack::TackCmd::AclGrant,
+    } = &cli.cmd
+    {
+        return cli::tack::acl_grant();
     }
     // In the guest: before HostEnv::detect, as root without a home.
     let cmd = match cli.cmd {
@@ -201,6 +222,7 @@ fn real_main() -> Result<i32> {
         Cmd::Timer { cmd } => cli::timer::run(&env, cmd),
         Cmd::Logins { cmd } => cli::logins::run(&env, cmd),
         Cmd::Credentials { cmd } => cli::credentials::run(&env, cmd),
+        Cmd::Tack { cmd } => cli::tack::run(&env, cmd),
         Cmd::Boundary { id, json, follow } => {
             cli::status::boundary(&env, paddock::ids::resolve(&env, &id)?, json, follow)
         }

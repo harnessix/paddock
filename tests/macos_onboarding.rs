@@ -101,5 +101,12 @@ fn setup_skips_the_linux_steps_and_doctor_checks_the_mac() {
     ] {
         assert!(text.contains(want), "{want}: {text}");
     }
-    assert!(!text.contains("sudo "), "{text}");
+    // No package manager with sudo. Only tackd, a system service, needs
+    // root to install.
+    assert!(
+        !text
+            .lines()
+            .any(|l| l.contains("sudo ") && !l.contains("sudo paddock tack setup")),
+        "{text}"
+    );
 }

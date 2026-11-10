@@ -71,6 +71,9 @@ pub(crate) fn update_cmd(env: &HostEnv, check: bool, yes: bool) -> Result<i32> {
         update::install(env, &gh as &dyn Source, &rel, &target, None, &tar)?;
         println!("Updated {} to paddock {}.", target.display(), rel.version);
         println!("Running sandboxes keep the old version until they exit.");
+        if let Some(h) = paddock::tack::status::update_hint() {
+            println!("{h}.");
+        }
         // The new version may bring profiles: its menu entries and shims.
         let _ = std::process::Command::new(&target)
             .arg("refresh")

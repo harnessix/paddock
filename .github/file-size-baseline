@@ -2,12 +2,12 @@
 894 src/backend/docker.rs
 1137 src/borrow.rs
 1595 src/build.rs
-1397 src/credentials.rs
+1348 src/credentials.rs
 993 src/credentials/gateway.rs
 729 src/detect.rs
 803 src/devices/blocking.rs
 1195 src/devices/user.rs
-1302 src/doctor.rs
+1199 src/doctor.rs
 995 src/gatewayd.rs
 819 src/hostcli.rs
 2219 src/kv.rs
