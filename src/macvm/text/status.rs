@@ -46,7 +46,7 @@ pub fn status_golden_unknown() -> String {
     "not started on this golden yet".into()
 }
 
-/// `ChatGPT 1.2025.300 (copied 2026-11-02), running, 2 windows`.
+/// `Sample Notes 1.2.3 (copied 2000-01-01), running, 2 windows`.
 pub fn status_app_row(
     name: &str,
     version: &str,
@@ -211,7 +211,7 @@ pub fn status_profile_state(app: &str, home: &str, size: u64, state: &str) -> St
     format!("  profile  {app}/{home} {}, {state}", gib(size))
 }
 
-/// The slots line: `1 of 2 in use (chatgpt-desktop (you, pid 812))`.
+/// The slots line: `1 of 2 in use (sample-notes (you, pid 812))`.
 pub fn status_slots(holders: &[Option<Holder>]) -> String {
     let used: Vec<String> = holders.iter().flatten().map(holder_short).collect();
     let mut s = format!("  slots    {} of {} in use", used.len(), holders.len());

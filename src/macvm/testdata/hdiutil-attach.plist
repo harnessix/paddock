@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- Written from the documented output form of the tool, not recorded on a Mac. packaging/macos/checks/macvm-offline.sh prints the real output to compare. -->
+<!-- Example output in the documented format. -->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>

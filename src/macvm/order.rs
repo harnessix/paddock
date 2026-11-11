@@ -11,9 +11,9 @@
 //! on a level outside the app levels (`level: hidden`, below the desktop or
 //! at the drag and screen saver levels) and a window above `normal` that is larger
 //! than its level allows. A refusal is a [`Change::Refuse`] with the frame
-//! to send back in `window.move`. One thing it corrects without a refusal:
-//! a window in the gap between two screens goes onto the nearest screen, as
-//! a [`Change::Correct`] with the frame for `window.move`.
+//! to send back in `window.move`. The fold keeps the guest's own frames:
+//! where each host window goes (its offset, the screen gap rule) is the
+//! work of `place.rs`, which never moves a guest window.
 //!
 //! A `normal` window in the guest's full screen (`full_screen`, from
 //! `AXFullScreen`) is no refusal: the host window goes to the host's full
@@ -29,6 +29,8 @@ use std::collections::{BTreeMap, BTreeSet};
 /// What the host shows of one guest window.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Entry {
+    /// The process of the window, for the anchor of a child (`place.rs`).
+    pub pid: u32,
     pub level: Level,
     pub parent: Option<u32>,
     /// The last frame the host followed, in guest points.
@@ -100,10 +102,6 @@ pub enum Change {
         reason: Reason,
         back: Option<Frame>,
     },
-    /// The guest put a window in the gap between two screens: the host
-    /// shows it at this frame on the nearest screen, and sends it in
-    /// `window.move`, so the guest agrees. No badge.
-    Correct(u32, Frame),
     /// The window entered (true) or left the guest's full screen: the
     /// host window does the same. Before the `Move` of the same event.
     FullScreen(u32, bool),
@@ -123,8 +121,7 @@ pub struct Windows {
     /// The window the host asked the guest to focus, until the guest
     /// answers with a `focus` event, so a second click sends nothing.
     host_asked: Option<u32>,
-    /// The host screens: the main one for the size rule, every one for
-    /// the gap rule.
+    /// The host screens: the main one for the size rule.
     screens: ScreenSet,
 }
 
@@ -374,20 +371,12 @@ impl Windows {
             });
             return;
         }
-        // A top-level window in the gap between two screens goes onto the
-        // nearest one; a child window follows its parent, and a full
-        // screen window covers the display.
         let full_screen = full_screen_of(w);
         let chrome = chrome_of(w);
-        let frame = if w.parent.is_none() && !full_screen {
-            crop::gap_clamp_guest(w.frame, &self.screens)
-        } else {
-            w.frame
-        };
-        let corrected = !frame.near(&w.frame, EPS);
-        let mut shown = w.clone();
-        shown.frame = frame;
+        let frame = w.frame;
+        let shown = w.clone();
         let entry = Entry {
+            pid: w.pid,
             level: w.level,
             parent: w.parent,
             frame,
@@ -438,9 +427,6 @@ impl Windows {
                 e.focused = w.focused;
             }
         }
-        if corrected {
-            out.push(Change::Correct(w.id, frame));
-        }
     }
 }
 
@@ -457,7 +443,6 @@ impl Change {
             Change::Restore(id) => format!("restore {id}"),    // not user text
             Change::Focus(id) => format!("focus {id}"),        // not user text
             Change::Refuse { id, reason, .. } => format!("refuse {id} {reason:?}"), // not user text
-            Change::Correct(id, f) => format!("correct {id} to {},{} {}x{}", f.x, f.y, f.w, f.h), // not user text
             Change::FullScreen(id, on) => format!("full screen {id} {on}"), // not user text
             Change::Chrome(id, c) => {
                 let (bar, radius) = (c.title_bar, c.radius);

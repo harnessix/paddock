@@ -321,7 +321,7 @@ mod tests {
     fn crash_report_by_pid_and_time() {
         let d = tempfile::tempdir().unwrap();
         let since = SystemTime::now() - Duration::from_secs(1);
-        let old = d.path().join("ChatGPT-2026-11-03-100000.ips");
+        let old = d.path().join("Sample Notes-old.ips");
         std::fs::write(&old, "{\"pid\":4242}\n{...}").unwrap();
         let past = std::fs::FileTimes::new().set_modified(since - Duration::from_secs(3600));
         std::fs::File::options()
@@ -330,7 +330,7 @@ mod tests {
             .unwrap()
             .set_times(past)
             .unwrap();
-        let other = d.path().join("Safari-2026-11-04-100000.ips");
+        let other = d.path().join("Sample Browser.ips");
         std::fs::write(&other, "{\"pid\" : 99}\n").unwrap();
         let txt = d.path().join("notes.txt");
         std::fs::write(&txt, "\"pid\":4242").unwrap();
@@ -339,8 +339,8 @@ mod tests {
             None,
             "old and wrong files do not count"
         );
-        let new = d.path().join("ChatGPT-2026-11-04-100000.ips");
-        std::fs::write(&new, "{\"app_name\":\"ChatGPT\",\"pid\" : 4242}\n").unwrap();
+        let new = d.path().join("Sample Notes-new.ips");
+        std::fs::write(&new, "{\"app_name\":\"Sample Notes\",\"pid\" : 4242}\n").unwrap();
         assert_eq!(find_crash_report(d.path(), 4242, since), Some(new));
         assert_eq!(find_crash_report(d.path(), 99, since), Some(other));
         assert_eq!(find_crash_report(&d.path().join("none"), 1, since), None);
@@ -356,10 +356,10 @@ mod copy_tests {
     /// Applications folder of the real guest is an absolute path, so the
     /// test builds a `Copy` by hand after `plan_copy` checked the rules.
     fn fixture(t: &Path) -> (Copy, PathBuf) {
-        let source = t.join("share/apps/ChatGPT.app");
+        let source = t.join("share/apps/Sample Notes.app");
         std::fs::create_dir_all(source.join("Contents")).unwrap();
         std::fs::write(source.join("Contents/Info.plist"), vec![0u8; 1000]).unwrap();
-        let target = t.join("home/Applications/ChatGPT.app");
+        let target = t.join("home/Applications/Sample Notes.app");
         let c = Copy {
             partial: crate::macvm::layout::partial(&target),
             source,
@@ -394,18 +394,18 @@ mod copy_tests {
         assert_eq!(apps, Path::new(super::super::data::HOME).join(GUEST_APPS));
         assert!(apps.ends_with("Applications"));
         assert!(apps.starts_with(super::super::data::MOUNT));
-        let from = Path::new("/Volumes/My Shared Files/apps/ChatGPT.app");
-        let c = plan_copy(from, &apps.join("ChatGPT.app"), true).unwrap();
-        assert_eq!(c.target, apps.join("ChatGPT.app"));
+        let from = Path::new("/Volumes/My Shared Files/apps/Sample Notes.app");
+        let c = plan_copy(from, &apps.join("Sample Notes.app"), true).unwrap();
+        assert_eq!(c.target, apps.join("Sample Notes.app"));
         assert_eq!(
             c.partial,
-            apps.join("ChatGPT.app.partial"),
+            apps.join("Sample Notes.app.partial"),
             "the copy carries the partial name until it is whole"
         );
         for bad in [
-            PathBuf::from("/etc/ChatGPT.app"),
-            apps.join("sub/ChatGPT.app"),
-            apps.join("ChatGPT"),
+            PathBuf::from("/etc/Sample Notes.app"),
+            apps.join("sub/Sample Notes.app"),
+            apps.join("Sample Notes"),
             apps.join(".app"),
             PathBuf::from("/"),
         ] {
@@ -427,7 +427,7 @@ mod copy_tests {
         let t = tempfile::tempdir().unwrap();
         let (c, target) = fixture(t.path());
         let log = RefCell::new(Vec::new());
-        run_copy(&c, "ChatGPT", Some(8 << 30), &runner(&log, true)).unwrap();
+        run_copy(&c, "Sample Notes", Some(8 << 30), &runner(&log, true)).unwrap();
         assert!(target.join("Contents/Info.plist").is_file());
         assert!(!c.partial.exists(), "no partial is left");
         let calls = log.borrow().clone();
@@ -445,7 +445,7 @@ mod copy_tests {
         keep.unquarantine = false;
         assert!(keep.xattr().is_none());
         let log = RefCell::new(Vec::new());
-        run_copy(&keep, "ChatGPT", None, &runner(&log, true)).unwrap();
+        run_copy(&keep, "Sample Notes", None, &runner(&log, true)).unwrap();
         assert_eq!(log.borrow().len(), 3);
     }
 
@@ -454,7 +454,7 @@ mod copy_tests {
         let t = tempfile::tempdir().unwrap();
         let (mut c, target) = fixture(t.path());
         // The host's archive: `ditto -x ARCHIVE PARTIAL`.
-        c.source = t.path().join("share/apps/ChatGPT.app.cpio");
+        c.source = t.path().join("share/apps/Sample Notes.app.cpio");
         assert_eq!(
             c.ditto().argv,
             [
@@ -469,7 +469,7 @@ mod copy_tests {
         std::fs::write(target.join("Contents/old"), b"v1").unwrap();
         let (c, _) = fixture(t.path());
         let log = RefCell::new(Vec::new());
-        let e = run_copy(&c, "ChatGPT", None, &|plan: &Plan| {
+        let e = run_copy(&c, "Sample Notes", None, &|plan: &Plan| {
             log.borrow_mut().push(plan.argv[0].clone());
             if plan.argv[0] == DITTO {
                 crate::macvm::drop::clone_into(Path::new(&plan.argv[1]), Path::new(&plan.argv[2]))?;
@@ -502,7 +502,7 @@ mod copy_tests {
         std::fs::create_dir_all(c.partial.join("Contents")).unwrap();
 
         let log = RefCell::new(Vec::new());
-        let e = run_copy(&c, "ChatGPT", Some(8 << 30), &runner(&log, false)).unwrap_err();
+        let e = run_copy(&c, "Sample Notes", Some(8 << 30), &runner(&log, false)).unwrap_err();
         assert_eq!(e.0, ErrorCode::Io);
         assert!(e.1.contains("No space left on device"), "{}", e.1);
         assert!(e.1.contains("ditto"), "{}", e.1);
@@ -516,7 +516,7 @@ mod copy_tests {
 
         // A second try with a working ditto replaces the old copy.
         let log = RefCell::new(Vec::new());
-        run_copy(&c, "ChatGPT", Some(8 << 30), &runner(&log, true)).unwrap();
+        run_copy(&c, "Sample Notes", Some(8 << 30), &runner(&log, true)).unwrap();
         assert!(!target.join("Contents/old").exists());
         assert!(target.join("Contents/Info.plist").is_file());
     }
@@ -528,10 +528,18 @@ mod copy_tests {
         assert_eq!(c.needs(1000), 1000 + COPY_HEADROOM);
         assert_eq!(c.needs(u64::MAX), u64::MAX, "no overflow");
         let log = RefCell::new(Vec::new());
-        let e = run_copy(&c, "ChatGPT", Some(1 << 20), &runner(&log, true)).unwrap_err();
-        assert!(e.1.contains("no room in the guest for ChatGPT"), "{}", e.1);
+        let e = run_copy(&c, "Sample Notes", Some(1 << 20), &runner(&log, true)).unwrap_err();
+        assert!(
+            e.1.contains("no room in the guest for Sample Notes"),
+            "{}",
+            e.1
+        );
         assert!(e.1.contains("The old copy stays"), "{}", e.1);
-        assert!(e.1.contains("paddock app reset ChatGPT --data"), "{}", e.1);
+        assert!(
+            e.1.contains("paddock app reset Sample Notes --data"),
+            "{}",
+            e.1
+        );
         assert!(log.borrow().is_empty() && !target.exists());
     }
 }

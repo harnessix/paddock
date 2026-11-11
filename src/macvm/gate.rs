@@ -17,6 +17,7 @@ use super::firewall::{self, Conn, Decision, Mode, Rule, Rules, Scope, BY_APPROVE
 use super::owner::AppOwner;
 use super::proxy_header::Identity;
 use crate::broker::ConnectAnswer;
+use crate::eventstream::schema::GrantSource;
 use crate::proxy::allow::Allowlist;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -37,17 +38,77 @@ pub const RULE_SYSTEM: &str = "system";
 pub const TICK: Duration = Duration::from_secs(1);
 
 pub struct Firewall {
-    pub mode: Mode,
+    /// The mode now: `paddock app network` changes it while the session
+    /// runs, and every new connection reads it.
+    mode: Arc<std::sync::RwLock<Mode>>,
     api: Option<Allowlist>,
     rules: Mutex<Rules>,
     asker: Option<Asker>,
     /// The app of the session. `None`: every process may ask (tests).
     owner: Option<AppOwner>,
     system: Mutex<Vec<SystemHost>>,
+    /// The apps of the guest that showed a window in this session besides
+    /// the app: a browser or a sign-in window that the app opened. Their
+    /// connections ask like the app's.
+    windowed: Mutex<std::collections::BTreeSet<String>>,
     /// The warning of a connection that the guest proxy could not name
     /// is written once per session.
     unknown_said: std::sync::atomic::AtomicBool,
     log: PathBuf,
+    /// The client streams of the open connections, by number, so a switch
+    /// to mode `none` shuts them down.
+    open: Arc<Mutex<std::collections::BTreeMap<u64, Held>>>,
+    next_open: std::sync::atomic::AtomicU64,
+    /// The profile whose `changes[]` gets the rules of the answers.
+    changes: Option<(PathBuf, PathBuf)>,
+}
+
+struct Held {
+    stream: std::os::unix::net::UnixStream,
+    host: String,
+    port: u16,
+    id: Option<Identity>,
+}
+
+impl Held {
+    fn denied(&self, mode: Mode, api: Option<&Allowlist>, rules: &[Rule]) -> bool {
+        let name = self
+            .id
+            .as_ref()
+            .map(Identity::app_name)
+            .unwrap_or_else(|| "unknown".into());
+        let conn = match &self.id {
+            Some(id) => Conn::of(id, &name, &self.host, self.port),
+            None => Conn::new(&name, &self.host, self.port),
+        };
+        matches!(firewall::decide(mode, api, rules, &conn), Decision::Deny(_))
+    }
+}
+
+impl Firewall {
+    /// A guest app other than the session's showed a window: from now on
+    /// its connections ask like the app's. `system` (the guest prompts)
+    /// never counts.
+    pub fn saw_window_of(&self, app: &str) {
+        if app.is_empty() || app == "system" {
+            return;
+        }
+        self.windowed
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(app.to_string());
+    }
+
+    fn windowed(&self, id: Option<&Identity>) -> bool {
+        let Some(id) = id else {
+            return false;
+        };
+        let set = self.windowed.lock().unwrap_or_else(|e| e.into_inner());
+        [id.app.as_deref(), id.parent_app.as_deref()]
+            .into_iter()
+            .flatten()
+            .any(|a| set.contains(a))
+    }
 }
 
 /// An allowed connection: its log line waits for the close.
@@ -77,15 +138,83 @@ impl Firewall {
         log: PathBuf,
     ) -> Self {
         Self {
-            mode,
+            mode: Arc::new(std::sync::RwLock::new(mode)),
             api,
             rules: Mutex::new(rules),
             asker,
             owner: None,
             system: Mutex::new(Vec::new()),
+            windowed: Mutex::new(Default::default()),
             unknown_said: std::sync::atomic::AtomicBool::new(false),
             log,
+            open: Arc::new(Mutex::new(std::collections::BTreeMap::new())),
+            next_open: std::sync::atomic::AtomicU64::new(0),
+            changes: None,
         }
+    }
+
+    /// The rules of the answers go to the grant changes of this profile
+    /// folder; `home` shows paths with `~` in the event log.
+    pub fn with_changes(mut self, profile_dir: PathBuf, home: PathBuf) -> Self {
+        self.changes = Some((profile_dir, home));
+        self
+    }
+
+    /// A rule that an answer made, into the grant changes of the profile.
+    fn note_rule(&self, r: &Rule, by: &str, now: u64) {
+        let Some((dir, home)) = &self.changes else {
+            return;
+        };
+        use super::grants::{self, Applies, Change, Source, What};
+        let source = if by == BY_APPROVER {
+            Source::Approver
+        } else if by == "cli" {
+            Source::You
+        } else {
+            Source::QuestionPanel
+        };
+        let value = format!("{} {}", r.verdict.word(), r.scope.word()); // not user text
+        let target = format!("{}:{}", r.host, r.port.text()); // not user text
+        let c = Change::new(
+            now,
+            What::Rule,
+            "add",
+            &target,
+            &value,
+            Applies::Live,
+            source,
+        );
+        grants::note_bounded(&super::session::Profile::new(dir.clone()), c, home);
+    }
+
+    /// The mode now.
+    pub fn mode(&self) -> Mode {
+        *self.mode.read().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Switch the mode and close connections that the new mode denies.
+    pub fn set_mode(&self, mode: Mode) -> u64 {
+        let _ = self.current_rules(crate::state::now());
+        let mut current = self.mode.write().unwrap_or_else(|e| e.into_inner());
+        *current = mode;
+        let rules = self.rules().all();
+        let mut open = self.open.lock().unwrap_or_else(|e| e.into_inner());
+        let mut closed = 0;
+        open.retain(|_, held| {
+            if held.denied(mode, self.api.as_ref(), &rules) {
+                let _ = held.stream.shutdown(std::net::Shutdown::Both);
+                closed += 1;
+                false
+            } else {
+                true
+            }
+        });
+        closed
+    }
+
+    /// The connections that are open now.
+    pub fn open_count(&self) -> usize {
+        self.open.lock().unwrap_or_else(|e| e.into_inner()).len()
     }
 
     /// Only the processes of this app ask in mode `ask`.
@@ -138,7 +267,7 @@ impl Firewall {
         let mut any = false;
         for (t, q) in asker.open() {
             let (answer, word) =
-                match firewall::decide(self.mode, self.api.as_ref(), all, &q.who.conn(&t)) {
+                match firewall::decide(self.mode(), self.api.as_ref(), all, &q.who.conn(&t)) {
                     Decision::Allow(r) => (
                         ConnectAnswer::AllowOnce,
                         r.unwrap_or_else(|| RULE_LISTED.into()),
@@ -174,6 +303,8 @@ impl Firewall {
         for a in answered {
             let by = if a.who == "approver" {
                 BY_APPROVER
+            } else if a.who == "cli" {
+                "cli"
             } else {
                 BY_USER
             };
@@ -184,6 +315,7 @@ impl Firewall {
                 word,
             };
             asker.finish(&a.triple, &a.question, s, now);
+            self.recheck(&self.rules().all(), now);
         }
         if any {
             self.write_status();
@@ -193,19 +325,71 @@ impl Firewall {
     /// The rule of an answer into the session or the file. The rule word
     /// of the log: the id of the new rule, or `once`.
     fn apply(&self, answer: ConnectAnswer, who: &Who, t: &Triple, by: &str, now: u64) -> String {
+        self.apply_with_bus(answer, who, t, by, now, crate::eventstream::default_bus())
+    }
+
+    fn apply_with_bus(
+        &self,
+        answer: ConnectAnswer,
+        who: &Who,
+        t: &Triple,
+        by: &str,
+        now: u64,
+        bus: Option<&crate::eventstream::Bus>,
+    ) -> String {
         match firewall::rule_of_answer(answer, &who.conn(t), by, now) {
             Some(r) => {
                 let id = r.id.clone();
                 let scope = r.scope;
                 let mut rules = self.rules();
-                match rules.add(r, false) {
-                    Ok(_) if scope == Scope::Always => {
-                        if let Err(e) = rules.save() {
-                            log::warn!("macvm: {e:#}");
+                let wildcard = (answer == ConnectAnswer::AllowSite
+                    && firewall::site::registrable_site(&t.host).is_some())
+                .then(|| {
+                    let mut w = r.clone();
+                    w.id.push_str("-subdomains");
+                    w.host = format!("*.{}", r.host);
+                    w
+                });
+                match rules.add(r.clone(), answer == ConnectAnswer::AllowEverything) {
+                    Ok(added) => {
+                        self.note_rule(&r, by, now);
+                        if let (Some(bus), Some(asker)) = (bus, &self.asker) {
+                            let source = if by == BY_APPROVER {
+                                GrantSource::Approver
+                            } else {
+                                GrantSource::QuestionPanel
+                            };
+                            bus.publish(super::events_stream::rule_grant(
+                                asker.profile(),
+                                added,
+                                "add",
+                                source,
+                            ));
+                        }
+                        if let Some(w) = wildcard {
+                            if let Err(e) = rules.add(w, false) {
+                                log::warn!("macvm: {e:#}");
+                            }
+                        }
+                        if scope == Scope::Always {
+                            if let Err(e) = rules.save() {
+                                log::warn!("macvm: {e:#}");
+                            }
                         }
                     }
-                    Ok(_) => {}
-                    Err(e) => log::warn!("macvm: {e:#}"),
+                    Err(e) => {
+                        log::warn!("macvm: {e:#}");
+                        return RULE_ONCE.into();
+                    }
+                }
+                let session = rules.session.clone();
+                if scope == Scope::Session {
+                    let path = self.log.with_file_name("session-rules.json");
+                    if let Ok(data) = serde_json::to_vec(&session) {
+                        if let Err(e) = crate::privfs::write_atomic(&path, data) {
+                            log::warn!("macvm: cannot write session rules: {e}");
+                        }
+                    }
                 }
                 id
             }
@@ -240,11 +424,13 @@ impl Firewall {
                     word,
                 };
                 asker.finish(t, &q, s.clone(), now);
+                self.recheck(&self.rules().all(), now);
                 return Ok(s);
             }
             asker.enqueue(t, now);
         }
         self.write_status();
+        self.recheck(&self.rules().all(), now);
         self.wait_on(asker, t, &q)
     }
 
@@ -261,6 +447,12 @@ impl Firewall {
                 if let Some(s) = asker.timeout(t, q, crate::state::now()) {
                     return Ok(s);
                 }
+                log::info!(
+                    "macvm: connection to {}:{} gave up after the maximum wait of {} seconds",
+                    t.host,
+                    t.port,
+                    asker.wait().as_secs()
+                );
                 self.write_status();
                 return Err(RULE_TIMEOUT.into());
             }
@@ -324,10 +516,11 @@ impl Firewall {
             Entry::new(now, &name, team.as_deref(), host, port, verdict, rule)
         };
         let all = self.current_rules(now);
-        let decision = firewall::decide(self.mode, self.api.as_ref(), &all, &conn);
+        let mode = self.mode();
+        let decision = firewall::decide(mode, self.api.as_ref(), &all, &conn);
         match decision {
             Decision::Allow(rule) => {
-                let word = rule.unwrap_or_else(|| match self.mode {
+                let word = rule.unwrap_or_else(|| match mode {
                     Mode::Api | Mode::Allowlist => RULE_LISTED.into(),
                     _ => RULE_EGRESS.into(),
                 });
@@ -339,7 +532,7 @@ impl Firewall {
                 Err(word)
             }
             Decision::Ask => {
-                if self.owner.as_ref().is_some_and(|o| !o.owns(id)) {
+                if self.owner.as_ref().is_some_and(|o| !o.owns(id)) && !self.windowed(id) {
                     // The guest system never asks. A connection whose
                     // process the guest proxy could not name is no proof
                     // of the app either: said once, then counted.
@@ -397,9 +590,38 @@ impl Firewall {
         crate::proxy::Gate(Arc::new(
             move |host: &str, port: u16, id: Option<&Identity>| {
                 let opened = self.connection(host, port, id)?;
-                Ok(crate::proxy::Opened(Box::new(move |up, down| {
+                let n = self
+                    .next_open
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let (held, gone) = (self.open.clone(), self.open.clone());
+                let fw = self.clone();
+                let host = host.to_string();
+                let id = id.cloned();
+                Ok(crate::proxy::Opened::new(move |up, down| {
+                    gone.lock().unwrap_or_else(|e| e.into_inner()).remove(&n);
                     opened.close(up, down)
-                })))
+                })
+                .holding(move |client| {
+                    if let Ok(stream) = client.try_clone() {
+                        let entry = Held {
+                            stream,
+                            host,
+                            port,
+                            id,
+                        };
+                        let mode = fw.mode.read().unwrap_or_else(|e| e.into_inner());
+                        let rules = fw.rules().all();
+                        if entry.denied(*mode, fw.api.as_ref(), &rules) {
+                            let _ = entry.stream.shutdown(std::net::Shutdown::Both);
+                        } else {
+                            held.lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .insert(n, entry);
+                        }
+                    } else {
+                        let _ = client.shutdown(std::net::Shutdown::Both);
+                    }
+                }))
             },
         ))
     }
@@ -429,8 +651,8 @@ pub fn build(
     side: AppSide,
 ) -> Arc<Firewall> {
     let mode = Mode::parse(mode_word).unwrap_or(Mode::Ask);
-    let api = matches!(mode, Mode::Api | Mode::Allowlist).then(|| Allowlist::parse(allow).0);
-    // Each instance of an app has its own rules file: `NAME--N.toml`.
+    // Keep the allowlist available for live network mode changes.
+    let api = Some(Allowlist::parse(allow).0);
     let rules_key = super::instance::key(app, super::instance::of_profile(profile_dir));
     let mut rules = Rules::load(env, &rules_key).unwrap_or_else(|e| {
         log::warn!("macvm: {e:#}");
@@ -442,7 +664,7 @@ pub fn build(
         .map(crate::app::app_label)
         .unwrap_or_else(|| app.to_string());
     rules.seed(&firewall::seed_hosts(profile.as_ref()), crate::state::now());
-    let asker = (mode == Mode::Ask).then(|| {
+    let asker = Some({
         let hook = crate::approver::load_system(&env.user).unwrap_or_else(|e| {
             log::warn!("macvm: the approver is off: {e:#}");
             None
@@ -456,7 +678,12 @@ pub fn build(
     let owner = side.owner;
     connlog::rotate_for_session(&log);
     ask_status::clear(&ask_status::path_next_to(&log));
-    let fw = Arc::new(Firewall::new(mode, api, rules, asker, log).with_owner(owner));
+    let _ = std::fs::remove_file(log.with_file_name("session-rules.json"));
+    let fw = Arc::new(
+        Firewall::new(mode, api, rules, asker, log)
+            .with_owner(owner)
+            .with_changes(profile_dir.to_path_buf(), env.home.clone()),
+    );
     if fw.asker.is_some() {
         start_ticks(&fw);
     }

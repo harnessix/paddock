@@ -61,14 +61,24 @@ pub fn host_screens() -> Option<super::crop::ScreenSet> {
 }
 
 /// The display argument of a session: `PADDOCK_MACVM_DISPLAY`, else the
-/// union of the host screens at the main screen's scale, else the
+/// union of the host screens at the main screen's scale with the room of
+/// `PADDOCK_MACVM_ROOM` (or [`super::crop::ROOM`]) right of it, else the
 /// default.
 pub fn display_arg(env: &HostEnv) -> String {
     if let Some(d) = env.var("PADDOCK_MACVM_DISPLAY") {
         return d.to_string();
     }
     host_screens()
-        .and_then(|s| s.session_display())
+        .and_then(|s| s.session_display(room_arg(env)))
         .map(|d| d.to_string())
         .unwrap_or_else(|| DEFAULT_DISPLAY.to_string())
+}
+
+/// The room of the guest display: `PADDOCK_MACVM_ROOM` (a share of the
+/// screens' width, 0 for none), else [`super::crop::ROOM`].
+pub fn room_arg(env: &HostEnv) -> f64 {
+    env.var("PADDOCK_MACVM_ROOM")
+        .and_then(|v| v.trim().parse::<f64>().ok())
+        .filter(|v| v.is_finite())
+        .map_or(super::crop::ROOM, |v| v.clamp(0.0, super::crop::ROOM_MAX))
 }

@@ -11,20 +11,23 @@ use std::time::Duration;
 
 #[test]
 fn app_exited() {
-    let s = t::app_exited("ChatGPT", 6);
-    has(&s, &["ChatGPT exited with code 6", "Open ChatGPT again"]);
-    assert!(s.contains(&t::open_again("ChatGPT")));
+    let s = t::app_exited("Sample Notes", 6);
+    has(
+        &s,
+        &["Sample Notes exited with code 6", "Open Sample Notes again"],
+    );
+    assert!(s.contains(&t::open_again("Sample Notes")));
 }
 
 #[test]
 fn crash_report() {
-    let p = Path::new("/Users/me/x/logs/ChatGPT-2026-11-04.ips");
+    let p = Path::new("/Users/me/x/logs/Sample Notes-report.ips");
     has(
-        &t::crash_report("ChatGPT", p),
+        &t::crash_report("Sample Notes", p),
         &[
-            "ChatGPT",
+            "Sample Notes",
             "3 times in 60 s",
-            "/Users/me/x/logs/ChatGPT-2026-11-04.ips",
+            "/Users/me/x/logs/Sample Notes-report.ips",
         ],
     );
 }
@@ -61,20 +64,20 @@ fn state_stale() {
 
 #[test]
 fn copy_signature_broken() {
-    let s = t::copy_signature_broken("ChatGPT", "a sealed resource is missing");
+    let s = t::copy_signature_broken("Sample Notes", "a sealed resource is missing");
     assert!(
-        s.contains("ChatGPT") && s.contains("damaged") && s.contains("old copy stays"),
+        s.contains("Sample Notes") && s.contains("damaged") && s.contains("old copy stays"),
         "{s}"
     );
 }
 
 #[test]
 fn copy_failed() {
-    let s = t::copy_failed("ChatGPT", "ditto: No space left on device");
+    let s = t::copy_failed("Sample Notes", "ditto: No space left on device");
     has(
         &s,
         &[
-            "the copy of ChatGPT into the guest failed: ditto: No space left on device",
+            "the copy of Sample Notes into the guest failed: ditto: No space left on device",
             "The old copy stays",
         ],
     );
@@ -116,14 +119,14 @@ fn status_label() {
 #[test]
 fn status_running() {
     let s = t::status_running(
-        "chatgpt-desktop",
+        "sample-notes",
         812,
         Duration::from_secs(2 * 3600 + 14 * 60 + 5),
         Some(Duration::from_millis(4100)),
     );
     assert_eq!(
         s,
-        "chatgpt-desktop   running (pid 812, 2h 14m), warm start in 4.1 s"
+        "sample-notes      running (pid 812, 2h 14m), warm start in 4.1 s"
     );
     let cold = t::status_running("x", 1, Duration::from_secs(59), None);
     assert_eq!(cold, "x                 running (pid 1, 0h 0m)");
@@ -142,14 +145,14 @@ fn session_end() {
 #[test]
 fn status_stopped() {
     let s = t::status_stopped(
-        "chatgpt-desktop",
+        "sample-notes",
         SessionEnd::Crashed,
         StartKind::Cold,
         Some("golden changed"),
     );
     assert_eq!(
         s,
-        "chatgpt-desktop   stopped (crashed), next start cold: golden changed"
+        "sample-notes      stopped (crashed), next start cold: golden changed"
     );
     let w = t::status_stopped("x", SessionEnd::QuitWithSave, StartKind::Warm, None);
     has(&w, &["quit with save", "next start warm"]);
@@ -160,8 +163,8 @@ fn status_stopped() {
 #[test]
 fn reset_confirm() {
     let system = ["state.vzs", "apps/", "drop/", "logs/"];
-    let s = t::reset_confirm("chatgpt-desktop", ResetTier::System, 6 * GIB);
-    has(&s, &["paddock app reset chatgpt-desktop removes 6 GiB"]);
+    let s = t::reset_confirm("sample-notes", ResetTier::System, 6 * GIB);
+    has(&s, &["paddock app reset sample-notes removes 6 GiB"]);
     has(&s, &system);
     let keeps = s.split("It keeps: ").nth(1).unwrap();
     has(
@@ -176,7 +179,7 @@ fn reset_confirm() {
     assert!(!s.split("It keeps").next().unwrap().contains("data.img"));
     assert!(s.ends_with("Remove it? [y/N]"));
 
-    let d = t::reset_confirm("chatgpt-desktop", ResetTier::Data, 10 * GIB);
+    let d = t::reset_confirm("sample-notes", ResetTier::Data, 10 * GIB);
     has(&d, &["--data", "data.img", "backups/pre-reset-<time>/"]);
     has(&d, &system);
     has(
@@ -184,7 +187,7 @@ fn reset_confirm() {
         &["downloads/", "backups/", "the firewall rules file"],
     );
 
-    let a = t::reset_confirm("chatgpt-desktop", ResetTier::All, 30 * GIB);
+    let a = t::reset_confirm("sample-notes", ResetTier::All, 30 * GIB);
     has(
         &a,
         &[
@@ -239,8 +242,8 @@ fn restore_done() {
 #[test]
 fn quit_first() {
     assert_eq!(
-        t::quit_first("chatgpt-desktop"),
-        "quit the session first (paddock app stop chatgpt-desktop)"
+        t::quit_first("sample-notes"),
+        "quit the session first (paddock app stop sample-notes)"
     );
 }
 
@@ -248,12 +251,12 @@ fn quit_first() {
 
 #[test]
 fn ask_panel() {
-    let p = Path::new("/Applications/ChatGPT.app/Contents/MacOS/ChatGPT");
-    let s = t::ask_panel("ChatGPT", "telemetry.example.com", 443, p);
+    let p = Path::new("/Applications/Sample Notes.app/Contents/MacOS/Sample Notes");
+    let s = t::ask_panel("Sample Notes", "telemetry.example.com", 443, p);
     has(
         &s,
         &[
-            "ChatGPT",
+            "Sample Notes",
             "telemetry.example.com",
             "port 443",
             &p.display().to_string(),

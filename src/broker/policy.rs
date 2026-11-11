@@ -47,8 +47,8 @@ impl HostPolicy {
         let Ok(text) = std::fs::read_to_string(&file) else {
             return Ok(p);
         };
-        let doc: toml::Value =
-            toml::from_str(&text).with_context(|| format!("{} is invalid", file.display()))?;
+        let doc: toml::Value = crate::manifest::user_config_doc(&text)
+            .with_context(|| format!("{} is invalid", file.display()))?;
         let Some(host) = doc.get("host").and_then(|h| h.as_table()) else {
             return Ok(p);
         };
@@ -90,5 +90,18 @@ impl HostPolicy {
 
     pub fn mode(&self, cap: &str) -> Mode {
         self.modes.get(cap).copied().unwrap_or(Mode::Deny)
+    }
+
+    pub fn set_mode(&mut self, cap: &str, mode: Mode) {
+        self.modes.insert(cap.to_string(), mode);
+    }
+
+    /// Whether `[host]` of the user configuration names `cap` itself.
+    pub fn configured(env: &HostEnv, cap: &str) -> bool {
+        std::fs::read_to_string(env.paddock_config().join("config.toml"))
+            .ok()
+            .and_then(|t| toml::from_str::<toml::Value>(&t).ok())
+            .and_then(|d| d.get("host").and_then(|h| h.get(cap)).cloned())
+            .is_some()
     }
 }

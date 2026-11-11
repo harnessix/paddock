@@ -42,9 +42,18 @@ targets:
         LSMinimumSystemVersion: "14.0"
         NSHumanReadableCopyright: "paddock"
         NSPrincipalClass: NSApplication
+        # A drop of an app on the Dock icon opens the Add App review.
+        # `Alternate`: paddock for Mac never becomes the opener of apps.
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Application
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
+            LSItemContentTypes: [com.apple.application-bundle]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.paddock.mac
+        # The paddock icon, rendered from docs/assets/paddock-icon.svg.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         PRODUCT_NAME: paddock for Mac
         PRODUCT_MODULE_NAME: PaddockLauncher
         ENABLE_HARDENED_RUNTIME: YES
@@ -102,6 +111,11 @@ schemes:
         # The unit-test host must not find a paddock installed on this Mac.
         PADDOCK_LAUNCHER_SEARCH_ROOT: /nonexistent
         PADDOCK_LAUNCHER_UITEST: "1"
+      # The checks compare English texts: the test host runs in English
+      # whatever the language of the Mac.
+      commandLineArguments:
+        "-AppleLanguages (en)": true
+        "-AppleLocale en_US": true
       targets:
         - PaddockLauncherTests
         - PaddockLauncherUITests

@@ -18,7 +18,7 @@ pub fn sizes(paths: &[PathBuf]) -> (Vec<u64>, SizeKind) {
     )
 }
 
-fn on_btrfs(p: &Path) -> bool {
+pub(super) fn on_btrfs(p: &Path) -> bool {
     const BTRFS_SUPER_MAGIC: i64 = 0x9123_683E;
     let Ok(c) = std::ffi::CString::new(p.as_os_str().as_encoded_bytes()) else {
         return false;

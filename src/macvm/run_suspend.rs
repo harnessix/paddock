@@ -68,6 +68,9 @@ impl Session<'_> {
         if self.quitting || self.suspend.active {
             return Err(text::suspend_while_quitting());
         }
+        if self.files.grant_pending.is_some() || self.files.fresh_handles.is_some() {
+            return Err(text::grant_busy());
+        }
         if self.freeze.frozen() {
             return Err(text::suspend_frozen());
         }
@@ -156,6 +159,9 @@ impl Session<'_> {
                 let _ = reply.send(Err(text::suspend_while_quitting()));
             }
             Event::Vm(VmEvent::Suspend(_, reply)) => {
+                let _ = reply.send(Err(text::suspend_while_quitting()));
+            }
+            Event::Vm(VmEvent::Grant(super::run_grants::GrantMsg::Line(_, reply, _))) => {
                 let _ = reply.send(Err(text::suspend_while_quitting()));
             }
             _ => {}

@@ -320,11 +320,11 @@ fn spaces_raise_active_only() {
     );
 }
 
-/// A window in the gap between two screens opens on the nearest screen
-/// and the guest hears about it; a move into the gap the same; a child
-/// window follows its parent and is never corrected.
+/// A window in the gap between two screens keeps the guest's frame in
+/// the fold, and the guest hears nothing: the host frame goes onto a
+/// screen in `place.rs`, and the guest window stays where it is.
 #[test]
-fn gap_window_is_corrected() {
+fn a_gap_window_keeps_its_guest_frame() {
     let screens = ScreenSet {
         screens: vec![
             Rect::new(0.0, 0.0, 1440.0, 900.0),
@@ -336,42 +336,16 @@ fn gap_window_is_corrected() {
     let mut w = Windows::with_screens(screens);
     let mut a = win(1, Level::Normal, Frame::new(1445.0, 100.0, 140.0, 100.0));
     let changes = w.apply(&event(&[1], vec![a.clone()], &[]));
-    let mut shown = a.clone();
-    shown.frame = Frame::new(1300.0, 100.0, 140.0, 100.0);
     assert_eq!(
         changes,
-        vec![
-            Change::Open(shown),
-            Change::Correct(1, Frame::new(1300.0, 100.0, 140.0, 100.0)),
-            Change::Reorder(vec![1]),
-        ]
+        vec![Change::Open(a.clone()), Change::Reorder(vec![1])]
     );
-    assert_eq!(
-        w.get(1).unwrap().frame,
-        Frame::new(1300.0, 100.0, 140.0, 100.0)
-    );
-    // The guest followed the correction: no further change.
-    a.frame = Frame::new(1300.0, 100.0, 140.0, 100.0);
-    assert_eq!(w.apply(&event(&[1], vec![a.clone()], &[])), vec![]);
-    // A move into the gap: the host moves it to the edge and corrects.
+    assert_eq!(w.get(1).unwrap().frame, a.frame);
+    // A move into the gap: a plain move, no request to the guest.
     a.frame = Frame::new(1470.0, 100.0, 120.0, 100.0);
     assert_eq!(
         w.apply(&event(&[1], vec![a.clone()], &[])),
-        vec![
-            Change::Move(1, Frame::new(1600.0, 100.0, 120.0, 100.0)),
-            Change::Correct(1, Frame::new(1600.0, 100.0, 120.0, 100.0)),
-        ]
-    );
-    // A popover in the gap under the window stays where the guest put it.
-    let mut pop = win(2, Level::Popover, Frame::new(1450.0, 150.0, 100.0, 40.0));
-    pop.parent = Some(1);
-    assert_eq!(
-        w.apply(&event(&[2, 1], vec![pop.clone()], &[])),
-        vec![Change::Open(pop), Change::Reorder(vec![2, 1])]
-    );
-    assert_eq!(
-        Change::Correct(1, Frame::new(1.0, 2.0, 3.0, 4.0)).kind(),
-        "correct 1 to 1,2 3x4"
+        vec![Change::Move(1, a.frame)]
     );
 }
 
@@ -534,26 +508,6 @@ fn only_a_top_level_normal_window_takes_the_full_screen() {
     let out = m.apply(&event(&[2, 1], vec![sheet], &[]));
     assert!(!out.iter().any(|c| matches!(c, Change::FullScreen(..))));
     assert!(!m.get(2).unwrap().full_screen);
-}
-
-#[test]
-fn a_full_screen_window_in_the_screen_gap_is_not_corrected() {
-    // The display covers two screens and the gap: a full screen window
-    // covers the display, gap included.
-    let screens = ScreenSet {
-        screens: vec![
-            Rect::new(0.0, 0.0, 1000.0, 800.0),
-            Rect::new(1200.0, 0.0, 1000.0, 800.0),
-        ],
-        main: 0,
-        scales: Vec::new(),
-    };
-    let mut m = Windows::with_screens(screens);
-    let mut w = normal(1);
-    w.full_screen = true;
-    w.frame = Frame::new(1010.0, 0.0, 180.0, 800.0);
-    let out = m.apply(&event(&[1], vec![w], &[]));
-    assert!(!out.iter().any(|c| matches!(c, Change::Correct(..))));
 }
 
 #[test]

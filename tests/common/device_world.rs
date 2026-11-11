@@ -43,6 +43,7 @@ impl World {
             "dev",
             "data",
             "state",
+            "home",
         ] {
             std::fs::create_dir_all(root.join(d)).unwrap();
         }
@@ -77,7 +78,8 @@ impl World {
 
     pub fn paddock(&self) -> Command {
         let mut c = Command::new(env!("CARGO_BIN_EXE_paddock"));
-        c.env("XDG_CONFIG_HOME", self.root.join("cfg"))
+        c.env("HOME", self.root.join("home"))
+            .env("XDG_CONFIG_HOME", self.root.join("cfg"))
             .env("XDG_DATA_HOME", self.root.join("data"))
             .env("XDG_STATE_HOME", self.root.join("state"))
             .env("XDG_CACHE_HOME", self.root.join("cache"))
@@ -142,6 +144,7 @@ impl World {
             .into_iter()
             .flatten()
             .flatten()
+            .filter(|e| e.path().extension().is_some_and(|ext| ext == "json"))
             .filter_map(|e| std::fs::read_to_string(e.path()).ok())
             .filter_map(|t| serde_json::from_str(&t).ok())
             .collect()
@@ -213,7 +216,11 @@ pub fn can_run() -> bool {
 /// The configuration of the view tests: one device per thing to prove.
 pub fn view_config(w: &World, port: u16) -> String {
     let dev = w.root.join("dev").display().to_string();
-    let home = std::env::var("HOME").unwrap();
+    let home = w.root.join("home");
+    std::fs::create_dir_all(home.join(".ssh")).unwrap();
+    std::fs::write(home.join(".ssh/key"), "private fixture").unwrap();
+    std::fs::write(home.join(".bash_history"), "private fixture").unwrap();
+    let home = home.display();
     format!(
         r#"
 [devices.up]

@@ -32,17 +32,17 @@ fn a_folder_name_gives_its_number_and_nothing_else_does() {
 
 #[test]
 fn keys_and_labels_name_the_instance_after_the_first() {
-    assert_eq!(key("chatgpt", 1), "chatgpt");
-    assert_eq!(key("chatgpt", 3), "chatgpt--3");
-    assert_eq!(label("ChatGPT", 1), "ChatGPT");
-    assert_eq!(label("ChatGPT", 2), "ChatGPT 2");
-    assert_eq!(arg("chatgpt", 1), "chatgpt");
-    assert_eq!(arg("chatgpt", 2), "chatgpt --instance 2");
+    assert_eq!(key("sample-notes", 1), "sample-notes");
+    assert_eq!(key("sample-notes", 3), "sample-notes--3");
+    assert_eq!(label("Sample Notes", 1), "Sample Notes");
+    assert_eq!(label("Sample Notes", 2), "Sample Notes 2");
+    assert_eq!(arg("sample-notes", 1), "sample-notes");
+    assert_eq!(arg("sample-notes", 2), "sample-notes --instance 2");
 }
 
 #[test]
 fn the_profile_folder_names_its_instance() {
-    let p = std::path::Path::new("/m/profiles.noindex/chatgpt");
+    let p = std::path::Path::new("/m/profiles.noindex/sample-notes");
     assert_eq!(of_profile(&p.join("default")), 1);
     assert_eq!(of_profile(&p.join("instance-4")), 4);
     assert_eq!(of_profile(&p.join("work")), 1);
@@ -83,19 +83,20 @@ fn existing_lists_the_instance_folders_of_one_app() {
     let dir = tempfile::tempdir().unwrap();
     let layout = Layout::at(dir.path().join("macvm"));
     for (app, home) in [
-        ("chatgpt", "default"),
-        ("chatgpt", "instance-3"),
-        ("chatgpt", "work"),
+        ("sample-notes", "default"),
+        ("sample-notes", "instance-3"),
+        ("sample-notes", "work"),
         ("other", "instance-2"),
     ] {
         std::fs::create_dir_all(layout.profile(app, home).dir).unwrap();
     }
-    assert_eq!(existing(&layout, "chatgpt"), vec![1, 3]);
+    assert_eq!(existing(&layout, "sample-notes"), vec![1, 3]);
     assert_eq!(existing(&layout, "other"), vec![2]);
     assert!(existing(&layout, "none").is_empty());
     // The profile of instance N is the folder of `folder(N)`.
     assert_eq!(
-        layout.profile("chatgpt", &folder(3)).dir,
-        dir.path().join("macvm/profiles.noindex/chatgpt/instance-3")
+        layout.profile("sample-notes", &folder(3)).dir,
+        dir.path()
+            .join("macvm/profiles.noindex/sample-notes/instance-3")
     );
 }

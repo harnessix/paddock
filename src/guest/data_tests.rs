@@ -1,23 +1,23 @@
 use super::*;
 
-const IOREG: &str = r#"+-o IOBlockStorageDevice  <class IOBlockStorageDevice, id 0x100000a1>
+const IOREG: &str = r#"+-o IOBlockStorageDevice  <class IOBlockStorageDevice, id 0xa0000001>
   | {
   |   "Device Characteristics" = {"Serial Number"="system-disk","Product Name"="Virtual Disk"}
   | }
-  +-o IOMedia  <class IOMedia, id 0x100000a2>
+  +-o IOMedia  <class IOMedia, id 0xa0000002>
   {
     "BSD Name" = "disk0"
   }
-+-o IOBlockStorageDevice  <class IOBlockStorageDevice, id 0x100000b1>
++-o IOBlockStorageDevice  <class IOBlockStorageDevice, id 0xa0000003>
   | {
   |   "Device Characteristics" = {"Product Name"="Virtual Disk"}
   |   "Serial Number" = "paddock-data"
   | }
-  +-o IOMedia  <class IOMedia, id 0x100000b2>
+  +-o IOMedia  <class IOMedia, id 0xa0000004>
 | {
 |   "BSD Name" = "disk2"
 | }
-+-o IOMedia  <class IOMedia, id 0x100000b3>
++-o IOMedia  <class IOMedia, id 0xa0000005>
     {
       "BSD Name" = "disk2s1"
     }
@@ -25,8 +25,8 @@ const IOREG: &str = r#"+-o IOBlockStorageDevice  <class IOBlockStorageDevice, id
 
 #[test]
 fn a_macos_27_guest_shows_no_serial_and_the_disk_without_the_boot_container_is_data() {
-    // ioreg of a macOS 27.2 guest with the system disk and a 20 GiB
-    // data disk (the device, BSD name, whole and size lines only).
+    // Synthetic ioreg of a macOS guest with a system disk and a data disk.
+    // The device, BSD name, whole and size lines keep the parser shapes.
     let ioreg = IOREG_MACOS_27;
     assert_eq!(find_disk(ioreg, "paddock-data"), None);
     assert_eq!(find_disk_by_elimination(ioreg), Some("disk2".into()));
@@ -46,13 +46,13 @@ fn a_macos_27_guest_shows_no_serial_and_the_disk_without_the_boot_container_is_d
 
 #[test]
 fn find_disk_by_serial_inside_device_characteristics() {
-    let ioreg = r#"+-o AppleVirtIOBlockStorageDevice  <class AppleVirtIOBlockStorageDevice, id 0x1000004c1, registered, matched, active, busy 0 (1 ms), retain 8>
+    let ioreg = r#"+-o AppleVirtIOBlockStorageDevice  <class AppleVirtIOBlockStorageDevice, id 0xa0000006, registered, matched, active, busy 0 (1 ms), retain 8>
   | {
   |   "Device Characteristics" = {"Product Name"="VirtIO Block Device","Serial Number"="paddock-data","Vendor Name"="Apple"}
   |   "Protocol Characteristics" = {"Physical Interconnect"="Virtual Interface"}
   | }
-  +-o IOBlockStorageDriver  <class IOBlockStorageDriver, id 0x1000004c3>
-+-o Apple VirtIO Block Device Media  <class IOMedia, id 0x1000004c5>
+  +-o IOBlockStorageDriver  <class IOBlockStorageDriver, id 0xa0000007>
++-o Apple VirtIO Block Device Media  <class IOMedia, id 0xa0000008>
   | {
   |   "BSD Name" = "disk3"
   | }
@@ -111,12 +111,12 @@ fn container_uuid_and_fresh() {
     assert_eq!(container(""), None);
     let info = "   Device Identifier:         disk3s1
    Volume Name:               Data
-   Volume UUID:               0A81F3B1-51D9-3335-B3E3-169C3640360D
-   Disk / Partition UUID:     0A81F3B1-51D9-3335-B3E3-169C3640360D
+   Volume UUID:               11111111-2222-4333-8444-555555555555
+   Disk / Partition UUID:     11111111-2222-4333-8444-555555555555
 ";
     assert_eq!(
         volume_uuid(info),
-        Some("0A81F3B1-51D9-3335-B3E3-169C3640360D".into())
+        Some("11111111-2222-4333-8444-555555555555".into())
     );
     assert_eq!(volume_uuid("   Volume UUID:   not a uuid\n"), None);
     assert_eq!(volume_uuid(""), None);
@@ -169,10 +169,10 @@ fn host_made_disk_is_filled_not_partitioned() {
 
 #[test]
 fn plist_and_plans() {
-    let p = daemon_plist("0A81F3B1-51D9-3335-B3E3-169C3640360D");
+    let p = daemon_plist("11111111-2222-4333-8444-555555555555");
     assert!(p.contains("dev.paddock.data") && p.contains(MOUNT));
-    assert!(p.contains("diskutil unmount 0A81F3B1-51D9-3335-B3E3-169C3640360D"));
-    assert!(p.contains("mount -mountPoint /Volumes/paddock 0A81F3B1"));
+    assert!(p.contains("diskutil unmount 11111111-2222-4333-8444-555555555555"));
+    assert!(p.contains("mount -mountPoint /Volumes/paddock 11111111"));
     assert!(
         p.contains("&amp;&amp; exit 0"),
         "a mounted volume is left alone"
@@ -190,158 +190,158 @@ fn plist_and_plans() {
     assert!(statvfs_free(Path::new("/")).is_some());
 }
 
-/// ioreg of a macOS 27.2 guest with the system disk and a 20 GiB data
-/// disk: the device, BSD name, whole and size lines only.
-const IOREG_MACOS_27: &str = r#"+-o AppleVirtIODiskStorageDevice@1  <class AppleVirtIODiskStorageDevice, id 0x1000001fd, registered, matched, active, busy 0 (33 ms), retain 11>
-  +-o IOBlockStorageDriver  <class IOBlockStorageDriver, id 0x1000001ff, registered, matched, active, busy 0 (33 ms), retain 8>
-    +-o Apple Inc. VirtIO Block Media  <class IOMedia, id 0x100000200, registered, matched, active, busy 0 (33 ms), retain 12>
+/// Synthetic ioreg of a macOS guest with a system disk and a data disk.
+/// The node IDs, timings, snapshot and sizes are invented.
+const IOREG_MACOS_27: &str = r#"+-o AppleVirtIODiskStorageDevice@1  <class AppleVirtIODiskStorageDevice, id 0xa0000009, registered, matched, active, busy 0 (0 ms), retain 1>
+  +-o IOBlockStorageDriver  <class IOBlockStorageDriver, id 0xa000000a, registered, matched, active, busy 0 (0 ms), retain 1>
+    +-o Apple Inc. VirtIO Block Media  <class IOMedia, id 0xa000000b, registered, matched, active, busy 0 (0 ms), retain 1>
       |   "Whole" = Yes
       |   "BSD Name" = "disk1"
-      |   "Size" = 68719476736
-      +-o IOMediaBSDClient  <class IOMediaBSDClient, id 0x100000207, registered, matched, active, busy 0 (0 ms), retain 6>
-      +-o IOGUIDPartitionScheme  <class IOGUIDPartitionScheme, id 0x100000216, !registered, !matched, active, busy 0 (30 ms), retain 8>
+      |   "Size" = 8000000000
+      +-o IOMediaBSDClient  <class IOMediaBSDClient, id 0xa000000c, registered, matched, active, busy 0 (0 ms), retain 1>
+      +-o IOGUIDPartitionScheme  <class IOGUIDPartitionScheme, id 0xa000000d, !registered, !matched, active, busy 0 (0 ms), retain 1>
         |   "IOPropertyMatch" = {"Whole"=Yes}
-        +-o iBootSystemContainer@1  <class IOMedia, id 0x100000230, registered, matched, active, busy 0 (6 ms), retain 12>
-        | |   "Size" = 524288000
+        +-o iBootSystemContainer@1  <class IOMedia, id 0xa000000e, registered, matched, active, busy 0 (0 ms), retain 1>
+        | |   "Size" = 3000000000
         | |   "Whole" = No
         | |   "BSD Name" = "disk1s1"
-        | +-o IOMediaBSDClient  <class IOMediaBSDClient, id 0x100000233, registered, matched, active, busy 0 (0 ms), retain 6>
-        | +-o AppleAPFSContainerScheme  <class AppleAPFSContainerScheme, id 0x100000234, !registered, !matched, active, busy 0 (5 ms), retain 7>
-        |   +-o AppleAPFSMedia  <class AppleAPFSMedia, id 0x100000241, registered, matched, active, busy 0 (5 ms), retain 11>
-        |     |   "Size" = 524288000
+        | +-o IOMediaBSDClient  <class IOMediaBSDClient, id 0xa000000f, registered, matched, active, busy 0 (0 ms), retain 1>
+        | +-o AppleAPFSContainerScheme  <class AppleAPFSContainerScheme, id 0xa0000010, !registered, !matched, active, busy 0 (0 ms), retain 1>
+        |   +-o AppleAPFSMedia  <class AppleAPFSMedia, id 0xa0000011, registered, matched, active, busy 0 (0 ms), retain 1>
+        |     |   "Size" = 3000000000
         |     |   "Whole" = Yes
         |     |   "BSD Name" = "disk4"
-        |     +-o AppleAPFSMediaBSDClient  <class AppleAPFSMediaBSDClient, id 0x100000242, registered, matched, active, busy 0 (0 ms), retain 7>
-        |     +-o AppleAPFSContainer  <class AppleAPFSContainer, id 0x100000252, registered, matched, active, busy 0 (0 ms), retain 36>
-        |       +-o iSCPreboot@1  <class AppleAPFSVolume, id 0x100000268, registered, matched, active, busy 0 (0 ms), retain 11>
-        |       | |   "Size" = 524288000
+        |     +-o AppleAPFSMediaBSDClient  <class AppleAPFSMediaBSDClient, id 0xa0000012, registered, matched, active, busy 0 (0 ms), retain 1>
+        |     +-o AppleAPFSContainer  <class AppleAPFSContainer, id 0xa0000013, registered, matched, active, busy 0 (0 ms), retain 1>
+        |       +-o iSCPreboot@1  <class AppleAPFSVolume, id 0xa0000014, registered, matched, active, busy 0 (0 ms), retain 1>
+        |       | |   "Size" = 3000000000
         |       | |   "Whole" = No
         |       | |   "BSD Name" = "disk4s1"
-        |       | +-o AppleAPFSVolumeBSDClient  <class AppleAPFSVolumeBSDClient, id 0x10000026c, registered, matched, active, busy 0 (0 ms), retain 7>
-        |       +-o xART@2  <class AppleAPFSVolume, id 0x100000269, registered, matched, active, busy 0 (0 ms), retain 11>
-        |       | |   "Size" = 524288000
+        |       | +-o AppleAPFSVolumeBSDClient  <class AppleAPFSVolumeBSDClient, id 0xa0000015, registered, matched, active, busy 0 (0 ms), retain 1>
+        |       +-o xART@2  <class AppleAPFSVolume, id 0xa0000016, registered, matched, active, busy 0 (0 ms), retain 1>
+        |       | |   "Size" = 3000000000
         |       | |   "Whole" = No
         |       | |   "BSD Name" = "disk4s2"
-        |       | +-o AppleAPFSVolumeBSDClient  <class AppleAPFSVolumeBSDClient, id 0x100000270, registered, matched, active, busy 0 (0 ms), retain 7>
-        |       +-o Hardware@3  <class AppleAPFSVolume, id 0x10000026a, registered, matched, active, busy 0 (0 ms), retain 11>
-        |       | |   "Size" = 524288000
+        |       | +-o AppleAPFSVolumeBSDClient  <class AppleAPFSVolumeBSDClient, id 0xa0000017, registered, matched, active, busy 0 (0 ms), retain 1>
+        |       +-o Hardware@3  <class AppleAPFSVolume, id 0xa0000018, registered, matched, active, busy 0 (0 ms), retain 1>
+        |       | |   "Size" = 3000000000
         |       | |   "Whole" = No
         |       | |   "BSD Name" = "disk4s3"
-        |       | +-o AppleAPFSVolumeBSDClient  <class AppleAPFSVolumeBSDClient, id 0x10000026e, registered, matched, active, busy 0 (0 ms), retain 7>
-        |       +-o Recovery@4  <class AppleAPFSVolume, id 0x10000026b, registered, matched, active, busy 0 (0 ms), retain 9>
-        |         |   "Size" = 524288000
+        |       | +-o AppleAPFSVolumeBSDClient  <class AppleAPFSVolumeBSDClient, id 0xa0000019, registered, matched, active, busy 0 (0 ms), retain 1>
+        |       +-o Recovery@4  <class AppleAPFSVolume, id 0xa000001a, registered, matched, active, busy 0 (0 ms), retain 1>
+        |         |   "Size" = 3000000000
         |         |   "Whole" = No
         |         |   "BSD Name" = "disk4s4"
-        |         +-o AppleAPFSVolumeBSDClient  <class AppleAPFSVolumeBSDClient, id 0x100000271, registered, matched, active, busy 0 (0 ms), retain 6>
-        +-o Container@2  <class IOMedia, id 0x100000231, registered, matched, active, busy 0 (30 ms), retain 12>
-        | |   "Size" = 62826479616
+        |         +-o AppleAPFSVolumeBSDClient  <class AppleAPFSVolumeBSDClient, id 0xa000001b, registered, matched, active, busy 0 (0 ms), retain 1>
+        +-o Container@2  <class IOMedia, id 0xa000001c, registered, matched, active, busy 0 (0 ms), retain 1>
+        | |   "Size" = 7000000000
         | |   "Whole" = No
         | |   "BSD Name" = "disk1s2"
-        | +-o IOMediaBSDClient  <class IOMediaBSDClient, id 0x100000238, registered, matched, active, busy 0 (0 ms), retain 6>
-        | +-o AppleAPFSContainerScheme  <class AppleAPFSContainerScheme, id 0x100000239, !registered, !matched, active, busy 0 (28 ms), retain 7>
-        |   +-o AppleAPFSMedia  <class AppleAPFSMedia, id 0x100000254, registered, matched, active, busy 0 (28 ms), retain 11>
-        |     |   "Size" = 62826479616
+        | +-o IOMediaBSDClient  <class IOMediaBSDClient, id 0xa000001d, registered, matched, active, busy 0 (0 ms), retain 1>
+        | +-o AppleAPFSContainerScheme  <class AppleAPFSContainerScheme, id 0xa000001e, !registered, !matched, active, busy 0 (0 ms), retain 1>
+        |   +-o AppleAPFSMedia  <class AppleAPFSMedia, id 0xa000001f, registered, matched, active, busy 0 (0 ms), retain 1>
+        |     |   "Size" = 7000000000
         |     |   "Whole" = Yes
         |     |   "BSD Name" = "disk6"
-        |     +-o AppleAPFSMediaBSDClient  <class AppleAPFSMediaBSDClient, id 0x100000258, registered, matched, active, busy 0 (0 ms), retain 7>
-        |     +-o AppleAPFSContainer  <class AppleAPFSContainer, id 0x100000264, registered, matched, active, busy 0 (0 ms), retain 90>
-        |       +-o Macintosh HD@1  <class AppleAPFSVolume, id 0x10000027a, registered, matched, active, busy 0 (0 ms), retain 14>
+        |     +-o AppleAPFSMediaBSDClient  <class AppleAPFSMediaBSDClient, id 0xa0000020, registered, matched, active, busy 0 (0 ms), retain 1>
+        |     +-o AppleAPFSContainer  <class AppleAPFSContainer, id 0xa0000021, registered, matched, active, busy 0 (0 ms), retain 1>
+        |       +-o Macintosh HD@1  <class AppleAPFSVolume, id 0xa0000022, registered, matched, active, busy 0 (0 ms), retain 1>
         |       | |   "BSD Name" = "disk6s1"
-        |       | |   "Size" = 62826479616
+        |       | |   "Size" = 7000000000
         |       | |   "Whole" = No
-        |       | +-o AppleAPFSVolumeBSDClient  <class AppleAPFSVolumeBSDClient, id 0x100000280, registered, matched, active, busy 0 (0 ms), retain 6>
-        |       | +-o com.apple.os.update-182F06D70C9D02A9A9077E3BC880E61BFCEE97BDF8F6804B657B29E28EBBCDF0@1  <class AppleAPFSSnapshot, id 0x10000028e, registered, matched, active, busy 0 (0 ms), retain 10>
-        |       |   |   "Size" = 62826479616
+        |       | +-o AppleAPFSVolumeBSDClient  <class AppleAPFSVolumeBSDClient, id 0xa0000023, registered, matched, active, busy 0 (0 ms), retain 1>
+        |       | +-o com.apple.os.update-0000000000000000000000000000000000000000000000000000000000000000@1  <class AppleAPFSSnapshot, id 0xa0000024, registered, matched, active, busy 0 (0 ms), retain 1>
+        |       |   |   "Size" = 7000000000
         |       |   |   "Whole" = No
         |       |   |   "BSD Name" = "disk6s1s1"
-        |       |   +-o IOMediaBSDClient  <class IOMediaBSDClient, id 0x10000028f, registered, matched, active, busy 0 (0 ms), retain 7>
-        |       +-o Preboot@2  <class AppleAPFSVolume, id 0x10000027b, registered, matched, active, busy 0 (0 ms), retain 15>
-        |       | |   "Size" = 62826479616
+        |       |   +-o IOMediaBSDClient  <class IOMediaBSDClient, id 0xa0000025, registered, matched, active, busy 0 (0 ms), retain 1>
+        |       +-o Preboot@2  <class AppleAPFSVolume, id 0xa0000026, registered, matched, active, busy 0 (0 ms), retain 1>
+        |       | |   "Size" = 7000000000
         |       | |   "Whole" = No
         |       | |   "BSD Name" = "disk6s2"
-        |       | +-o AppleAPFSVolumeBSDClient  <class AppleAPFSVolumeBSDClient, id 0x100000282, registered, matched, active, busy 0 (0 ms), retain 7>
-        |       | +-o FizzB26B123.arm64eSystemCryptex  <class AppleAPFSGraft, id 0x1000002bd, !registered, !matched, active, busy 0, retain 5>
-        |       | +-o AppCryptex  <class AppleAPFSGraft, id 0x1000002be, !registered, !matched, active, busy 0, retain 5>
-        |       | +-o FizzB26B123.arm64eSystemCryptex  <class AppleAPFSGraft, id 0x1000002bf, !registered, !matched, active, busy 0, retain 5>
-        |       | +-o FizzB26B123.RosettaSystemCryptex  <class AppleAPFSGraft, id 0x1000002c0, !registered, !matched, active, busy 0, retain 5>
-        |       +-o Recovery@3  <class AppleAPFSVolume, id 0x10000027c, registered, matched, active, busy 0 (0 ms), retain 9>
-        |       | |   "Size" = 62826479616
+        |       | +-o AppleAPFSVolumeBSDClient  <class AppleAPFSVolumeBSDClient, id 0xa0000027, registered, matched, active, busy 0 (0 ms), retain 1>
+        |       | +-o ExampleBuild.arm64eSystemCryptex  <class AppleAPFSGraft, id 0xa0000028, !registered, !matched, active, busy 0, retain 1>
+        |       | +-o AppCryptex  <class AppleAPFSGraft, id 0xa0000029, !registered, !matched, active, busy 0, retain 1>
+        |       | +-o ExampleBuild.arm64eSystemCryptex  <class AppleAPFSGraft, id 0xa000002a, !registered, !matched, active, busy 0, retain 1>
+        |       | +-o ExampleBuild.RosettaSystemCryptex  <class AppleAPFSGraft, id 0xa000002b, !registered, !matched, active, busy 0, retain 1>
+        |       +-o Recovery@3  <class AppleAPFSVolume, id 0xa000002c, registered, matched, active, busy 0 (0 ms), retain 1>
+        |       | |   "Size" = 7000000000
         |       | |   "Whole" = No
         |       | |   "BSD Name" = "disk6s3"
-        |       | +-o AppleAPFSVolumeBSDClient  <class AppleAPFSVolumeBSDClient, id 0x10000028a, registered, matched, active, busy 0 (0 ms), retain 6>
-        |       +-o Update@4  <class AppleAPFSVolume, id 0x10000027d, registered, matched, active, busy 0 (0 ms), retain 11>
+        |       | +-o AppleAPFSVolumeBSDClient  <class AppleAPFSVolumeBSDClient, id 0xa000002d, registered, matched, active, busy 0 (0 ms), retain 1>
+        |       +-o Update@4  <class AppleAPFSVolume, id 0xa000002e, registered, matched, active, busy 0 (0 ms), retain 1>
         |       | |   "BSD Name" = "disk6s4"
-        |       | |   "Size" = 62826479616
+        |       | |   "Size" = 7000000000
         |       | |   "Whole" = No
-        |       | +-o AppleAPFSVolumeBSDClient  <class AppleAPFSVolumeBSDClient, id 0x100000288, registered, matched, active, busy 0 (0 ms), retain 7>
-        |       +-o Data@5  <class AppleAPFSVolume, id 0x10000027e, registered, matched, active, busy 0 (0 ms), retain 11>
-        |       | |   "Size" = 62826479616
+        |       | +-o AppleAPFSVolumeBSDClient  <class AppleAPFSVolumeBSDClient, id 0xa000002f, registered, matched, active, busy 0 (0 ms), retain 1>
+        |       +-o Data@5  <class AppleAPFSVolume, id 0xa0000030, registered, matched, active, busy 0 (0 ms), retain 1>
+        |       | |   "Size" = 7000000000
         |       | |   "Whole" = No
         |       | |   "BSD Name" = "disk6s5"
-        |       | +-o AppleAPFSVolumeBSDClient  <class AppleAPFSVolumeBSDClient, id 0x100000284, registered, matched, active, busy 0 (0 ms), retain 7>
-        |       +-o VM@6  <class AppleAPFSVolume, id 0x10000027f, registered, matched, active, busy 0 (0 ms), retain 11>
-        |         |   "Size" = 62826479616
+        |       | +-o AppleAPFSVolumeBSDClient  <class AppleAPFSVolumeBSDClient, id 0xa0000031, registered, matched, active, busy 0 (0 ms), retain 1>
+        |       +-o VM@6  <class AppleAPFSVolume, id 0xa0000032, registered, matched, active, busy 0 (0 ms), retain 1>
+        |         |   "Size" = 7000000000
         |         |   "Whole" = No
         |         |   "BSD Name" = "disk6s6"
-        |         +-o AppleAPFSVolumeBSDClient  <class AppleAPFSVolumeBSDClient, id 0x100000285, registered, matched, active, busy 0 (0 ms), retain 7>
-        +-o RecoveryOSContainer@3  <class IOMedia, id 0x100000232, registered, matched, active, busy 0 (19 ms), retain 11>
-          |   "Size" = 5368668160
+        |         +-o AppleAPFSVolumeBSDClient  <class AppleAPFSVolumeBSDClient, id 0xa0000033, registered, matched, active, busy 0 (0 ms), retain 1>
+        +-o RecoveryOSContainer@3  <class IOMedia, id 0xa0000034, registered, matched, active, busy 0 (0 ms), retain 1>
+          |   "Size" = 4000000000
           |   "Whole" = No
           |   "BSD Name" = "disk1s3"
-          +-o IOMediaBSDClient  <class IOMediaBSDClient, id 0x100000235, registered, matched, active, busy 0 (0 ms), retain 6>
-          +-o AppleAPFSContainerScheme  <class AppleAPFSContainerScheme, id 0x100000236, !registered, !matched, active, busy 0 (17 ms), retain 6>
-            +-o AppleAPFSMedia  <class AppleAPFSMedia, id 0x100000253, registered, matched, active, busy 0 (17 ms), retain 10>
-              |   "Size" = 5368668160
+          +-o IOMediaBSDClient  <class IOMediaBSDClient, id 0xa0000035, registered, matched, active, busy 0 (0 ms), retain 1>
+          +-o AppleAPFSContainerScheme  <class AppleAPFSContainerScheme, id 0xa0000036, !registered, !matched, active, busy 0 (0 ms), retain 1>
+            +-o AppleAPFSMedia  <class AppleAPFSMedia, id 0xa0000037, registered, matched, active, busy 0 (0 ms), retain 1>
+              |   "Size" = 4000000000
               |   "Whole" = Yes
               |   "BSD Name" = "disk5"
-              +-o AppleAPFSMediaBSDClient  <class AppleAPFSMediaBSDClient, id 0x100000255, registered, matched, active, busy 0 (0 ms), retain 6>
-              +-o AppleAPFSContainer  <class AppleAPFSContainer, id 0x100000263, registered, matched, active, busy 0 (0 ms), retain 12>
-                +-o Recovery@1  <class AppleAPFSVolume, id 0x100000274, registered, matched, active, busy 0 (0 ms), retain 9>
-                | |   "Size" = 5368668160
+              +-o AppleAPFSMediaBSDClient  <class AppleAPFSMediaBSDClient, id 0xa0000038, registered, matched, active, busy 0 (0 ms), retain 1>
+              +-o AppleAPFSContainer  <class AppleAPFSContainer, id 0xa0000039, registered, matched, active, busy 0 (0 ms), retain 1>
+                +-o Recovery@1  <class AppleAPFSVolume, id 0xa000003a, registered, matched, active, busy 0 (0 ms), retain 1>
+                | |   "Size" = 4000000000
                 | |   "Whole" = No
                 | |   "BSD Name" = "disk5s1"
-                | +-o AppleAPFSVolumeBSDClient  <class AppleAPFSVolumeBSDClient, id 0x100000276, registered, matched, active, busy 0 (0 ms), retain 6>
-                +-o Update@2  <class AppleAPFSVolume, id 0x100000275, registered, matched, active, busy 0 (0 ms), retain 9>
+                | +-o AppleAPFSVolumeBSDClient  <class AppleAPFSVolumeBSDClient, id 0xa000003b, registered, matched, active, busy 0 (0 ms), retain 1>
+                +-o Update@2  <class AppleAPFSVolume, id 0xa000003c, registered, matched, active, busy 0 (0 ms), retain 1>
                   |   "BSD Name" = "disk5s2"
-                  |   "Size" = 5368668160
+                  |   "Size" = 4000000000
                   |   "Whole" = No
-                  +-o AppleAPFSVolumeBSDClient  <class AppleAPFSVolumeBSDClient, id 0x100000278, registered, matched, active, busy 0 (0 ms), retain 6>
-+-o AppleVirtIODiskStorageDevice@1  <class AppleVirtIODiskStorageDevice, id 0x100000209, registered, matched, active, busy 0 (7 ms), retain 10>
-  +-o IOBlockStorageDriver  <class IOBlockStorageDriver, id 0x100000213, registered, matched, active, busy 0 (7 ms), retain 8>
-    +-o Apple Inc. VirtIO Block Media  <class IOMedia, id 0x100000214, registered, matched, active, busy 0 (7 ms), retain 12>
+                  +-o AppleAPFSVolumeBSDClient  <class AppleAPFSVolumeBSDClient, id 0xa000003d, registered, matched, active, busy 0 (0 ms), retain 1>
++-o AppleVirtIODiskStorageDevice@1  <class AppleVirtIODiskStorageDevice, id 0xa000003e, registered, matched, active, busy 0 (0 ms), retain 1>
+  +-o IOBlockStorageDriver  <class IOBlockStorageDriver, id 0xa000003f, registered, matched, active, busy 0 (0 ms), retain 1>
+    +-o Apple Inc. VirtIO Block Media  <class IOMedia, id 0xa0000040, registered, matched, active, busy 0 (0 ms), retain 1>
       |   "Whole" = Yes
       |   "BSD Name" = "disk2"
-      |   "Size" = 21474836480
-      +-o IOMediaBSDClient  <class IOMediaBSDClient, id 0x10000021f, registered, matched, active, busy 0 (0 ms), retain 6>
-      +-o IOGUIDPartitionScheme  <class IOGUIDPartitionScheme, id 0x10000022e, !registered, !matched, active, busy 0 (5 ms), retain 7>
+      |   "Size" = 6000000000
+      +-o IOMediaBSDClient  <class IOMediaBSDClient, id 0xa0000041, registered, matched, active, busy 0 (0 ms), retain 1>
+      +-o IOGUIDPartitionScheme  <class IOGUIDPartitionScheme, id 0xa0000042, !registered, !matched, active, busy 0 (0 ms), retain 1>
         |   "IOPropertyMatch" = {"Whole"=Yes}
-        +-o EFI System Partition@1  <class IOMedia, id 0x10000023c, registered, matched, active, busy 0 (0 ms), retain 10>
-        | |   "Size" = 209715200
+        +-o EFI System Partition@1  <class IOMedia, id 0xa0000043, registered, matched, active, busy 0 (0 ms), retain 1>
+        | |   "Size" = 2000000000
         | |   "Whole" = No
         | |   "BSD Name" = "disk2s1"
-        | +-o IOMediaBSDClient  <class IOMediaBSDClient, id 0x10000023f, registered, matched, active, busy 0 (0 ms), retain 6>
-        +-o Untitled 2@2  <class IOMedia, id 0x10000023d, registered, matched, active, busy 0 (5 ms), retain 12>
-          |   "Size" = 21265080320
+        | +-o IOMediaBSDClient  <class IOMediaBSDClient, id 0xa0000044, registered, matched, active, busy 0 (0 ms), retain 1>
+        +-o Untitled 2@2  <class IOMedia, id 0xa0000045, registered, matched, active, busy 0 (0 ms), retain 1>
+          |   "Size" = 5000000000
           |   "Whole" = No
           |   "BSD Name" = "disk2s2"
-          +-o IOMediaBSDClient  <class IOMediaBSDClient, id 0x10000023e, registered, matched, active, busy 0 (0 ms), retain 6>
-          +-o AppleAPFSContainerScheme  <class AppleAPFSContainerScheme, id 0x100000240, !registered, !matched, active, busy 0 (5 ms), retain 7>
-            +-o AppleAPFSMedia  <class AppleAPFSMedia, id 0x100000244, registered, matched, active, busy 0 (5 ms), retain 11>
-              |   "Size" = 21265080320
+          +-o IOMediaBSDClient  <class IOMediaBSDClient, id 0xa0000046, registered, matched, active, busy 0 (0 ms), retain 1>
+          +-o AppleAPFSContainerScheme  <class AppleAPFSContainerScheme, id 0xa0000047, !registered, !matched, active, busy 0 (0 ms), retain 1>
+            +-o AppleAPFSMedia  <class AppleAPFSMedia, id 0xa0000048, registered, matched, active, busy 0 (0 ms), retain 1>
+              |   "Size" = 5000000000
               |   "Whole" = Yes
               |   "BSD Name" = "disk3"
-              +-o AppleAPFSMediaBSDClient  <class AppleAPFSMediaBSDClient, id 0x100000246, registered, matched, active, busy 0 (0 ms), retain 7>
-              +-o AppleAPFSContainer  <class AppleAPFSContainer, id 0x10000024e, registered, matched, active, busy 0 (0 ms), retain 17>
-                +-o Data@1  <class AppleAPFSVolume, id 0x100000265, registered, matched, active, busy 0 (0 ms), retain 11>
-                  |   "Size" = 21265080320
+              +-o AppleAPFSMediaBSDClient  <class AppleAPFSMediaBSDClient, id 0xa0000049, registered, matched, active, busy 0 (0 ms), retain 1>
+              +-o AppleAPFSContainer  <class AppleAPFSContainer, id 0xa000004a, registered, matched, active, busy 0 (0 ms), retain 1>
+                +-o Data@1  <class AppleAPFSVolume, id 0xa000004b, registered, matched, active, busy 0 (0 ms), retain 1>
+                  |   "Size" = 5000000000
                   |   "Whole" = No
                   |   "BSD Name" = "disk3s1"
-                  +-o AppleAPFSVolumeBSDClient  <class AppleAPFSVolumeBSDClient, id 0x100000266, registered, matched, active, busy 0 (0 ms), retain 7>
-+-o AppleVirtIOFSDevice  <class AppleVirtIOFSDevice, id 0x1000001ef, registered, matched, active, busy 0 (1 ms), retain 9>
-  +-o IOBlockStorageDriver  <class IOBlockStorageDriver, id 0x1000001f0, registered, matched, active, busy 0 (0 ms), retain 6>
-  +-o AppleVirtIOFSNub  <class AppleVirtIOFSNub, id 0x1000001fe, registered, matched, active, busy 0 (0 ms), retain 9>
+                  +-o AppleAPFSVolumeBSDClient  <class AppleAPFSVolumeBSDClient, id 0xa000004c, registered, matched, active, busy 0 (0 ms), retain 1>
++-o AppleVirtIOFSDevice  <class AppleVirtIOFSDevice, id 0xa000004d, registered, matched, active, busy 0 (0 ms), retain 1>
+  +-o IOBlockStorageDriver  <class IOBlockStorageDriver, id 0xa000004e, registered, matched, active, busy 0 (0 ms), retain 1>
+  +-o AppleVirtIOFSNub  <class AppleVirtIOFSNub, id 0xa000004f, registered, matched, active, busy 0 (0 ms), retain 1>
     |   "Whole" = Yes
     |   "BSD Name" = "disk0"
-    |   "Size" = 16384
-    +-o IOMediaBSDClient  <class IOMediaBSDClient, id 0x100000205, registered, matched, active, busy 0 (0 ms), retain 6>
+    |   "Size" = 1000000000
+    +-o IOMediaBSDClient  <class IOMediaBSDClient, id 0xa0000050, registered, matched, active, busy 0 (0 ms), retain 1>
 "#;

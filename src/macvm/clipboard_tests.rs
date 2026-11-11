@@ -383,3 +383,62 @@ fn html_text_cases() {
         "deep\ntwo"
     );
 }
+
+/// `paddock app clipboard NAME --to-app off --from-app off`, live: no
+/// direction moves while it is off, and turning paste on again while key
+/// sends the host content that the guest missed.
+#[test]
+fn each_direction_turns_off_and_on_live() {
+    let mut s = Sync::new(shares());
+    assert_eq!(s.directions(), (true, true));
+    assert_eq!(s.set_directions(false, true), [Action::Nothing]);
+    assert_eq!(s.directions(), (false, true));
+    assert_eq!(s.on_key(true), [Action::Nothing]);
+    assert_eq!(
+        s.on_host_change(1, vec![Item::text("secret")]),
+        [Action::Nothing],
+        "no paste into the app"
+    );
+    // Copy from the app still works.
+    let a = s.on_guest_change(1, vec![Item::text("from app")]);
+    assert_eq!(set(&a).items, [Item::text("from app")]);
+    // Paste on again while key: the missed content goes once.
+    let a = s.set_directions(true, false);
+    assert_eq!(sent(&a).items, [Item::text("secret")]);
+    assert_eq!(s.set_directions(true, false), [Action::Nothing]);
+    assert_eq!(
+        s.on_guest_change(2, vec![Item::text("again")]),
+        [Action::Nothing],
+        "no copy from the app"
+    );
+    // Not key: turning paste on sends nothing.
+    s.set_directions(false, false);
+    s.on_key(false);
+    s.on_host_change(2, vec![Item::text("later")]);
+    assert_eq!(s.set_directions(true, true), [Action::Nothing]);
+}
+
+/// A share added live: a file URL into it crosses after `set_shares`.
+#[test]
+fn file_urls_follow_the_live_shares() {
+    let mut s = Sync::new(shares());
+    s.on_key(true);
+    let url = |p: &str| vec![Item::default().with(FILE_URL, path_url(Path::new(p)).as_bytes())];
+    assert_eq!(
+        s.on_host_change(1, url("/Users/me/new/a.txt")),
+        [Action::Nothing]
+    );
+    let mut more = shares();
+    more.push(Share {
+        name: "ws-2".into(),
+        host: PathBuf::from("/Users/me/new"),
+        read_only: true,
+    });
+    s.set_shares(more);
+    let a = s.on_host_change(2, url("/Users/me/new/b.txt"));
+    let got = String::from_utf8(sent(&a).items[0].get(FILE_URL).unwrap().to_vec()).unwrap();
+    assert!(
+        got.ends_with("/Volumes/My%20Shared%20Files/ws-2/b.txt") || got.contains("ws-2/b.txt"),
+        "{got}"
+    );
+}

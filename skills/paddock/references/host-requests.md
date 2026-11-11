@@ -41,4 +41,4 @@ Before you add a harness there, ask the user and explain: the child uses the use
 
 `paddock view ID` opens a terminal with a read-only live view of a sandbox without a terminal, such as a spawned child (there, `--write` only scrolls and closes the view). It needs tmux for a live session and shows the run log without it.
 
-`paddock run HARNESS PATH --detach --prompt-file FILE` starts the interactive interface in a tmux session in the background (claude, codex, grok), `paddock view ID --write` types into the agent, and `paddock wait ID [--timeout 30m]` waits for its end (exit 0 ok, 1 failed or no `paddock-host done`, 124 timeout).
+`paddock run HARNESS PATH --detach --prompt-file FILE` starts the interactive interface in a tmux session in the background (claude, codex, grok), `paddock mail send ID TEXT` gives the agent a message and `paddock mail watch ID` shows its messages and the run's events (prefer the mailbox; `paddock view ID --write` types into the pane), and `paddock wait ID [--timeout 30m]` waits for its end (exit 0 success, 1 failed or blocked, 2 unknown outcome, 124 timeout).

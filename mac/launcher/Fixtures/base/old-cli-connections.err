@@ -1,0 +1,5 @@
+error: unrecognized subcommand 'connections'
+
+Usage: paddock app <COMMAND>
+
+For more information, try '--help'.

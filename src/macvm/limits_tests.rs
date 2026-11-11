@@ -21,11 +21,11 @@ fn session(app: &str, pid: u32) -> Session {
 #[test]
 fn each_refusal_line() {
     // A third session names the two that run.
-    let two = [session("chatgpt-desktop", 812), session("vscode", 913)];
+    let two = [session("sample-notes", 812), session("vscode", 913)];
     let line = third_session_refusal(&two, "claude-desktop").expect("refused");
     for part in [
         "two macOS VMs",
-        "chatgpt-desktop (you, pid 812)",
+        "sample-notes (you, pid 812)",
         "vscode (you, pid 913)",
         "paddock app stop",
     ] {

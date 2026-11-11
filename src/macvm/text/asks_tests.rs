@@ -9,8 +9,8 @@ fn has(s: &str, parts: &[&str]) {
 #[test]
 fn ask_title() {
     assert_eq!(
-        t::ask_title("ChatGPT", "api.example.com"),
-        "ChatGPT wants to connect to api.example.com"
+        t::ask_title("Sample Notes", "api.example.com"),
+        "Sample Notes wants to connect to api.example.com"
     );
 }
 
@@ -44,18 +44,18 @@ fn ask_more_button() {
 #[test]
 fn asks_notice_summary() {
     has(
-        &t::asks_notice_summary("ChatGPT", 21),
-        &["ChatGPT", "21", "paused"],
+        &t::asks_notice_summary("Sample Notes", 21),
+        &["Sample Notes", "21", "paused"],
     );
 }
 
 #[test]
 fn asks_notice_detail() {
     has(
-        &t::asks_notice_detail("ChatGPT", "chatgpt-desktop", 21),
+        &t::asks_notice_detail("Sample Notes", "sample-notes", 21),
         &[
             "many new connections",
-            "paddock app status chatgpt-desktop",
+            "paddock app status sample-notes",
             "Deny all",
             "Ask one by one",
             "21",
@@ -72,12 +72,12 @@ fn asks_notice_button() {
 #[test]
 fn asks_paused() {
     has(
-        &t::asks_paused("ChatGPT", "chatgpt-desktop", 21),
+        &t::asks_paused("Sample Notes", "sample-notes", 21),
         &[
             "more than 20",
             "21 open",
             "paused",
-            "paddock app status chatgpt-desktop",
+            "paddock app status sample-notes",
         ],
     );
 }
@@ -112,8 +112,8 @@ fn status_questions_row() {
 #[test]
 fn status_question_line() {
     assert_eq!(
-        t::status_question_line("com.openai.chat", "a.example", 443, 2, true),
-        "  com.openai.chat -> a.example:443 (on the screen), 2 connections wait"
+        t::status_question_line("com.example.notes", "a.example", 443, 2, true),
+        "  com.example.notes -> a.example:443 (on the screen), 2 connections wait"
     );
     assert_eq!(
         t::status_question_line("x", "b.example", 80, 0, false),

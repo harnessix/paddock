@@ -94,14 +94,20 @@ impl ScreenSet {
     }
 
     /// The display of a session in pixels: the union of the screens at
-    /// the main scale, within the sizes that `session::Display` takes.
-    /// None without a scale.
-    pub fn session_display(&self) -> Option<super::session::Display> {
+    /// the main scale, with `room` times its width as room to the right
+    /// (`apart.rs` moves guest windows apart there), within the sizes
+    /// that `session::Display` takes. None without a scale.
+    pub fn session_display(&self, room: f64) -> Option<super::session::Display> {
         let scale = self.main_scale()?.round().clamp(1.0, 4.0);
         let u = self.union();
+        let room = if room.is_finite() {
+            room.clamp(0.0, ROOM_MAX)
+        } else {
+            ROOM
+        };
         let px = |points: f64, min: u32| ((points * scale).round() as u32).clamp(min, 16384);
         Some(super::session::Display {
-            w: px(u.w, 640),
+            w: px(u.w * (1.0 + room), 640),
             h: px(u.h, 480),
             scale: scale as u32,
         })
@@ -162,6 +168,28 @@ impl ScreenSet {
             h: u.h,
             scale,
         }
+    }
+}
+
+/// The room of the guest display right of the host screens, as a share
+/// of their width: the guest display is twice as wide as the screens.
+/// `PADDOCK_MACVM_ROOM` sets another share.
+pub const ROOM: f64 = 1.0;
+
+/// The largest room that `PADDOCK_MACVM_ROOM` gives.
+pub const ROOM_MAX: f64 = 2.0;
+
+/// The part of the guest display that the host screens show: the guest
+/// display without its room to the right. Its height is the display's,
+/// so the view origins stay the same.
+pub fn screens_area(display: Display, screens: &ScreenSet) -> Display {
+    let u = screens.union();
+    if u.w <= 0.0 {
+        return display;
+    }
+    Display {
+        w: display.w.min(u.w),
+        ..display
     }
 }
 
@@ -227,17 +255,44 @@ pub fn full_screen_origin(display: Display, content_h: f64) -> (f64, f64) {
 
 /// The radius of the host clip of a window: the one that the agent
 /// measured on the window, when it is a sane number, else the radius of
-/// the guest's macOS version ([`corner_radius`]). A window in full screen
-/// has square corners.
-pub fn clip_radius(measured: Option<f64>, macos_major: u32, full_screen: bool) -> f64 {
+/// the window's kind on the guest's macOS version ([`kind_radius`]). A
+/// window in full screen has square corners.
+pub fn clip_radius(
+    measured: Option<f64>,
+    title_bar: f64,
+    macos_major: u32,
+    full_screen: bool,
+) -> f64 {
     if full_screen {
         return 0.0;
     }
     match measured {
         Some(r) if r.is_finite() && (0.0..=RADIUS_MAX).contains(&r) => r,
-        _ => corner_radius(macos_major),
+        _ => kind_radius(title_bar, macos_major),
     }
 }
+
+/// The title bar height from which a window has a toolbar, in points.
+pub const TOOLBAR_TITLE_BAR: f64 = 40.0;
+
+/// The corner radius of a window by its kind. From macOS 26 on a window
+/// with a toolbar has larger corners than a plain titled window; 17.5 is
+/// the radius of a plain titled window on macOS 27, measured.
+pub fn kind_radius(title_bar: f64, macos_major: u32) -> f64 {
+    if macos_major < 26 {
+        return corner_radius(macos_major);
+    }
+    if title_bar >= TOOLBAR_TITLE_BAR {
+        TOOLBAR_RADIUS
+    } else {
+        PLAIN_RADIUS
+    }
+}
+
+/// The radius of a plain titled window from macOS 26 on, in points.
+pub const PLAIN_RADIUS: f64 = 17.5;
+/// The radius of a window with a toolbar from macOS 26 on, in points.
+pub const TOOLBAR_RADIUS: f64 = 26.0;
 
 /// The largest corner radius that the host takes from the agent, in
 /// points.

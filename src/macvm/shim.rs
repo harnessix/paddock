@@ -51,7 +51,7 @@ pub enum Target {
 pub struct Face {
     /// The profile name, and the file name of the bundle.
     pub app: String,
-    /// `ChatGPT (paddock)`: the Dock name.
+    /// `Sample Notes (paddock)`: the Dock name.
     pub display_name: String,
     pub bundle_id: String,
     /// The icon of the host bundle, cloned into the shim.
@@ -98,13 +98,13 @@ impl Face {
     }
 }
 
-/// `ChatGPT` becomes `ChatGPT (paddock)`, the name of every session in the
+/// `Sample Notes` becomes `Sample Notes (paddock)`, the name of every session in the
 /// Dock and in Cmd-Tab.
 pub fn paddock_name(display_name: &str) -> String {
     format!("{display_name} (paddock)") // not user text
 }
 
-/// `dev.paddock.app.chatgpt-desktop`.
+/// `dev.paddock.app.sample-notes`.
 pub fn bundle_id(app: &str) -> String {
     format!("{ID_PREFIX}.{}", super::layout::safe_name(app)) // not user text
 }

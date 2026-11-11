@@ -23,11 +23,10 @@
 //!   parent, and after a wall-clock timeout.
 //! - The prompt never goes into the arguments of a process. It reaches the
 //!   harness on stdin or as a file of that run in the child's sandbox home.
-
 use crate::broker::Mode;
 use crate::env::HostEnv;
 use crate::manifest::Manifest;
-use crate::spec::{GuiMode, Network};
+use crate::spec::Network;
 use crate::state;
 use anyhow::{bail, Context as _, Result};
 use serde::{Deserialize, Serialize};
@@ -41,9 +40,10 @@ pub use units::{format_bytes, format_cpus, parse_bytes, parse_cpus, parse_durati
 
 mod ceiling;
 mod cfg;
+mod child;
 pub mod model;
 mod units;
-
+pub use child::child_main;
 pub const DEFAULT_MAX_RUNNING: u32 = 2;
 pub const DEFAULT_MAX_DEPTH: u32 = 1;
 /// Seconds that a child may run in total.
@@ -53,17 +53,15 @@ pub const MAX_PROMPT: u64 = 256 * 1024;
 /// How much of the final output reaches the parent: the end of it.
 pub const MAX_OUTPUT: usize = 64 * 1024;
 /// How much of the diff summary reaches the parent.
-const MAX_STAT: usize = 16 * 1024;
+pub(crate) const MAX_STAT: usize = 16 * 1024;
 /// How much of the prompt the approval card shows.
 pub const PROMPT_SHOWN: usize = 1000;
 /// Folder of prompt files in the sandbox home. Runs of one harness in one
 /// project share that home, so each run gets its own file under this folder.
 pub const PROMPT_DIR: &str = ".paddock-spawn";
-
 /// The old shared prompt path. A run removes it at the start, so a stale
 /// prompt does not stay behind.
 pub const LEGACY_PROMPT: &str = ".paddock-spawn/prompt.md";
-
 /// Relative path of one run's prompt: `.paddock-spawn/<id>/prompt.md`.
 /// `id` is the sandbox id and one path component.
 pub fn prompt_rel(id: &str) -> PathBuf {
@@ -251,6 +249,9 @@ pub fn narrower(a: Mode, b: Mode) -> Mode {
 pub struct Ceiling {
     pub parent: String,
     pub parent_harness: String,
+    /// Horse mode follows the run tree; each child creates its own horse.
+    #[serde(default)]
+    pub horse: bool,
     /// The sandboxes above the child, the first one started by the user.
     pub chain: Vec<String>,
     /// The depth of the parent: 0 when the user started it.
@@ -300,6 +301,9 @@ pub struct ChildInfo {
     pub modes: BTreeMap<String, Mode>,
     #[serde(default)]
     pub role: Role,
+    /// `--hitch`: this run's session in the parent's horse.
+    #[serde(default)]
+    pub hitch: Option<crate::horse::hitch::Hitched>,
 }
 
 /// What `build` needs to make a child sandbox.
@@ -314,8 +318,8 @@ pub struct ChildPlan {
     /// (`--from-head`). None: HEAD of `base_from`.
     pub base: Option<String>,
     pub role: Role,
+    pub trainer: bool,
 }
-
 /// The host modes for a child: the user configuration as it is now, and at
 /// most what the parent had.
 pub fn child_modes(
@@ -346,6 +350,9 @@ pub struct Job {
     /// The commit that paddock made from the parent's files (`--from-head`).
     #[serde(default)]
     pub base: Option<String>,
+    /// `--hitch`: the child's session in the parent's horse.
+    #[serde(default)]
+    pub hitch: Option<crate::horse::hitch::Hitched>,
     #[serde(default)]
     pub pick: model::Pick,
     /// `--device NAME` of the spawn, within the parent's ceiling.
@@ -360,6 +367,8 @@ pub struct StartOpts {
     pub limits: Limits,
     /// Start from the parent's files, uncommitted changes included.
     pub from_head: bool,
+    /// `--hitch`: the parent's run; the child joins its horse.
+    pub hitch: Option<crate::horse::run::RunHorse>,
     pub pick: model::Pick,
     /// `--device NAME`, checked against the ceiling.
     pub devices: Vec<String>,
@@ -552,6 +561,8 @@ struct Entry {
     /// The child's host process.
     pid: u32,
     stop: Option<(State, Instant)>,
+    /// `--hitch`: the child's session in the parent's horse.
+    hitch: Option<crate::horse::hitch::Hitched>,
 }
 
 /// The children of one sandbox. The parent's broker owns it.
@@ -765,11 +776,12 @@ impl Spawner {
                     },
                     pid: 0,
                     stop: None,
+                    hitch: None,
                 },
             );
         }
         let fail = |e: anyhow::Error| {
-            self.children.lock().unwrap().remove(&id);
+            self.forget(&id, &e);
             let _ = std::fs::remove_dir_all(&job_dir);
             e
         };
@@ -782,10 +794,21 @@ impl Spawner {
             role: o.role,
             limits: o.limits,
             base: None,
+            hitch: None,
             pick: o.pick,
             devices: o.devices,
         };
         crate::privfs::dir(&job_dir).map_err(|e| fail(e.into()))?;
+        if let Some(parent) = &o.hitch {
+            let hitched = crate::horse::Store::open_host(&self.env)
+                .and_then(|st| crate::horse::hitch::wire::begin(&st, parent, harness))
+                .context("--hitch")
+                .map_err(fail)?;
+            if let Some(e) = self.children.lock().unwrap().get_mut(&id) {
+                e.hitch = Some(hitched.clone());
+            }
+            job.hitch = Some(hitched);
+        }
         if o.from_head {
             let c = snapshot_commit(&self.ceiling.head_from, &job_dir.join("index"), &id)
                 .context("--from-head")
@@ -856,10 +879,7 @@ impl Spawner {
                     c.arg("-p")
                         .arg(format!("RuntimeMaxSec={}", limits.timeout + 60));
                 }
-                if let Some(m) = limits.mem {
-                    c.arg("-p").arg(format!("MemoryMax={m}"));
-                    c.arg("-p").arg("MemorySwapMax=0");
-                }
+                crate::memory::limit::apply_spawn(&mut c, &self.env, limits.mem)?;
                 if let Some(p) = limits.cpu_percent {
                     c.arg("-p").arg(format!("CPUQuota={p}%"));
                 }
@@ -958,10 +978,10 @@ impl Spawner {
 
     /// Record the end of a child, give the parent its results and log it.
     fn finish(&self, id: &str, code: Option<i32>, result: Option<ChildResult>) {
-        let (status, stop) = {
+        let (status, stop, hitch) = {
             let ch = self.children.lock().unwrap();
             let Some(e) = ch.get(id) else { return };
-            (e.status.clone(), e.stop.map(|(s, _)| s))
+            (e.status.clone(), e.stop.map(|(s, _)| s), e.hitch.clone())
         };
         let r = result.unwrap_or_default();
         // The scope's runtime limit ends the child without a result.
@@ -1015,6 +1035,9 @@ impl Spawner {
         }
         self.audit_end(&done, &r);
         self.publish_result(&done, &r);
+        if let Some(h) = &hitch {
+            self.hitch_end(h, &done, &r);
+        }
         // A worker of a Spec Kit task: its record and the checkboxes.
         crate::speckit::flow::child_ended(&self.env, self.ceiling.root(), &self.project, &done, &r);
         if let Some(e) = self.children.lock().unwrap().get_mut(id) {
@@ -1386,6 +1409,24 @@ pub const RESULT_WRITER: &str = "paddock";
 /// The value of `result:<spawn id>`: the state, one line of summary and the
 /// branch as `ref`. JSON, in the key convention of paddock kv.
 pub fn result_value(s: &Status, r: &ChildResult) -> String {
+    let (status, summary) = result_parts(s, r);
+    serde_json::json!({
+        "status": status,
+        "summary": summary,
+        "ref": s.branch,
+        "spawn_id": s.id,
+        "sandbox": s.sandbox,
+        "harness": s.harness,
+        "role": s.role,
+        "exit_code": s.exit_code,
+        "commits": r.commits,
+        "inbox": s.inbox,
+    })
+    .to_string()
+}
+
+/// The status word and the one-line summary of a child's end.
+pub fn result_parts(s: &Status, r: &ChildResult) -> (&'static str, String) {
     let status = match s.state {
         State::Exited if s.exit_code == Some(0) => "done",
         State::Exited => "failed",
@@ -1409,19 +1450,7 @@ pub fn result_value(s: &Status, r: &ChildResult) -> String {
             }
         )
     };
-    serde_json::json!({
-        "status": status,
-        "summary": summary,
-        "ref": s.branch,
-        "spawn_id": s.id,
-        "sandbox": s.sandbox,
-        "harness": s.harness,
-        "role": s.role,
-        "exit_code": s.exit_code,
-        "commits": r.commits,
-        "inbox": s.inbox,
-    })
-    .to_string()
+    (status, summary)
 }
 
 /// The base commit of a child: HEAD of the parent's project folder.
@@ -1441,145 +1470,6 @@ pub fn tail(text: &str, max: usize) -> (String, bool) {
         start += 1;
     }
     (text[start..].to_string(), true)
-}
-
-/// The host process of one child (`paddock spawn-child JOB`). The parent's
-/// paddock starts it; it builds and runs the child sandbox and writes
-/// `result.json` next to the job.
-pub fn child_main(env: &HostEnv, job_file: &Path) -> Result<i32> {
-    let dir = job_file.parent().context("bad job file")?.to_path_buf();
-    if !dir.starts_with(env.paddock_run()) {
-        bail!("the job file must be in {}", env.paddock_run().display());
-    }
-    let job: Job = serde_json::from_slice(
-        &std::fs::read(job_file).with_context(|| format!("cannot read {}", job_file.display()))?,
-    )?;
-    let prompt = std::fs::read(dir.join("prompt.md"))?;
-    let _ = std::fs::remove_file(dir.join("prompt.md"));
-    let mut result = ChildResult {
-        branch: job.branch.clone(),
-        started: state::now(),
-        ..Default::default()
-    };
-    let r = run_child(env, &job, prompt, &mut result);
-    if let Err(e) = &r {
-        result.error = Some(format!("{e:#}"));
-    }
-    result.ended = state::now();
-    crate::privfs::write(&dir.join("result.json"), serde_json::to_vec(&result)?)?;
-    Ok(if r.is_ok() { 0 } else { 1 })
-}
-
-fn run_child(env: &HostEnv, job: &Job, prompt: Vec<u8>, result: &mut ChildResult) -> Result<()> {
-    let c = &job.ceiling;
-    let factory = crate::profile::HarnessFactory::new(env)?;
-    let harness = factory.create(&job.harness)?;
-    let oneshot = harness
-        .profile
-        .oneshot
-        .clone()
-        .with_context(|| format!("the {} profile has no [oneshot] command", job.harness))?;
-    crate::storage::guard::before_run(env, Some(&c.repo), true)?;
-    let opts = crate::build::Options {
-        harness: job.harness.clone(),
-        project: Some(c.repo.clone()),
-        backend: Some(c.backend.clone()),
-        network: Some(child_network(job.role, c.network)),
-        gui: Some(GuiMode::Off),
-        // Both roles get a clean environment: only the allowlist and the
-        // harness's own variables pass.
-        inherit_env: Some(false),
-        auth: Some(c.auth.clone()),
-        worktree: true,
-        child: Some(ChildPlan {
-            id: job.sandbox_id.clone(),
-            manifest: c.manifest.clone(),
-            branch: job.branch.clone(),
-            base_from: c.head_from.clone(),
-            base: job.base.clone(),
-            role: job.role,
-        }),
-        args: job.pick.args(&oneshot),
-        devices: job.devices.clone(),
-        ..Default::default()
-    };
-    let mut built = crate::build::build_with(env, &opts, harness)?;
-    let wt = built.worktree.clone();
-    if let Some(w) = &wt {
-        result.base = w.base.clone();
-    }
-    let outcome = (|| -> Result<crate::run::Outcome> {
-        let backend = crate::run::select_backend(env, &built)?;
-        c.check(&built, backend.name())?;
-        crate::run::probe_args(
-            env,
-            &built.harness_exe,
-            &[oneshot.args.clone(), job.pick.args(&oneshot)].concat(),
-            &oneshot.probe_args,
-            "[oneshot] args",
-        )?;
-        // The child's broker narrows these again with the configuration as
-        // it is when the child starts.
-        let modes = c.modes.clone();
-        built.spawn = Some(ChildInfo {
-            spawn_id: job.spawn_id.clone(),
-            parent: c.parent.clone(),
-            chain: c.chain.clone(),
-            depth: c.depth + 1,
-            modes,
-            role: job.role,
-        });
-        // paddock kv and the devices: the identity comes from the job, which
-        // the parent's paddock wrote in a folder that no sandbox sees.
-        built.parent = Some(c.parent.clone());
-        built.device_ceiling = Some(c.devices.clone());
-        let home = built.spec.home_src.clone();
-        let prompt_id = built.spec.id.clone();
-        // The file also when the prompt comes on stdin: the note after a
-        // context compaction (compaction.rs) points the agent at it.
-        if oneshot.prompt == crate::profile::PromptVia::Stdin {
-            built.stdin = Some(prompt.clone());
-        }
-        write_prompt(&home, &prompt_id, &prompt, 0o600)?;
-        let out = crate::run::run(env, built, backend.as_ref(), true, true);
-        remove_prompt(&home, &prompt_id);
-        out
-    })();
-    if let Some(w) = &wt {
-        let (commits, uncommitted) = crate::build::worktree_counts(env, w);
-        result.commits = commits;
-        result.uncommitted = uncommitted;
-        let stat = crate::hostgit::Layout::discover(&w.repo)
-            .ok()
-            .flatten()
-            .and_then(|l| {
-                l.try_query(&[
-                    "diff",
-                    "--stat",
-                    "--no-textconv",
-                    "--no-ext-diff",
-                    "--no-color",
-                    &format!("{}...{}", w.base, w.branch),
-                ])
-            })
-            .unwrap_or_default();
-        result.stat = tail(&stat, MAX_STAT).0;
-        // Nothing to review: the worktree and the branch go at once.
-        if commits == 0 && uncommitted == Some(0) {
-            if let Err(e) = crate::worktree::reclaim_if_empty(env, w) {
-                log::warn!(
-                    "cannot remove the empty worktree {}: {e:#}",
-                    w.path.display()
-                );
-            }
-        }
-    }
-    let o = outcome?;
-    result.exit_code = Some(o.code);
-    let (text, cut) = tail(&o.stdout.unwrap_or_default(), MAX_OUTPUT);
-    result.output = text;
-    result.output_truncated = cut;
-    Ok(())
 }
 
 /// Create the child's worktree: a new branch from the parent's HEAD.
@@ -1664,3 +1554,5 @@ pub fn chain_text(chain: &[String]) -> Option<String> {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_hitch;

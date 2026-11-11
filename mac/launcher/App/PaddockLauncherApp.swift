@@ -45,7 +45,7 @@ struct PaddockLauncherApp: App {
         Settings {
             SettingsView()
                 .environment(store)
-                .frame(minWidth: 640, minHeight: 440)
+                .frame(minWidth: 640, minHeight: 560)
         }
     }
 }
@@ -75,7 +75,7 @@ struct LauncherCommands: Commands {
         }
         CommandGroup(after: .sidebar) {
             Button("Apps") {
-                store.selection = store.apps.first.map { .app($0.name) }
+                store.selection = store.apps.first.map { .app($0.key) }
             }
             .keyboardShortcut("1")
             Button("Questions") { store.selection = .questions }

@@ -128,8 +128,20 @@ public struct AppJSON: Codable, Equatable, Sendable, Identifiable {
     public var crash: String?
     /// paddock's line after a failed app copy. The app runs the old copy.
     public var copyFailed: String?
+    /// The home folder of the instance: `default` or `instance-N`.
+    public var home: String?
+    /// The app's own name from its bundle: `Sample Notes` for `sample-notes`.
+    public var displayName: String?
+    /// The bundle version of the host app.
+    public var version: String?
+    /// The disk use of the profile instance.
+    public var bytes: Int64?
+    /// True when `~/Applications/<Name> (paddock).app` exists.
+    public var launcher: Bool?
+    /// Why paddock suspended the session, for `suspended`.
+    public var suspendReason: String?
 
-    public var id: String { name }
+    public var id: String { InstanceRef(app: name, home: home).key }
 }
 
 public struct AppListJSON: Codable, Equatable, Sendable {
@@ -146,17 +158,20 @@ public struct ShareJSON: Codable, Equatable, Sendable, Identifiable {
     public var guestPath: String?
     /// `live`, `next_start` or `reopen`.
     public var applies: String?
+    /// `grant` (kept in the profile) or `run` (shared by this session only).
+    public var from: String?
 
     public var id: String { path }
 
     public init(path: String, mode: String, lastUsed: Date? = nil, openHandles: Int? = nil,
-                guestPath: String? = nil, applies: String? = nil) {
+                guestPath: String? = nil, applies: String? = nil, from: String? = nil) {
         self.path = path
         self.mode = mode
         self.lastUsed = lastUsed
         self.openHandles = openHandles
         self.guestPath = guestPath
         self.applies = applies
+        self.from = from
     }
 }
 
@@ -206,7 +221,7 @@ public struct DeviceJSON: Codable, Equatable, Sendable, Identifiable {
 
 public struct ChangeJSON: Codable, Equatable, Sendable, Identifiable {
     public var time: Date
-    /// paddock's text: `Allow always api.openai.com`.
+    /// paddock's text: `Allow always api.example.com`.
     public var text: String
     /// `you`, `question_panel`, `profile`.
     public var source: String
@@ -242,7 +257,7 @@ public struct QuestionJSON: Codable, Equatable, Sendable, Identifiable {
     public var app: String
     public var host: String
     public var port: Int
-    /// `ChatGPT.app → helper (Renderer)`.
+    /// `Sample Notes.app → helper (Renderer)`.
     public var process: String?
     public var opened: Date?
 

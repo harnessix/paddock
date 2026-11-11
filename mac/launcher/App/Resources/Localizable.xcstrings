@@ -9,6 +9,12 @@
             "state": "translated",
             "value": "%@"
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@"
+          }
         }
       }
     },
@@ -19,6 +25,40 @@
           "stringUnit": {
             "state": "translated",
             "value": "%@ added. It also appears in Launchpad as \"%@\"."
+          }
+        }
+      }
+    },
+    "%@ added. The Launchpad launcher was not made: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ added. The Launchpad launcher was not made: %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已添加 %@。启动台中的启动器没有创建：%@"
+          }
+        }
+      }
+    },
+    "%@ and its subdomains": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ and its subdomains"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 及其所有子域名"
           }
         }
       }
@@ -42,6 +82,29 @@
             "state": "translated",
             "value": "%@ asked %@ times in a minute. paddock paused the questions."
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 在一分钟内询问了 %@ 次。paddock 已暂停询问。"
+          }
+        }
+      }
+    },
+    "%@ covers sites of many owners. Enter a name under it, for example *.example.com.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ covers sites of many owners. Enter a name under it, for example *.example.com."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 涵盖许多不同所有者的网站。请输入它下面的名称，例如 *.example.com。"
+          }
         }
       }
     },
@@ -52,6 +115,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "%@ d ago"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 天前"
           }
         }
       }
@@ -78,6 +147,23 @@
         }
       }
     },
+    "%@ files open": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ files open"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 个文件已打开"
+          }
+        }
+      }
+    },
     "%@ free, %@ needed": {
       "extractionState": "manual",
       "localizations": {
@@ -85,6 +171,46 @@
           "stringUnit": {
             "state": "translated",
             "value": "%@ free, %@ needed"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "可用 %@，需要 %@"
+          }
+        }
+      }
+    },
+    "%@ freed.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ freed."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已释放 %@。"
+          }
+        }
+      }
+    },
+    "%@ freed. %@ items were not removed.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ freed. %@ items were not removed."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已释放 %@。有 %@ 项没有删除。"
           }
         }
       }
@@ -96,6 +222,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "%@ h ago"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 小时前"
           }
         }
       }
@@ -122,6 +254,23 @@
         }
       }
     },
+    "%@ instances": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ instances"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 个实例"
+          }
+        }
+      }
+    },
     "%@ is waiting for an answer": {
       "extractionState": "manual",
       "localizations": {
@@ -141,6 +290,12 @@
             "state": "translated",
             "value": "%@ min ago"
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 分钟前"
+          }
         }
       }
     },
@@ -151,6 +306,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "%@ min left"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "还剩 %@ 分钟"
           }
         }
       }
@@ -196,6 +357,29 @@
             "state": "translated",
             "value": "%@ removed. %@ freed."
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已移除 %@，释放了 %@。"
+          }
+        }
+      }
+    },
+    "%@ removed. %@ freed. Its data (%@) stays in the paddock trash for 7 days.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ removed. %@ freed. Its data (%@) stays in the paddock trash for 7 days."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已移除 %@，释放了 %@。它的数据（%@）在 paddock 废纸篓中保留 7 天。"
+          }
         }
       }
     },
@@ -217,6 +401,40 @@
           "stringUnit": {
             "state": "translated",
             "value": "%@ stopped unexpectedly"
+          }
+        }
+      }
+    },
+    "%@ times": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ times"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 次"
+          }
+        }
+      }
+    },
+    "%@ wants to connect to %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ wants to connect to %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 想要连接到 %@"
           }
         }
       }
@@ -250,6 +468,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "%@ was not removed"
+          }
+        }
+      }
+    },
+    "%@ was not suspended": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ was not suspended"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ 没有挂起"
           }
         }
       }
@@ -298,6 +533,40 @@
         }
       }
     },
+    "1 file open": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 file open"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 个文件已打开"
+          }
+        }
+      }
+    },
+    "1 time": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 time"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "1 次"
+          }
+        }
+      }
+    },
     "2 min": {
       "extractionState": "manual",
       "localizations": {
@@ -320,6 +589,125 @@
         }
       }
     },
+    "443 (HTTPS)": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "443 (HTTPS)"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "443 (HTTPS)"
+          }
+        }
+      }
+    },
+    "80 (HTTP)": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "80 (HTTP)"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "80 (HTTP)"
+          }
+        }
+      }
+    },
+    "8443": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "8443"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "8443"
+          }
+        }
+      }
+    },
+    "A change here ends when the app stops. The next start uses the setting of the app.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A change here ends when the app stops. The next start uses the setting of the app."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此处的更改在应用停止时结束。下次启动使用该应用的设置。"
+          }
+        }
+      }
+    },
+    "A development build": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A development build"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "开发版本"
+          }
+        }
+      }
+    },
+    "A rule for every host turns the firewall off for the app. paddock allows it only in Terminal:": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A rule for every host turns the firewall off for the app. paddock allows it only in Terminal:"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "适用于所有主机的规则会关闭该应用的防火墙。paddock 只允许在“终端”中添加："
+          }
+        }
+      }
+    },
+    "About": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "About"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "关于"
+          }
+        }
+      }
+    },
     "Access": {
       "extractionState": "manual",
       "localizations": {
@@ -327,6 +715,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Access"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "访问权限"
           }
         }
       }
@@ -339,6 +733,12 @@
             "state": "translated",
             "value": "Add"
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "添加"
+          }
         }
       }
     },
@@ -349,6 +749,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Add App…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "添加应用…"
           }
         }
       }
@@ -361,6 +767,12 @@
             "state": "translated",
             "value": "Add Folder…"
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "添加文件夹…"
+          }
         }
       }
     },
@@ -372,6 +784,12 @@
             "state": "translated",
             "value": "Add Rule"
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "添加规则"
+          }
         }
       }
     },
@@ -382,6 +800,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Add Rule…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "添加规则…"
           }
         }
       }
@@ -408,17 +832,6 @@
         }
       }
     },
-    "Added": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Added"
-          }
-        }
-      }
-    },
     "Added %@, %@. Visible in the app under %@.": {
       "extractionState": "manual",
       "localizations": {
@@ -426,6 +839,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Added %@, %@. Visible in the app under %@."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已添加 %@，%@。在应用中位于 %@。"
           }
         }
       }
@@ -452,6 +871,23 @@
         }
       }
     },
+    "All": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "All"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "全部"
+          }
+        }
+      }
+    },
     "Allow": {
       "extractionState": "manual",
       "localizations": {
@@ -459,6 +895,63 @@
           "stringUnit": {
             "state": "translated",
             "value": "Allow"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "允许"
+          }
+        }
+      }
+    },
+    "Allow %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allow %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "允许 %@"
+          }
+        }
+      }
+    },
+    "Allow %@ and all its subdomains": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allow %@ and all its subdomains"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "允许 %@ 及其所有子域名"
+          }
+        }
+      }
+    },
+    "Allow everything for 10 minutes": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allow everything for 10 minutes"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "10 分钟内允许所有连接"
           }
         }
       }
@@ -471,6 +964,12 @@
             "state": "translated",
             "value": "Allow list only"
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "仅允许列表"
+          }
         }
       }
     },
@@ -481,6 +980,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "Allow once"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "允许一次"
+          }
+        }
+      }
+    },
+    "Allow once for %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allow once for %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "对 %@ 允许一次"
           }
         }
       }
@@ -493,16 +1015,130 @@
             "state": "translated",
             "value": "Allow this session"
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "本次会话允许"
+          }
         }
       }
     },
-    "Also delete the data now instead of moving it to the Trash": {
+    "Allow this session for %@": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Also delete the data now instead of moving it to the Trash"
+            "value": "Allow this session for %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "本次会话允许 %@"
+          }
+        }
+      }
+    },
+    "Allowed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allowed"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已允许"
+          }
+        }
+      }
+    },
+    "Allowed once": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allowed once"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已允许一次"
+          }
+        }
+      }
+    },
+    "Allowed · rule added. The app connects on its next try.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Allowed · rule added. The app connects on its next try."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已允许 · 已添加规则。应用下次尝试时即可连接。"
+          }
+        }
+      }
+    },
+    "Also delete the data now instead of moving it to the trash": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Also delete the data now instead of moving it to the trash"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "现在就删除数据，而不是移到废纸篓"
+          }
+        }
+      }
+    },
+    "Also every subdomain of %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Also every subdomain of %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "同时包括 %@ 的所有子域名"
+          }
+        }
+      }
+    },
+    "Also remove unused apps and their logins": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Also remove unused apps and their logins"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "同时移除不用的应用及其登录"
           }
         }
       }
@@ -514,6 +1150,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Always"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "始终"
           }
         }
       }
@@ -529,6 +1171,57 @@
         }
       }
     },
+    "Always allow %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Always allow %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "始终允许 %@"
+          }
+        }
+      }
+    },
+    "Always allow %@ on port %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Always allow %@ on port %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "始终允许 %@ 的端口 %@"
+          }
+        }
+      }
+    },
+    "Always allow %@ only": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Always allow %@ only"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "仅始终允许 %@"
+          }
+        }
+      }
+    },
     "Always deny": {
       "extractionState": "manual",
       "localizations": {
@@ -536,6 +1229,63 @@
           "stringUnit": {
             "state": "translated",
             "value": "Always deny"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "始终拒绝"
+          }
+        }
+      }
+    },
+    "Always deny for %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Always deny for %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "始终拒绝 %@"
+          }
+        }
+      }
+    },
+    "An app bundle": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "An app bundle"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "应用程序包"
+          }
+        }
+      }
+    },
+    "An app that was not used for 90 days goes with its login and its files.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "An app that was not used for 90 days goes with its login and its files."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "90 天没有使用的应用会连同登录和文件一起移除。"
           }
         }
       }
@@ -547,6 +1297,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "Answer"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "回答"
+          }
+        }
+      }
+    },
+    "Any port": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Any port"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "任意端口"
           }
         }
       }
@@ -562,6 +1335,40 @@
         }
       }
     },
+    "App %@ of %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "App %@ of %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "第 %@ 个应用，共 %@ 个"
+          }
+        }
+      }
+    },
+    "App bundle": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "App bundle"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "应用程序包"
+          }
+        }
+      }
+    },
     "App copy": {
       "extractionState": "manual",
       "localizations": {
@@ -573,13 +1380,19 @@
         }
       }
     },
-    "App copy %@ · Data %@ · Saved state %@": {
+    "App profile": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "App copy %@ · Data %@ · Saved state %@"
+            "value": "App profile"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "应用配置"
           }
         }
       }
@@ -595,6 +1408,57 @@
         }
       }
     },
+    "Applies at the next start.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Applies at the next start."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "下次启动时生效。"
+          }
+        }
+      }
+    },
+    "Applies now and at every start.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Applies now and at every start."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "立即生效，每次启动都生效。"
+          }
+        }
+      }
+    },
+    "Approver": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Approver"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "审批程序"
+          }
+        }
+      }
+    },
     "Apps": {
       "extractionState": "manual",
       "localizations": {
@@ -602,6 +1466,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Apps"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "应用"
           }
         }
       }
@@ -625,6 +1495,12 @@
             "state": "translated",
             "value": "Ask"
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "询问"
+          }
         }
       }
     },
@@ -646,6 +1522,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "Ask one by one"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "逐个询问"
+          }
+        }
+      }
+    },
+    "Asked": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Asked"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已询问"
           }
         }
       }
@@ -669,6 +1568,12 @@
             "state": "translated",
             "value": "Base image"
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "基础映像"
+          }
         }
       }
     },
@@ -691,6 +1596,12 @@
             "state": "translated",
             "value": "Base image ready"
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "基础映像已就绪"
+          }
         }
       }
     },
@@ -701,6 +1612,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Base image removed. %@ freed."
+          }
+        }
+      }
+    },
+    "Before it is added": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Before it is added"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "添加之前"
           }
         }
       }
@@ -812,6 +1740,12 @@
             "state": "translated",
             "value": "Build…"
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "构建…"
+          }
         }
       }
     },
@@ -822,6 +1756,46 @@
           "stringUnit": {
             "state": "translated",
             "value": "Cancel"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "取消"
+          }
+        }
+      }
+    },
+    "Cancel All": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cancel All"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "全部取消"
+          }
+        }
+      }
+    },
+    "Cannot start: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cannot start: %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法启动：%@"
           }
         }
       }
@@ -867,6 +1841,12 @@
             "state": "translated",
             "value": "Changes"
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "更改记录"
+          }
         }
       }
     },
@@ -877,6 +1857,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Change…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "更改…"
           }
         }
       }
@@ -889,6 +1875,12 @@
             "state": "translated",
             "value": "Check Again"
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "重新检查"
+          }
         }
       }
     },
@@ -899,17 +1891,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Check again"
-          }
-        }
-      }
-    },
-    "Check for newer macOS": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Check for newer macOS"
           }
         }
       }
@@ -943,6 +1924,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Checking"
+          }
+        }
+      }
+    },
+    "Checking the app…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Checking the app…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在检查应用…"
           }
         }
       }
@@ -991,6 +1989,23 @@
         }
       }
     },
+    "Choose an app…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose an app…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "选择一个应用…"
+          }
+        }
+      }
+    },
     "Choose another restore image…": {
       "extractionState": "manual",
       "localizations": {
@@ -998,6 +2013,40 @@
           "stringUnit": {
             "state": "translated",
             "value": "Choose another restore image…"
+          }
+        }
+      }
+    },
+    "Clean Up paddock": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clean Up paddock"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "清理 paddock"
+          }
+        }
+      }
+    },
+    "Clean Up…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Clean Up…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "清理…"
           }
         }
       }
@@ -1013,13 +2062,19 @@
         }
       }
     },
-    "Clear all saved states": {
+    "Clear All Saved States…": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Clear all saved states"
+            "value": "Clear All Saved States…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "清除所有已存状态…"
           }
         }
       }
@@ -1057,13 +2112,70 @@
         }
       }
     },
-    "Clipboard": {
+    "Clipboard for this app": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Clipboard"
+            "value": "Clipboard for this app"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此应用的剪贴板"
+          }
+        }
+      }
+    },
+    "Close": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Close"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "关闭"
+          }
+        }
+      }
+    },
+    "Cold, about 40 s": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cold, about 40 s"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "冷启动，约 40 秒"
+          }
+        }
+      }
+    },
+    "Cold, about 40 s: %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cold, about 40 s: %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "冷启动，约 40 秒：%@"
           }
         }
       }
@@ -1075,6 +2187,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "Command"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "命令"
+          }
+        }
+      }
+    },
+    "Connections": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Connections"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "连接"
           }
         }
       }
@@ -1098,6 +2233,12 @@
             "state": "translated",
             "value": "Copied"
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已拷贝"
+          }
         }
       }
     },
@@ -1108,6 +2249,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Copy"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "拷贝"
           }
         }
       }
@@ -1131,16 +2278,11 @@
             "state": "translated",
             "value": "Copy from the app to this Mac"
           }
-        }
-      }
-    },
-    "Count": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
+        },
+        "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "Count"
+            "value": "从应用拷贝到这台 Mac"
           }
         }
       }
@@ -1167,6 +2309,23 @@
         }
       }
     },
+    "Data of removed apps, kept for 7 days.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Data of removed apps, kept for 7 days."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已移除应用的数据，保留 7 天。"
+          }
+        }
+      }
+    },
     "Default for new apps": {
       "extractionState": "manual",
       "localizations": {
@@ -1178,13 +2337,19 @@
         }
       }
     },
-    "Delete": {
+    "Denied": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Delete"
+            "value": "Denied"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已拒绝"
           }
         }
       }
@@ -1197,6 +2362,29 @@
             "state": "translated",
             "value": "Deny"
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "拒绝"
+          }
+        }
+      }
+    },
+    "Deny Instead…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Deny Instead…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "改为拒绝…"
+          }
         }
       }
     },
@@ -1207,6 +2395,40 @@
           "stringUnit": {
             "state": "translated",
             "value": "Deny all"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "全部拒绝"
+          }
+        }
+      }
+    },
+    "Deny for %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Deny for %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "拒绝 %@"
+          }
+        }
+      }
+    },
+    "Details": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Details"
           }
         }
       }
@@ -1219,6 +2441,12 @@
             "state": "translated",
             "value": "Devices"
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "设备"
+          }
         }
       }
     },
@@ -1229,6 +2457,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Devices attach when the app starts."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "设备在应用启动时连接。"
           }
         }
       }
@@ -1244,6 +2478,40 @@
         }
       }
     },
+    "Do Not Move": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Do Not Move"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "不移动"
+          }
+        }
+      }
+    },
+    "Dock apps": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dock apps"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "程序坞应用"
+          }
+        }
+      }
+    },
     "Done": {
       "extractionState": "manual",
       "localizations": {
@@ -1251,6 +2519,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Done"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "完成"
           }
         }
       }
@@ -1277,6 +2551,23 @@
         }
       }
     },
+    "Downloaded from the maker": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Downloaded from the maker"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "从开发者网站下载"
+          }
+        }
+      }
+    },
     "Downloads → %@": {
       "extractionState": "manual",
       "localizations": {
@@ -1284,6 +2575,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "Downloads → %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "下载 → %@"
+          }
+        }
+      }
+    },
+    "Drop to add": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Drop to add"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "松开即可添加"
           }
         }
       }
@@ -1299,6 +2613,57 @@
         }
       }
     },
+    "Each instance is its own sandbox with its own login, files and rules.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Each instance is its own sandbox with its own login, files and rules."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "每个实例都是独立的沙盒，有自己的登录、文件和规则。"
+          }
+        }
+      }
+    },
+    "Edit Rule": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Edit Rule"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "编辑规则"
+          }
+        }
+      }
+    },
+    "Edit…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Edit…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "编辑…"
+          }
+        }
+      }
+    },
     "Enter a host name, for example api.example.com.": {
       "extractionState": "manual",
       "localizations": {
@@ -1306,6 +2671,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "Enter a host name, for example api.example.com."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请输入主机名，例如 api.example.com。"
+          }
+        }
+      }
+    },
+    "Enter a port from 1 to 65535.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Enter a port from 1 to 65535."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请输入 1 到 65535 之间的端口。"
           }
         }
       }
@@ -1329,6 +2717,29 @@
             "state": "translated",
             "value": "Failed"
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "失败"
+          }
+        }
+      }
+    },
+    "Files & Clipboard": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Files & Clipboard"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "文件与剪贴板"
+          }
         }
       }
     },
@@ -1351,6 +2762,12 @@
             "state": "translated",
             "value": "Folders"
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "文件夹"
+          }
         }
       }
     },
@@ -1365,13 +2782,36 @@
         }
       }
     },
-    "For example api.openai.com, or *.openai.com for every server of that domain.": {
+    "Follow the steps in paddock's setup window.": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "For example api.openai.com, or *.openai.com for every server of that domain."
+            "value": "Follow the steps in paddock's setup window."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请按 paddock 设置窗口中的步骤操作。"
+          }
+        }
+      }
+    },
+    "For example api.example.com, *.example.com for every name under example.com, or an IP address.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "For example api.example.com, *.example.com for every name under example.com, or an IP address."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "例如 api.example.com，*.example.com（example.com 下的所有名称），或一个 IP 地址。"
           }
         }
       }
@@ -1384,6 +2824,12 @@
             "state": "translated",
             "value": "Free space"
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "可用空间"
+          }
         }
       }
     },
@@ -1394,6 +2840,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "From the app profile"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "来自应用配置"
+          }
+        }
+      }
+    },
+    "From the last session": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "From the last session"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "来自上次会话"
           }
         }
       }
@@ -1431,6 +2900,23 @@
         }
       }
     },
+    "Guest helpers": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Guest helpers"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "虚拟机助手"
+          }
+        }
+      }
+    },
     "Host": {
       "extractionState": "manual",
       "localizations": {
@@ -1438,6 +2924,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Host"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "主机"
           }
         }
       }
@@ -1449,6 +2941,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "In progress"
+          }
+        }
+      }
+    },
+    "In your Applications folder": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In your Applications folder"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在你的“应用程序”文件夹中"
           }
         }
       }
@@ -1475,6 +2984,40 @@
         }
       }
     },
+    "Instances": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Instances"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "实例"
+          }
+        }
+      }
+    },
+    "It then opens from Launchpad and Spotlight, and keeps working after you eject the disk image or empty Downloads. paddock for Mac copies itself into the Applications folder of your home folder.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "It then opens from Launchpad and Spotlight, and keeps working after you eject the disk image or empty Downloads. paddock for Mac copies itself into the Applications folder of your home folder."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "之后可以从启动台和聚焦搜索打开，推出磁盘映像或清空“下载”后也能继续使用。paddock for Mac 会把自己复制到你个人文件夹中的“应用程序”文件夹。"
+          }
+        }
+      }
+    },
     "Its saved state was not written. The next start is cold.": {
       "extractionState": "manual",
       "localizations": {
@@ -1493,6 +3036,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Keep Building"
+          }
+        }
+      }
+    },
+    "Keep for Later Starts": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Keep for Later Starts"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "保留到以后启动"
           }
         }
       }
@@ -1519,6 +3079,40 @@
         }
       }
     },
+    "Kept unless you turn on the option below": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kept unless you turn on the option below"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "保留，除非你打开下面的选项"
+          }
+        }
+      }
+    },
+    "Kept until an app ran on the new base image. Clean Up removes it then.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kept until an app ran on the new base image. Clean Up removes it then."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "保留到有应用在新基础映像上运行过为止，之后“清理”会移除它。"
+          }
+        }
+      }
+    },
     "Language": {
       "extractionState": "manual",
       "localizations": {
@@ -1538,6 +3132,12 @@
             "state": "translated",
             "value": "Last used"
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "上次使用"
+          }
         }
       }
     },
@@ -1548,6 +3148,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Live"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已生效"
           }
         }
       }
@@ -1596,6 +3202,91 @@
         }
       }
     },
+    "Loading apps…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Loading apps…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在载入应用…"
+          }
+        }
+      }
+    },
+    "Loading clipboard settings…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Loading clipboard settings…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在载入剪贴板设置…"
+          }
+        }
+      }
+    },
+    "Loading connections…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Loading connections…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在载入连接…"
+          }
+        }
+      }
+    },
+    "Loading folders…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Loading folders…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在载入文件夹…"
+          }
+        }
+      }
+    },
+    "Loading rules…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Loading rules…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在载入规则…"
+          }
+        }
+      }
+    },
     "Location": {
       "extractionState": "manual",
       "localizations": {
@@ -1604,16 +3295,11 @@
             "state": "translated",
             "value": "Location"
           }
-        }
-      }
-    },
-    "Location…": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
+        },
+        "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "Location…"
+            "value": "位置"
           }
         }
       }
@@ -1629,6 +3315,51 @@
         }
       }
     },
+    "Looking for files paddock no longer needs…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Looking for files paddock no longer needs…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在查找 paddock 不再需要的文件…"
+          }
+        }
+      }
+    },
+    "Made by": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Made by"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "创建者"
+          }
+        }
+      }
+    },
+    "Main window": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Main window"
+          }
+        }
+      }
+    },
     "Manage Storage…": {
       "extractionState": "manual",
       "localizations": {
@@ -1636,6 +3367,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "Manage Storage…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "管理存储…"
+          }
+        }
+      }
+    },
+    "Measuring…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Measuring…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在计算…"
           }
         }
       }
@@ -1648,16 +3402,11 @@
             "state": "translated",
             "value": "Memory"
           }
-        }
-      }
-    },
-    "Mode": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
+        },
+        "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "Mode"
+            "value": "内存"
           }
         }
       }
@@ -1670,6 +3419,12 @@
             "state": "translated",
             "value": "More"
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "更多"
+          }
         }
       }
     },
@@ -1681,6 +3436,63 @@
             "state": "translated",
             "value": "More…"
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "更多…"
+          }
+        }
+      }
+    },
+    "Move paddock for Mac to your Applications folder?": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Move paddock for Mac to your Applications folder?"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "将 paddock for Mac 移到你的“应用程序”文件夹？"
+          }
+        }
+      }
+    },
+    "Move to Applications Folder": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Move to Applications Folder"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "移到“应用程序”文件夹"
+          }
+        }
+      }
+    },
+    "Move to Applications…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Move to Applications…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "移到“应用程序”…"
+          }
         }
       }
     },
@@ -1691,6 +3503,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Name"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "名称"
           }
         }
       }
@@ -1725,6 +3543,12 @@
             "state": "translated",
             "value": "Network"
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "网络"
+          }
         }
       }
     },
@@ -1739,6 +3563,23 @@
         }
       }
     },
+    "New base image": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "New base image"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "新基础映像"
+          }
+        }
+      }
+    },
     "Next start": {
       "extractionState": "manual",
       "localizations": {
@@ -1746,6 +3587,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Next start"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "下次启动"
           }
         }
       }
@@ -1761,6 +3608,23 @@
         }
       }
     },
+    "No answer in time": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No answer in time"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "未及时回答"
+          }
+        }
+      }
+    },
     "No apps yet": {
       "extractionState": "manual",
       "localizations": {
@@ -1768,6 +3632,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "No apps yet"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "还没有应用"
           }
         }
       }
@@ -1780,6 +3650,12 @@
             "state": "translated",
             "value": "No base image"
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没有基础映像"
+          }
         }
       }
     },
@@ -1790,6 +3666,46 @@
           "stringUnit": {
             "state": "translated",
             "value": "No changes yet"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "尚无更改"
+          }
+        }
+      }
+    },
+    "No connections yet": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No connections yet"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "尚无连接"
+          }
+        }
+      }
+    },
+    "No folders yet. The app sees none of your files.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No folders yet. The app sees none of your files."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "尚无文件夹。应用看不到你的任何文件。"
           }
         }
       }
@@ -1802,6 +3718,12 @@
             "state": "translated",
             "value": "No network"
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无网络"
+          }
         }
       }
     },
@@ -1813,6 +3735,29 @@
             "state": "translated",
             "value": "No open questions"
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没有待回答的询问"
+          }
+        }
+      }
+    },
+    "No rules yet": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No rules yet"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "尚无规则"
+          }
         }
       }
     },
@@ -1823,6 +3768,40 @@
           "stringUnit": {
             "state": "translated",
             "value": "Not enough free space to start %@"
+          }
+        }
+      }
+    },
+    "Not from the App Store": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not from the App Store"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "不是来自 App Store"
+          }
+        }
+      }
+    },
+    "Not in an Applications folder": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not in an Applications folder"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "不在“应用程序”文件夹中"
           }
         }
       }
@@ -1857,6 +3836,46 @@
             "state": "translated",
             "value": "Not used yet"
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "尚未使用"
+          }
+        }
+      }
+    },
+    "Nothing matches the filter": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nothing matches the filter"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没有符合筛选条件的项目"
+          }
+        }
+      }
+    },
+    "Nothing to clean up. paddock keeps only what your apps need.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nothing to clean up. paddock keeps only what your apps need."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "没有可清理的内容。paddock 只保留应用需要的文件。"
+          }
         }
       }
     },
@@ -1879,6 +3898,12 @@
             "state": "translated",
             "value": "OK"
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "好"
+          }
         }
       }
     },
@@ -1893,6 +3918,23 @@
         }
       }
     },
+    "On disk": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "On disk"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "磁盘占用"
+          }
+        }
+      }
+    },
     "On next start": {
       "extractionState": "manual",
       "localizations": {
@@ -1900,6 +3942,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "On next start"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "下次启动时"
+          }
+        }
+      }
+    },
+    "Only apps can be added. Drag an app from your Applications folder.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Only apps can be added. Drag an app from your Applications folder."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "只能添加应用。请从“应用程序”文件夹拖入一个应用。"
           }
         }
       }
@@ -1912,6 +3977,12 @@
             "state": "translated",
             "value": "Open"
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "打开"
+          }
         }
       }
     },
@@ -1922,6 +3993,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Open Log Folder"
+          }
+        }
+      }
+    },
+    "Open New Instance": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Open New Instance"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "打开新实例"
           }
         }
       }
@@ -1989,6 +4077,46 @@
             "state": "translated",
             "value": "Open website"
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "打开网站"
+          }
+        }
+      }
+    },
+    "Or drag an app here, or onto paddock for Mac in the Dock.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Or drag an app here, or onto paddock for Mac in the Dock."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "也可以把应用拖到这里，或拖到程序坞中的 paddock for Mac 上。"
+          }
+        }
+      }
+    },
+    "Other…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Other…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "其他…"
+          }
         }
       }
     },
@@ -2022,6 +4150,12 @@
             "state": "translated",
             "value": "Passed"
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "通过"
+          }
         }
       }
     },
@@ -2033,6 +4167,12 @@
             "state": "translated",
             "value": "Paste from this Mac into the app"
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "从这台 Mac 粘贴到应用"
+          }
         }
       }
     },
@@ -2043,6 +4183,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Pause"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "暂停"
           }
         }
       }
@@ -2069,6 +4215,57 @@
         }
       }
     },
+    "Port": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Port"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "端口"
+          }
+        }
+      }
+    },
+    "Port number": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Port number"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "端口号"
+          }
+        }
+      }
+    },
+    "Previous base image": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Previous base image"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "上一个基础映像"
+          }
+        }
+      }
+    },
     "Profile": {
       "extractionState": "manual",
       "localizations": {
@@ -2076,6 +4273,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Profile"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "配置"
           }
         }
       }
@@ -2088,6 +4291,12 @@
             "state": "translated",
             "value": "Question panel"
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "询问面板"
+          }
         }
       }
     },
@@ -2098,6 +4307,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Questions"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "询问"
           }
         }
       }
@@ -2165,6 +4380,12 @@
             "state": "translated",
             "value": "Read and write"
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "读写"
+          }
         }
       }
     },
@@ -2176,6 +4397,12 @@
             "state": "translated",
             "value": "Read only"
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "只读"
+          }
         }
       }
     },
@@ -2186,6 +4413,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Ready"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "就绪"
           }
         }
       }
@@ -2223,17 +4456,6 @@
         }
       }
     },
-    "Rebuild…": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Rebuild…"
-          }
-        }
-      }
-    },
     "Refresh": {
       "extractionState": "manual",
       "localizations": {
@@ -2241,6 +4463,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Refresh"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "刷新"
           }
         }
       }
@@ -2253,6 +4481,46 @@
             "state": "translated",
             "value": "Remove"
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "移除"
+          }
+        }
+      }
+    },
+    "Remove %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remove %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "移除 %@"
+          }
+        }
+      }
+    },
+    "Remove %@ and its %@ instances from paddock?": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remove %@ and its %@ instances from paddock?"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "从 paddock 中移除 %@ 及其 %@ 个实例？"
+          }
         }
       }
     },
@@ -2264,6 +4532,29 @@
             "state": "translated",
             "value": "Remove %@ from paddock?"
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "从 paddock 中移除 %@？"
+          }
+        }
+      }
+    },
+    "Remove %@ rules?": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remove %@ rules?"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "移除 %@ 条规则？"
+          }
         }
       }
     },
@@ -2274,6 +4565,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Remove App…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "移除应用…"
           }
         }
       }
@@ -2333,13 +4630,70 @@
         }
       }
     },
-    "Remove the selected rules?": {
+    "Remove the rule for %@ and its subdomains?": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Remove the selected rules?"
+            "value": "Remove the rule for %@ and its subdomains?"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "移除 %@ 及其子域名的规则？"
+          }
+        }
+      }
+    },
+    "Remove the rule for %@?": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remove the rule for %@?"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "移除 %@ 的规则？"
+          }
+        }
+      }
+    },
+    "Removed now": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Removed now"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "现在移除"
+          }
+        }
+      }
+    },
+    "Remove…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Remove…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "移除…"
           }
         }
       }
@@ -2355,6 +4709,23 @@
         }
       }
     },
+    "Removing…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Removing…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在移除…"
+          }
+        }
+      }
+    },
     "Reopen files": {
       "extractionState": "manual",
       "localizations": {
@@ -2362,6 +4733,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Reopen files"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "需重新打开文件"
           }
         }
       }
@@ -2407,16 +4784,28 @@
             "state": "translated",
             "value": "Restart App"
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "重新启动应用"
+          }
         }
       }
     },
-    "Restore image download": {
+    "Restore images": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Restore image download"
+            "value": "Restore images"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "恢复映像"
           }
         }
       }
@@ -2429,6 +4818,12 @@
             "state": "translated",
             "value": "Resume"
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "恢复"
+          }
         }
       }
     },
@@ -2440,6 +4835,12 @@
             "state": "translated",
             "value": "Reveal"
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "显示"
+          }
         }
       }
     },
@@ -2450,6 +4851,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Reveal in Finder"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "在“访达”中显示"
+          }
+        }
+      }
+    },
+    "Rules": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rules"
           }
         }
       }
@@ -2495,6 +4913,12 @@
             "state": "translated",
             "value": "Running"
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在运行"
+          }
         }
       }
     },
@@ -2531,6 +4955,57 @@
         }
       }
     },
+    "Runs from a disk image or a temporary copy": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Runs from a disk image or a temporary copy"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "从磁盘映像或临时副本运行"
+          }
+        }
+      }
+    },
+    "Same as the app": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Same as the app"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "与应用设置相同"
+          }
+        }
+      }
+    },
+    "Save": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Save"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "存储"
+          }
+        }
+      }
+    },
     "Saved state": {
       "extractionState": "manual",
       "localizations": {
@@ -2538,6 +5013,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Saved state"
+          }
+        }
+      }
+    },
+    "Saved state %@ · Backups %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saved state %@ · Backups %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已存状态 %@ · 备份 %@"
           }
         }
       }
@@ -2560,6 +5052,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Scope"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "范围"
           }
         }
       }
@@ -2616,6 +5114,63 @@
             "state": "translated",
             "value": "Share anyway"
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "仍然共享"
+          }
+        }
+      }
+    },
+    "Show": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "显示"
+          }
+        }
+      }
+    },
+    "Show All": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show All"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "显示全部"
+          }
+        }
+      }
+    },
+    "Show App": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show App"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "显示应用"
+          }
         }
       }
     },
@@ -2626,17 +5181,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Show Log"
-          }
-        }
-      }
-    },
-    "Show Window": {
-      "extractionState": "manual",
-      "localizations": {
-        "en": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Show Window"
           }
         }
       }
@@ -2652,6 +5196,17 @@
         }
       }
     },
+    "Show menu": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Show menu"
+          }
+        }
+      }
+    },
     "Show the paddock command for each action": {
       "extractionState": "manual",
       "localizations": {
@@ -2659,6 +5214,17 @@
           "stringUnit": {
             "state": "translated",
             "value": "Show the paddock command for each action"
+          }
+        }
+      }
+    },
+    "Sidebar": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sidebar"
           }
         }
       }
@@ -2682,6 +5248,12 @@
             "state": "translated",
             "value": "Start"
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "启动"
+          }
         }
       }
     },
@@ -2703,6 +5275,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Starting"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在启动"
           }
         }
       }
@@ -2803,6 +5381,29 @@
             "state": "translated",
             "value": "Stop"
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "停止"
+          }
+        }
+      }
+    },
+    "Stop %@ first.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Stop %@ first."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "请先停止 %@。"
+          }
         }
       }
     },
@@ -2858,6 +5459,12 @@
             "state": "translated",
             "value": "Stopped"
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已停止"
+          }
         }
       }
     },
@@ -2868,6 +5475,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Stopping"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在停止"
           }
         }
       }
@@ -2913,6 +5526,97 @@
             "state": "translated",
             "value": "Storage"
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "存储"
+          }
+        }
+      }
+    },
+    "Storage needs paddock. Install or update it, then click Check Again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Storage needs paddock. Install or update it, then click Check Again."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "存储需要 paddock。请安装或更新它，然后点按“再次检查”。"
+          }
+        }
+      }
+    },
+    "Storage…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Storage…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "存储…"
+          }
+        }
+      }
+    },
+    "Suspend": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Suspend"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "挂起"
+          }
+        }
+      }
+    },
+    "Suspended": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Suspended"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已挂起"
+          }
+        }
+      }
+    },
+    "Suspended · resumes in about 4 s": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Suspended · resumes in about 4 s"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已挂起 · 约 4 秒恢复"
+          }
         }
       }
     },
@@ -2923,6 +5627,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Terminal"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "终端"
           }
         }
       }
@@ -2946,6 +5656,12 @@
             "state": "translated",
             "value": "The app asks again the next time it reaches these servers."
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "应用下次连接这些服务器时会再次询问。"
+          }
         }
       }
     },
@@ -2956,6 +5672,46 @@
           "stringUnit": {
             "state": "translated",
             "value": "The app can read what you copy on this Mac when you paste in it."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "你在应用中粘贴时，应用可以读取你在这台 Mac 上拷贝的内容。"
+          }
+        }
+      }
+    },
+    "The app gets a launcher in your Applications folder, so it also starts from the Dock and Launchpad.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The app gets a launcher in your Applications folder, so it also starts from the Dock and Launchpad."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "应用会在你的“应用程序”文件夹中得到一个启动器，因此也能从程序坞和启动台启动。"
+          }
+        }
+      }
+    },
+    "The app is not running. Choose Always, or start the app first.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The app is not running. Choose Always, or start the app first."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "应用没有运行。请选择“始终”，或先启动应用。"
           }
         }
       }
@@ -2979,6 +5735,29 @@
             "state": "translated",
             "value": "The app sees only these folders. They appear in the app under \"My Shared Files\"."
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "应用只能看到这些文件夹。它们在应用中位于“My Shared Files”下。"
+          }
+        }
+      }
+    },
+    "The apps did not load": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The apps did not load"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "应用没有载入"
+          }
         }
       }
     },
@@ -2989,6 +5768,74 @@
           "stringUnit": {
             "state": "translated",
             "value": "The base image was not removed"
+          }
+        }
+      }
+    },
+    "The build stopped before the base image was sealed. Try Again continues where it stopped.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The build stopped before the base image was sealed. Try Again continues where it stopped."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "构建在基础映像封装之前停止了。“重试”会从停止的地方继续。"
+          }
+        }
+      }
+    },
+    "The clipboard settings did not load": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The clipboard settings did not load"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "剪贴板设置未能载入"
+          }
+        }
+      }
+    },
+    "The connections did not load": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The connections did not load"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "连接未能载入"
+          }
+        }
+      }
+    },
+    "The download is done. The later steps cannot pause.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The download is done. The later steps cannot pause."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "下载已完成。之后的步骤不能暂停。"
           }
         }
       }
@@ -3004,6 +5851,74 @@
         }
       }
     },
+    "The list also has paddock data outside the Mac apps, for example of coding agents. Remove takes it too.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The list also has paddock data outside the Mac apps, for example of coding agents. Remove takes it too."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "列表中还有 Mac 应用以外的 paddock 数据，例如编程代理的数据。“移除”也会删除它们。"
+          }
+        }
+      }
+    },
+    "The login and the files of the app in its sandbox cannot come back.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The login and the files of the app in its sandbox cannot come back."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "应用在沙盒中的登录和文件将无法恢复。"
+          }
+        }
+      }
+    },
+    "The macOS download. Needed again only for a rebuild.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The macOS download. Needed again only for a rebuild."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "下载的 macOS，只有重新构建时才需要。"
+          }
+        }
+      }
+    },
+    "The network mode does not allow it": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The network mode does not allow it"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "网络模式不允许此连接"
+          }
+        }
+      }
+    },
     "The next start of each app is cold, about 30 s. Your data in the apps stays.": {
       "extractionState": "manual",
       "localizations": {
@@ -3011,6 +5926,57 @@
           "stringUnit": {
             "state": "translated",
             "value": "The next start of each app is cold, about 30 s. Your data in the apps stays."
+          }
+        }
+      }
+    },
+    "The rules did not load": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The rules did not load"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "规则未能载入"
+          }
+        }
+      }
+    },
+    "The servers the app connects to show here while it runs, with what paddock decided.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The servers the app connects to show here while it runs, with what paddock decided."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "应用运行时，它连接的服务器以及 paddock 的决定会显示在这里。"
+          }
+        }
+      }
+    },
+    "The update that builds now.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The update that builds now."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在构建的更新。"
           }
         }
       }
@@ -3059,6 +6025,40 @@
         }
       }
     },
+    "This app is in paddock already, as %@.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This app is in paddock already, as %@."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这个应用已在 paddock 中，名为 %@。"
+          }
+        }
+      }
+    },
+    "This app is no longer in paddock.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This app is no longer in paddock."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这个应用已不在 paddock 中。"
+          }
+        }
+      }
+    },
     "This folder cannot be shared": {
       "extractionState": "manual",
       "localizations": {
@@ -3066,6 +6066,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "This folder cannot be shared"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此文件夹不能共享"
           }
         }
       }
@@ -3077,6 +6083,114 @@
           "stringUnit": {
             "state": "translated",
             "value": "This folder holds keys"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此文件夹包含密钥"
+          }
+        }
+      }
+    },
+    "This paddock cannot change rules from the app yet. Update paddock:": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This paddock cannot change rules from the app yet. Update paddock:"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此版本的 paddock 还不能从应用中更改规则。请更新 paddock："
+          }
+        }
+      }
+    },
+    "This paddock cannot change the clipboard of one session yet. Update paddock:": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This paddock cannot change the clipboard of one session yet. Update paddock:"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此版本的 paddock 还不能更改单个会话的剪贴板。请更新 paddock："
+          }
+        }
+      }
+    },
+    "This paddock cannot keep a session folder yet. Update paddock:": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This paddock cannot keep a session folder yet. Update paddock:"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此版本的 paddock 还不能保留会话文件夹。请更新 paddock："
+          }
+        }
+      }
+    },
+    "This paddock cannot list the connections of an app yet. Update it in Terminal, then try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This paddock cannot list the connections of an app yet. Update it in Terminal, then try again."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此版本的 paddock 还不能列出应用的连接。请在“终端”中更新，然后重试。"
+          }
+        }
+      }
+    },
+    "This paddock cannot list the rules of an app yet. Update it in Terminal, then try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This paddock cannot list the rules of an app yet. Update it in Terminal, then try again."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此版本的 paddock 还不能列出应用的规则。请在“终端”中更新，然后重试。"
+          }
+        }
+      }
+    },
+    "This paddock cannot show the clipboard of a session yet. Update it in Terminal, then try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This paddock cannot show the clipboard of a session yet. Update it in Terminal, then try again."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "此版本的 paddock 还不能显示会话的剪贴板。请在“终端”中更新，然后重试。"
           }
         }
       }
@@ -3103,6 +6217,40 @@
         }
       }
     },
+    "This removes the sandbox of the app (%@ with its saved state %@) and its launcher in your Applications folder. Its data (%@) goes to the paddock trash for 7 days. The original app stays.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This removes the sandbox of the app (%@ with its saved state %@) and its launcher in your Applications folder. Its data (%@) goes to the paddock trash for 7 days. The original app stays."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这会移除应用的沙盒（%@，其中已存状态 %@）以及“应用程序”文件夹中的启动器。它的数据（%@）会在 paddock 废纸篓中保留 7 天。原来的应用保持不变。"
+          }
+        }
+      }
+    },
+    "This removes the sandbox of the app (%@) and its launcher in your Applications folder. Its data goes to the paddock trash for 7 days. The original app stays.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This removes the sandbox of the app (%@) and its launcher in your Applications folder. Its data goes to the paddock trash for 7 days. The original app stays."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这会移除应用的沙盒（%@）以及“应用程序”文件夹中的启动器。它的数据会在 paddock 废纸篓中保留 7 天。原来的应用保持不变。"
+          }
+        }
+      }
+    },
     "This session": {
       "extractionState": "manual",
       "localizations": {
@@ -3110,6 +6258,29 @@
           "stringUnit": {
             "state": "translated",
             "value": "This session"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "本次会话"
+          }
+        }
+      }
+    },
+    "This session only": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This session only"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "仅本次会话"
           }
         }
       }
@@ -3133,16 +6304,45 @@
             "state": "translated",
             "value": "This version of paddock for Mac needs paddock %@ or newer. You have %@."
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这个版本的 paddock for Mac 需要 paddock %@ 或更新版本。你的版本是 %@。"
+          }
         }
       }
     },
-    "To move it, remove the base image and build it in a new location.": {
+    "Time left": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "To move it, remove the base image and build it in a new location."
+            "value": "Time left"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "剩余时间"
+          }
+        }
+      }
+    },
+    "To move the base image, remove it and build it again in a new location.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "To move the base image, remove it and build it again in a new location."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "要移动基础映像，请先移除它，再在新位置重新构建。"
           }
         }
       }
@@ -3158,13 +6358,19 @@
         }
       }
     },
-    "Trash of removed apps": {
+    "Trash": {
       "extractionState": "manual",
       "localizations": {
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "Trash of removed apps"
+            "value": "Trash"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "废纸篓"
           }
         }
       }
@@ -3176,6 +6382,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Try Again"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "重试"
           }
         }
       }
@@ -3213,6 +6425,23 @@
         }
       }
     },
+    "Until the app stops": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Until the app stops"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "直到应用停止"
+          }
+        }
+      }
+    },
     "Up to date": {
       "extractionState": "manual",
       "localizations": {
@@ -3242,6 +6471,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "Update paddock"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "更新 paddock"
           }
         }
       }
@@ -3279,6 +6514,23 @@
         }
       }
     },
+    "Update…": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Update…"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "更新…"
+          }
+        }
+      }
+    },
     "Use a restore image I already have…": {
       "extractionState": "manual",
       "localizations": {
@@ -3298,6 +6550,63 @@
             "state": "translated",
             "value": "Used %@"
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@使用"
+          }
+        }
+      }
+    },
+    "Version": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Version"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "版本"
+          }
+        }
+      }
+    },
+    "Version %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Version %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "版本 %@"
+          }
+        }
+      }
+    },
+    "Waiting for an answer": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Waiting for an answer"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "正在等待回答"
+          }
         }
       }
     },
@@ -3308,6 +6617,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "Waiting for the setup window…"
+          }
+        }
+      }
+    },
+    "Warm, about 6 s": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Warm, about 6 s"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "热启动，约 6 秒"
           }
         }
       }
@@ -3345,6 +6671,23 @@
         }
       }
     },
+    "What paddock keeps": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "What paddock keeps"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "paddock 保存的内容"
+          }
+        }
+      }
+    },
     "What you copy in the app reaches the clipboard of this Mac.": {
       "extractionState": "manual",
       "localizations": {
@@ -3352,6 +6695,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "What you copy in the app reaches the clipboard of this Mac."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "你在应用中拷贝的内容会进入这台 Mac 的剪贴板。"
           }
         }
       }
@@ -3363,6 +6712,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "When an app wants to reach a new server, the question appears here and next to the app's window."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "当应用想要连接新的服务器时，询问会显示在这里和应用窗口旁边。"
           }
         }
       }
@@ -3389,6 +6744,23 @@
         }
       }
     },
+    "When you answer a question about a server, the rule appears here. You can also add one yourself.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "When you answer a question about a server, the rule appears here. You can also add one yourself."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "当你回答关于某个服务器的询问后，规则会显示在这里。你也可以自己添加规则。"
+          }
+        }
+      }
+    },
     "Writes paddock's doctor report to a file and shows it in Finder. The report has no user name, paths or tokens: paddock removes them. It lists this Mac's model, macOS version, paddock version and the state of each app.": {
       "extractionState": "manual",
       "localizations": {
@@ -3408,6 +6780,12 @@
             "state": "translated",
             "value": "You"
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "你"
+          }
         }
       }
     },
@@ -3418,6 +6796,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "You can close this window; the build continues. Quitting paddock for Mac pauses it."
+          }
+        }
+      }
+    },
+    "You stopped the guided step. Try Again continues where it stopped.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "You stopped the guided step. Try Again continues where it stopped."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "你停止了引导步骤。“重试”会从停止的地方继续。"
           }
         }
       }
@@ -3441,6 +6836,12 @@
             "state": "translated",
             "value": "api.example.com"
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "api.example.com"
+          }
         }
       }
     },
@@ -3451,6 +6852,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "just now"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "刚刚"
           }
         }
       }
@@ -3463,6 +6870,12 @@
             "state": "translated",
             "value": "less than a minute left"
           }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "还剩不到一分钟"
+          }
         }
       }
     },
@@ -3473,6 +6886,23 @@
           "stringUnit": {
             "state": "translated",
             "value": "macOS %@"
+          }
+        }
+      }
+    },
+    "macOS %@ can be built for the apps.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "macOS %@ can be built for the apps."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "可以为应用构建 macOS %@。"
           }
         }
       }
@@ -3543,6 +6973,23 @@
         }
       }
     },
+    "paddock adds one rule for the site and one for every name under it.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "paddock adds one rule for the site and one for every name under it."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "paddock 会为该网站添加一条规则，并为它下面的所有名称再添加一条。"
+          }
+        }
+      }
+    },
     "paddock app mode needs a Mac with Apple silicon.": {
       "extractionState": "manual",
       "localizations": {
@@ -3565,6 +7012,40 @@
         }
       }
     },
+    "paddock did not list the apps. Click Try Again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "paddock did not list the apps. Click Try Again."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "paddock 没有列出应用。请点按“重试”。"
+          }
+        }
+      }
+    },
+    "paddock did not take the rule.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "paddock did not take the rule."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "paddock 没有接受此规则。"
+          }
+        }
+      }
+    },
     "paddock downloads macOS from Apple (about 13 GB), installs it into an image (about 25 GB on disk) and seals it. This takes 10 to 30 minutes on a fast connection. You can pause, quit and continue later.": {
       "extractionState": "manual",
       "localizations": {
@@ -3572,6 +7053,74 @@
           "stringUnit": {
             "state": "translated",
             "value": "paddock downloads macOS from Apple (about 13 GB), installs it into an image (about 25 GB on disk) and seals it. This takes 10 to 30 minutes on a fast connection. You can pause, quit and continue later."
+          }
+        }
+      }
+    },
+    "paddock ended with status %@.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "paddock ended with status %@."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "paddock 以状态 %@ 结束。"
+          }
+        }
+      }
+    },
+    "paddock for Mac %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "paddock for Mac %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "paddock for Mac %@"
+          }
+        }
+      }
+    },
+    "paddock for Mac %@ · paddock %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "paddock for Mac %@ · paddock %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "paddock for Mac %@ · paddock %@"
+          }
+        }
+      }
+    },
+    "paddock for Mac cannot run the paddock command. Check that paddock is installed, then check again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "paddock for Mac cannot run the paddock command. Check that paddock is installed, then check again."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "paddock for Mac 无法运行 paddock 命令。请确认已安装 paddock，然后重新检查。"
           }
         }
       }
@@ -3598,6 +7147,74 @@
         }
       }
     },
+    "paddock for Mac was not moved": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "paddock for Mac was not moved"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "paddock for Mac 没有移动"
+          }
+        }
+      }
+    },
+    "paddock has no files on this Mac yet.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "paddock has no files on this Mac yet."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "paddock 在这台 Mac 上还没有文件。"
+          }
+        }
+      }
+    },
+    "paddock is not available": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "paddock is not available"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "paddock 不可用"
+          }
+        }
+      }
+    },
+    "paddock is not available. Install or update it, then click Check Again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "paddock is not available. Install or update it, then click Check Again."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "paddock 不可用。请安装或更新它，然后点按“再次检查”。"
+          }
+        }
+      }
+    },
     "paddock is not installed": {
       "extractionState": "manual",
       "localizations": {
@@ -3605,6 +7222,40 @@
           "stringUnit": {
             "state": "translated",
             "value": "paddock is not installed"
+          }
+        }
+      }
+    },
+    "paddock is not reachable": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "paddock is not reachable"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "无法连接 paddock"
+          }
+        }
+      }
+    },
+    "paddock keeps the base image in this folder. It needs about 40 GB free on this disk.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "paddock keeps the base image in this folder. It needs about 40 GB free on this disk."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "paddock 把基础映像保存在这个文件夹中，需要这块磁盘上约 40 GB 的可用空间。"
           }
         }
       }
@@ -3620,6 +7271,23 @@
         }
       }
     },
+    "paddock needed": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "paddock needed"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "需要的 paddock"
+          }
+        }
+      }
+    },
     "paddock needs a base image of macOS, about 25 GB, built once. Apps start from a copy of it in about half a minute.": {
       "extractionState": "manual",
       "localizations": {
@@ -3627,6 +7295,40 @@
           "stringUnit": {
             "state": "translated",
             "value": "paddock needs a base image of macOS, about 25 GB, built once. Apps start from a copy of it in about half a minute."
+          }
+        }
+      }
+    },
+    "paddock never removes anything of an app that runs or is suspended.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "paddock never removes anything of an app that runs or is suspended."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "paddock 从不移除正在运行或已挂起的应用的任何内容。"
+          }
+        }
+      }
+    },
+    "paddock stopped with status %@.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "paddock stopped with status %@."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "paddock 已停止，状态为 %@。"
           }
         }
       }
@@ -3642,6 +7344,74 @@
         }
       }
     },
+    "paddock uses %@.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "paddock uses %@."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "paddock 使用了 %@。"
+          }
+        }
+      }
+    },
+    "paddock uses %@. %@ free on this disk.": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "paddock uses %@. %@ free on this disk."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "paddock 使用了 %@。这块磁盘还有 %@ 可用。"
+          }
+        }
+      }
+    },
+    "port %@ · %@ and all its subdomains": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "port %@ · %@ and all its subdomains"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "端口 %@ · %@ 及其所有子域名"
+          }
+        }
+      }
+    },
+    "port %@ · first connection to this host": {
+      "extractionState": "manual",
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "port %@ · first connection to this host"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "端口 %@ · 首次连接此主机"
+          }
+        }
+      }
+    },
     "read and write": {
       "extractionState": "manual",
       "localizations": {
@@ -3649,6 +7419,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "read and write"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "读写"
           }
         }
       }
@@ -3660,6 +7436,12 @@
           "stringUnit": {
             "state": "translated",
             "value": "read only"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "只读"
           }
         }
       }

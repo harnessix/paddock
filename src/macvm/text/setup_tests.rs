@@ -340,8 +340,8 @@ fn status_golden_unsealed() {
 
 #[test]
 fn status_golden_sealed() {
-    let s = t::status_golden_sealed("15.2", "2026-11-04T10:00:00Z", 23 * GIB, true);
-    has(&s, &["macOS 15.2", "sealed 2026-11-04T10:00:00Z", "23 GiB"]);
+    let s = t::status_golden_sealed("15.2", "2000-01-03T03:04:05Z", 23 * GIB, true);
+    has(&s, &["macOS 15.2", "sealed 2000-01-03T03:04:05Z", "23 GiB"]);
     assert!(!s.contains("flags"));
     has(
         &t::status_golden_sealed("15.2", "?", GIB, false),
@@ -370,8 +370,8 @@ fn status_profiles_none() {
 #[test]
 fn status_profile() {
     has(
-        &t::status_profile("chatgpt-desktop", "default", 3 * GIB),
-        &["chatgpt-desktop/default 3 GiB"],
+        &t::status_profile("sample-notes", "default", 3 * GIB),
+        &["sample-notes/default 3 GiB"],
     );
 }
 
@@ -383,8 +383,8 @@ fn status_sessions_none() {
 #[test]
 fn status_session() {
     has(
-        &t::status_session("chatgpt-desktop--default", 812, "/p"),
-        &["chatgpt-desktop--default (pid 812) /p"],
+        &t::status_session("sample-notes--default", 812, "/p"),
+        &["sample-notes--default (pid 812) /p"],
     );
 }
 

@@ -2,8 +2,8 @@
   "v": 1,
   "apps": [
     {
-      "name": "ChatGPT",
-      "bundle_path": "/Applications/ChatGPT.app",
+      "name": "Sample Notes",
+      "bundle_path": "/Applications/Sample Notes.app",
       "state": "running",
       "next_start": "Warm, about 10 s",
       "memory_bytes": 6442450944,
@@ -23,8 +23,8 @@
       "windows": 3
     },
     {
-      "name": "Slack",
-      "bundle_path": "/Applications/Slack.app",
+      "name": "Sample Mail",
+      "bundle_path": "/Applications/Sample Mail.app",
       "state": "saved",
       "next_start": "Warm, about 10 s",
       "memory_bytes": 6442450944,

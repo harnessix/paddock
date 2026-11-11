@@ -10,9 +10,9 @@ const TOKEN: &str = "plantedtoken0123plantedtoken0123";
 fn id() -> Identity {
     Identity {
         pid: Some(612),
-        app: Some("com.openai.chat".into()),
-        team: Some("2DC432GLL2".into()),
-        path: Some("/Applications/ChatGPT.app/Contents/MacOS/ChatGPT".into()),
+        app: Some("com.example.notes".into()),
+        team: Some("EXAMPLE123".into()),
+        path: Some("/Applications/Sample Notes.app/Contents/MacOS/Sample Notes".into()),
         parent_app: None,
     }
 }
@@ -83,7 +83,7 @@ fn status_rest(client: &mut UnixStream) -> (u16, Vec<u8>) {
 #[test]
 fn guest_connect_header_then_connect_line() {
     let (mut client, host, t) = run(
-        b"CONNECT chatgpt.com:443 HTTP/1.1\r\nHost: chatgpt.com:443\r\nProxy-Connection: keep-alive\r\n\r\n\x16\x03\x01early",
+        b"CONNECT notes.example.com:443 HTTP/1.1\r\nHost: notes.example.com:443\r\nProxy-Connection: keep-alive\r\n\r\n\x16\x03\x01early",
         Some(TOKEN),
         None,
         true,
@@ -94,17 +94,17 @@ fn guest_connect_header_then_connect_line() {
     let h = ProxyHeader::parse(l[1].trim_end()).unwrap();
     assert_eq!(
         (h.host.as_str(), h.port, h.token.as_str()),
-        ("chatgpt.com", 443, TOKEN)
+        ("notes.example.com", 443, TOKEN)
     );
     assert_eq!(h.id, id());
     assert_eq!(
-        l[2], "CONNECT chatgpt.com:443 HTTP/1.1\r\n",
+        l[2], "CONNECT notes.example.com:443 HTTP/1.1\r\n",
         "then the CONNECT line"
     );
     let l = lines(&mut host, 2);
     assert_eq!(
         l,
-        ["Host: chatgpt.com:443\r\n", "\r\n"],
+        ["Host: notes.example.com:443\r\n", "\r\n"],
         "no client header is forwarded"
     );
     let mut early = [0u8; 8];
@@ -210,7 +210,7 @@ fn guest_malformed_400() {
 fn guest_dial_fail_502() {
     let started = std::time::Instant::now();
     let (mut client, _none, t) = run(
-        b"CONNECT chatgpt.com:443 HTTP/1.1\r\n\r\n",
+        b"CONNECT notes.example.com:443 HTTP/1.1\r\n\r\n",
         Some(TOKEN),
         None,
         false,

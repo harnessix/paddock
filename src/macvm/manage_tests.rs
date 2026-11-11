@@ -12,7 +12,7 @@ fn sealed_layout(t: &Path) -> Layout {
     let mut m = Manifest::new("15.2", "24C101", "0.2.1");
     m.version = "15.2".into();
     m.build = "24C101".into();
-    m.sealed = Some("2026-11-01T10:00:00Z".into());
+    m.sealed = Some("2000-01-01T03:04:05Z".into());
     m.at(State::Sealed);
     l.golden.write_manifest(&m).unwrap();
     l
@@ -48,7 +48,7 @@ fn views_of_missing_unsealed_sealed_and_unreadable() {
     }
     let lines = status_lines(&l, Some("15.3"), "u");
     assert!(
-        lines[1].contains("sealed 2026-11-01T10:00:00Z"),
+        lines[1].contains("sealed 2000-01-01T03:04:05Z"),
         "{lines:?}"
     );
     assert!(
@@ -56,6 +56,8 @@ fn views_of_missing_unsealed_sealed_and_unreadable() {
         "{lines:?}"
     );
     let j = status_json(&l, Some("15.3"), "u");
+    let j: serde_json::Value = serde_json::from_str(&j.to_string()).unwrap();
+    assert_eq!(j["v"], 1);
     assert_eq!(j["golden"]["state"], "sealed");
     assert_eq!(j["golden"]["flags_ok"], true);
 
@@ -154,7 +156,7 @@ fn remove_golden_unseals_and_removes_the_images_and_the_password() {
 fn remove_profiles_moves_each_profile_into_the_trash() {
     let t = tempfile::tempdir().unwrap();
     let l = Layout::at(t.path().join("macvm"));
-    let p = l.profile("chatgpt-desktop", "default").dir;
+    let p = l.profile("sample-notes", "default").dir;
     std::fs::create_dir_all(&p).unwrap();
     std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o700)).unwrap();
     std::fs::write(p.join("data.img"), "the login keychain").unwrap();
@@ -172,7 +174,7 @@ fn remove_profiles_moves_each_profile_into_the_trash() {
         .file_name()
         .unwrap()
         .to_string_lossy()
-        .starts_with("chatgpt-desktop-default-"));
+        .starts_with("sample-notes-default-"));
     // The pair stays together in the trash: the system disk with its data.
     assert_eq!(
         std::fs::read_to_string(made[0].join("data.img")).unwrap(),
@@ -201,7 +203,7 @@ fn remove_profiles_moves_each_profile_into_the_trash() {
         .unwrap();
     let items = gc_items_at(&l, 0);
     assert_eq!(items.len(), 1);
-    assert!(items[0].what.contains("chatgpt-desktop-default-"));
+    assert!(items[0].what.contains("sample-notes-default-"));
     assert!(gc_remove_in(&l, &t.path().join("elsewhere")).is_err());
     gc_remove_in(&l, &made[0]).unwrap();
     assert!(!made[0].exists() && made[1].exists());
@@ -211,7 +213,7 @@ fn remove_profiles_moves_each_profile_into_the_trash() {
 fn gc_lists_the_backups_above_the_retention() {
     let t = tempfile::tempdir().unwrap();
     let l = Layout::at(t.path().join("macvm"));
-    let p = l.profile("chatgpt-desktop", "default");
+    let p = l.profile("sample-notes", "default");
     std::fs::create_dir_all(p.backups()).unwrap();
     for (i, name) in [
         "pre-repair-1",
@@ -235,7 +237,7 @@ fn gc_lists_the_backups_above_the_retention() {
     }
     let items = gc_items_at(&l, 2000);
     assert_eq!(items.len(), 1);
-    assert!(items[0].what.contains("pre-repair-1") && items[0].what.contains("chatgpt-desktop"));
+    assert!(items[0].what.contains("pre-repair-1") && items[0].what.contains("sample-notes"));
     let dir = match &items[0].action {
         crate::storage::Action::Macvm { dir } => dir.clone(),
         other => panic!("{other:?}"),
@@ -308,7 +310,7 @@ fn status_names_prev_and_gc_lists_it_once_a_profile_ran_clean_on_the_new_golden(
             scale: 2,
         },
     };
-    let p = l.profile("chatgpt", "default");
+    let p = l.profile("sample-notes", "default");
     std::fs::create_dir_all(&p.dir).unwrap();
     now.stamp("x-0".into()).write(&p.stamp()).unwrap();
     assert!(matches!(prev_state(&l), Prev::Removable { .. }));

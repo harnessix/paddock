@@ -5,7 +5,7 @@ use super::*;
 const GIB: u64 = 1 << 30;
 
 fn cfg(save: bool) -> Config {
-    Config::new("chatgpt", save, 4 * GIB)
+    Config::new("sample-notes", save, 4 * GIB)
 }
 
 fn kinds(v: &[Action]) -> Vec<String> {

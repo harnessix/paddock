@@ -40,33 +40,33 @@ struct MenuBarContent: View {
     private func appMenu(_ app: AppItem) -> some View {
         let presentation = StatusPresentation.of(app.state, now: Date())
         return Menu {
-            if app.state.isRunning {
-                Button("Open") { Task { await store.openApp(app.name) } }
+            ForEach(SessionButtons.of(app.state, canSuspend: store.capabilities.suspend), id: \.self) { button in
+                Button(SessionMenuTitle.of(button)) {
+                    SessionCommand.perform(button, app, store: store, router: router)
+                    if button == .stop, router.sheet != nil { showMain(.app(app.key)) }
+                }
             }
-            if app.state.canStart {
-                Button("Start") { Task { await store.startApp(app.name) } }
-            }
-            if app.state.canStop {
-                Button("Stop") { Task { await store.stopApp(app.name) } }
-            }
+            Button("Open New Instance") { SessionCommand.newInstance(app, store: store) }
+                .disabled(app.state.isBlocked)
             Divider()
             Button("Grants…") {
                 store.detailTab = .grants
-                showMain(.app(app.name))
+                showMain(.app(app.key))
             }
             Button("Show Log") {
                 store.detailTab = .log
-                showMain(.app(app.name))
+                showMain(.app(app.key))
             }
         } label: {
             Label {
-                Text(verbatim: app.name)
+                Text(verbatim: app.title)
             } icon: {
                 Image(systemName: presentation.symbol ?? "circle.dotted")
             }
-            .accessibilityLabel(Text(verbatim: app.name + ", " + presentation.accessibilityLabel.localized))
+            .accessibilityLabel(Text(verbatim: app.title + ", " + presentation.accessibilityLabel.localized))
         } primaryAction: {
-            Task { await store.primaryAction(app.name) }
+            if app.state.isRunning, SessionActivator.activate(app) { return }
+            Task { await store.primaryAction(app.key) }
         }
     }
 

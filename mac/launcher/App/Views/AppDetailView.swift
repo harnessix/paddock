@@ -14,7 +14,7 @@ struct AppDetailView: View {
         let model = store.detail(for: name)
         VStack(spacing: 0) {
             if let app = store.app(named: name) {
-                AppHeader(app: app)
+                SessionHeader(app: app)
                     .padding()
                 notices(app)
             }
@@ -22,12 +22,15 @@ struct AppDetailView: View {
                 OverviewTab(model: model)
                     .tabItem { Text("Overview") }
                     .tag(DetailTab.overview)
+                    .accessibilityHidden(store.detailTab != .overview)
                 GrantsView(model: model)
                     .tabItem { Text("Grants") }
                     .tag(DetailTab.grants)
+                    .accessibilityHidden(store.detailTab != .grants)
                 LogView(model: model)
                     .tabItem { Text("Log") }
                     .tag(DetailTab.log)
+                    .accessibilityHidden(store.detailTab != .log)
             }
             .padding([.horizontal, .bottom])
         }
@@ -48,10 +51,10 @@ struct AppDetailView: View {
                 ErrorShape(error: .agentAway)
             }
             if app.json.appChanged == true {
-                ErrorShape(error: .appChanged(app: name))
+                ErrorShape(error: .appChanged(app: app.title))
             }
             if let line = app.json.copyFailed {
-                ErrorShape(error: .appCopyFailed(app: name, line: line), primary: { store.detailTab = .log })
+                ErrorShape(error: .appCopyFailed(app: app.title, line: line), primary: { store.detailTab = .log })
             }
             if case .blocked(_, "no_golden"?) = app.state {
                 ErrorShape(error: .goldenRemoved, primary: { store.selection = .baseImage })
@@ -76,50 +79,6 @@ struct AppDetailView: View {
     }
 }
 
-/// Icon, name, bundle path, and Start / Open / Stop.
-@MainActor
-struct AppHeader: View {
-    let app: AppItem
-    @Environment(LauncherStore.self) private var store
-    @Environment(UIRouter.self) private var router
-
-    var body: some View {
-        HStack(spacing: 12) {
-            AppIcon(path: app.json.bundlePath, size: 48)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(verbatim: app.name).font(.title2)
-                if let path = app.json.bundlePath {
-                    Text(verbatim: path).textSelection(.enabled)
-                }
-            }
-            Spacer()
-            if app.state.canStop {
-                Button("Stop") { stop() }
-                    .accessibilityIdentifier("stop-button")
-            }
-            if app.state.isRunning {
-                Button("Open") { Task { await store.openApp(app.name) } }
-                    .keyboardShortcut(.defaultAction)
-                    .accessibilityIdentifier("open-button")
-            } else {
-                Button("Start") { Task { await store.startApp(app.name) } }
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(!app.state.canStart)
-                    .accessibilityIdentifier("start-button")
-            }
-        }
-    }
-
-    /// No sheet in the normal case: only with open questions.
-    private func stop() {
-        if store.questions.contains(where: { $0.app == app.name }) {
-            router.sheet = .confirmStop(app.name)
-        } else {
-            Task { await store.stopApp(app.name) }
-        }
-    }
-}
-
 @MainActor
 struct OverviewTab: View {
     let model: AppDetailModel
@@ -129,32 +88,38 @@ struct OverviewTab: View {
     var body: some View {
         if let app = store.app(named: model.name) {
             Form {
+                InstancesSection(app: app)
                 Section("Status") {
-                    LabeledContent("State") {
-                        Text(StatusPresentation.of(app.state, now: Date()).text)
+                    LabeledContent {
+                        Text(StatusPresentation.of(app.state, now: Date()).text).labelInk()
                             .accessibilityIdentifier("overview-state")
-                    }
+                    } label: { Text("State").labelInk() }
                     if let since = app.json.since {
-                        LabeledContent("Since") { Text(since, format: .dateTime.day().month().hour().minute()) }
+                        LabeledContent {
+                            Text(since, format: .dateTime.day().month().hour().minute()).labelInk()
+                        } label: { Text("Since").labelInk() }
                     }
                     if let memory = OverviewCopy.memory(app.json) {
-                        LabeledContent("Memory") { Text(memory) }
+                        LabeledContent { Text(memory).labelInk() } label: { Text("Memory").labelInk() }
                     }
                     if let golden = app.json.golden {
-                        LabeledContent("Base image") { Text(verbatim: golden) }
+                        LabeledContent { Text(verbatim: golden).labelInk() } label: { Text("Base image").labelInk() }
                     }
                     if let next = app.json.nextStart {
-                        LabeledContent("Next start") { Text(verbatim: next) }
+                        LabeledContent { Text(verbatim: next).labelInk() } label: { Text("Next start").labelInk() }
+                    }
+                    if app.json.sizes == nil, let bytes = app.json.bytes, bytes > 0 {
+                        LabeledContent { Text(verbatim: Format.gb(bytes)).labelInk() } label: { Text("On disk").labelInk() }
                     }
                 }
                 if let sizes = app.json.sizes {
                     Section("Disk") {
-                        LabeledContent("App copy") { Text(verbatim: Format.gb(sizes.appCopy)) }
-                        LabeledContent("Data") { Text(verbatim: Format.gb(sizes.data)) }
-                        LabeledContent("Saved state") { Text(verbatim: Format.gb(sizes.savedState)) }
-                        LabeledContent("Total") { Text(verbatim: Format.gb(sizes.total)) }
-                        Button("Clear saved state") { router.sheet = .clearState(app.name) }
-                            .disabled(sizes.savedState == 0 || app.state.isActive)
+                        LabeledContent { Text(verbatim: Format.gb(sizes.appCopy)).labelInk() } label: { Text("App copy").labelInk() }
+                        LabeledContent { Text(verbatim: Format.gb(sizes.data)).labelInk() } label: { Text("Data").labelInk() }
+                        LabeledContent { Text(verbatim: Format.gb(sizes.savedState)).labelInk() } label: { Text("Saved state").labelInk() }
+                        LabeledContent { Text(verbatim: Format.gb(sizes.total)).labelInk() } label: { Text("Total").labelInk() }
+                        Button("Clear saved state") { router.sheet = .clearState(app.key) }
+                            .disabled(sizes.savedState == 0 || app.state.holdsSession)
                     }
                 }
                 Section("Network") {
@@ -165,6 +130,7 @@ struct OverviewTab: View {
                             Text(mode.title).tag(mode)
                         }
                     }
+                    .menuAuditAction()
                     Button { store.selection = .questions } label: {
                         Text(OverviewCopy.openQuestions(store.questions.filter { $0.app == app.name }.count))
                     }
@@ -178,12 +144,14 @@ struct OverviewTab: View {
                     HStack {
                         Button("Show Log") { store.detailTab = .log }
                         Spacer()
-                        Button("Remove App…", role: .destructive) { router.sheet = .removeApp(app.name) }
+                        Button("Remove App…", role: .destructive) { router.sheet = .removeApp(app.key) }
                             .accessibilityIdentifier("remove-app-button")
                     }
                 }
             }
             .formStyle(.grouped)
+            .accessibilityElement(children: .contain)
+            .accessibilityLabel(Text("Overview"))
         }
     }
 }
@@ -208,6 +176,7 @@ struct LogView: View {
                 ScrollView {
                     Text(verbatim: model.logLines.joined(separator: "\n"))
                         .font(.system(.body, design: .monospaced))
+                        .labelInk()
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(8)
@@ -223,6 +192,8 @@ struct LogView: View {
             .border(.separator)
         }
         .padding(.top, 8)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(Text("Log"))
         .task { await model.loadLog() }
         .onDisappear { model.setFollow(false) }
     }

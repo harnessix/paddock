@@ -514,8 +514,10 @@ impl Marker {
             let now = crate::state::now();
             let mut seen = BTreeSet::new();
             for (w, run) in &matched {
-                seen.insert(w.id);
                 let r = &st.runs[*run];
+                // A guest session window keeps its badge, without a frame.
+                let framed = super::framed(r);
+                seen.insert(w.id);
                 let tone = Tone::of(&r.network);
                 let text = super::run_badge(r, st.vm.get(*run).and_then(|f| f.as_ref()), now);
                 let m = st
@@ -536,7 +538,9 @@ impl Marker {
                     st.moved = Instant::now();
                     place = true;
                 }
-                let alpha = if focused == Some(w.id) {
+                let alpha = if !framed {
+                    0.0
+                } else if focused == Some(w.id) {
                     1.0
                 } else {
                     super::DIM_ALPHA
@@ -666,6 +670,9 @@ impl Mark {
         action: objc2::runtime::Sel,
     ) -> Self {
         let frame = panel(mtm, false);
+        // A new window is opaque: the frame starts hidden, and only a run
+        // that gets a frame raises it.
+        frame.setAlphaValue(0.0);
         let view = NSView::new(mtm);
         view.setWantsLayer(true);
         if let Some(layer) = view.layer() {

@@ -20,11 +20,6 @@ pub const SOCKET_NAME: &str = "devices.sock";
 /// The backend that gets the devices over a socket.
 const SEATBELT: &str = crate::backend::seatbelt::NAME;
 
-#[cfg(target_os = "linux")]
-use super::fuse::lazy_unmount;
-#[cfg(not(target_os = "linux"))]
-use super::fuse_stub::lazy_unmount;
-
 /// Whether this host can mount a user FUSE file system: `/dev/fuse` opens
 /// and `fusermount3` (or `fusermount`) exists.
 #[cfg(target_os = "linux")]
@@ -192,6 +187,7 @@ impl Drop for Devices {
         self.socket.take();
         self.fifos.take();
         let _ = std::fs::remove_dir(&self.dir);
+        super::stale::release(&self.dir);
     }
 }
 
@@ -212,6 +208,7 @@ pub fn start(
     started_by: &[String],
     gateway: Option<crate::gateway::Handler>,
     secrets: Arc<SecretFiles>,
+    horse_setup: Option<crate::horse::device::Access>,
 ) -> Option<Devices> {
     let cfg = match DevicesCfg::load(env) {
         Ok(c) => c,
@@ -220,7 +217,12 @@ pub fn start(
             return None;
         }
     };
+    let horse = horse_setup.is_some();
     if !cfg.mount {
+        if horse {
+            spec.notices
+                .push(format!("{}: [devices] mount is false", super::HORSE_OFF));
+        }
         return None;
     }
     let instances = super::sandbox::Instances::new(env.clone());
@@ -238,7 +240,8 @@ pub fn start(
     // FUSE is not worth a notice at each start. The gateway and the files
     // of off devices do not count: without the mount, paddock-host uses
     // the host socket.
-    let quiet = devices.is_empty();
+    let quiet = devices.is_empty() && !horse;
+    devices.extend(crate::mail::device::devices(env, &spec.id));
     let off = disabled(&cfg, &devices, grants, &ctx);
     devices.extend(off);
     if let Some(h) = gateway {
@@ -247,6 +250,8 @@ pub fn start(
     let tell = |spec: &mut SandboxSpec, why: String| {
         if quiet {
             log::debug!("no /dev/paddock: {why}");
+        } else if horse {
+            spec.notices.push(format!("{}: {why}", super::HORSE_OFF));
         } else {
             spec.notices
                 .push(format!("devices are off in this sandbox: {why}"));
@@ -275,7 +280,11 @@ pub fn start(
     }
     clear_stale(env);
     let dir = mount_dir(env, backend, &spec.id);
-    let fs = DeviceFs::with_secrets(&spec.id, devices, secrets);
+    if let Err(e) = super::stale::claim(&dir) {
+        tell(spec, format!("cannot mark {}: {e}", dir.display()));
+        return None;
+    }
+    let fs = DeviceFs::with_secrets(&spec.id, devices, secrets).with_horse(horse_setup, ctx);
     let mut out = Devices {
         dir: dir.clone(),
         mounted: Arc::new(Mutex::new(None)),
@@ -368,21 +377,12 @@ fn start_socket(
 /// sandbox owns is asked instead: the file system of a process that is
 /// gone refuses the question, a live one answers.
 pub fn clear_stale(env: &HostEnv) {
-    let Ok(info) = std::fs::read_to_string("/proc/self/mountinfo") else {
-        return;
-    };
-    let running: Vec<String> = crate::state::Running::list(env)
-        .into_iter()
-        .map(|r| r.id)
-        .collect();
-    for mp in stale_mounts(&info, &env.paddock_run(), &running, probe) {
-        log::debug!("unmounting the stale device mount {}", mp.display());
-        lazy_unmount(&mp);
-    }
+    super::stale::clear_stale(env);
 }
 
 /// What a device mount answers when asked for its file system.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(test)]
 pub(crate) enum Mount {
     /// The process that serves it is there.
     Answers,
@@ -394,6 +394,7 @@ pub(crate) enum Mount {
 }
 
 /// How long a probe waits for the file system to answer.
+#[cfg(test)]
 const PROBE_WAIT: Duration = Duration::from_secs(2);
 
 /// Ask the file system at `mp` for its statistics. `statfs` always
@@ -401,6 +402,7 @@ const PROBE_WAIT: Duration = Duration::from_secs(2);
 /// the attribute cache), and a process that is gone makes the kernel
 /// answer `ENOTCONN`. A thread, so a file system that hangs cannot hang
 /// the start of a sandbox.
+#[cfg(test)]
 fn probe(mp: &Path) -> Mount {
     let (tx, rx) = std::sync::mpsc::channel();
     let path = mp.to_path_buf();
@@ -415,6 +417,7 @@ fn probe(mp: &Path) -> Mount {
 }
 
 /// The errno of `statfs(path)`, None when it succeeds.
+#[cfg(test)]
 fn statfs_errno(path: &Path) -> Option<i32> {
     use std::os::unix::ffi::OsStrExt as _;
     let Ok(c) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
@@ -437,6 +440,7 @@ fn statfs_errno(path: &Path) -> Option<i32> {
 /// under `run` to unmount: `<id>/dev`, or `devices/<id>` for srt, of a
 /// sandbox that is not in `running` and whose file system `probe` finds
 /// gone. A registered sandbox owns its mount and is not asked.
+#[cfg(test)]
 pub(crate) fn stale_mounts(
     info: &str,
     run: &Path,

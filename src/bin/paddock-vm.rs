@@ -81,6 +81,7 @@ fn macvm_setup(
 #[cfg(target_os = "macos")]
 fn app(plan: &helper::AppPlan) -> anyhow::Result<i32> {
     let env = paddock::env::HostEnv::detect()?;
+    paddock::eventstream::init(&env);
     paddock::macvm::run::run(&env, plan)
 }
 

@@ -12,8 +12,13 @@ pub(super) fn every_request() -> Vec<Request> {
     let all = vec![
         Request::Token {
             bench: false,
+            now_ms: None,
             token: TOKEN.into(),
             v: VERSION,
+        },
+        Request::ClockSet {
+            unix_ms: 1,
+            password: super::PASSWORD.into(),
         },
         Request::WindowMove { id: 1, frame: f },
         Request::WindowRaise { id: 1 },
@@ -105,6 +110,7 @@ pub(super) fn every_request() -> Vec<Request> {
         Request::KeychainUnlock {
             password: PASSWORD.into(),
         },
+        Request::SharesOpen,
         Request::BenchLock,
         Request::BenchKeychain,
         Request::LoginForward {
@@ -116,6 +122,7 @@ pub(super) fn every_request() -> Vec<Request> {
         // The exhaustive match: a new variant must be added to the list above.
         match r {
             Request::Token { .. }
+            | Request::ClockSet { .. }
             | Request::WindowMove { .. }
             | Request::WindowRaise { .. }
             | Request::WindowMinimize { .. }
@@ -151,6 +158,7 @@ pub(super) fn every_request() -> Vec<Request> {
             | Request::BenchDockMenu
             | Request::Shutdown { .. }
             | Request::KeychainUnlock { .. }
+            | Request::SharesOpen
             | Request::BenchLock
             | Request::BenchKeychain
             | Request::LoginForward { .. } => {}

@@ -50,6 +50,9 @@ pub enum VmEvent {
     Bench(Bench),
     /// A `pause` (true) or `resume` line on the control socket.
     Freeze(bool, Sender<Result<String, String>>),
+    /// A `grant` line on the control socket, or the framework's answer to
+    /// a share change (`run_grants.rs`).
+    Grant(super::run_grants::GrantMsg),
     /// A `suspend REASON` line on the control socket (`run_suspend.rs`).
     Suspend(String, Sender<Result<String, String>>),
 }
@@ -145,6 +148,18 @@ impl Guest for VmGuest {
 
     fn resume(&self) -> Result<()> {
         self.freeze(false)
+    }
+
+    fn grant(&self, args: &str) -> Result<String> {
+        let (rtx, rrx) = mpsc::channel();
+        let deadline = std::time::Instant::now() + super::run_grants::GRANT_TIMEOUT;
+        let msg = super::run_grants::GrantMsg::Line(args.to_string(), rtx, deadline);
+        let _ = self.tx.send(VmEvent::Grant(msg));
+        match rrx.recv_timeout(deadline.saturating_duration_since(std::time::Instant::now())) {
+            Ok(Ok(line)) => Ok(line),
+            Ok(Err(e)) => bail!(e),
+            Err(_) => bail!(text::control_request_timeout()),
+        }
     }
 
     fn window(&self, args: &str) -> Result<String> {

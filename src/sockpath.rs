@@ -1,7 +1,7 @@
 //! Unix socket paths that fit in `sun_path`.
 //!
 //! Linux keeps paddock's sockets under the run directory. macOS allows 104
-//! bytes and `$TMPDIR` is long, so those sockets live in
+//! bytes, so short run directories hold their own sockets. Longer paths use
 //! `/tmp/paddock-<uid>/<run>`, with mode 0700. `<run>` is a short hash of the
 //! run directory, so two paddock homes (for example a test and the real one)
 //! never share a socket. A path that is still too long is an error here,
@@ -54,7 +54,18 @@ pub fn check(path: &Path) -> Result<()> {
 pub fn socket_dir(run: &Path, uid: u32, id: &str) -> PathBuf {
     #[cfg(target_os = "macos")]
     {
-        short_dir(&top(uid), run, id, MACOS_MAX)
+        let direct = if id.is_empty() {
+            run.to_path_buf()
+        } else {
+            run.join(id)
+        };
+        let safe =
+            id.is_empty() || (!id.contains('/') && !id.contains('\0') && id != "." && id != "..");
+        if safe && direct.as_os_str().len() + NAME_ROOM < MACOS_MAX {
+            direct
+        } else {
+            short_dir(&top(uid), run, id, MACOS_MAX)
+        }
     }
     #[cfg(not(target_os = "macos"))]
     {
@@ -98,7 +109,11 @@ pub fn host_socket(run: &Path, uid: u32, id: &str, name: &str) -> Result<PathBuf
     #[cfg(target_os = "macos")]
     {
         // Each level from /tmp/paddock-<uid> down is private.
-        let top = top(uid);
+        let top = if dir.starts_with(run) {
+            run.to_path_buf()
+        } else {
+            top(uid)
+        };
         private_dir(&dir)?;
         for d in dir.ancestors().skip(1) {
             if !d.starts_with(&top) {

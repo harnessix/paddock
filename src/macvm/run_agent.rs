@@ -17,7 +17,13 @@ use std::time::Instant;
 
 impl Session<'_> {
     pub(super) fn guest_message(&mut self, ev: proto::Event) {
-        log::debug!("macvm: <- {}", ev.kind());
+        if let proto::Event::Reply(r) = &ev {
+            // Reply text is untrusted and can echo a request's password,
+            // including on a late reply after the request has timed out.
+            log::debug!("macvm: <- reply {}", r.req);
+        } else {
+            log::debug!("macvm: <- {}", ev.kind());
+        }
         match ev {
             proto::Event::Hello(h) => self.hello(h),
             proto::Event::Health(h) => {
@@ -183,9 +189,26 @@ impl Session<'_> {
                 token: self.token.clone(),
                 v: proto::VERSION,
                 bench: self.plan.bench,
+                now_ms: Some(crate::macvm::proto::now_ms()),
             },
             Why::Token,
         );
+        if let Some(password) = self
+            .password
+            .clone()
+            .filter(|_| proto::supports_clock_set(h.v))
+        {
+            self.send(
+                Request::ClockSet {
+                    unix_ms: proto::now_ms(),
+                    password,
+                },
+                Why::ClockSet,
+            );
+        }
+        if self.password.is_some() && !proto::supports_clock_set(h.v) {
+            log::warn!("macvm: guest agent does not support clock.set");
+        }
         if action == proto::HelloAction::Update {
             let request = if self.update_refused {
                 None
@@ -317,7 +340,11 @@ impl Session<'_> {
     fn reply(&mut self, r: proto::Reply) {
         let pending = self.agent.as_mut().and_then(|a| a.take(r.req));
         let why = self.why.remove(&r.req).unwrap_or(Why::Other);
-        let kind = pending.map(|p| p.kind).unwrap_or_else(|| "?".into());
+        let Some(pending) = pending else {
+            // A late or unsolicited reply has no trusted request context.
+            return;
+        };
+        let kind = pending.kind;
         match (why, r.outcome) {
             (Why::DataPrepare, outcome) => {
                 let actions = self.data.answer(&outcome);
@@ -329,10 +356,22 @@ impl Session<'_> {
             (Why::AppCopy, Outcome::Error { code, text: detail }) => {
                 self.app_copy_failed(&text::io_failed(code.describe(), &detail));
             }
+            (
+                Why::AppLaunch,
+                Outcome::Error {
+                    code: proto::ErrorCode::NoSuchApp,
+                    ..
+                },
+            ) if self.copy_missing_app() => {}
             (Why::AppLaunch, Outcome::Error { code, text: detail }) => {
                 let line = text::launch_refused(&self.plan.app, code.describe(), &detail);
                 say(&line);
                 self.events.record("error", &line, &[]);
+                // A session without its app has nothing to show: it ends at
+                // once and fails, so the launcher and the CLI tell why
+                // instead of waiting for a window that never comes.
+                self.failed = true;
+                self.begin_quit(&line);
             }
             (Why::AgentUpdate, Outcome::Ok { .. }) => {
                 // The agent exits and launchd restarts it: a new hello comes.
@@ -355,6 +394,8 @@ impl Session<'_> {
                 self.events.record("drop", &line, &[]);
             }
             (Why::ClipboardSpill, _) => self.spill_done(),
+            (Why::SharesOpen, outcome) => self.shares_open_answer(outcome),
+            (Why::SharesOpenFresh, outcome) => self.fresh_shares_answer(outcome),
             (Why::InputSet, Outcome::Ok { data }) => {
                 let missing = match data {
                     Some(proto::ReplyData::InputSet { missing }) => missing,
@@ -406,6 +447,9 @@ impl Session<'_> {
                 log::warn!("macvm: {line}");
                 self.events.record("files", &line, &[]);
             }
+            (Why::ClockSet, Outcome::Error { code, .. }) => {
+                log::warn!("macvm: clock.set failed: {}", code.describe());
+            }
             (Why::Shutdown, Outcome::Error { code, text: detail }) => {
                 let detail = text::io_failed(code.describe(), &detail);
                 log::warn!("macvm: {}", text::request_failed(&kind, &detail));
@@ -417,7 +461,15 @@ impl Session<'_> {
                         text::request_failed(&kind, &text::io_failed(code.describe(), detail));
                     log::debug!("macvm: {line}");
                 }
-                self.lead_answered(id);
+                self.lead_answered(id, outcome.moved_with_ms());
+            }
+            (Why::Layout(id), outcome) => {
+                if let Outcome::Error { code, text: detail } = &outcome {
+                    let line =
+                        text::request_failed(&kind, &text::io_failed(code.describe(), detail));
+                    log::info!("macvm: {line}");
+                }
+                self.apart_answered(id, outcome.moved_with_ms().map(|(f, _)| f));
             }
             (_, Outcome::Ok { .. }) => {}
             (_, Outcome::Error { code, text: detail }) => {
@@ -435,6 +487,12 @@ impl Session<'_> {
     /// The requests that got no reply in their time: the ones whose
     /// silence changes the host state.
     pub(super) fn request_timeouts(&mut self, timed_out: &[Why]) {
+        if timed_out.contains(&Why::SharesOpenFresh) {
+            self.fresh_shares_answer(Outcome::Error {
+                code: ErrorCode::Timeout,
+                text: "open file count timed out".into(),
+            });
+        }
         if timed_out.contains(&Why::DataPrepare) {
             let wait = proto::timeout(&Request::DataPrepare {
                 password: String::new(),
@@ -459,8 +517,10 @@ impl Session<'_> {
             self.ax_timeout();
         }
         for why in timed_out {
-            if let Why::Lead(id) = why {
-                self.lead_answered(*id);
+            match why {
+                Why::Lead(id) => self.lead_answered(*id, None),
+                Why::Layout(id) => self.apart_answered(*id, None),
+                _ => {}
             }
         }
     }

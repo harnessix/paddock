@@ -8,7 +8,8 @@
 # map.tsv maps an argument prefix to one or more answer files in ../base,
 # separated by commas. The longest prefix that the call starts with wins.
 # Several files are given in turn; the last one repeats. A file name may end
-# with ":N" to exit with status N.
+# with ":N" to exit with status N. A file that ends in .err goes to stderr,
+# as paddock prints its errors.
 #
 # An answer file that ends in .jsonl is a stream: each line is printed, a
 # line "#sleep N" waits N seconds, "#hold" keeps the stream open until the
@@ -26,7 +27,7 @@ scenario=${PADDOCK_FAKE_SCENARIO:?PADDOCK_FAKE_SCENARIO is not set}
 state=${PADDOCK_FAKE_STATE:-/tmp/paddock-fake}
 mkdir -p "$state"
 line="$*"
-echo "$(date +%s) $line" >>"$state/calls.log"
+printf '%s %s\n' "$(date +%s)" "$line" >>"$state/calls.log"
 
 map="$scenario/map.tsv"
 best=""
@@ -44,7 +45,7 @@ while IFS="$(printf '\t')" read -r prefix files; do
 done <"$map"
 
 if [ -z "$answer" ]; then
-  echo "fake paddock: no fixture for: $line" >&2
+  printf 'fake paddock: no fixture for: %s\n' "$line" >&2
   exit 64
 fi
 
@@ -54,7 +55,7 @@ count_file="$state/count.$key"
 count=0
 [ -f "$count_file" ] && count=$(cat "$count_file")
 count=$((count + 1))
-echo "$count" >"$count_file"
+printf '%s\n' "$count" >"$count_file"
 IFS=',' read -r -a list <<<"$answer"
 index=$((count - 1))
 [ "$index" -ge "${#list[@]}" ] && index=$((${#list[@]} - 1))
@@ -112,6 +113,7 @@ stream() {
 
 case "$file" in
   *.jsonl) stream ;;
+  *.err) cat "$file" >&2 ;;
   *) cat "$file" ;;
 esac
 exit "$status"

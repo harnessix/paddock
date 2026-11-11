@@ -39,10 +39,10 @@ fn two_sentences(text: &str) {
 
 #[test]
 fn no_golden() {
-    let s = t::no_golden("ChatGPT", SIZE, 30);
+    let s = t::no_golden("Sample Notes", SIZE, 30);
     assert_eq!(
         s,
-        "ChatGPT runs in paddock's macOS guest. The guest needs a one-time setup of about 30 minutes (15 GB download, 25 GB on disk): paddock macvm setup"
+        "Sample Notes runs in paddock's macOS guest. The guest needs a one-time setup of about 30 minutes (15 GB download, 25 GB on disk): paddock macvm setup"
     );
 }
 
@@ -57,14 +57,16 @@ fn golden_unsealed() {
 fn third_session() {
     let s = t::third_session(&[
         Holder::Mine {
-            app: "chatgpt-desktop".into(),
+            app: "sample-notes".into(),
             pid: 812,
         },
-        Holder::User { name: "ana".into() },
+        Holder::User {
+            name: "demo".into(),
+        },
     ]);
     assert_eq!(
         s,
-        "two macOS VMs already run on this Mac: chatgpt-desktop (you, pid 812) and a VM of user ana. Stop one (paddock app stop chatgpt-desktop), then try again"
+        "two macOS VMs already run on this Mac: sample-notes (you, pid 812) and a VM of user demo. Stop one (paddock app stop sample-notes), then try again"
     );
     let other = t::third_session(&[]);
     has(&other, &["another program", "Tart", "Stop one"]);
@@ -77,18 +79,20 @@ fn third_session() {
         &three,
         &["user a, a VM of user b and a VM of another program"],
     );
-    let one = t::third_session(&[Holder::User { name: "ana".into() }]);
-    has(&one, &["user ana and one more VM"]);
+    let one = t::third_session(&[Holder::User {
+        name: "demo".into(),
+    }]);
+    has(&one, &["user demo and one more VM"]);
 }
 
 #[test]
 fn profile_running() {
-    let s = t::profile_running("chatgpt-desktop", 812);
+    let s = t::profile_running("sample-notes", 812);
     has(
         &s,
         &[
-            "chatgpt-desktop already runs (pid 812)",
-            "paddock app stop chatgpt-desktop",
+            "sample-notes already runs (pid 812)",
+            "paddock app stop sample-notes",
         ],
     );
 }
@@ -104,11 +108,11 @@ fn no_space() {
 
 #[test]
 fn mas_bundle() {
-    let s = t::mas_bundle(Path::new("/Applications/Things.app"));
+    let s = t::mas_bundle(Path::new("/Applications/Notebook.app"));
     has(
         &s,
         &[
-            "/Applications/Things.app",
+            "/Applications/Notebook.app",
             "App Store",
             "Apple ID",
             "paddock app run",
@@ -131,14 +135,14 @@ fn not_apple_silicon() {
 
 #[test]
 fn memory_too_large() {
-    let s = t::memory_too_large("vscode", 32, 16);
+    let s = t::memory_too_large("sample-editor", 32, 16);
     has(
         &s,
         &[
             "32 GiB",
             "16 GiB",
             "vm_memory = \"8G\"",
-            "[apps.vscode]",
+            "[apps.sample-editor]",
             "config.toml",
         ],
     );
@@ -146,23 +150,31 @@ fn memory_too_large() {
 
 #[test]
 fn env_file() {
-    let s = t::env_file("vscode", Path::new("/Users/me/src/web/.env"));
+    let s = t::env_file("sample-editor", Path::new("/Users/me/src/web/.env"));
     has(
         &s,
         &[
             "/Users/me/src/web/.env",
             "unprotected_workspaces",
-            "[apps.vscode]",
+            "[apps.sample-editor]",
         ],
     );
 }
 
 #[test]
 fn share_refused() {
-    let s = t::share_refused("vscode", Path::new("/Users/me"), "it is the home folder");
+    let s = t::share_refused(
+        "sample-editor",
+        Path::new("/Users/me"),
+        "it is the home folder",
+    );
     has(
         &s,
-        &["/Users/me", "the home folder", "paddock app run vscode"],
+        &[
+            "/Users/me",
+            "the home folder",
+            "paddock app run sample-editor",
+        ],
     );
 }
 
@@ -181,20 +193,20 @@ fn ask_mode_elsewhere() {
 
 #[test]
 fn data_unmountable() {
-    let s = t::data_unmountable("chatgpt-desktop", Some("2026-11-02T10-00"));
+    let s = t::data_unmountable("sample-notes", Some("2000-01-02T10-00"));
     has(
         &s,
         &[
             "does not mount",
-            "paddock app restore chatgpt-desktop 2026-11-02T10-00",
+            "paddock app restore sample-notes 2000-01-02T10-00",
         ],
     );
-    let none = t::data_unmountable("chatgpt-desktop", None);
+    let none = t::data_unmountable("sample-notes", None);
     has(
         &none,
         &[
             "no backup",
-            "paddock app reset chatgpt-desktop --data",
+            "paddock app reset sample-notes --data",
             "login",
         ],
     );
@@ -204,13 +216,13 @@ fn data_unmountable() {
 
 #[test]
 fn fetch_question() {
-    let url = "https://updates.cdn-apple.com/x/UniversalMac_15.2_Restore.ipsw";
-    let s = t::fetch_question(url, "15.2", SIZE, 30);
+    let url = "https://updates.example.invalid/x/System_50.2_Restore.ipsw";
+    let s = t::fetch_question(url, "50.2", SIZE, 30);
     has(
         &s,
         &[
             url,
-            "macOS 15.2",
+            "macOS 50.2",
             "15 GB download",
             "25 GB on disk",
             "30 minutes",
@@ -241,10 +253,10 @@ fn panel_stopped() {
 
 #[test]
 fn golden_ready() {
-    let s = t::golden_ready("15.2", GIB * 234 / 10 + 1);
+    let s = t::golden_ready("50.2", GIB * 234 / 10 + 1);
     has(
         &s,
-        &["golden ready (macOS 15.2, 23.4 GiB)", "paddock app run"],
+        &["golden ready (macOS 50.2, 23.4 GiB)", "paddock app run"],
     );
 }
 
@@ -267,8 +279,8 @@ fn start_backend() {
 #[test]
 fn start_memory() {
     has(
-        &t::start_memory("chatgpt-desktop", 4),
-        &["4 GiB", "vm_memory", "[apps.chatgpt-desktop]"],
+        &t::start_memory("sample-notes", 4),
+        &["4 GiB", "vm_memory", "[apps.sample-notes]"],
     );
 }
 
@@ -288,7 +300,7 @@ fn start_shares() {
     let a = PathBuf::from("/Users/me/src/web");
     let b = PathBuf::from("/Users/me/src/api");
     let s = t::start_shares(
-        "vscode",
+        "sample-editor",
         &[
             Share {
                 path: &a,
@@ -309,14 +321,14 @@ fn start_shares() {
         ],
     );
     has(
-        &t::start_shares("vscode", &[]),
-        &["0 folders", "paddock app run vscode"],
+        &t::start_shares("sample-editor", &[]),
+        &["0 folders", "paddock app run sample-editor"],
     );
 }
 
 #[test]
 fn start_downloads() {
-    let p = "/Users/me/Library/Application Support/paddock/macvm/profiles/chatgpt-desktop/default/downloads";
+    let p = "/Users/me/Library/Application Support/paddock/macvm/profiles/sample-notes/default/downloads";
     has(&t::start_downloads(Path::new(p)), &["downloads", p]);
 }
 
@@ -349,19 +361,19 @@ fn start_kind() {
 #[test]
 fn start_copy() {
     has(
-        &t::start_copy("ChatGPT", 20),
-        &["copy of ChatGPT", "20 s", "once per version"],
+        &t::start_copy("Sample Notes", 20),
+        &["copy of Sample Notes", "20 s", "once per version"],
     );
 }
 
 #[test]
 fn start_continues() {
-    let s = t::start_continues("chatgpt-desktop");
+    let s = t::start_continues("sample-notes");
     has(
         &s,
         &[
             "continues after this terminal closes",
-            "paddock app stop chatgpt-desktop",
+            "paddock app stop sample-notes",
         ],
     );
 }

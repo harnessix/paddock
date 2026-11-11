@@ -1,0 +1,9 @@
+#sleep 1
+{"v":1,"t":"2026-11-06T10:00:00Z","kind":"setup","step":"fetch","paused":false,"stopped":false,"line":"State fetch: the restore image."}
+{"v":1,"t":"2026-11-06T10:00:02Z","kind":"setup","step":"fetch","bytes":0,"total":14000000000,"paused":false,"stopped":false}
+{"v":1,"t":"2026-11-06T10:00:40Z","kind":"setup","step":"fetch","bytes":1100000000,"total":14000000000,"rate":28000000,"paused":false,"stopped":false}
+#sleep 1
+{"v":1,"t":"2026-11-06T10:04:00Z","kind":"setup","step":"fetch","bytes":6600000000,"total":14000000000,"rate":28000000,"paused":false,"stopped":false}
+#sleep 2
+{"v":1,"t":"2026-11-06T10:30:00Z","kind":"setup","step":"install","paused":false,"stopped":false,"line":"install 45%, about 4 min left"}
+#hold

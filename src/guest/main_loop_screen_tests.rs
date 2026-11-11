@@ -21,6 +21,7 @@ fn bench_handshake(host: &mut Host) {
         token: TOKEN.into(),
         v: VERSION,
         bench: true,
+        now_ms: None,
     });
     assert_eq!(host.reply(req), Outcome::Ok { data: None });
 }

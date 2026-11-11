@@ -7,12 +7,12 @@ use crate::macvm::proto::Version;
 use crate::macvm::session::{AppStamp, Display, Now, Reason};
 
 const GIB: u64 = 1 << 30;
-const NOW: u64 = 1_762_250_000;
+const NOW: u64 = 1_700_000_000;
 
 fn now_values() -> Now {
     Now {
-        golden: "15.2 (24C101)".into(),
-        host_build: "24C101".into(),
+        golden: "50.2 (99B102)".into(),
+        host_build: "99B102".into(),
         vz: "vz-1".into(),
         protocol: Version { major: 1, minor: 3 },
         paddock: "0.9.0".into(),
@@ -28,9 +28,9 @@ fn now_values() -> Now {
 fn stamp(clean: bool, saved: bool) -> Stamp {
     let mut s = now_values().stamp("abcd-3".into());
     s.app = Some(AppStamp {
-        version: "1.2025.300".into(),
-        build: "1730000000".into(),
-        copied: Some("2026-11-02".into()),
+        version: "1.2.3".into(),
+        build: "123456".into(),
+        copied: Some("2000-01-02".into()),
     });
     s.clean = clean;
     s.data_prepared = true;
@@ -44,14 +44,14 @@ fn stamp(clean: bool, saved: bool) -> Stamp {
 fn record() -> Session {
     Session {
         pid: 812,
-        app: "chatgpt-desktop".into(),
+        app: "sample-notes".into(),
         home: "default".into(),
-        profile: PathBuf::from("/p/chatgpt-desktop/default"),
+        profile: PathBuf::from("/p/sample-notes/default"),
         slot: Some(0),
         input_source: String::new(),
         bench: false,
         started: NOW - (2 * 3600 + 14 * 60 + 5),
-        control: PathBuf::from("/run/macvm-chatgpt-desktop/control.sock"),
+        control: PathBuf::from("/run/macvm-sample-notes/control.sock"),
         badge: None,
         health: Some(RecordHealth {
             t: NOW - 1,
@@ -68,14 +68,15 @@ fn record() -> Session {
             secs: 4.1,
         }),
         app_info: Some(RecordApp {
-            name: "ChatGPT".into(),
-            version: "1.2025.300".into(),
+            name: "Sample Notes".into(),
+            version: "1.2.3".into(),
         }),
         network: None,
         network_mode: "ask".into(),
         shares: vec![host::RecordShare {
             path: PathBuf::from("/Users/u/src/web"),
             read_only: false,
+            ..Default::default()
         }],
         menu: None,
         ax: None,
@@ -87,17 +88,17 @@ fn inputs(record: Option<Session>, stamp: Option<Stamp>, next: Start) -> Inputs 
     let mut connections = Counts::default();
     if record.is_some() {
         connections = count_connections(
-            br#"{"t":1,"host":"chatgpt.com","port":443,"verdict":"allowed"}
+            br#"{"t":1,"host":"notes.example.com","port":443,"verdict":"allowed"}
 {"t":2,"host":"telemetry.example.com","port":443,"verdict":"denied"}
-{"t":3,"host":"chatgpt.com","port":443,"verdict":"allowed"}
+{"t":3,"host":"notes.example.com","port":443,"verdict":"allowed"}
 "#,
         );
         connections.allowed = 14;
         connections.denied = 2;
     }
     Inputs {
-        name: "chatgpt-desktop".into(),
-        profile: Profile::new("/p/chatgpt-desktop/default"),
+        name: "sample-notes".into(),
+        profile: Profile::new("/p/sample-notes/default"),
         record,
         stamp,
         next: Ok(next),
@@ -122,15 +123,15 @@ fn render_fixtures() {
     assert_eq!(
         render(&running),
         "\
-chatgpt-desktop   running (pid 812, 2h 14m), warm start in 4.1 s
-golden            macOS 15.2 (24C101), agent 0.9.0, protocol 1.3
-app               ChatGPT 1.2025.300 (copied 2026-11-02), running, 2 windows
+sample-notes      running (pid 812, 2h 14m), warm start in 4.1 s
+golden            macOS 50.2 (99B102), agent 0.9.0, protocol 1.3
+app               Sample Notes 1.2.3 (copied 2000-01-02), running, 2 windows
 guest             healthy (last health 1 s ago), load 0.4, 1.9 GiB free RAM, data disk 14.2 GiB free
 host              profile 6.3 GiB (data 4.1 GiB, state 4 GiB), disk 120 GiB free
 data disk         prepared: the home of the guest is on data.img
-network           ask, 14 allowed, 2 denied in this session (last: chatgpt.com:443)
-shares            /Users/u/src/web (rw), downloads -> /p/chatgpt-desktop/default/downloads
-logs              /p/chatgpt-desktop/default/logs/
+network           ask, 14 allowed, 2 denied in this session (last: notes.example.com:443)
+shares            /Users/u/src/web (rw), downloads -> /p/sample-notes/default/downloads
+logs              /p/sample-notes/default/logs/
 questions         none open
 "
     );
@@ -149,7 +150,7 @@ questions         none open
     let booting = build(&inputs(Some(r), Some(s), Start::Warm));
     let text = render(&booting);
     assert!(
-        text.starts_with("chatgpt-desktop   running (pid 812, 2h 14m)\n"),
+        text.starts_with("sample-notes      running (pid 812, 2h 14m)\n"),
         "{text}"
     );
     assert!(text.contains("app               none (the session runs the guest without an app)\n"));
@@ -167,15 +168,15 @@ questions         none open
     assert_eq!(
         render(&clean),
         "\
-chatgpt-desktop   stopped (quit with save), next start warm
-golden            macOS 15.2 (24C101), agent 0.9.0, protocol 1.3
-app               chatgpt-desktop 1.2025.300 (copied 2026-11-02)
+sample-notes      stopped (quit with save), next start warm
+golden            macOS 50.2 (99B102), agent 0.9.0, protocol 1.3
+app               sample-notes 1.2.3 (copied 2000-01-02)
 guest             stopped
 host              profile 6.3 GiB (data 4.1 GiB, state 4 GiB), disk 120 GiB free
 data disk         prepared: the home of the guest is on data.img
 network           no session
-shares            /Users/u/src/web (rw), downloads -> /p/chatgpt-desktop/default/downloads
-logs              /p/chatgpt-desktop/default/logs/
+shares            /Users/u/src/web (rw), downloads -> /p/sample-notes/default/downloads
+logs              /p/sample-notes/default/logs/
 "
     );
     assert_eq!(clean.state, State::Stopped);
@@ -190,7 +191,7 @@ logs              /p/chatgpt-desktop/default/logs/
     let text = render(&crashed);
     assert!(
         text.starts_with(
-            "chatgpt-desktop   stopped (crashed), next start cold: the guest image changed\n"
+            "sample-notes      stopped (crashed), next start cold: the guest image changed\n"
         ),
         "{text}"
     );
@@ -213,15 +214,15 @@ logs              /p/chatgpt-desktop/default/logs/
     assert_eq!(
         render(&never),
         "\
-chatgpt-desktop   never started, next start cold: the first start of this profile
+sample-notes      never started, next start cold: the first start of this profile
 golden            not started on this golden yet
 app               none (the session runs the guest without an app)
 guest             stopped
 host              profile 6.3 GiB (data 4.1 GiB, state 4 GiB), disk 120 GiB free
 data disk         not prepared yet: the next cold start prepares it
 network           no session
-shares            /Users/u/src/web (rw), downloads -> /p/chatgpt-desktop/default/downloads
-logs              /p/chatgpt-desktop/default/logs/
+shares            /Users/u/src/web (rw), downloads -> /p/sample-notes/default/downloads
+logs              /p/sample-notes/default/logs/
 "
     );
     assert_eq!(never.state, State::NeverStarted);
@@ -265,8 +266,8 @@ fn json_has_every_field() {
     assert_eq!(v["state"], "running");
     assert_eq!(v["windows"], 2);
     assert_eq!(v["health_age_s"], 1);
-    assert_eq!(v["app"]["name"], "ChatGPT");
-    assert_eq!(v["app"]["copied"], "2026-11-02");
+    assert_eq!(v["app"]["name"], "Sample Notes");
+    assert_eq!(v["app"]["copied"], "2000-01-02");
     assert_eq!(v["guest"]["answering"], true);
     assert_eq!(v["guest"]["load"], 0.4);
     assert_eq!(v["host"]["disk_free"], 120 * GIB);
@@ -276,10 +277,7 @@ fn json_has_every_field() {
     for log in ["dir", "shim", "events", "console", "agent", "boundary"] {
         assert!(v["logs"][log].is_string(), "{log}");
     }
-    assert_eq!(
-        v["logs"]["agent"],
-        "/p/chatgpt-desktop/default/logs/agent.log"
-    );
+    assert_eq!(v["logs"]["agent"], "/p/sample-notes/default/logs/agent.log");
     // A stopped profile: the running fields are absent, the end is there.
     let v =
         serde_json::to_value(build(&inputs(None, Some(stamp(true, false)), Start::Cold))).unwrap();
@@ -366,25 +364,25 @@ fn read_builds_inputs_from_a_profile_folder() {
         .collect(),
     );
     assert!(read(&env, "../x", 1).is_none());
-    let i = read(&env, "vscode", 1).unwrap();
+    let i = read(&env, "sample-editor", 1).unwrap();
     assert!(i.record.is_none() && i.stamp.is_none());
     assert_eq!(i.next, Ok(Start::Fresh));
     let s = build(&i);
     assert_eq!(s.state, State::NeverStarted);
-    assert_eq!(cmd(&env, "vscode", 1, false).unwrap(), 1);
+    assert_eq!(cmd(&env, "sample-editor", 1, false).unwrap(), 1);
     // A stopped profile with a stamp.
     let layout = Layout::new(&env);
-    let p = layout.profile("vscode", crate::macvm::host::DEFAULT_HOME);
+    let p = layout.profile("sample-editor", crate::macvm::host::DEFAULT_HOME);
     std::fs::create_dir_all(p.logs()).unwrap();
     stamp(true, false).write(&p.stamp()).unwrap();
     for f in [p.data(), p.system(), p.aux(), p.machine_id()] {
         std::fs::write(f, "x").unwrap();
     }
-    let i = read(&env, "vscode", 1).unwrap();
+    let i = read(&env, "sample-editor", 1).unwrap();
     assert!(i.stamp.is_some());
     assert_eq!(build(&i).last_end.as_deref(), Some("quit without save"));
-    assert_eq!(cmd(&env, "vscode", 1, true).unwrap(), 0);
-    assert_eq!(cmd(&env, "vscode", 1, false).unwrap(), 0);
+    assert_eq!(cmd(&env, "sample-editor", 1, true).unwrap(), 0);
+    assert_eq!(cmd(&env, "sample-editor", 1, false).unwrap(), 0);
 }
 
 #[test]
@@ -444,7 +442,7 @@ fn open_questions_and_the_guest_system_show_while_running() {
         ..Default::default()
     };
     asks.open.push(OpenQuestion {
-        app: "com.openai.chat".into(),
+        app: "com.example.notes".into(),
         host: "a.example".into(),
         port: 443,
         waiting: 2,
@@ -465,7 +463,7 @@ fn open_questions_and_the_guest_system_show_while_running() {
     assert!(
         text.ends_with(
             "questions         1 open, asking paused: answer the notice, or add rules with paddock app rules; 3 connections of the guest system denied without asking
-  com.openai.chat -> a.example:443, 2 connections wait
+  com.example.notes -> a.example:443, 2 connections wait
   denied weather-edge.apple.com:443 x3 (guest system, last process com.apple.weather)
 "
         ),

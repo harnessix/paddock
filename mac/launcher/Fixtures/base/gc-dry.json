@@ -1,0 +1,48 @@
+{
+  "api_version": "paddock.gc/v1",
+  "dry_run": true,
+  "items": [
+    {
+      "what": "macvm trash: sample-mail-old",
+      "tier": "auto",
+      "bytes": 2100000000,
+      "reason": "in the trash for more than 7 days",
+      "warning": null,
+      "needs": [],
+      "action": {
+        "kind": "macvm",
+        "dir": "/Users/demo/Library/Application Support/paddock/macvm/trash/sample-mail-old"
+      }
+    },
+    {
+      "what": "restore image UniversalMac_50.1_99A101_Restore.ipsw",
+      "tier": "auto",
+      "bytes": 14000000000,
+      "reason": "the golden is sealed",
+      "warning": null,
+      "needs": [],
+      "action": {
+        "kind": "macvm",
+        "dir": "/Users/demo/Library/Application Support/paddock/macvm/ipsw"
+      }
+    },
+    {
+      "what": "macvm profile sample-notes 2",
+      "tier": "consent",
+      "bytes": 4200000000,
+      "reason": "not used for 90 days",
+      "warning": "its login is lost",
+      "needs": [
+        "--homes",
+        "--include-app-logins"
+      ],
+      "action": {
+        "kind": "macvm",
+        "dir": "/Users/demo/Library/Application Support/paddock/macvm/profiles.noindex/sample-notes/instance-2"
+      }
+    }
+  ],
+  "removed": [],
+  "notes": [],
+  "dedupe": null
+}

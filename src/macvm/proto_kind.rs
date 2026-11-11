@@ -111,6 +111,7 @@ impl Request {
     /// text, no environment values.
     pub fn kind(&self) -> String {
         match self {
+            Request::ClockSet { .. } => "clock.set".into(),
             Request::Token { v, .. } => format!("token from host v{v}"), // not user text
             Request::WindowMove { id, frame } => format!(
                 // not user text
@@ -185,6 +186,7 @@ impl Request {
             Request::BenchPasteboard { action, .. } => format!("bench.pasteboard {action}"), // not user text
             Request::BenchEnv => "bench.env".into(),
             Request::BenchDockMenu => "bench.dock_menu".into(),
+            Request::SharesOpen => "shares.open".into(),
             Request::BenchLock => "bench.lock".into(),
             Request::BenchKeychain => "bench.keychain".into(),
             Request::LoginForward { port, .. } => format!("login.forward port {port}"), // not user text

@@ -53,21 +53,34 @@ public struct BinaryLocator {
 }
 
 /// Compares `paddock --version` with the launcher's compiled-in range.
+/// The comparison is major, minor and patch: 0.2.1 is older than 0.2.2.
 public struct VersionGate: Equatable, Sendable {
-    /// The oldest paddock this launcher works with: major and minor.
-    public var minimum: (major: Int, minor: Int)
+    /// The oldest paddock this launcher works with.
+    public var minimum: (major: Int, minor: Int, patch: Int)
     /// The newest major this launcher knows.
     public var supportedMajor: Int
 
-    public static let current = VersionGate(minimum: (0, 3), supportedMajor: 0)
+    /// paddock 0.2.2 is the first with the JSON and the events this launcher
+    /// reads. Any 0.x from there on works; 1.0 needs a newer launcher.
+    public static let current = VersionGate(minimum: (0, 2, 2), supportedMajor: 0)
 
-    public init(minimum: (major: Int, minor: Int), supportedMajor: Int) {
+    public init(minimum: (major: Int, minor: Int, patch: Int), supportedMajor: Int) {
         self.minimum = minimum
         self.supportedMajor = supportedMajor
     }
 
+    /// A minimum without a patch number means patch 0.
+    public init(minimum: (major: Int, minor: Int), supportedMajor: Int) {
+        self.init(minimum: (minimum.major, minimum.minor, 0), supportedMajor: supportedMajor)
+    }
+
     public static func == (a: VersionGate, b: VersionGate) -> Bool {
         a.minimum == b.minimum && a.supportedMajor == b.supportedMajor
+    }
+
+    /// `0.2.2`, or `0.3` when the patch is 0.
+    public var minimumText: String {
+        minimum.patch == 0 ? "\(minimum.major).\(minimum.minor)" : "\(minimum.major).\(minimum.minor).\(minimum.patch)"
     }
 
     public enum Verdict: Equatable, Sendable {
@@ -84,8 +97,8 @@ public struct VersionGate: Equatable, Sendable {
         }
         let text = "\(version.major).\(version.minor).\(version.patch)"
         if version.major > supportedMajor { return .tooNew(have: text) }
-        if (version.major, version.minor) < (minimum.major, minimum.minor) {
-            return .tooOld(have: text, need: "\(minimum.major).\(minimum.minor)")
+        if (version.major, version.minor, version.patch) < (minimum.major, minimum.minor, minimum.patch) {
+            return .tooOld(have: text, need: minimumText)
         }
         return .ok(version: text)
     }

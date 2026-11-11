@@ -14,6 +14,7 @@ pub mod apps;
 #[path = "apps_macos.rs"]
 pub mod apps_macos;
 pub mod chrome;
+pub mod clock;
 pub mod configure;
 pub mod console;
 pub mod data;
@@ -21,24 +22,25 @@ pub mod data_copy;
 pub mod dialogs;
 pub mod downloads;
 pub mod files;
+pub mod files_open;
 pub mod identity;
 pub mod input_fallback;
 pub mod keychain;
 pub mod link;
 pub mod log;
 pub mod main_loop;
+pub mod pace;
 pub mod platform;
 pub mod proxy;
 pub mod shutdown;
 pub mod update;
+pub mod wallpaper;
 pub mod windows;
 
 #[cfg(target_os = "macos")]
 pub mod ax;
 #[cfg(target_os = "macos")]
 pub mod ax_tree;
-#[cfg(target_os = "macos")]
-pub mod capture;
 #[cfg(target_os = "macos")]
 pub mod clipboard;
 #[cfg(target_os = "macos")]

@@ -2,7 +2,7 @@ use anyhow::Result;
 use paddock::env::HostEnv;
 use paddock::state::{self, Running};
 
-pub(crate) fn ps(env: &HostEnv, json: bool) -> Result<i32> {
+pub(crate) fn ps(env: &HostEnv, json: bool, mem: bool) -> Result<i32> {
     // Children follow their parent.
     let list = state::tree_order(Running::list(env));
     if json {
@@ -134,6 +134,10 @@ pub(crate) fn ps(env: &HostEnv, json: bool) -> Result<i32> {
                         serde_json::to_value(marks).unwrap_or_default(),
                     );
                 }
+                if mem {
+                    v["memory"] =
+                        serde_json::to_value(paddock::memory::of_run(r)).unwrap_or_default();
+                }
                 v
             })
             .collect();
@@ -203,6 +207,46 @@ pub(crate) fn ps(env: &HostEnv, json: bool) -> Result<i32> {
                 (now.saturating_sub(r.started)) / 60,
                 r.project.display()
             );
+            if mem {
+                match paddock::memory::of_run(r) {
+                    Some(m) => {
+                        let size = |n: Option<u64>| {
+                            n.map(|n| format!("{:.1} MiB", n as f64 / 1048576.0))
+                                .unwrap_or_else(|| "unavailable".into())
+                        };
+                        println!(
+                            "  memory: anon {}  file {}  swap {}",
+                            size(m.anon_bytes),
+                            size(m.file_bytes),
+                            size(m.swap_bytes)
+                        );
+                        let high = if m.high_unlimited {
+                            "max".to_string()
+                        } else {
+                            size(m.high_bytes)
+                        };
+                        println!("    memory.high: {high}");
+                        for group in m.groups {
+                            if !group.processes.is_empty() {
+                                println!(
+                                    "    {} (RSS {}, shared pages may be counted more than once):",
+                                    group.name,
+                                    size(Some(group.rss_bytes))
+                                );
+                                for p in group.processes {
+                                    println!(
+                                        "      {} {} {}",
+                                        p.pid,
+                                        p.name,
+                                        size(Some(p.rss_bytes))
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    None => println!("  memory: unavailable (no accessible sandbox cgroup)"),
+                }
+            }
             for n in rec.map(|d| d.notes).unwrap_or_default() {
                 println!("{:<28} {n}", "");
             }
@@ -234,31 +278,6 @@ pub(crate) fn thaw(env: &HostEnv, id: String, tree: bool) -> Result<i32> {
         println!("Thawed {f}.");
     }
     Ok(0)
-}
-
-pub(crate) fn wait(env: &HostEnv, id: String, timeout: Option<String>) -> Result<i32> {
-    let t = match timeout {
-        Some(t) => Some(std::time::Duration::from_secs(
-            paddock::timer::parse_duration(&t)?,
-        )),
-        None => None,
-    };
-    // The tree is known only while the sandbox runs.
-    let root = paddock::speckit::tree_root_of(env, &id);
-    if let Some(t) = root
-        .as_deref()
-        .and_then(|r| paddock::speckit::record_of(env, r, &id))
-    {
-        eprintln!("paddock: {id} works on task {} of {}", t.id, t.feature);
-    }
-    let code = paddock::detach::wait(env, &id, t)?;
-    if let Some(t) = root
-        .as_deref()
-        .and_then(|r| paddock::speckit::record_of(env, r, &id))
-    {
-        println!("task {} of {}: {}", t.id, t.feature, t.state.name());
-    }
-    Ok(code)
 }
 
 /// The Spec Kit task that a running sandbox holds.

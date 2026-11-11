@@ -527,6 +527,7 @@ pub fn run_app(env: &HostEnv, o: &crate::app::AppOptions) -> Result<i32> {
         &[],
         None,
         crate::credentials::secret::SecretFiles::new(None, None),
+        None,
     );
     let spec = &built.spec;
     let net = net_for(spec.network)?;

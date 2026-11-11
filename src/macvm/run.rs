@@ -83,6 +83,7 @@ pub(super) enum Event {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Why {
     Token,
+    ClockSet,
     DataPrepare,
     AgentUpdate,
     /// A `drop`: the badge on the reply.
@@ -109,10 +110,15 @@ pub(super) enum Why {
     AppQuit,
     /// The `log.fetch` of the quit: the exit waits a little for the file.
     LogFetch,
+    /// A `shares.open`: the counts go into the grants (`run_grants.rs`).
+    SharesOpen,
+    SharesOpenFresh,
     /// The `keychain.unlock` before the app starts: its reply is an event.
     Keychain,
     /// The `window.move` of a host-led drag of this window (`run_lead.rs`).
     Lead(u32),
+    /// The `window.move` of the guest layout (`run_apart.rs`).
+    Layout(u32),
     Other,
 }
 
@@ -294,6 +300,7 @@ pub fn run(env: &HostEnv, plan: &AppPlan) -> Result<i32> {
                 if tx.send(Event::Vm(ev)).is_err() {
                     break;
                 }
+                super::run_appkit::wake();
             }
         });
     }
@@ -316,6 +323,8 @@ pub fn run(env: &HostEnv, plan: &AppPlan) -> Result<i32> {
         let tx = tx.clone();
         Arc::new(move |ev| {
             let _ = tx.send(Event::Agent(ev));
+            // A reply or a window event waits for no tick.
+            super::run_appkit::wake();
         })
     };
     let login = super::run_login::Login::new(env, plan, &token, tx.clone());
@@ -391,6 +400,7 @@ pub fn run(env: &HostEnv, plan: &AppPlan) -> Result<i32> {
         record_done: false,
         failed: false,
         app_started: false,
+        copy_tried: false,
         copy_begun: None,
         shell,
         network: network.clone(),
@@ -453,7 +463,7 @@ pub(super) struct Session<'a> {
     pub(super) vm: Arc<Vm>,
     pub(super) queue: &'static DispatchQueue,
     pub(super) tx: Sender<Event>,
-    vtx: Sender<VmEvent>,
+    pub(super) vtx: Sender<VmEvent>,
     /// The control connection of the guest agent, while one is up.
     pub(super) agent: Option<Agent>,
     /// Why each pending request was sent.
@@ -484,6 +494,8 @@ pub(super) struct Session<'a> {
     pub(super) failed: bool,
     /// The copy and the launch of the app happened, or were skipped.
     pub(super) app_started: bool,
+    /// This session sent `app.copy` once already.
+    pub(super) copy_tried: bool,
     /// When the `app.copy` of this start went out, for its seconds.
     pub(super) copy_begun: Option<Instant>,
     /// The host windows, the order fold and the Dock.
@@ -522,6 +534,10 @@ impl Session<'_> {
         if matches!(request, Request::AppLaunch { .. }) {
             self.shell.last_launch = Some(request.clone());
         }
+        if let Request::WindowMove { id, .. } = &request {
+            // `window frames` gives the count: a host drag sends none.
+            *self.shell.moves_sent.entry(*id).or_default() += 1;
+        }
         match agent.send(request) {
             Ok(req) => {
                 self.why.insert(req, why);
@@ -550,6 +566,7 @@ impl Session<'_> {
             // SAFETY: a run loop mode constant of Foundation.
             let mode = unsafe { NSDefaultRunLoopMode };
             super::run_appkit::pass(&app, &until, mode);
+            super::run_appkit::woken();
             while let Ok(ev) = rx.try_recv() {
                 self.handle(ev);
                 if self.exit.is_some() {
@@ -666,6 +683,7 @@ impl Session<'_> {
             }
             Event::Vm(VmEvent::Bench(b)) => self.on_bench(b),
             Event::Vm(VmEvent::Freeze(pause, reply)) => self.freeze_line(pause, reply),
+            Event::Vm(VmEvent::Grant(m)) => self.on_grant(m),
             Event::Vm(VmEvent::Suspend(reason, reply)) => {
                 let _ = reply.send(self.begin_suspend(&reason));
             }
@@ -712,7 +730,9 @@ impl Session<'_> {
         }
         if !self.quitting {
             self.files_tick();
+            self.grants_tick(now);
             self.lead_tick();
+            self.apart_tick();
         }
         if let Some(d) = self.hello_deadline {
             if now >= d {

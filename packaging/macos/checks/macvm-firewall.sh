@@ -431,7 +431,7 @@ print(next((r.get("window", r.get("id", "")) for r in rows if r.get("kind") == "
     echo "look: set the appearance to $mode (System Settings, Appearance), then press Enter"
     read -r _
     [ -n "$wid" ] && screencapture -x -o -l "$wid" "$keep/panel-$mode.png"
-    echo "look: in $mode, can you read the title, the detail and all three buttons (Deny, Allow once, Always allow)? [y/n]"
+    echo "look: in $mode, can you read the title, the detail and all three buttons (Deny, Always allow, Allow once)? [y/n]"
     read -r answer
     [ "$answer" = y ] || { fail look "not readable in $mode (picture: $keep/panel-$mode.png)"; return; }
   done

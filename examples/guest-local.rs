@@ -123,6 +123,7 @@ mod mac {
                 token: TOKEN.into(),
                 v: VERSION,
                 bench: false,
+                now_ms: None,
             });
             self.ok(req, Duration::from_secs(5))
         }

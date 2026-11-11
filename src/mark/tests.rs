@@ -40,21 +40,21 @@ fn tone_ask_is_sage() {
 fn badge_vm_and_input_source() {
     let mut r = running("ask", "app");
     r.backend = "macvm".into();
-    r.harness = "chatgpt-desktop".into();
+    r.harness = "sample-notes".into();
     // A guest session gains the word vm.
     assert_eq!(
         run_badge(&r, None, 1000 + 7200),
-        "paddock · chatgpt-desktop · ask · vm · 2h"
+        "paddock · sample-notes · ask · vm · 2h"
     );
     // The guest input source name while it differs from the host's.
     let facts = VmFacts {
-        display_name: "ChatGPT (paddock)".into(),
+        display_name: "Sample Notes (paddock)".into(),
         guest_input: Some("Pinyin - Simplified".into()),
         note: None,
     };
     assert_eq!(
         run_badge(&r, Some(&facts), 1000 + 7200),
-        "paddock · chatgpt-desktop · ask · vm · Pinyin - Simplified · 2h"
+        "paddock · sample-notes · ask · vm · Pinyin - Simplified · 2h"
     );
     // Equal sources: no name.
     let same = VmFacts {
@@ -65,7 +65,7 @@ fn badge_vm_and_input_source() {
     // The menu entry names the app.
     assert_eq!(
         run_menu_title(&r, Some(&facts), 1000 + 60, 1, 1, None),
-        "ChatGPT (paddock) · api · ask · vm · 1m"
+        "Sample Notes (paddock) · api · ask · vm · 1m"
     );
     // A Seatbelt run keeps its badge and menu entry, with no vm.
     let seatbelt = running("egress", "app");
@@ -477,4 +477,13 @@ fn the_firewall_panel_sits_under_the_badge_corner_of_its_window() {
     // No screens at all: something, not a panic.
     let r = panel_rect(None, size, &[]);
     assert_eq!((r.w, r.h), size);
+}
+
+#[test]
+fn a_macos_guest_session_gets_no_frame() {
+    let mut r = running("ask", "app");
+    assert_eq!(framed(&r), !cfg!(target_os = "macos"));
+    r.backend = crate::macvm::host::BACKEND.into();
+    assert!(!framed(&r));
+    assert_eq!(marked_runs(vec![r]).len(), 1, "it keeps its menu entry");
 }

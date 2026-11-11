@@ -333,3 +333,37 @@ fn macvm_pause_resume_and_quit_while_frozen() {
         "{audit}"
     );
 }
+
+#[cfg(target_os = "linux")]
+#[test]
+#[ignore = "requires a working systemd user manager on the host"]
+fn host_scope_sets_memory_high() {
+    use std::process::{Command, Stdio};
+    struct ChildGuard(std::process::Child);
+    impl Drop for ChildGuard {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let env = HostEnv::detect().unwrap();
+    let child = ChildGuard(
+        Command::new("sh")
+            .args(["-c", "kill -STOP $$; read -r x"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    let id = format!("memory-high-test-{}", child.0.id());
+    let unit = scope_name(&id);
+    wait_stopped(child.0.id()).unwrap();
+    assert!(move_to_scope(&env, child.0.id(), &unit, &id, Some(512 << 20)).unwrap());
+    resume(child.0.id());
+    let text = std::fs::read_to_string(format!("/proc/{}/cgroup", child.0.id())).unwrap();
+    let path = text.lines().find_map(|l| l.strip_prefix("0::/")).unwrap();
+    let high = std::fs::read_to_string(Path::new("/sys/fs/cgroup").join(path).join("memory.high"))
+        .unwrap();
+    assert_eq!(high.trim(), (512u64 << 20).to_string());
+}

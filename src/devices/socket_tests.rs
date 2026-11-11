@@ -205,6 +205,11 @@ fn the_65th_connection_is_busy() {
 
 #[test]
 fn a_closed_client_cancels_the_request() {
+    if crate::storage::package_cache::isolated_test(
+        "devices::socket::tests::a_closed_client_cancels_the_request",
+    ) {
+        return;
+    }
     let f = fixture(vec![]);
     let mut c = UnixStream::connect(&f.path).unwrap();
     c.write_all(b"{\"v\":1,\"op\":\"call\",\"device\":\"sleeper\",\"size\":0}\n")

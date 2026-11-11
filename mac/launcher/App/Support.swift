@@ -21,6 +21,50 @@ extension Text {
     }
 }
 
+extension View {
+    /// Opaque system label color. SwiftUI's primary and secondary styles are
+    /// vibrant on macOS, and the accessibility audit counts them as too faint.
+    func labelInk() -> some View {
+        foregroundStyle(Color(nsColor: .labelColor))
+    }
+
+    /// Menus and popup pickers have no press action, so the audit reports
+    /// them as missing one. The control still opens from its own click.
+    func menuAuditAction() -> some View {
+        accessibilityAction(named: Text("Show menu")) {}
+    }
+}
+
+/// A stand-in for `ContentUnavailableView`. That view paints its title and
+/// description with secondary and tertiary colors, which fail the contrast
+/// audit, and a parent `foregroundStyle` does not override them.
+@MainActor
+struct PlainEmpty<Title: View, Description: View, Actions: View>: View {
+    let title: Title
+    let description: Description
+    let actions: Actions
+
+    init(@ViewBuilder title: () -> Title,
+         @ViewBuilder description: () -> Description,
+         @ViewBuilder actions: () -> Actions) {
+        self.title = title()
+        self.description = description()
+        self.actions = actions()
+    }
+
+    var body: some View {
+        VStack(spacing: 10) {
+            title.labelInk()
+            description.labelInk()
+            actions
+        }
+        .multilineTextAlignment(.center)
+        .frame(maxWidth: 420)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .labelInk()
+    }
+}
+
 // MARK: - Status symbols
 
 extension SymbolTint {
@@ -150,6 +194,7 @@ struct ErrorShape: View {
             } label: {
                 Text(LauncherError.Primary.stopPicker.title!)
             }
+            .menuAuditAction()
             .fixedSize()
         } else if let title = error.primary.title {
             Button(action: primary) { Text(title) }

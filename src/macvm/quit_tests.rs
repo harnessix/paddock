@@ -55,7 +55,7 @@ fn drive(cfg: Config, fake: &Fake) -> Vec<Action> {
         let input = match action {
             Action::SendQuit { .. } if fake.not_running => quit_answer(&Outcome::Error {
                 code: ErrorCode::NoSuchApp,
-                text: "no such app in the guest: ChatGPT does not run".into(),
+                text: "no such app in the guest: Sample Notes does not run".into(),
             }),
             Action::SendQuit { force: false } => fake.exits_on_quit.then_some(Input::AppExited),
             Action::SendQuit { force: true } => fake.exits_on_force.then_some(Input::AppExited),
@@ -115,7 +115,7 @@ fn lines(actions: &[Action]) -> Vec<String> {
 
 #[test]
 fn quit_state_machine_cases() {
-    let cfg = Config::new("ChatGPT", true, 4 << 30);
+    let cfg = Config::new("Sample Notes", true, 4 << 30);
     let plenty = 100 << 30;
 
     // 1. The app exits in time, the save succeeds: quit with save.
@@ -183,11 +183,11 @@ fn quit_state_machine_cases() {
     assert_eq!(stamp(&a), (false, None));
     assert_eq!(
         lines(&a),
-        vec!["ChatGPT did not quit in 70 s: the VM stops without a save"]
+        vec!["Sample Notes did not quit in 70 s: the VM stops without a save"]
     );
 
     // 3. The save is off: no pause, no save, the guest shuts down.
-    let off = Config::new("ChatGPT", false, 4 << 30);
+    let off = Config::new("Sample Notes", false, 4 << 30);
     let fake = Fake {
         exits_on_quit: true,
         guest_stops: true,
@@ -373,7 +373,7 @@ fn quit_of_an_app_that_does_not_run_goes_on_to_the_save() {
     // The scratch profile of a check script, or the user quit the app: the
     // agent answers `no_such_app`, and the save follows at once, with no
     // wait and no force.
-    let cfg = Config::new("ChatGPT", true, 4 << 30);
+    let cfg = Config::new("Sample Notes", true, 4 << 30);
     let fake = Fake {
         not_running: true,
         free: 100 << 30,
@@ -408,7 +408,7 @@ fn quit_of_an_app_that_does_not_run_goes_on_to_the_save() {
         &a,
         &Action::Event {
             kind: "quit".into(),
-            text: text::quit_app_not_running("ChatGPT"),
+            text: text::quit_app_not_running("Sample Notes"),
         }
     ));
 
@@ -422,7 +422,7 @@ fn quit_of_an_app_that_does_not_run_goes_on_to_the_save() {
     assert_eq!(q.phase(), Phase::Pausing);
 
     // With the save off, the guest shuts down at once.
-    let off = Config::new("ChatGPT", false, 4 << 30);
+    let off = Config::new("Sample Notes", false, 4 << 30);
     let fake = Fake {
         not_running: true,
         guest_stops: true,

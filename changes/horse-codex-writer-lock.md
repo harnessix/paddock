@@ -1,0 +1,1 @@
+- Fix: (experimental) `paddock horse swap` of a Codex session no longer fails with "Codex thread is locked by a writer" when the lock was released only a moment before. paddock now waits up to one second for the writer lock of the thread.

@@ -191,8 +191,14 @@ impl Backend for VzBackend {
         })
     }
 
-    fn download(&mut self, url: &str, dest: &Path, size: Option<u64>) -> Result<()> {
-        download(url, dest, size)
+    fn download(
+        &mut self,
+        url: &str,
+        dest: &Path,
+        size: Option<u64>,
+        watch: &mut super::download::Watch,
+    ) -> Result<()> {
+        download(url, dest, size, watch)
     }
 
     fn check_image(&mut self, path: &Path) -> Result<ImageInfo> {

@@ -193,6 +193,11 @@ fn paddock_cost_reaches_the_ledger() {
 
 #[test]
 fn concurrency_two_runs_at_most_two_at_once_and_none_fails() {
+    if crate::storage::package_cache::isolated_test(
+        "devices::outproc::tests::concurrency_two_runs_at_most_two_at_once_and_none_fails",
+    ) {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let marks = dir.path().join("marks");
     std::fs::create_dir(&marks).unwrap();

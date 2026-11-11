@@ -27,6 +27,8 @@ pub enum ShareWhy {
     Protected,
     /// Not an absolute path.
     Relative,
+    /// A folder of paddock itself, inside one or above one.
+    PaddockData,
 }
 
 /// The reason of a refused share, the second half of `share_refused`.
@@ -41,6 +43,9 @@ pub fn share_reason(why: ShareWhy) -> String {
         ShareWhy::SystemApps => "it holds the system and its apps",
         ShareWhy::Protected => "it holds your keys, logins or app data",
         ShareWhy::Relative => "it is not an absolute path",
+        ShareWhy::PaddockData => {
+            "it holds paddock's own data, with the disks and the keys of the apps"
+        }
     }
     .into()
 }

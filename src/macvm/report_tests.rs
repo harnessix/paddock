@@ -40,7 +40,7 @@ fn sealed_golden(layout: &Layout) {
     let mut m = Manifest::new("15.2", "24C101", "0.9.0");
     m.version = "15.2".into();
     m.build = "24C101".into();
-    m.sealed = Some("2026-11-01T10:00:00Z".into());
+    m.sealed = Some("2000-01-01T03:04:05Z".into());
     m.at(State::Sealed);
     layout.golden.write_manifest(&m).unwrap();
 }
@@ -110,10 +110,10 @@ fn plant(p: &Profile) {
     for path in [p.shim_log(), p.console_log(), p.boundary_log()] {
         let mut f = std::fs::File::create(&path).unwrap();
         for l in &raw {
-            writeln!(f, "2026-11-04T10:00:00Z INFO {l}").unwrap();
+            writeln!(f, "2000-01-03T03:04:05Z INFO {l}").unwrap();
         }
         for k in &kinds {
-            writeln!(f, "2026-11-04T10:00:01Z DEBUG macvm: <- {k}").unwrap();
+            writeln!(f, "2000-01-03T03:04:06Z DEBUG macvm: <- {k}").unwrap();
         }
     }
     // The event log: the writer.
@@ -139,7 +139,7 @@ fn rules(env: &HostEnv, app: &str) -> PathBuf {
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(
         &path,
-        "# the rules of the app\n[hosts]\n\"chatgpt.com\" = \"allow\"\n\"*.openai.com\" = \"allow\"\n\"Telemetry.Example.com\" = \"deny\"\nallow = [\"api.github.com\", \"10.0.0.5\"]\nnote = \"stamp.json is a file, not a host\"\n",
+        "# the rules of the app\n[hosts]\n\"notes.example.com\" = \"allow\"\n\"*.example.com\" = \"allow\"\n\"Telemetry.Example.com\" = \"deny\"\nallow = [\"api.github.com\", \"10.0.0.5\"]\nnote = \"stamp.json is a file, not a host\"\n",
     )
     .unwrap();
     path
@@ -151,7 +151,7 @@ fn planted_secrets_absent() {
     let e = env(t.path());
     let layout = Layout::new(&e);
     sealed_golden(&layout);
-    let p = stamped_profile(&layout, "chatgpt-desktop");
+    let p = stamped_profile(&layout, "sample-notes");
     plant(&p);
     // Item 18: the clipboard text never reached any log.
     for which in super::super::logs::Which::ALL {
@@ -170,7 +170,7 @@ fn planted_secrets_absent() {
         out.contains("manifest ") && out.contains("manifest.toml:"),
         "{out}"
     );
-    assert!(out.contains("profile chatgpt-desktop/default ("), "{out}");
+    assert!(out.contains("profile sample-notes/default ("), "{out}");
     assert!(
         out.contains("stamp ") && out.contains("\"schema\": 1"),
         "{out}"
@@ -211,20 +211,20 @@ fn no_hosts_replaces_every_host() {
     let e = env(t.path());
     let layout = Layout::new(&e);
     sealed_golden(&layout);
-    let p = stamped_profile(&layout, "chatgpt-desktop");
+    let p = stamped_profile(&layout, "sample-notes");
     plant(&p);
-    let rules_path = rules(&e, "chatgpt-desktop");
+    let rules_path = rules(&e, "sample-notes");
     std::fs::write(
         p.logs().join(status::CONNECTIONS_FILE),
-        "{\"host\":\"chatgpt.com\",\"port\":443,\"verdict\":\"allowed\"}\n{\"host\":\"telemetry.example.com\",\"port\":443,\"verdict\":\"denied\"}\n{\"host\":\"cdn.oaistatic.com\",\"port\":443,\"verdict\":\"allowed\"}\n",
+        "{\"host\":\"notes.example.com\",\"port\":443,\"verdict\":\"allowed\"}\n{\"host\":\"telemetry.example.com\",\"port\":443,\"verdict\":\"denied\"}\n{\"host\":\"cdn.oaistatic.com\",\"port\":443,\"verdict\":\"allowed\"}\n",
     )
     .unwrap();
     let hosts = hosts_in(&std::fs::read_to_string(&rules_path).unwrap());
     assert_eq!(
         hosts,
         [
-            "chatgpt.com",
-            "openai.com",
+            "notes.example.com",
+            "example.com",
             "telemetry.example.com",
             "api.github.com",
             "10.0.0.5"
@@ -232,7 +232,7 @@ fn no_hosts_replaces_every_host() {
     );
     let with = macvm_section(&e, &Opts::default());
     assert!(
-        with.contains("chatgpt.com") && with.contains("Telemetry.Example.com"),
+        with.contains("notes.example.com") && with.contains("Telemetry.Example.com"),
         "{with}"
     );
     assert!(with.contains("connections: 2 allowed, 1 denied"), "{with}");
@@ -268,9 +268,9 @@ fn no_hosts_replaces_every_host() {
     // password lines.
     let r = Redactor::new("/Users/u", "u", "mac", &BTreeMap::new());
     let out = redact(
-        "a line with token id x-abcdefabcdefabcdefabcdefabcdefabcdef and chatgpt.com\nPassword hunter2 here\nplain\n",
+        "a line with token id x-abcdefabcdefabcdefabcdefabcdefabcdef and notes.example.com\nPassword hunter2 here\nplain\n",
         &r,
-        &["chatgpt.com".to_string()],
+        &["notes.example.com".to_string()],
         true,
     );
     assert_eq!(

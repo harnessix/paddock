@@ -306,11 +306,7 @@ impl Platform for Mac {
         self.ax.observe(pids);
     }
 
-    fn window_radius(&mut self, w: &RawWindow) -> Option<f64> {
-        super::capture::radius(w)
-    }
-
-    fn window_op(&mut self, w: &Window, op: WindowOp) -> Result<(), Fail> {
+    fn window_op(&mut self, w: &Window, op: WindowOp) -> Result<Option<Frame>, Fail> {
         self.ax.op(w, op)
     }
 

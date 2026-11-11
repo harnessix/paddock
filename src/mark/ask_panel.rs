@@ -16,7 +16,8 @@
 //! - Top to bottom, left aligned, 360 pt wide, 16 pt padding: the 32 pt
 //!   app icon next to the title (13 pt semibold), the detail (11 pt), the
 //!   `and 3 more waiting` line, and the row of buttons at the bottom right:
-//!   `Deny` (Esc), `Allow once`, `Always allow` (Return, the default).
+//!   `Deny` (Esc), `Always allow` (a click or Command-A: a reflex Return
+//!   never makes a permanent rule), `Allow once` (Return, the default).
 //!   The other answers sit in the `More…` menu at the bottom left.
 //! - The panel is a non-activating panel at the floating level: it does
 //!   not take the keyboard from the user's typing, it takes clicks, and
@@ -35,10 +36,11 @@ use objc2::runtime::{AnyObject, Sel};
 use objc2::{AnyThread, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
     NSAccessibility, NSApplication, NSBackingStoreType, NSBezelStyle, NSButton, NSColor,
-    NSControlSize, NSFloatingWindowLevel, NSFont, NSFontWeightRegular, NSFontWeightSemibold,
-    NSImage, NSImageScaling, NSImageView, NSLineBreakMode, NSPanel, NSTextField, NSView,
-    NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView,
-    NSWindowButton, NSWindowCollectionBehavior, NSWindowStyleMask, NSWindowTitleVisibility,
+    NSControlSize, NSEventModifierFlags, NSFloatingWindowLevel, NSFont, NSFontWeightRegular,
+    NSFontWeightSemibold, NSImage, NSImageScaling, NSImageView, NSLineBreakMode, NSPanel,
+    NSTextField, NSView, NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState,
+    NSVisualEffectView, NSWindowButton, NSWindowCollectionBehavior, NSWindowStyleMask,
+    NSWindowTitleVisibility,
 };
 use objc2_core_graphics::CGColor;
 use objc2_foundation::{ns_string, NSPoint, NSRect, NSSize, NSString};
@@ -224,6 +226,10 @@ pub fn redraw(
                 Role::Default => button.setKeyEquivalent(ns_string!("\r")),
                 Role::Cancel => button.setKeyEquivalent(ns_string!("\u{1b}")),
                 Role::Plain => {}
+            }
+            if let Some(key) = panels::command_key(b.answer) {
+                button.setKeyEquivalent(&NSString::from_str(key));
+                button.setKeyEquivalentModifierMask(NSEventModifierFlags::Command);
             }
             button.setAccessibilityLabel(Some(&NSString::from_str(&b.label)));
             button

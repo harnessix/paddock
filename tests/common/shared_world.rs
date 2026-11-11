@@ -24,7 +24,7 @@ impl World {
     pub fn new(config: &str) -> Self {
         let tmp = super::tempdir();
         let root = tmp.path().to_path_buf();
-        for d in ["cfg/paddock", "state", "run", "project", "dev"] {
+        for d in ["cfg/paddock", "state", "run", "project", "dev", "home"] {
             std::fs::create_dir_all(root.join(d)).unwrap();
         }
         std::fs::set_permissions(
@@ -54,7 +54,8 @@ impl World {
 
     pub fn paddock(&self) -> Command {
         let mut c = Command::new(env!("CARGO_BIN_EXE_paddock"));
-        c.env("XDG_CONFIG_HOME", self.root.join("cfg"))
+        c.env("HOME", self.root.join("home"))
+            .env("XDG_CONFIG_HOME", self.root.join("cfg"))
             .env("XDG_STATE_HOME", self.root.join("state"))
             .env("XDG_DATA_HOME", self.root.join("data"))
             .env("XDG_CACHE_HOME", self.root.join("cache"))
@@ -90,9 +91,7 @@ impl World {
         .into_iter()
         .map(|(k, v)| (k.to_string(), v.display().to_string()))
         .collect();
-        let home = std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .unwrap_or_default();
+        let home = self.root.join("home");
         // SAFETY: getuid has no preconditions.
         let uid = unsafe { libc::getuid() };
         let env = paddock::env::HostEnv::from_parts(home, "t".into(), uid, 0, vars);

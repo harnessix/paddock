@@ -14,8 +14,6 @@ struct OnboardingView: View {
     @State private var step = 1
     @State private var doctor: DoctorJSON?
     @State private var checking = false
-    @State private var dir: String?
-    @State private var dirProblem: LocalizedStringKey?
     @State private var useIPSW = false
     @State private var ipsw: String?
     @State private var showCancel = false
@@ -55,6 +53,9 @@ struct OnboardingView: View {
             Button("Keep Building", role: .cancel) {}
             Button("Stop", role: .destructive) { store.cancelBuild() }
         }
+        .background(Color(nsColor: .windowBackgroundColor))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(Text("Welcome to paddock"))
     }
 
     // MARK: Steps list
@@ -150,19 +151,14 @@ struct OnboardingView: View {
             Text("Build the base image").font(.title2)
             Text(BuildCopy.body).fixedSize(horizontal: false, vertical: true)
             LabeledContent("Keep in") {
-                HStack {
-                    Text(verbatim: Format.tildePath(dir ?? defaultDir, home: NSHomeDirectory()))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                    Button("Change…") {
-                        if let path = Pickers.folder() {
-                            dirProblem = Pickers.storageProblem(path)
-                            if dirProblem == nil { dir = path }
-                        }
-                    }
-                }
+                Text(verbatim: Format.tildePath(store.golden.info?.dir ?? defaultDir, home: NSHomeDirectory()))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .textSelection(.enabled)
             }
-            if let dirProblem { ProblemLine { Text(dirProblem) } }
+            Text("paddock keeps the base image in this folder. It needs about 40 GB free on this disk.")
+                .font(.callout)
+                .labelInk()
             Toggle("Use a restore image I already have…", isOn: $useIPSW)
                 .onChange(of: useIPSW) { _, on in
                     if on, ipsw == nil { ipsw = Pickers.restoreImage() }
@@ -171,7 +167,7 @@ struct OnboardingView: View {
             if useIPSW, let ipsw {
                 Text(verbatim: ipsw).lineLimit(1).truncationMode(.middle)
             }
-            CommandEcho(args: PaddockArgs.setup(dir: dir, ipsw: useIPSW ? ipsw : nil, resume: false))
+            CommandEcho(args: LibraryArgs.setup(ipsw: useIPSW ? ipsw : nil, resume: false))
         }
     }
 
@@ -219,7 +215,7 @@ struct OnboardingView: View {
                     .accessibilityIdentifier("onboarding-continue")
             case 3:
                 Button("Build") {
-                    store.build(dir: dir, ipsw: useIPSW ? ipsw : nil)
+                    store.build(ipsw: useIPSW ? ipsw : nil)
                     step = 4
                 }
                 .keyboardShortcut(.defaultAction)

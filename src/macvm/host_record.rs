@@ -57,7 +57,7 @@ pub struct Session {
     /// The Accessibility mirror, written by the shim.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ax: Option<super::axmirror::AxRecord>,
-    /// The Dock name of the session, `ChatGPT (paddock)`, for the menu
+    /// The Dock name of the session, `Sample Notes (paddock)`, for the menu
     /// entry of the marker.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub display_name: String,
@@ -97,17 +97,17 @@ impl Session {
         self.instance.max(super::instance::FIRST)
     }
 
-    /// The key of the instance: `chatgpt`, `chatgpt--2`.
+    /// The key of the instance: `sample-notes`, `sample-notes--2`.
     pub fn key(&self) -> String {
         super::instance::key(&self.app, self.instance())
     }
 
-    /// The name of the session for the user: `chatgpt`, `chatgpt 2`.
+    /// The name of the session for the user: `sample-notes`, `sample-notes 2`.
     pub fn label(&self) -> String {
         super::instance::label(&self.app, self.instance())
     }
 
-    /// The name of the session in a command: `chatgpt`, `chatgpt
+    /// The name of the session in a command: `sample-notes`, `sample-notes
     /// --instance 2`.
     pub fn arg(&self) -> String {
         super::instance::arg(&self.app, self.instance())
@@ -127,10 +127,30 @@ pub struct GuestOptions {
     pub resumed_by: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// One workspace folder of the running session. The shim writes the
+/// name, the open file handles and the times after each grant change and
+/// each answer of the guest (`grants_live.rs`).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RecordShare {
     pub path: PathBuf,
     pub read_only: bool,
+    /// The share name, `ws-<n>`, under `/Volumes/My Shared Files`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
+    /// The files that processes of the guest hold open in the folder, as
+    /// the guest agent last counted them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub open_handles: Option<u32>,
+    /// When the guest counted them, seconds since the epoch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handles_t: Option<u64>,
+    /// The last count with an open file, seconds since the epoch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_use: Option<u64>,
+    /// Until then the app must open its files of the folder again, after
+    /// a change while it held them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reopen_until: Option<u64>,
 }
 
 /// The last `health` of the guest in the record.

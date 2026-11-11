@@ -59,7 +59,14 @@ fn world(config: &str) -> World {
     .unwrap();
     let mut vars = BTreeMap::new();
     vars.insert("XDG_CONFIG_HOME".to_string(), cfg.display().to_string());
-    vars.insert("XDG_RUNTIME_DIR".to_string(), "/Users/u/run".to_string());
+    vars.insert(
+        "XDG_RUNTIME_DIR".to_string(),
+        std::fs::canonicalize(t.path())
+            .unwrap()
+            .join("run")
+            .display()
+            .to_string(),
+    );
     vars.insert(
         "HTTPS_PROXY".to_string(),
         "http://127.0.0.1:3128".to_string(),
@@ -248,7 +255,13 @@ fn the_profile_has_the_exact_rules_in_depth_order() {
         !sb.contains(&format!("file-write* (subpath \"{dir}\")")),
         "{sb}"
     );
-    assert!(!sb.contains("(subpath \"/Users/u/run\")"), "{sb}");
+    assert!(
+        !sb.contains(&format!(
+            "(subpath \"{}\")",
+            w.env.runtime_dir.as_ref().unwrap().display()
+        )),
+        "{sb}"
+    );
 }
 
 #[test]

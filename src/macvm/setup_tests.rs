@@ -21,6 +21,7 @@ struct Fake {
     /// The password of each configure call.
     configured_with: Rc<RefCell<Vec<String>>>,
     install_fails: bool,
+    pause_on_image: Option<PathBuf>,
     reject: Vec<PathBuf>,
     latest_size: Option<u64>,
     short_download: usize,
@@ -47,6 +48,7 @@ impl Fake {
             asked: Vec::new(),
             configured_with: Rc::new(RefCell::new(Vec::new())),
             install_fails: false,
+            pause_on_image: None,
             reject: Vec::new(),
             latest_size: Some(10),
             short_download: 0,
@@ -87,8 +89,19 @@ impl Backend for Fake {
             size: self.latest_size,
         })
     }
-    fn download(&mut self, _url: &str, dest: &Path, _size: Option<u64>) -> Result<()> {
+    fn download(
+        &mut self,
+        _url: &str,
+        dest: &Path,
+        _size: Option<u64>,
+        watch: &mut super::super::download::Watch,
+    ) -> Result<()> {
         self.note("download");
+        (watch.report)(super::super::download::Tick::Progress {
+            bytes: 0,
+            total: Some(10),
+            rate: None,
+        });
         assert!(layout::is_partial(dest));
         let bytes = if self.short_download > 0 {
             self.short_download -= 1;
@@ -101,6 +114,9 @@ impl Backend for Fake {
     }
     fn check_image(&mut self, path: &Path) -> Result<ImageInfo> {
         self.note("check_image");
+        if let Some(path) = self.pause_on_image.take() {
+            std::fs::write(path, "").unwrap();
+        }
         if self.reject.iter().any(|r| r == path) {
             bail!("mostFeaturefulSupportedConfiguration is nil");
         }
@@ -751,3 +767,6 @@ fn agent_binary_prefers_the_given_path() {
     std::fs::write(&own, "").unwrap();
     assert_eq!(agent_binary(&w.layout, &roomy()), Some(own));
 }
+
+#[path = "setup_reliability_tests.rs"]
+mod reliability;

@@ -181,6 +181,12 @@ pub fn stage_bundle_with(
     if !needs && have_clone {
         return Ok(false);
     }
+    // A clone of this version with its archive is staged already, for
+    // example by a start whose guest copy is still to come: staging again
+    // would remove the archive under that copy.
+    if needs && staged(profile, bundle) {
+        return Ok(true);
+    }
     appcopy::clone_into_profile(profile, bundle, &super::drop::clone_into)?;
     if needs {
         appcopy::archive_into_profile(profile, bundle, archive)?;
@@ -188,10 +194,52 @@ pub fn stage_bundle_with(
     Ok(needs)
 }
 
+/// Stage the bundle under the profile lock. A start of an instance that
+/// runs or starts already stops: it touches neither the clone and the
+/// archive that the other start copies from, nor the session record of
+/// the running instance. None then, after the line that says so. The shim
+/// takes the lock again for its life.
+pub fn stage_locked(
+    profile: &Profile,
+    name: &str,
+    bundle: Option<&HostBundle>,
+) -> Result<Option<bool>> {
+    let _lock = match super::lock::ProfileLock::take(profile) {
+        Ok(l) => l,
+        Err(super::lock::LockError::Held { pid }) => {
+            eprintln!("{}", text::profile_running(name, pid.unwrap_or(0)));
+            return Ok(None);
+        }
+        Err(super::lock::LockError::Io(e)) => {
+            return Err(e).with_context(|| text::cannot_lock(&profile.lock()))
+        }
+    };
+    Ok(Some(match bundle.map(|b| stage_bundle(profile, b)) {
+        None => false,
+        Some(Ok(copy)) => copy,
+        // The copy in the guest stays usable: one line, no refusal.
+        Some(Err(e)) => {
+            eprintln!("{e:#}");
+            false
+        }
+    }))
+}
+
+/// The clone in the profile has the version and build of the host bundle,
+/// and its archive is complete (a written archive has its final name).
+fn staged(profile: &Profile, bundle: &HostBundle) -> bool {
+    let archive = bundle.archive_path(profile);
+    if !std::fs::metadata(&archive).is_ok_and(|m| m.is_file() && m.len() > 0) {
+        return false;
+    }
+    appcopy::read(&bundle.clone_path(profile))
+        .is_ok_and(|c| c.version == bundle.version && c.build == bundle.build)
+}
+
 /// The executable of the session's Dock face: `macvm/shims/<NAME>.app`,
 /// built or rebuilt when it is missing or from another paddock version.
 /// Instance N of an app has its own face, `<NAME>--N.app`, named
-/// `ChatGPT N (paddock)`, so the Dock tells the instances apart.
+/// `Sample Notes N (paddock)`, so the Dock tells the instances apart.
 pub fn shim_exe(
     layout: &Layout,
     name: &str,

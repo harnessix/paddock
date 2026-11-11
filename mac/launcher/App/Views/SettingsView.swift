@@ -13,23 +13,59 @@ struct SettingsView: View {
 
     @State private var pane: Pane? = .general
 
+    /// One row of an outline. `List(_:children:)` is an NSOutlineView, which
+    /// is what the UI tests query with `app.outlines`.
+    private struct Node: Identifiable {
+        let pane: Pane
+        var id: Pane { pane }
+        var children: [Node]? { nil }
+    }
+
+    private var nodes: [Node] { Pane.allCases.map { Node(pane: $0) } }
+
     var body: some View {
         NavigationSplitView {
-            List(selection: $pane) {
-                Label { Text("General") } icon: { DecorativeSymbol(name: "gearshape") }.tag(Pane.general)
-                Label { Text("Storage") } icon: { DecorativeSymbol(name: "internaldrive") }.tag(Pane.storage)
-                Label { Text("Network") } icon: { DecorativeSymbol(name: "network") }.tag(Pane.network)
-                Label { Text("Advanced") } icon: { DecorativeSymbol(name: "wrench.and.screwdriver") }.tag(Pane.advanced)
+            List(nodes, children: \.children, selection: $pane) { node in
+                Button {
+                    pane = node.pane
+                } label: {
+                    paneLabel(node.pane)
+                }
+                .buttonStyle(.plain)
+                .tag(node.pane)
+                .accessibilityIdentifier("settings-" + node.pane.rawValue)
             }
             .listStyle(.sidebar)
+            .scrollContentBackground(.hidden)
+            .background(Color(nsColor: .windowBackgroundColor))
             .navigationSplitViewColumnWidth(170)
         } detail: {
             switch pane ?? .general {
             case .general: GeneralPane()
-            case .storage: StoragePane()
+            case .storage: StorageView()
             case .network: NetworkPane()
             case .advanced: AdvancedPane()
             }
+        }
+        .accessibilityIdentifier("settings-root")
+        .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    @ViewBuilder
+    private func paneLabel(_ pane: Pane) -> some View {
+        switch pane {
+        case .general:
+            Label { Text("General").labelInk() } icon: { DecorativeSymbol(name: "gearshape") }
+                .accessibilityLabel(Text("General"))
+        case .storage:
+            Label { Text("Storage").labelInk() } icon: { DecorativeSymbol(name: "internaldrive") }
+                .accessibilityLabel(Text("Storage"))
+        case .network:
+            Label { Text("Network").labelInk() } icon: { DecorativeSymbol(name: "network") }
+                .accessibilityLabel(Text("Network"))
+        case .advanced:
+            Label { Text("Advanced").labelInk() } icon: { DecorativeSymbol(name: "wrench.and.screwdriver") }
+                .accessibilityLabel(Text("Advanced"))
         }
     }
 }
@@ -50,23 +86,25 @@ struct GeneralPane: View {
                 if let loginError { ProblemLine { Text(verbatim: loginError) } }
                 Toggle(isOn: $showInMenuBar) {
                     Text("Show in menu bar")
-                    Text("When this is off, open paddock for Mac from the Applications folder to get the window and this setting back.")
+                    Text("When this is off, open paddock for Mac from the Applications folder to get the window and this setting back.").labelInk()
                 }
                 Toggle(isOn: $keepRunning) {
                     Text("Keep running apps when paddock for Mac quits")
-                    Text("When this is off, quitting stops each app and saves its state.")
+                    Text("When this is off, quitting stops each app and saves its state.").labelInk()
                 }
                 Picker("Notify when a question waits longer than", selection: $notifyAfter) {
                     Text("30 s").tag(30)
                     Text("2 min").tag(120)
                     Text("Never").tag(0)
                 }
+                .menuAuditAction()
             }
             Section {
                 LabeledContent("Language") {
                     Text("paddock for Mac uses the language of macOS.")
                 }
             }
+            AboutSection()
         }
         .formStyle(.grouped)
     }
@@ -78,81 +116,6 @@ struct GeneralPane: View {
         } catch {
             loginError = error.localizedDescription
             openAtLogin = SMAppService.mainApp.status == .enabled
-        }
-    }
-}
-
-@MainActor
-struct StoragePane: View {
-    @Environment(LauncherStore.self) private var store
-    @State private var confirmClear = false
-
-    var body: some View {
-        Form {
-            if let disk = store.disk, let total = disk.totalBytes {
-                let used = disk.usedByPaddockBytes ?? 0
-                Section {
-                    ProgressView(value: Double(used), total: Double(max(total, 1)))
-                        .accessibilityLabel(Text(StorageCopy.usage(used: used, total: total)))
-                    Text(StorageCopy.usage(used: used, total: total))
-                }
-            }
-            Section {
-                if let info = store.golden.info {
-                    LabeledContent("Base image") { Text(verbatim: Format.gb(info.sizeBytes)) }
-                }
-                ForEach(store.apps) { app in
-                    if let sizes = app.json.sizes {
-                        LabeledContent {
-                            Text(UIText("App copy %@ · Data %@ · Saved state %@", Format.gb(sizes.appCopy),
-                                        Format.gb(sizes.data), Format.gb(sizes.savedState)))
-                        } label: {
-                            Text(verbatim: app.name)
-                        }
-                    }
-                }
-                if let ipsw = store.disk?.ipswBytes, ipsw > 0 {
-                    LabeledContent("Restore image download") {
-                        HStack {
-                            Text(verbatim: Format.gb(ipsw))
-                            Button("Delete") { Task { try? await store.service?.execute(PaddockArgs.deleteRestoreImage) } }
-                                .disabled(!store.golden.isReady)
-                        }
-                    }
-                }
-                if let trash = store.disk?.trashBytes {
-                    LabeledContent("Trash of removed apps") {
-                        HStack {
-                            Text(verbatim: Format.gb(trash))
-                            Button("Reveal") { SystemLinks.reveal(store.disk?.trashDir ?? NSHomeDirectory() + "/.Trash") }
-                        }
-                    }
-                }
-            }
-            Section {
-                Button("Clear all saved states") { confirmClear = true }
-                    .disabled(store.apps.allSatisfy { $0.state.isActive })
-                LabeledContent("Location") {
-                    HStack {
-                        Text(verbatim: Format.tildePath(store.golden.info?.dir ?? "", home: NSHomeDirectory()))
-                        Button("Location…") { if let dir = store.golden.info?.dir { SystemLinks.reveal(dir) } }
-                    }
-                }
-                Text("To move it, remove the base image and build it in a new location.")
-            }
-        }
-        .formStyle(.grouped)
-        .confirmationDialog(Text("Clear the saved state of every app?"), isPresented: $confirmClear) {
-            Button("Clear", role: .destructive) {
-                Task {
-                    for app in store.apps where !app.state.isActive {
-                        await store.detail(for: app.name).clearSavedState()
-                    }
-                }
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("The next start of each app is cold, about 30 s. Your data in the apps stays.")
         }
     }
 }
@@ -177,10 +140,12 @@ struct NetworkPane: View {
                 } label: {
                     Text("Default for new apps")
                 }
+                .menuAuditAction()
                 Picker("Panel position", selection: $panelPosition) {
                     Text("Next to the app's window").tag("window")
                     Text("Center of the screen").tag("center")
                 }
+                .menuAuditAction()
                 .onChange(of: panelPosition) { _, value in
                     Task { try? await store.service?.execute(PaddockArgs.panelPosition(value)) }
                 }
@@ -203,7 +168,7 @@ struct AdvancedPane: View {
             Section {
                 Toggle(isOn: $showCommands) {
                     Text("Show the paddock command for each action")
-                    Text("Adds a Terminal row under each sheet with the same command, for support.")
+                    Text("Adds a Terminal row under each sheet with the same command, for support.").labelInk()
                 }
             }
             Section {
@@ -268,13 +233,14 @@ struct UninstallSheet: View {
                 Toggle(isOn: $plan.removeGolden) { Text(UninstallCopy.golden(sizes.golden)) }
                 Toggle(isOn: $plan.removeData) {
                     Text(UninstallCopy.data(sizes.data))
-                    Text("Off: the data of each app goes to the Trash.")
+                    Text("Off: the data of each app goes to the Trash.").labelInk()
                 }
                 .disabled(!plan.removeApps)
                 Text("This removes everything paddock built. The paddock command from Homebrew stays; remove it with \"brew uninstall paddock\". The original apps in /Applications stay.")
+                    .labelInk()
                     .fixedSize(horizontal: false, vertical: true)
                 CopyField(command: ShellCommands.brewUninstall)
-                ForEach(plan.commands(apps: store.apps.map(\.name)), id: \.self) { args in
+                ForEach(plan.commands(apps: Array(Set(store.apps.map(\.instance.app))).sorted()), id: \.self) { args in
                     CommandEcho(args: args)
                 }
                 if working { ProgressView().progressViewStyle(.linear).accessibilityLabel(Text("Removing")) }
@@ -295,5 +261,51 @@ struct UninstallSheet: View {
         }
         .padding(20)
         .frame(width: 520)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(Text("Uninstall paddock for Mac"))
+    }
+}
+
+/// The versions of paddock for Mac and paddock, and where the launcher
+/// runs from, with the move into ~/Applications.
+@MainActor
+struct AboutSection: View {
+    @Environment(LauncherStore.self) private var store
+
+    var body: some View {
+        let place = SelfInstaller.place
+        Section {
+            LabeledContent("Version") {
+                Text(LibraryCopy.versions(launcher: SelfInstaller.version, paddock: paddockVersion))
+                    .labelInk()
+                    .textSelection(.enabled)
+                    .accessibilityIdentifier("about-versions")
+            }
+            LabeledContent("paddock needed") {
+                Text(verbatim: VersionGate.current.minimumText + "+")
+            }
+            LabeledContent("Location") {
+                HStack {
+                    Text(SelfInstall.locationLine(place))
+                    if SelfInstall.shouldOffer(place, declined: false) {
+                        Button("Move to Applications…") { SelfInstaller.move() }
+                            .accessibilityIdentifier("about-move")
+                    }
+                }
+            }
+        } header: {
+            Text("About")
+        }
+    }
+
+    private var paddockVersion: String? {
+        if case .found(_, let verdict) = store.binary {
+            switch verdict {
+            case .ok(let version), .tooNew(let version): return version
+            case .tooOld(let have, _): return have
+            case .unreadable: return nil
+            }
+        }
+        return nil
     }
 }

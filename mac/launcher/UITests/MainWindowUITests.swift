@@ -23,13 +23,13 @@ final class MainWindowUITests: XCTestCase {
             ("The VM stopped: out of memory", "Error: The VM stopped: out of memory"),
             ("Build the base image to start this app.", "Blocked: Build the base image to start this app."),
         ]
-        let status = app.element("status-text-ChatGPT")
+        let status = app.element("status-text-Sample Notes")
         XCTAssertTrue(status.waitForExistence(timeout: 10))
         for (text, spoken) in steps {
             let shows = NSPredicate(format: "label BEGINSWITH %@ OR value BEGINSWITH %@", text, text)
             expectation(for: shows, evaluatedWith: status)
             waitForExpectations(timeout: 8)
-            let row = app.element("app-row-ChatGPT")
+            let row = app.element("app-row-Sample Notes")
             XCTAssertTrue(row.label.contains(spoken), "\(row.label) has no \(spoken)")
         }
     }
@@ -116,7 +116,11 @@ final class MainWindowUITests: XCTestCase {
         let app = fake.launch()
         app.openStatusMenu()
         XCTAssertTrue(app.menuItems["1 app keeps running"].waitForExistence(timeout: 5))
-        app.menuItems["Quit paddock for Mac"].click()
+        // The app menu has the same title, from the bundle name "paddock for Mac".
+        // The click belongs to the status menu this test just opened.
+        let quit = app.statusItems.firstMatch.menuItems["Quit paddock for Mac"]
+        XCTAssertTrue(quit.waitForExistence(timeout: 5))
+        quit.click()
         XCTAssertTrue(app.wait(for: .notRunning, timeout: 10))
         XCTAssertTrue(fake.calls("app stop").isEmpty)
     }
@@ -124,11 +128,11 @@ final class MainWindowUITests: XCTestCase {
     func testQuitStopsAppsWhenTheSettingIsOff() {
         let fake = Fake("ready", env: ["PADDOCK_LAUNCHER_KEEP_RUNNING": "0"])
         let app = fake.launch()
-        XCTAssertTrue(app.element("app-row-ChatGPT").waitForExistence(timeout: 10))
+        XCTAssertTrue(app.element("app-row-Sample Notes").waitForExistence(timeout: 10))
         app.typeKey("q", modifierFlags: .command)
-        XCTAssertTrue(fake.waitForCall("app stop ChatGPT"))
+        XCTAssertTrue(fake.waitForCall("app stop Sample Notes"))
         XCTAssertEqual(app.state, .runningForeground, "waits for saved")
-        fake.inject(#"{"v":1,"kind":"session","app":"ChatGPT","state":"saved","since":"2026-11-06T10:00:00Z"}"#)
+        fake.inject(#"{"v":1,"kind":"session","app":"Sample Notes","state":"saved","since":"2026-11-06T10:00:00Z"}"#)
         XCTAssertTrue(app.wait(for: .notRunning, timeout: 15))
     }
 
@@ -137,21 +141,22 @@ final class MainWindowUITests: XCTestCase {
     func testRemoveAppSheet() {
         let fake = Fake("ready")
         let app = fake.launch()
-        app.selectApp("Slack")
+        app.selectApp("Sample Mail")
         app.buttons["remove-app-button"].click()
         let body = app.element("remove-body")
         XCTAssertTrue(body.waitForExistence(timeout: 5))
         let text = body.text
-        XCTAssertTrue(text.contains("(1.2 GB)") && text.contains("(2.0 GB)") && text.contains("(3.4 GB)"), text)
+        XCTAssertTrue(text.contains("(3.2 GB with its saved state 2.0 GB)") && text.contains("(3.4 GB)"), text)
+        XCTAssertTrue(text.contains("paddock trash for 7 days"), text)
         app.buttons["remove-confirm"].click()
-        waitForText(app, "Slack removed. 6.6 GB freed.")
-        XCTAssertEqual(fake.calls("app remove"), ["app remove Slack --json"])
+        waitForText(app, "Sample Mail removed. 6.6 GB freed.")
+        XCTAssertEqual(fake.calls("app remove"), ["app remove Sample Mail --yes --json"])
     }
 
     func testRemoveWithDeleteData() {
         let fake = Fake("stopped")
         let app = fake.launch()
-        app.selectApp("ChatGPT")
+        app.selectApp("Sample Notes")
         app.buttons["remove-app-button"].click()
         let deleteData = app.checkBoxes["remove-delete-data"]
         XCTAssertTrue(deleteData.waitForExistence(timeout: 5))
@@ -160,16 +165,16 @@ final class MainWindowUITests: XCTestCase {
         expectation(for: on, evaluatedWith: deleteData)
         waitForExpectations(timeout: 5)
         app.buttons["remove-confirm"].click()
-        XCTAssertTrue(fake.waitForCall("app remove ChatGPT --delete-data --json"), "\(fake.calls.map(\.line))")
+        XCTAssertTrue(fake.waitForCall("app remove Sample Notes --delete-data --yes --json"), "\(fake.calls.map(\.line))")
     }
 
     func testRemoveRunningAppIsBlocked() {
         let app = Fake("ready").launch()
-        app.selectApp("ChatGPT")
+        app.selectApp("Sample Notes")
         app.buttons["remove-app-button"].click()
         XCTAssertTrue(app.buttons["remove-confirm"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["remove-confirm"].isEnabled)
-        waitForText(app, "Stop the app first.")
+        waitForText(app, "Stop Sample Notes first.")
         XCTAssertTrue(app.sheets.buttons["Stop"].exists)
     }
 
@@ -189,7 +194,7 @@ final class MainWindowUITests: XCTestCase {
         XCTAssertEqual(app.text("uninstall-done"),
                        "Done. 38.5 GB freed. You can now drag paddock for Mac to the Trash.")
         let removals = fake.calls.map(\.line).filter { $0.contains("remove") }
-        XCTAssertEqual(removals, ["app remove ChatGPT --json", "app remove Slack --json", "macvm remove --json"])
+        XCTAssertEqual(removals, ["app remove Sample Notes --yes --json", "app remove Sample Mail --yes --json", "macvm remove --yes --json"])
         XCTAssertFalse(fake.calls.contains { $0.line.contains("brew") })
     }
 
@@ -236,7 +241,7 @@ final class MainWindowUITests: XCTestCase {
     func testNoPollingWithAHealthyStream() {
         let fake = Fake("ready")
         let app = fake.launch()
-        app.selectApp("ChatGPT")
+        app.selectApp("Sample Notes")
         app.openTab("Grants")
         app.openTab("Overview")
         let start = Int(Date().timeIntervalSince1970)

@@ -429,14 +429,17 @@ pub fn run_app_mode(env: &HostEnv, o: &crate::app::AppOptions, wait: Wait) -> Re
         .map(|r| super::shares::Root {
             path: r.clone(),
             read_only: o.ro.contains(r),
+            unprotected: false,
         })
         .collect();
+    let (roots, saved_network) = super::grants::for_start(&profile, &roots);
     let built = super::shares::build(
         &o.name,
         &roots,
         &profile,
         None,
         &env.home,
+        &super::grants::paddock_dirs(env),
         crate::app::unprotected_workspaces(env, &o.name)?,
     )?;
     for w in &built.warnings {
@@ -469,17 +472,9 @@ pub fn run_app_mode(env: &HostEnv, o: &crate::app::AppOptions, wait: Wait) -> Re
         app_profile.as_ref(),
         cfg,
     )?;
-    let will_copy = match bundle
-        .as_ref()
-        .map(|b| super::host_app::stage_bundle(&profile, b))
-    {
-        None => false,
-        Some(Ok(copy)) => copy,
-        Some(Err(e)) => {
-            // The copy in the guest stays usable: one line, no refusal.
-            eprintln!("{e:#}");
-            false
-        }
+    // A start of an instance that runs or starts already stops here.
+    let Some(will_copy) = super::host_app::stage_locked(&profile, &o.name, bundle.as_ref())? else {
+        return Ok(EXIT_REFUSED);
     };
     let shim = super::host_app::shim_exe(
         &layout,
@@ -490,7 +485,7 @@ pub fn run_app_mode(env: &HostEnv, o: &crate::app::AppOptions, wait: Wait) -> Re
         super::version::paddock_version(),
     )?;
     let network = match o.network {
-        None => "ask".to_string(),
+        None => saved_network.unwrap_or_else(|| "ask".to_string()),
         Some(crate::spec::Network::Host) => bail!(text::network_host_refused()),
         Some(crate::spec::Network::None) => "none".to_string(),
         Some(crate::spec::Network::Egress) => "egress".to_string(),
@@ -603,6 +598,7 @@ pub fn run_app_mode(env: &HostEnv, o: &crate::app::AppOptions, wait: Wait) -> Re
             .map(|(_, path, ro)| RecordShare {
                 path: path.clone(),
                 read_only: *ro,
+                ..Default::default()
             })
             .collect(),
         display_name: super::host_running::display_name(&o.name, n, bundle.as_ref()),

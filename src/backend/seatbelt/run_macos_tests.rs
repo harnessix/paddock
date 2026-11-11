@@ -626,6 +626,7 @@ fn the_devices_come_over_the_socket_and_secret_files_are_fifos() {
         &[],
         None,
         secrets.clone(),
+        None,
     )
     .expect("the devices of a Seatbelt run");
     assert!(w.spec.notices.is_empty(), "{:?}", w.spec.notices);

@@ -394,7 +394,11 @@ fn three_deaths_make_the_device_failed_with_how_to_fix_and_restart_clears_it() {
         &c,
     );
     assert_eq!(d.call(&call(), b"1").unwrap(), b"status: exit 0\n\n1");
-    let sock = state::instance_dir(&c.env, "tool", "box1").join("dev.sock");
+    let sock = state::InstanceState::list(&c.env)
+        .into_iter()
+        .find(|instance| instance.device == "tool" && instance.caller == "box1")
+        .unwrap()
+        .socket;
     // The supervisor dies (the socket goes): the next request restarts it
     // after the backoff, twice; the third death is `failed`.
     let t0 = Instant::now();

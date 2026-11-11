@@ -30,6 +30,9 @@ pub type Waker = Arc<dyn Fn() + Send + Sync>;
 /// The work of one `data.prepare`, run in a thread of its own.
 pub type PrepareJob = Box<dyn FnOnce(&super::data_copy::Watch) -> Result<String, Fail> + Send>;
 
+/// The count of the open files per share, run in a thread of its own.
+pub type OpenFilesJob = Box<dyn FnOnce() -> Result<BTreeMap<String, u32>, Fail> + Send>;
+
 /// What the agent says about itself in `hello`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct HelloInfo {
@@ -88,15 +91,18 @@ pub trait Platform {
     fn front_pid(&mut self) -> Option<u32>;
     /// The Accessibility facts of one window, with the 1 s timeout.
     fn ax_info(&mut self, w: &RawWindow) -> AxInfo;
-    /// The corner radius of a window in points, measured on its image
-    /// (`capture.rs`). None without the image: no Screen Recording, a
-    /// window not drawn yet, a platform without windows.
+    /// The corner radius of a window in points, measured on its image.
+    /// None on every platform now: a window capture in the guest makes
+    /// macOS ask for Screen Recording, so the host uses the radius of the
+    /// guest's macOS version.
     fn window_radius(&mut self, _w: &RawWindow) -> Option<f64> {
         None
     }
     /// Keep one Accessibility observer per followed pid.
     fn observe(&mut self, pids: &BTreeSet<u32>);
-    fn window_op(&mut self, w: &Window, op: WindowOp) -> Result<(), Fail>;
+    /// Run `op` on window `w`. After a move, the frame that the window
+    /// has now, when the platform can read it: the reply carries it.
+    fn window_op(&mut self, w: &Window, op: WindowOp) -> Result<Option<Frame>, Fail>;
     /// Launch the app and give its pid.
     fn launch(
         &mut self,
@@ -227,6 +233,11 @@ pub trait Platform {
         role: &str,
         value: &str,
     ) -> Result<(), Fail>;
+    /// `shares.open`: the job that counts the open files of the guest
+    /// per share (`files_open.rs`).
+    fn open_files(&mut self) -> OpenFilesJob {
+        Box::new(super::files_open::count)
+    }
 }
 
 #[cfg(test)]
@@ -303,6 +314,8 @@ pub mod fake {
         pub ax_presses: Vec<(u32, Vec<usize>, String)>,
         pub ax_sets: Vec<(u32, Vec<usize>, String, String)>,
         pub ax_action_result: Option<Fail>,
+        /// The answer of `shares.open`: `None` is an error.
+        pub open_files: Option<BTreeMap<String, u32>>,
         /// The screen lock that the fake reports, and the reads of it.
         pub locked: bool,
         pub lock_reads: u32,
@@ -421,7 +434,7 @@ pub mod fake {
             self.st().observed = pids.clone();
         }
 
-        fn window_op(&mut self, w: &Window, op: WindowOp) -> Result<(), Fail> {
+        fn window_op(&mut self, w: &Window, op: WindowOp) -> Result<Option<Frame>, Fail> {
             let mut st = self.st();
             st.ops.push((w.id, op));
             if let Some(e) = &st.op_result {
@@ -430,9 +443,10 @@ pub mod fake {
             if let WindowOp::Move(f) = op {
                 if let Some(raw) = st.windows.iter_mut().find(|x| x.id == w.id) {
                     raw.bounds = f;
+                    return Ok(Some(f));
                 }
             }
-            Ok(())
+            Ok(None)
         }
 
         fn launch(
@@ -683,6 +697,11 @@ pub mod fake {
                 Some(e) => Err(e.clone()),
                 None => Ok(()),
             }
+        }
+
+        fn open_files(&mut self) -> OpenFilesJob {
+            let r = self.st().open_files.clone();
+            Box::new(move || r.ok_or((ErrorCode::Io, "no lsof".to_string())))
         }
     }
 }

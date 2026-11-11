@@ -25,6 +25,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
     }
 
+    /// An app dropped on the Dock icon, or opened with paddock for Mac from
+    /// Finder: the same review sheet as a drop on the window.
+    func application(_ application: NSApplication, open urls: [URL]) {
+        let paths = urls.filter(\.isFileURL).map(\.path)
+        Task {
+            await AppContainer.start()
+            guard AppContainer.store.binary.isUsable else {
+                AppContainer.showMain(nil)
+                return
+            }
+            AddCenter.shared.receive(paths)
+        }
+    }
+
     /// Closing the window keeps the menu bar item and running apps.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false

@@ -598,7 +598,9 @@ pub fn cmd(env: &HostEnv, name: &str, n: u32, json: bool) -> anyhow::Result<i32>
     }
     let status = build(&inputs);
     if json {
-        println!("{}", serde_json::to_string_pretty(&status)?);
+        let mut v = serde_json::to_value(&status)?;
+        super::grants_cli::extend_status(&mut v, &inputs.profile, inputs.record.as_ref());
+        println!("{}", serde_json::to_string_pretty(&v)?);
     } else {
         print!("{}", render(&status));
     }

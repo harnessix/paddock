@@ -7,15 +7,10 @@ extension LauncherStore {
 
     /// `Start`. paddock refuses a start that cannot work; the refusal shows
     /// in place before anything starts.
+    /// `Start` and `Resume`. `name` is a sidebar key: the profile name,
+    /// or `NAME--N` for instance N. A refusal shows in place.
     public func startApp(_ name: String) async {
-        guard let service else { return }
-        appErrors[name] = nil
-        do {
-            let result = try await service.perform(PaddockArgs.run(name))
-            if !result.ok { appErrors[name] = LauncherStore.startError(app: name, result: result) }
-        } catch {
-            appErrors[name] = .command(title: UIText("%@ did not start", name), line: LauncherStore.line(of: error))
-        }
+        await launch(name)
     }
 
     public static func startError(app: String, result: ResultJSON) -> LauncherError {
@@ -32,12 +27,7 @@ extension LauncherStore {
     }
 
     public func stopApp(_ name: String) async {
-        guard let service else { return }
-        do {
-            try await service.execute(PaddockArgs.stop(name))
-        } catch {
-            appErrors[name] = .command(title: UIText("%@ did not stop", name), line: LauncherStore.line(of: error))
-        }
+        await halt(name)
     }
 
     /// `Open`: brings the running app's windows forward.
@@ -50,7 +40,7 @@ extension LauncherStore {
         guard let app = app(named: name) else { return }
         if app.state.isRunning {
             await openApp(name)
-        } else if app.state.canStart {
+        } else if app.state.canStart || app.state.canResume {
             await startApp(name)
         }
     }
@@ -59,9 +49,9 @@ extension LauncherStore {
     public func toggleSelected() async {
         guard let app = selectedApp else { return }
         if app.state.canStop {
-            await stopApp(app.name)
+            await stopApp(app.key)
         } else if app.state.canStart {
-            await startApp(app.name)
+            await startApp(app.key)
         }
     }
 
@@ -96,11 +86,18 @@ extension LauncherStore {
 
     /// Runs `macvm setup --json` as a child. Quitting the launcher pauses
     /// it, closing the window does not.
+    /// paddock's setup has no `--dir`: the base image stays in the folder of
+    /// `macvm status`. A rebuild is `macvm update` (`updateGolden`).
     public func build(dir: String? = nil, ipsw: String? = nil, resume: Bool = false, rebuild: Bool = false) {
+        if rebuild {
+            updateGolden()
+            return
+        }
         guard let service, !buildRunning else { return }
         buildRunning = true
+        buildNote = nil
         if case .building = golden {} else { golden = .building(BuildProgress()) }
-        let args = PaddockArgs.setup(dir: dir, ipsw: ipsw, resume: resume, rebuild: rebuild)
+        let args = LibraryArgs.setup(ipsw: ipsw, resume: resume)
         buildTask = Task { [weak self] in
             do {
                 for try await line in service.setup(args) {
@@ -118,25 +115,12 @@ extension LauncherStore {
 
     /// `Pause`: the download step only.
     public func pauseBuild() async {
-        try? await service?.execute(PaddockArgs.setupPause)
-        if case .building(var progress) = golden {
-            progress.paused = true
-            progress.rateSince = nil
-            golden = .building(progress)
-        }
+        await requestPause()
     }
 
     /// `Resume` or `Try Again`: continues from paddock's manifest.
     public func resumeBuild() {
-        if case .building(var progress) = golden {
-            progress.paused = false
-            golden = .building(progress)
-        }
-        if buildRunning {
-            Task { try? await self.service?.execute(PaddockArgs.setup(dir: nil, ipsw: nil, resume: true)) }
-        } else {
-            build(resume: true)
-        }
+        Task { await self.requestResume() }
     }
 
     /// `Stop` in the cancel sheet. The downloaded part stays.
@@ -169,51 +153,23 @@ extension LauncherStore {
     }
 
     /// `Remove Base Image…` then `Remove`.
-    public func removeGolden() async -> Int64? {
-        guard let service else { return nil }
-        do {
-            let result = try await service.perform(PaddockArgs.macvmRemove)
-            if result.ok {
-                golden = .none
-                show(UIText("Base image removed. %@ freed.", Format.gb(result.freedBytes ?? 0)))
-                return result.freedBytes ?? 0
-            }
-            lastError = .command(title: UIText("The base image was not removed"), line: result.error ?? "")
-        } catch {
-            lastError = .command(title: UIText("The base image was not removed"), line: LauncherStore.line(of: error))
-        }
-        return nil
+    public func removeGolden() async -> Bool {
+        await removeBaseImage()
     }
 
     // MARK: Remove app
 
-    /// `Remove` in the remove sheet. Data goes to the Trash unless
+    /// `Remove` in the remove sheet. Data goes to paddock's trash unless
     /// `deleteData` is on.
     @discardableResult
-    public func removeApp(_ name: String, deleteData: Bool) async -> Int64? {
-        guard let service else { return nil }
-        do {
-            let result = try await service.perform(PaddockArgs.remove(name, deleteData: deleteData))
-            guard result.ok else {
-                lastError = .command(title: UIText("%@ was not removed", name), line: result.error ?? "")
-                return nil
-            }
-            apps.removeAll { $0.name == name }
-            details[name] = nil
-            if selection == .app(name) { selection = apps.first.map { .app($0.name) } }
-            let freed = result.freedBytes ?? 0
-            show(UIText("%@ removed. %@ freed.", name, Format.gb(freed)))
-            return freed
-        } catch {
-            lastError = .command(title: UIText("%@ was not removed", name), line: LauncherStore.line(of: error))
-            return nil
-        }
+    public func removeApp(_ name: String, deleteData: Bool) async -> UIText? {
+        await remove(name, deleteData: deleteData)
     }
 
     // MARK: Helpers
 
     /// paddock's own words for a failed call.
-    public static func line(of error: Error) -> String {
+    public nonisolated static func line(of error: Error) -> String {
         switch error {
         case CommandError.failed(_, let line): return line
         case CommandError.badJSON(let output): return output

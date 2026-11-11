@@ -35,8 +35,8 @@ fn du_days_ago() {
 #[test]
 fn du_profile() {
     has(
-        &t::du_profile("5 GiB", "today", "chatgpt 2", "suspended"),
-        &["5 GiB", "profile chatgpt 2", "[suspended]"],
+        &t::du_profile("5 GiB", "today", "sample-notes 2", "suspended"),
+        &["5 GiB", "profile sample-notes 2", "[suspended]"],
     );
 }
 

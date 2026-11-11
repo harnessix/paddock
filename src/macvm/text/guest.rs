@@ -195,6 +195,11 @@ pub fn vsock_no_answer(port: u32, wait: Duration) -> String {
     )
 }
 
+/// The clock command failed without exposing its output.
+pub fn clock_set_failed(code: Option<i32>) -> String {
+    format!("clock.set failed (exit {code:?})")
+}
+
 #[cfg(test)]
 #[path = "guest_tests.rs"]
 mod tests;

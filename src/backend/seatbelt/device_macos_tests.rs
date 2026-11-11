@@ -117,7 +117,20 @@ impl Drop for World {
 fn sandboxed(w: &World, script: &str) -> (i32, String) {
     let paddock = std::env::current_exe().unwrap();
     let spec = sspec::spec(&w.env, &w.def, &w.ctx, &w.plan, &paddock).unwrap();
-    let pol = policy(&w.env, &w.def, &w.ctx, &w.plan, &w.sockets, &paddock).unwrap();
+    let mut pol = policy(&w.env, &w.def, &w.ctx, &w.plan, &w.sockets, &paddock).unwrap();
+    // /usr/bin/python3 may be an xcrun shim into a versioned Xcode folder.
+    // Give this test the selected tools just as an explicit ro mount would.
+    if let Some(out) = Command::new("/usr/bin/xcode-select")
+        .arg("-p")
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+    {
+        let path = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
+        if path.is_absolute() && path.is_dir() {
+            pol.add(real(&path), Access::ReadOnly, "test developer tools");
+        }
+    }
     let profile = w.ctx.dir.join("seatbelt.sb");
     std::fs::write(&profile, crate::seatbelt::render(&pol).unwrap()).unwrap();
     let out = Command::new(SANDBOX_EXEC)

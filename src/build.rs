@@ -1,6 +1,9 @@
 //! Assemble a `SandboxSpec` from the harness profile, the project detectors,
 //! the manifest and the command line, then run the policy engine on it.
 
+mod cleanup;
+use cleanup::{PendingShadow, PendingWorktree};
+
 use crate::detect::{self, git_toplevel, Context};
 use crate::env::HostEnv;
 use crate::gui;
@@ -160,37 +163,6 @@ pub fn discard_worktree(env: &HostEnv, w: &Worktree) {
     }
 }
 
-/// Drops the worktree unless `keep` takes it (the build succeeded).
-struct PendingWorktree<'a> {
-    env: &'a HostEnv,
-    wt: Option<Worktree>,
-}
-
-impl PendingWorktree<'_> {
-    fn keep(&mut self) -> Option<Worktree> {
-        self.wt.take()
-    }
-}
-
-impl Drop for PendingWorktree<'_> {
-    fn drop(&mut self) {
-        if let Some(w) = self.wt.take() {
-            discard_worktree(self.env, &w);
-        }
-    }
-}
-
-/// The run folder of a shadow run while the build can still fail.
-struct PendingShadow(Option<crate::shadow::Plan>);
-
-impl Drop for PendingShadow {
-    fn drop(&mut self) {
-        if let Some(p) = self.0.take() {
-            let _ = p.remove();
-        }
-    }
-}
-
 /// What the run left in its worktree: commits, uncommitted changes and the
 /// commands to review, merge or remove it. Empty lines are dropped.
 pub fn worktree_report(env: &HostEnv, w: &Worktree) -> String {
@@ -270,6 +242,7 @@ pub fn worktree_counts(env: &HostEnv, w: &Worktree) -> (usize, Option<usize>) {
 }
 
 pub struct Built {
+    pub horse: bool,
     /// A detached run (`paddock run --detach`): `paddock-host done` ends it.
     pub detach: bool,
     /// For a child sandbox: where it came from. Its broker takes the depth
@@ -285,9 +258,8 @@ pub struct Built {
     /// Who answers host passthrough requests. None means the user, through
     /// the panel, a notification or `paddock approvals`.
     pub approver: Option<std::sync::Arc<dyn crate::broker::Approver>>,
-    /// The sandbox that started this one, for the `parent` scope of paddock
-    /// kv. None for a sandbox that the user started. The spawn child build
-    /// sets it from the job that the parent's paddock wrote.
+    /// The parent for the `parent` scope of paddock kv.
+    /// None for a sandbox that the user started; spawn supplies it.
     pub parent: Option<String>,
     /// For a spawned sandbox: the devices of its parent. It gets no other.
     pub device_ceiling: Option<Vec<String>>,
@@ -295,8 +267,7 @@ pub struct Built {
     pub devices: Vec<String>,
     /// The run shares session history with the host (`paddock wrap` starts).
     pub shared_history: bool,
-    /// Serve the built-in `echo` device whatever the user configuration says.
-    /// `paddock doctor --escape` tests the device mount with it.
+    /// Serve the echo device for `paddock doctor --escape`.
     pub test_devices: bool,
     /// Show the run in a live view when it has no terminal (view.rs).
     /// Off for the escape probe and app windows.
@@ -387,6 +358,7 @@ pub fn build(env: &HostEnv, opts: &Options) -> Result<Built> {
 }
 
 pub fn build_with(env: &HostEnv, opts: &Options, harness: Harness) -> Result<Built> {
+    let memory = crate::memory::limit::Config::load(env)?;
     let project = resolve_project(opts.project.as_deref())?;
     // The project path is resolved, so compare it with the resolved home
     // too: `$HOME` may name a symlink.
@@ -414,7 +386,7 @@ pub fn build_with(env: &HostEnv, opts: &Options, harness: Harness) -> Result<Bui
     // The settings and the sandbox home belong to the repository; the agent
     // works in the worktree.
     let home_key = project.clone();
-    let worktree = if let Some(c) = &opts.child {
+    let worktree = if let Some(c) = opts.child.as_ref().filter(|c| !c.trainer) {
         Some(crate::spawn::create_worktree(env, &project, c)?)
     } else if opts.worktree {
         Some(create_worktree(
@@ -507,6 +479,7 @@ pub fn build_with(env: &HostEnv, opts: &Options, harness: Harness) -> Result<Bui
         env.gid,
         &env.user,
     );
+    spec.memory_high = memory.high;
     spec.network = opts.network.or(m.network.mode).unwrap_or_default();
     spec.publish = m.network.publish.clone();
     // An isolated login is another machine; a host login keeps the host's
@@ -579,7 +552,7 @@ pub fn build_with(env: &HostEnv, opts: &Options, harness: Harness) -> Result<Bui
             count += 1;
             spec.set_env(k, v.clone(), "host env (inherited)");
         }
-        for d in &env.path {
+        for d in crate::tack::tackshims::host_path(env) {
             spec.inherit_path.push(d.clone());
         }
         // Names only, never values.
@@ -991,6 +964,7 @@ pub fn build_with(env: &HostEnv, opts: &Options, harness: Harness) -> Result<Bui
         .or(m.backend.clone())
         .unwrap_or_else(|| "auto".into());
     Ok(Built {
+        horse: false,
         spawn: None,
         stdin: None,
         home_key,
@@ -1467,8 +1441,8 @@ mod tests {
                 .and_then(|m| m.src.clone())
         };
         let shared = npm(pkg.join("bin/agent.js")).expect("an npm harness gets .npm");
-        assert!(shared.ends_with("npm/upper"), "{}", shared.display());
-        assert!(shared.starts_with(crate::storage::layers::projects_root(&env)));
+        assert!(shared.ends_with("npm"), "{}", shared.display());
+        assert!(shared.starts_with(crate::storage::package_cache::root(&env)));
         assert_eq!(npm(PathBuf::from("/usr/bin/true")), None);
     }
 

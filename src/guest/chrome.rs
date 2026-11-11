@@ -2,7 +2,7 @@
 //! height and its buttons from the Accessibility frames, the corner radius
 //! from the alpha of the window's image, when the agent measures the
 //! radius again, and the parts of a full screen window that the host
-//! shows already. `ax.rs` reads the frames, `capture.rs` the image.
+//! shows already. `ax.rs` reads the frames.
 
 use crate::macvm::proto::{Frame, Level, Window};
 use std::collections::BTreeMap;

@@ -1,0 +1,8 @@
+{"v":1,"t":"2026-11-06T12:01:09Z","kind":"grant","app":"sample-notes","what":"rule","action":"add","detail":"allow api.example.com:443 always","source":"question_panel","applies":"live","id":"r7"}
+{"v":1,"t":"2026-11-06T12:10:00Z","kind":"grant","app":"sample-notes","what":"rule","action":"add","detail":"deny *.tracker.example.net:* always","source":"you","applies":"live","id":"r8"}
+{"v":1,"t":"2026-11-06T12:11:00Z","kind":"grant","app":"sample-notes","what":"rule","action":"remove","detail":"deny *.tracker.example.net:* always","source":"you","applies":"live","id":"r8"}
+{"v":1,"t":"2026-11-06T12:12:00Z","kind":"grant","app":"sample-notes","what":"folder","action":"add","detail":"~/Projects rw","source":"you","applies":"live"}
+{"v":1,"t":"2026-11-06T12:13:00Z","kind":"grant","app":"sample-notes","what":"folder","action":"change","detail":"~/Projects ro","source":"you","applies":"reopen_files"}
+{"v":1,"t":"2026-11-06T12:14:00Z","kind":"grant","app":"sample-notes","what":"clipboard","action":"change","detail":"to-app off","source":"you","applies":"live"}
+{"v":1,"t":"2026-11-06T12:15:00Z","kind":"grant","app":"sample-notes","what":"device","action":"add","detail":"camera","source":"profile","applies":"next_start"}
+{"v":1,"t":"2026-11-06T12:16:00Z","kind":"grant","app":"sample-notes","what":"network","action":"change","detail":"allowlist","source":"you","applies":"live"}

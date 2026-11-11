@@ -1,0 +1,6 @@
+{
+  "v": 1,
+  "running": true,
+  "profile": {"to_app": true, "from_app": false},
+  "session": {"to_app": true, "from_app": false}
+}

@@ -6,7 +6,7 @@
 //! A connection belongs to the app when the identity that the guest proxy
 //! found names it:
 //! - its bundle identifier is the app's, or starts with the app's and a
-//!   dot (`com.openai.chat.helper`),
+//!   dot (`com.example.notes.helper`),
 //! - its outermost app (`parent_app`, a child of the app such as a shell
 //!   or a `curl`) is the app, by the same test,
 //! - or its executable lies inside the copy of the app bundle in the guest
@@ -99,10 +99,10 @@ mod tests {
 
     fn owner() -> AppOwner {
         AppOwner::new(
-            "com.openai.chat",
+            "com.example.notes",
             &[
-                Path::new("/Users/paddock/Applications/ChatGPT.app/"),
-                Path::new("/Volumes/paddock/apps/ChatGPT.app"),
+                Path::new("/Users/paddock/Applications/Sample Notes.app/"),
+                Path::new("/Volumes/paddock/apps/Sample Notes.app"),
             ],
         )
     }
@@ -120,15 +120,15 @@ mod tests {
     #[test]
     fn the_app_its_helpers_and_its_children_belong_to_it() {
         let o = owner();
-        assert!(o.owns(Some(&id(Some("com.openai.chat"), None, None))));
-        assert!(o.owns(Some(&id(Some("com.openai.chat.helper"), None, None))));
+        assert!(o.owns(Some(&id(Some("com.example.notes"), None, None))));
+        assert!(o.owns(Some(&id(Some("com.example.notes.helper"), None, None))));
         // A shell or a curl of the app: the outermost app is the app.
         assert!(o.owns(Some(&id(
             Some("com.apple.curl"),
-            Some("com.openai.chat"),
+            Some("com.example.notes"),
             None
         ))));
-        assert!(o.owns(Some(&id(None, None, Some("/Users/paddock/Applications/ChatGPT.app/Contents/XPCServices/x.xpc/Contents/MacOS/x")))));
+        assert!(o.owns(Some(&id(None, None, Some("/Users/paddock/Applications/Sample Notes.app/Contents/XPCServices/x.xpc/Contents/MacOS/x")))));
     }
 
     #[test]
@@ -145,24 +145,24 @@ mod tests {
                 None,
                 Some("/usr/libexec/nsurlsessiond"),
             ),
-            id(Some("com.openai.chatgpt-other"), None, None),
-            id(Some("com.openai"), None, None),
+            id(Some("com.example.notesgpt-other"), None, None),
+            id(Some("com.example"), None, None),
             id(
                 None,
                 None,
-                Some("/Users/paddock/Applications/ChatGPT.app.evil/x"),
+                Some("/Users/paddock/Applications/Sample Notes.app.evil/x"),
             ),
             id(
                 None,
                 None,
-                Some("/Users/paddock/Applications/ChatGPT.app/../Evil.app/x"),
+                Some("/Users/paddock/Applications/Sample Notes.app/../Evil.app/x"),
             ),
             Identity::default(),
         ] {
             assert!(!o.owns(Some(&i)), "{i:?}");
         }
         assert!(!o.owns(None));
-        assert!(!AppOwner::nobody().owns(Some(&id(Some("com.openai.chat"), None, None))));
+        assert!(!AppOwner::nobody().owns(Some(&id(Some("com.example.notes"), None, None))));
         // No bundle id: only the path tells.
         let p = AppOwner::new("", &[Path::new("/A.app"), Path::new("/")]);
         assert!(!p.owns(Some(&id(Some(""), None, None))));
@@ -171,7 +171,7 @@ mod tests {
             !p.owns(Some(&id(None, None, Some("/usr/bin/curl")))),
             "/ is no bundle"
         );
-        assert_eq!(owner().bundle_id(), "com.openai.chat");
+        assert_eq!(owner().bundle_id(), "com.example.notes");
     }
 
     #[test]

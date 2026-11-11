@@ -35,11 +35,11 @@ fn bundle(dir: &Path, name: &str, version: &str, build: &str, icon: bool) -> Pat
 #[test]
 fn needs_copy_cases() {
     let t = tempfile::tempdir().unwrap();
-    let app = bundle(t.path(), "ChatGPT", "1.2026.300", "1726", true);
+    let app = bundle(t.path(), "Sample Notes", "1.2026.300", "1726", true);
     let b = read(&app).unwrap();
-    assert_eq!(b.name, "ChatGPT");
-    assert_eq!(b.display_name, "ChatGPT");
-    assert_eq!(b.bundle_id, "com.vendor.ChatGPT");
+    assert_eq!(b.name, "Sample Notes");
+    assert_eq!(b.display_name, "Sample Notes");
+    assert_eq!(b.bundle_id, "com.vendor.Sample Notes");
     assert_eq!(b.version, "1.2026.300");
     assert_eq!(b.build, "1726");
     assert_eq!(b.icon, Some(app.join("Contents/Resources/app.icns")));
@@ -71,18 +71,18 @@ fn needs_copy_cases() {
 
     // The guest paths and the estimate of the start line.
     let p = Profile::new(t.path().join("profile"));
-    assert_eq!(b.clone_path(&p), p.apps().join("ChatGPT.app"));
+    assert_eq!(b.clone_path(&p), p.apps().join("Sample Notes.app"));
     assert_eq!(
         b.guest_source(),
-        Path::new("/Volumes/My Shared Files/apps/ChatGPT.app.cpio")
+        Path::new("/Volumes/My Shared Files/apps/Sample Notes.app.cpio")
     );
-    assert_eq!(b.archive_path(&p), p.apps().join("ChatGPT.app.cpio"));
+    assert_eq!(b.archive_path(&p), p.apps().join("Sample Notes.app.cpio"));
     // The Applications folder of the guest home on the data disk.
     assert_eq!(
         b.guest_target(),
         Path::new(crate::guest::data::HOME)
             .join(GUEST_APPS)
-            .join("ChatGPT.app")
+            .join("Sample Notes.app")
     );
     assert!(b.guest_target().starts_with(crate::guest::data::MOUNT));
     assert!(b.copy_seconds() >= 2);
@@ -135,13 +135,13 @@ fn mas_refusal_text() {
 #[test]
 fn failure_text_keeps_old() {
     let t = tempfile::tempdir().unwrap();
-    let app = bundle(t.path(), "ChatGPT", "1.0", "1", true);
+    let app = bundle(t.path(), "Sample Notes", "1.0", "1", true);
     let b = read(&app).unwrap();
     let p = Profile::new(t.path().join("profile"));
 
     // The clone makes the final name only, never a partial.
     let made = clone_into_profile(&p, &b, &crate::macvm::drop::clone_into).unwrap();
-    assert_eq!(made, p.apps().join("ChatGPT.app"));
+    assert_eq!(made, p.apps().join("Sample Notes.app"));
     assert!(made.join("Contents/Info.plist").is_file());
     assert!(super::super::session::partials(&p).is_empty());
 
@@ -185,7 +185,7 @@ fn failure_text_keeps_old() {
     assert!(e.contains("No space left on device"), "{e}");
     assert!(e.contains("The old copy stays"), "{e}");
     // The copy failure the agent reports reads the same way.
-    let line = crate::macvm::text::copy_failed("ChatGPT", "the ditto failed");
+    let line = crate::macvm::text::copy_failed("Sample Notes", "the ditto failed");
     assert!(
         line.contains("the ditto failed") && line.contains("The old copy stays"),
         "{line}"

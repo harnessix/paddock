@@ -1,3 +1,4 @@
+#![cfg(target_os = "linux")]
 //! `paddock-host status` in a bwrap sandbox, as the Claude Code hooks run
 //! it: the session hook prints the timers; the prompt and tool hooks print
 //! only a timer whose time is up, and the tool hook says it once. A shell

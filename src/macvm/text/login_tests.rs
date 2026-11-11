@@ -92,7 +92,9 @@ fn link_card_detail() {
 
 #[test]
 fn link_card_reason() {
-    assert!(t::link_card_reason("ChatGPT").starts_with("ChatGPT in paddock's macOS guest"));
+    assert!(
+        t::link_card_reason("Sample Notes").starts_with("Sample Notes in paddock's macOS guest")
+    );
 }
 
 #[test]

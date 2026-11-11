@@ -1,92 +1,82 @@
 import PaddockKit
 import SwiftUI
 
-/// The Grants tab: live permissions of one app, in the shape of System
-/// Settings > Privacy & Security. Every row says whether a change is `Live`,
+/// The parts of the Grants tab.
+enum GrantsPart: String, CaseIterable, Identifiable {
+    case network, connections, files
+
+    var id: String { rawValue }
+
+    var title: UIText {
+        switch self {
+        case .network: return UIText("Network")
+        case .connections: return UIText("Connections")
+        case .files: return UIText("Files & Clipboard")
+        }
+    }
+}
+
+/// The Grants tab: the live permissions of one app, in three parts.
+/// Network has the mode and the rules, Connections the recent connections
+/// of the session, Files & Clipboard the folders, the clipboard, the
+/// devices and the changes. Every row says whether a change is `Live`,
 /// `On next start`, or needs the app to `Reopen files`.
 @MainActor
 struct GrantsView: View {
     let model: AppDetailModel
+    @Environment(LauncherStore.self) private var store
+    @State private var part: GrantsPart = .network
     @State private var folderSheet: FolderSheet?
-    @State private var addingRule = false
-    @State private var ruleSelection = Set<RuleJSON.ID>()
-    @State private var confirmRuleDelete = false
 
     var body: some View {
+        let net = NetworkModels.model(for: model.name, store: store)
+        VStack(spacing: 0) {
+            Picker("Show", selection: $part) {
+                ForEach(GrantsPart.allCases) { item in Text(item.title).tag(item) }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(maxWidth: .infinity)
+            .padding(.top, 10)
+            .accessibilityIdentifier("grants-part")
+            switch part {
+            case .network:
+                NetworkRulesPane(model: model, net: net)
+            case .connections:
+                ConnectionsPane(net: net)
+            case .files:
+                filesForm(net)
+            }
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) { ToastBar(toast: model.toast) }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(Text("Grants"))
+        // A grant change from elsewhere (a panel answer, the CLI) reaches
+        // the Changes list first: reload the rules then, through the 5 s
+        // gate. A change of this window already updated the list.
+        .onChange(of: model.changes.first?.id) { _, _ in
+            if model.changes.first?.source != "you" {
+                Task { await net.loadRules() }
+            }
+        }
+        .sheet(item: $folderSheet) { sheet in
+            FolderSheetView(model: model, sheet: sheet) { folderSheet = $0 }
+        }
+    }
+
+    private func filesForm(_ net: NetworkModel) -> some View {
         Form {
-            FoldersSection(model: model, sheet: $folderSheet)
-            networkSection
-            clipboardSection
+            if let problem = net.problem {
+                NetProblemBanner(message: problem) { net.problem = nil }
+            }
+            FoldersSection(model: model, net: net, sheet: $folderSheet)
+            ClipboardSections(net: net)
             DevicesSection(model: model)
             changesSection
         }
         .formStyle(.grouped)
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("grants-form")
-        .safeAreaInset(edge: .bottom, spacing: 0) { ToastBar(toast: model.toast) }
-        .sheet(item: $folderSheet) { sheet in
-            FolderSheetView(model: model, sheet: sheet) { folderSheet = $0 }
-        }
-        .sheet(isPresented: $addingRule) {
-            AddRuleSheet(model: model)
-        }
-        .confirmationDialog(Text("Remove the selected rules?"), isPresented: $confirmRuleDelete) {
-            Button("Remove", role: .destructive) {
-                let hosts = model.rules.filter { ruleSelection.contains($0.id) }.map(\.host)
-                Task { await model.removeRules(hosts) }
-                ruleSelection = []
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("The app asks again the next time it reaches these servers.")
-        }
-    }
-
-    // MARK: Network
-
-    private var networkSection: some View {
-        Section("Network") {
-            Picker("Mode", selection: Binding(get: { model.networkMode },
-                                              set: { mode in Task { await model.setNetwork(mode) } })) {
-                ForEach(NetworkMode.allCases) { mode in Text(mode.title).tag(mode) }
-            }
-            .accessibilityIdentifier("network-mode")
-            if let text = model.status?.networkText {
-                Text(verbatim: text)
-            }
-            if let note = model.networkNote {
-                Text(note)
-            }
-            RulesTable(model: model, selection: $ruleSelection, confirmDelete: $confirmRuleDelete)
-                .frame(minHeight: 160)
-            HStack {
-                Button("Add Rule…") { addingRule = true }
-                    .accessibilityIdentifier("add-rule-button")
-                Spacer()
-                LiveLabel(label: .live)
-            }
-        }
-    }
-
-    // MARK: Clipboard
-
-    private var clipboardSection: some View {
-        Section("Clipboard") {
-            Toggle(isOn: Binding(get: { model.clipboard.toApp },
-                                 set: { on in Task { await model.setClipboard(toApp: on, fromApp: model.clipboard.fromApp) } })) {
-                Text("Paste from this Mac into the app")
-                Text("The app can read what you copy on this Mac when you paste in it.")
-            }
-            Toggle(isOn: Binding(get: { model.clipboard.fromApp },
-                                 set: { on in Task { await model.setClipboard(toApp: model.clipboard.toApp, fromApp: on) } })) {
-                Text("Copy from the app to this Mac")
-                Text("What you copy in the app reaches the clipboard of this Mac.")
-            }
-            HStack {
-                Spacer()
-                LiveLabel(label: .live)
-            }
-        }
     }
 
     // MARK: Changes
@@ -101,9 +91,10 @@ struct GrantsView: View {
                 HStack {
                     Text(verbatim: Format.clock(change.time))
                         .monospacedDigit()
-                    Text(verbatim: change.text)
+                        .labelInk()
+                    Text(verbatim: change.text).labelInk()
                     Spacer()
-                    Text(source)
+                    Text(source).labelInk()
                 }
                 .accessibilityElement(children: .combine)
                 .accessibilityLabel(Text(verbatim: [Format.clock(change.time), change.text, source.localized]
@@ -122,6 +113,7 @@ struct LiveLabel: View {
     var body: some View {
         Text(label.text)
             .font(.caption)
+            .labelInk()
             .accessibilityIdentifier("grant-label")
     }
 }
@@ -145,10 +137,13 @@ enum FolderSheet: Identifiable, Equatable {
 @MainActor
 struct FoldersSection: View {
     let model: AppDetailModel
+    let net: NetworkModel
     @Binding var sheet: FolderSheet?
 
     var body: some View {
         Section {
+            Button("Add Folder…") { addFolder() }
+                .accessibilityIdentifier("add-folder-button")
             if let downloads = model.downloads {
                 HStack {
                     Image(systemName: "arrow.down.circle").accessibilityHidden(true)
@@ -161,14 +156,28 @@ struct FoldersSection: View {
                     LiveLabel(label: .live)
                 }
             }
+            if let error = model.loadError {
+                HStack(alignment: .firstTextBaseline) {
+                    ProblemLine { Text(verbatim: error).fixedSize(horizontal: false, vertical: true) }
+                    Spacer()
+                    Button("Try Again") { Task { await model.load(force: true) } }
+                }
+                .accessibilityIdentifier("folders-error")
+            } else if model.status == nil {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Loading folders…")
+                }
+            } else if model.shares.isEmpty {
+                Text("No folders yet. The app sees none of your files.")
+                    .accessibilityIdentifier("folders-empty")
+            }
             TimelineView(.periodic(from: .now, by: 1)) { context in
                 ForEach(model.shares) { share in
-                    FolderRow(model: model, share: share, now: context.date, sheet: $sheet)
+                    FolderRow(model: model, net: net, share: share, now: context.date, sheet: $sheet)
                 }
             }
             CommandEcho(args: PaddockArgs.shareAdd(model.name, path: "PATH", rw: false, unprotected: false))
-            Button("Add Folder…") { addFolder() }
-                .accessibilityIdentifier("add-folder-button")
         } header: {
             Text("Folders")
         } footer: {
@@ -191,6 +200,7 @@ struct FoldersSection: View {
 @MainActor
 struct FolderRow: View {
     let model: AppDetailModel
+    let net: NetworkModel
     let share: ShareJSON
     let now: Date
     @Binding var sheet: FolderSheet?
@@ -199,9 +209,12 @@ struct FolderRow: View {
         HStack {
             Image(systemName: "folder").accessibilityHidden(true)
             VStack(alignment: .leading) {
-                Text(verbatim: Format.tildePath(share.path, home: NSHomeDirectory()))
-                Text(OverviewCopy.used(share.lastUsed, now: now))
+                Text(verbatim: Format.tildePath(share.path, home: NSHomeDirectory())).labelInk()
+                // The open files show before Remove, not only in its sheet.
+                Text(verbatim: caption)
                     .font(.caption)
+                    .labelInk()
+                    .accessibilityIdentifier("folder-caption")
             }
             Spacer()
             Picker("Access", selection: Binding(
@@ -210,26 +223,42 @@ struct FolderRow: View {
                 ForEach(ShareMode.allCases) { mode in Text(mode.title).tag(mode) }
             }
             .labelsHidden()
-            .fixedSize()
+            .menuAuditAction()
+            .accessibilityIdentifier("folder-access")
             LiveLabel(label: model.label(for: share, now: now))
             Menu {
                 Button("Reveal in Finder") { SystemLinks.reveal(share.path) }
+                if share.from == "run" {
+                    Button("Keep for Later Starts") { Task { await net.keepFolder(share.path) } }
+                }
+                Divider()
                 Button("Remove", role: .destructive) { remove() }
             } label: {
                 Image(systemName: "ellipsis.circle")
             }
             .menuStyle(.borderlessButton)
-            .fixedSize()
+            .menuAuditAction()
             .accessibilityLabel(Text("More"))
         }
         .accessibilityElement(children: .contain)
+        .accessibilityLabel(Text(verbatim: Format.tildePath(share.path, home: NSHomeDirectory())))
         .accessibilityIdentifier("folder-row")
+    }
+
+    /// `Used 3 min ago · 2 files open · This session only`.
+    private var caption: String {
+        var parts = [OverviewCopy.used(share.lastUsed, now: now).localized]
+        if let open = NetworkModel.openFiles(share) { parts.append(open.localized) }
+        if share.from == "run" { parts.append(UIText("This session only").localized) }
+        return parts.joined(separator: " · ")
     }
 
     private func remove() {
         Task {
-            if case .confirm(let open) = await model.removeFolder(share) {
-                sheet = .removeOpen(share, open)
+            switch await model.removeFolder(share) {
+            case .confirm(let open): sheet = .removeOpen(share, open)
+            case .failed(let line) where !line.isEmpty: net.problem = NetMessage(UIText(key: "%@", args: [line]))
+            default: break
             }
         }
     }

@@ -52,8 +52,8 @@ fn the_decision_follows_the_mode_of_open_url() {
 #[test]
 fn the_card_is_the_open_url_card_of_the_linux_route() {
     let who = Asker {
-        profile: "chatgpt-desktop".into(),
-        label: "ChatGPT".into(),
+        profile: "sample-notes".into(),
+        label: "Sample Notes".into(),
         dir: "/p".into(),
     };
     let u = login_url(1455);
@@ -61,8 +61,8 @@ fn the_card_is_the_open_url_card_of_the_linux_route() {
     assert_eq!(p.capability, "open-url");
     assert_eq!(p.summary, format!("open {u}"));
     assert!(p.detail.ends_with(&u));
-    assert_eq!(p.sandbox, "macvm-chatgpt-desktop");
-    assert!(p.reason.starts_with("ChatGPT"));
+    assert_eq!(p.sandbox, "macvm-sample-notes");
+    assert!(p.reason.starts_with("Sample Notes"));
     assert!(p.session_allowed);
     assert_eq!((p.created, p.expires), (100, 220));
 }
@@ -281,12 +281,12 @@ fn a_dial_with_a_wrong_token_gets_nothing() {
 fn an_unknown_ticket_gets_nothing() {
     let (cb, _notes) = forwarder(TOKEN, 1);
     let (host, mut guest) = UnixStream::pair().unwrap();
-    let t = std::thread::spawn(move || cb.guest_dial(host));
-    write!(guest, "{TOKEN}\n00112233445566778899aabbccddeeff\n").unwrap();
-    t.join().unwrap();
     guest
         .set_read_timeout(Some(Duration::from_secs(2)))
         .unwrap();
+    let t = std::thread::spawn(move || cb.guest_dial(host));
+    write!(guest, "{TOKEN}\n00112233445566778899aabbccddeeff\n").unwrap();
+    t.join().unwrap();
     let mut out = Vec::new();
     let _ = guest.read_to_end(&mut out);
     assert!(out.is_empty());
@@ -377,8 +377,8 @@ fn links(mode: Mode, answer: Option<Answer>) -> (Links, Arc<Fixed>) {
         asked: Mutex::new(Vec::new()),
     });
     let who = Asker {
-        profile: "chatgpt-desktop".into(),
-        label: "ChatGPT".into(),
+        profile: "sample-notes".into(),
+        label: "Sample Notes".into(),
         dir: "/p".into(),
     };
     (Links::new(env, Ok(policy), fixed.clone(), who), fixed)
@@ -409,7 +409,7 @@ fn an_allowed_link_opens_and_its_callback_port_listens() {
 fn ask_shows_the_card_and_follows_the_answer() {
     let open = |_: &str| -> Result<(), String> { Ok(()) };
     let cb = quiet();
-    let u = "https://chatgpt.com/auth/login";
+    let u = "https://notes.example.com/auth/login";
     let (l, fixed) = links(Mode::Ask, Some(Answer::Once));
     assert_eq!(l.handle(u, &open, &cb), Opened::Yes(vec![]));
     assert_eq!(l.handle(u, &open, &cb), Opened::Yes(vec![]));

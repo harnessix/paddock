@@ -220,6 +220,8 @@ fn profile_env_beats_the_host_and_account_and_cache_vars_stay_out() {
         .insert("CLAUDE_CONFIG_DIR".into(), "/elsewhere".into());
     env.vars.insert("CARGO_HOME".into(), "/host/cargo".into());
     env.vars.insert("UV_CACHE_DIR".into(), "/host/uv".into());
+    env.vars
+        .insert("XDG_CACHE_HOME".into(), "/host/cache".into());
     let h = Harness {
         profile: paddock::profile::builtin("claude").unwrap(),
         exe: PathBuf::from("/bin/sh"),
@@ -251,5 +253,9 @@ fn profile_env_beats_the_host_and_account_and_cache_vars_stay_out() {
     assert!(
         !e.contains_key("UV_CACHE_DIR"),
         "UV_CACHE_DIR must not bypass the shared cache"
+    );
+    assert!(
+        !e.contains_key("XDG_CACHE_HOME"),
+        "XDG_CACHE_HOME must not bypass the package caches"
     );
 }

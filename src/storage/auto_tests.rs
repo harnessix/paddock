@@ -354,6 +354,11 @@ fn a_new_worktree_waits_for_the_grace_time() {
 
 #[test]
 fn a_worktree_that_another_process_leases_is_left_alone() {
+    if crate::storage::package_cache::isolated_test(
+        "storage::auto::tests::a_worktree_that_another_process_leases_is_left_alone",
+    ) {
+        return;
+    }
     use crate::storage::merged::tests::git;
     let (_t, env) = setup();
     let repo = repo(&env);
@@ -373,9 +378,10 @@ fn a_worktree_that_another_process_leases_is_left_alone() {
         .args([
             "-MFcntl=:flock",
             "-e",
-            "open(my $f, '<', $ARGV[0]) or die; flock($f, LOCK_SH) or die; sleep 30",
+            "open(my $f, '<', $ARGV[0]) or die; flock($f, LOCK_SH) or die; scalar <STDIN>",
         ])
         .arg(&lease)
+        .stdin(std::process::Stdio::piped())
         .spawn()
         .unwrap();
     // The lease of this process is dropped by hand, as at its exit.
@@ -405,4 +411,59 @@ fn a_worktree_that_another_process_leases_is_left_alone() {
     assert!(r[0].error.is_none(), "{r:?}");
     assert!(!w.path.exists());
     assert!(!git(&repo, &["branch"]).contains(&w.branch));
+}
+
+#[test]
+fn cleanup_waits_for_a_forked_child_to_release_the_inherited_lock() {
+    let (_t, env) = setup();
+    let lock = try_lock(&env.paddock_state().join("storage-auto.lock")).unwrap();
+    let mut pipe = [0; 2];
+    // SAFETY: pipe points to two writable integers; the child uses only
+    // async-signal-safe calls before _exit.
+    assert_eq!(unsafe { libc::pipe(pipe.as_mut_ptr()) }, 0);
+    let child = unsafe { libc::fork() };
+    assert!(child >= 0, "fork failed");
+    if child == 0 {
+        unsafe {
+            libc::close(pipe[1]);
+            let mut byte = 0u8;
+            libc::read(pipe[0], (&mut byte as *mut u8).cast(), 1);
+            libc::_exit(0);
+        }
+    }
+    unsafe { libc::close(pipe[0]) };
+    drop(lock);
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let byte = [1u8];
+        unsafe {
+            libc::write(pipe[1], byte.as_ptr().cast(), 1);
+            libc::close(pipe[1]);
+        }
+    });
+    let result = pass(&env, &Settings::default(), true, None);
+    release.join().unwrap();
+    unsafe { libc::waitpid(child, std::ptr::null_mut(), 0) };
+    assert!(
+        matches!(result, Outcome::Done(_)),
+        "cleanup skipped while the child held the inherited lock"
+    );
+}
+
+#[test]
+fn foreground_cleanup_does_not_wait_for_a_busy_lock() {
+    let (_t, env) = setup();
+    let _lock = try_lock(&env.paddock_state().join("storage-auto.lock")).unwrap();
+    let started = Instant::now();
+    let result = pass(
+        &env,
+        &Settings::default(),
+        true,
+        Some(started + std::time::Duration::from_secs(2)),
+    );
+    assert!(matches!(result, Outcome::Skipped(_)));
+    assert!(
+        started.elapsed() < std::time::Duration::from_millis(200),
+        "foreground cleanup waited for the lock"
+    );
 }

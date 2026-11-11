@@ -7,6 +7,7 @@ fn root(p: &str, ro: bool) -> Root {
     Root {
         path: PathBuf::from(p),
         read_only: ro,
+        unprotected: false,
     }
 }
 
@@ -71,7 +72,7 @@ fn refuses_every_listed_root() {
     ];
     for (path, why) in listed {
         assert_eq!(refusal(Path::new(path), home), Some(why), "{path}");
-        let e = build("vscode", &[root(path, false)], &p, None, home, false)
+        let e = build("vscode", &[root(path, false)], &p, None, home, &[], false)
             .unwrap_err()
             .to_string();
         let shown = normalize(Path::new(path));
@@ -100,6 +101,7 @@ fn refuses_every_listed_root() {
         &p,
         None,
         home,
+        &[],
         false,
     )
     .unwrap_err()
@@ -112,6 +114,7 @@ fn refuses_every_listed_root() {
         &p,
         None,
         home,
+        &[],
         false,
     )
     .unwrap_err()
@@ -127,7 +130,7 @@ fn only_named_roots() {
     let p = profile(&t);
     let agent = t.path().join("agent");
     fs::create_dir_all(&agent).unwrap();
-    let b = build("a", &[], &p, Some(&agent), t.home(), false).unwrap();
+    let b = build("a", &[], &p, Some(&agent), t.home(), &[], false).unwrap();
     let names: Vec<&str> = b.shares.iter().map(|s| s.name.as_str()).collect();
     assert_eq!(names, RESERVED.to_vec());
     assert!(b.warnings.is_empty());
@@ -141,7 +144,7 @@ fn only_named_roots() {
     assert_eq!(by_name("agent").host, agent);
     assert!(by_name("agent").read_only);
     // Without an agent folder, three.
-    let b = build("a", &[], &p, None, t.home(), false).unwrap();
+    let b = build("a", &[], &p, None, t.home(), &[], false).unwrap();
     assert_eq!(b.shares.len(), 3);
 
     let web = t.path().join("web");
@@ -157,6 +160,7 @@ fn only_named_roots() {
         &p,
         None,
         t.home(),
+        &[],
         false,
     )
     .unwrap();
@@ -187,6 +191,7 @@ fn only_named_roots() {
         &p,
         None,
         t.home(),
+        &[],
         false,
     )
     .unwrap();
@@ -204,7 +209,7 @@ fn reserved_names_never_collide() {
         fs::create_dir_all(&d).unwrap();
         roots.push(root(d.to_str().unwrap(), false));
     }
-    let b = build("a", &roots, &p, Some(t.path()), t.home(), false).unwrap();
+    let b = build("a", &roots, &p, Some(t.path()), t.home(), &[], false).unwrap();
     let names: Vec<&str> = b.shares.iter().map(|s| s.name.as_str()).collect();
     assert_eq!(
         names,
@@ -267,7 +272,7 @@ fn env_file_stops_unless_unprotected() {
     fs::write(web.join("deep/er/id_rsa"), "key").unwrap();
     fs::write(web.join(".env.example"), "KEY=").unwrap();
     let roots = [root(web.to_str().unwrap(), false)];
-    let e = build("vscode", &roots, &p, None, t.home(), false)
+    let e = build("vscode", &roots, &p, None, t.home(), &[], false)
         .unwrap_err()
         .to_string();
     assert_eq!(e.lines().count(), 2, "{e}");
@@ -278,7 +283,7 @@ fn env_file_stops_unless_unprotected() {
     );
     assert!(!e.contains(".env.example"), "{e}");
     assert!(e.contains("[apps.vscode]") && e.contains("unprotected_workspaces"));
-    let b = build("vscode", &roots, &p, None, t.home(), true).unwrap();
+    let b = build("vscode", &roots, &p, None, t.home(), &[], true).unwrap();
     assert_eq!(b.shares.len(), 4);
     assert_eq!(b.warnings.len(), 2);
     assert!(b.warnings[0].contains("unprotected_workspaces is on for vscode"));
@@ -292,6 +297,7 @@ fn env_file_stops_unless_unprotected() {
         &p,
         None,
         t.home(),
+        &[],
         true,
     )
     .unwrap();
@@ -332,6 +338,7 @@ fn the_home_and_the_real_path_decide() {
         &p,
         None,
         t.home(),
+        &[],
         false,
     )
     .unwrap_err()
@@ -354,9 +361,24 @@ fn the_home_and_the_real_path_decide() {
         &p,
         None,
         t.home(),
+        &[],
         false,
     )
     .unwrap();
     assert_eq!(b.shares[0].host, web);
     assert_eq!(b.shares.len(), 4, "{:?}", b.shares);
+}
+
+#[test]
+fn saved_workspace_cannot_share_paddock_data() {
+    let t = scratch();
+    let p = Profile::new(t.path().join("p"));
+    let protected = t.home().join("paddock-data");
+    std::fs::create_dir_all(&protected).unwrap();
+    let roots = [Root {
+        path: protected.clone(),
+        read_only: true,
+        unprotected: false,
+    }];
+    assert!(build("app", &roots, &p, None, t.home(), &[protected], false).is_err());
 }

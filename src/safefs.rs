@@ -1002,7 +1002,7 @@ impl Dir {
         exact: bool,
     ) -> Result<u64> {
         let mut tmp = name.to_os_string();
-        tmp.push(format!(".paddock-tmp-{}", std::process::id()));
+        tmp.push(node::tmp_suffix());
         let _ = self.remove(&tmp);
         let mut f = self.create_new(&tmp, if exact { 0o600 } else { mode })?;
         let written = std::io::copy(from, &mut f).and_then(|n| {

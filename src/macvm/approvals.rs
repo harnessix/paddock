@@ -8,7 +8,7 @@
 //! The rules:
 //! - A second connection to the same triple waits on the same question.
 //!   Every waiter gets the answer.
-//! - After `WAIT` with no answer the connection is denied once and the
+//! - After the ten-minute maximum wait with no answer the connection is denied once and the
 //!   question stays open, on the screen or in the queue. An answer that
 //!   comes when nobody waits is kept: a rule for the `session` and
 //!   `always` answers, and for `allow-once` and `deny` the next connection
@@ -33,6 +33,7 @@ use super::proxy_header::Identity;
 use super::text;
 use crate::broker::{self, Connect, ConnectAnswer, Pending, CONNECT_CAPABILITY};
 use crate::env::HostEnv;
+use crate::eventstream::schema::{Question as EventQuestion, QuestionState};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -40,7 +41,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 /// How long a connection waits for the answer.
-pub const WAIT: Duration = Duration::from_secs(60);
+pub const WAIT: Duration = Duration::from_secs(600);
 /// How often a waiter looks for the answer file.
 const POLL: Duration = Duration::from_millis(200);
 /// How often a waiter calls `on_wait` (the marker restart).
@@ -152,7 +153,7 @@ pub struct Asker {
     env: HostEnv,
     /// The app profile name.
     profile: String,
-    /// The name of the app in the question: `ChatGPT`.
+    /// The name of the app in the question: `Sample Notes`.
     label: String,
     profile_dir: PathBuf,
     icon: Option<PathBuf>,
@@ -256,6 +257,40 @@ impl Asker {
         self.inner.lock().unwrap_or_else(|e| e.into_inner())
     }
 
+    /// The app profile of the session.
+    pub fn profile(&self) -> &str {
+        &self.profile
+    }
+
+    /// A `question` line on the launcher event stream.
+    fn publish(
+        &self,
+        state: QuestionState,
+        id: &str,
+        about: Option<(&Triple, Option<String>)>,
+        answer: Option<(&str, &str)>,
+        open: Option<u64>,
+    ) {
+        let (host, port, process) = match about {
+            Some((t, p)) => (t.host.clone(), t.port, p),
+            None => (String::new(), 0, None),
+        };
+        crate::eventstream::publish(
+            &self.env,
+            crate::eventstream::Event::Question(EventQuestion {
+                state,
+                id: id.to_string(),
+                app: self.profile.clone(),
+                host,
+                port,
+                process,
+                answer: answer.map(|a| a.0.to_string()),
+                by: answer.map(|a| a.1.to_string()),
+                open,
+            }),
+        );
+    }
+
     /// The card of a question on the screen.
     pub fn card(&self, q: &Question, t: &Triple, more: u64) -> Pending {
         let why_path = PathBuf::from(q.path.clone().unwrap_or_else(|| t.app.clone()));
@@ -345,10 +380,21 @@ impl Asker {
 
     /// The answer in the store, when there is one. A file that holds no
     /// answer counts as deny.
-    fn read_answer(&self, id: &str) -> Option<ConnectAnswer> {
+    fn read_answer(&self, id: &str) -> Option<(ConnectAnswer, &'static str)> {
         let file = broker::approvals_dir(&self.env).join(format!("{id}.answer"));
         let text = std::fs::read_to_string(file).ok()?;
-        Some(ConnectAnswer::parse_file(&text).unwrap_or(ConnectAnswer::Deny))
+        let source = serde_json::from_str::<serde_json::Value>(&text)
+            .ok()
+            .and_then(|v| v.get("source").and_then(|v| v.as_str()).map(str::to_owned));
+        let who = if source.as_deref() == Some("cli") {
+            "cli"
+        } else {
+            "user"
+        };
+        Some((
+            ConnectAnswer::parse_file(&text).unwrap_or(ConnectAnswer::Deny),
+            who,
+        ))
     }
 
     /// Bring the store up to date with the queue. `rewrite`: the card on
@@ -376,6 +422,7 @@ impl Asker {
                     );
                     let id = broker::new_request_id();
                     self.write_card(&self.notice_card(&id, open, now));
+                    self.publish(QuestionState::Paused, &id, None, None, Some(open as u64));
                     g.notice = Some(id);
                 }
             }
@@ -422,6 +469,15 @@ impl Asker {
             return Join::Stale;
         }
         q.count.fetch_add(1, Ordering::SeqCst);
+        if fresh {
+            self.publish(
+                QuestionState::Open,
+                &q.id,
+                Some((t, q.path.clone())),
+                None,
+                None,
+            );
+        }
         if fresh && self.hook.is_some() {
             return Join::Wait(q, true);
         }
@@ -463,7 +519,7 @@ impl Asker {
         let mut out = Vec::new();
         if let Some(t) = g.queue.shown().cloned() {
             if let Some(q) = g.map.get(&t).cloned() {
-                if let Some(a) = self.read_answer(&q.id) {
+                if let Some((a, who)) = self.read_answer(&q.id) {
                     q.taken.store(true, Ordering::SeqCst);
                     self.remove_files(&q.id);
                     g.queue.remove(&t);
@@ -471,13 +527,13 @@ impl Asker {
                         triple: t,
                         question: q,
                         answer: a,
-                        who: "user",
+                        who,
                     });
                 }
             }
         }
         if let Some(id) = g.notice.clone() {
-            if let Some(a) = self.read_answer(&id) {
+            if let Some((a, _who)) = self.read_answer(&id) {
                 self.remove_files(&id);
                 g.notice = None;
                 let deny_all = !a.allows();
@@ -516,11 +572,20 @@ impl Asker {
     /// nobody waited and makes no rule is kept for the next connection.
     pub fn finish(&self, t: &Triple, q: &Arc<Question>, s: Settled, now: u64) {
         let mut g = self.lock();
-        if g.map.get(t).is_some_and(|m| Arc::ptr_eq(m, q)) {
-            g.map.remove(t);
+        if !g.map.get(t).is_some_and(|m| Arc::ptr_eq(m, q)) {
+            return;
         }
+        g.map.remove(t);
         g.queue.remove(t);
         self.remove_files(&q.id);
+        let answer = Some((s.answer.word(), s.who));
+        self.publish(
+            QuestionState::Answered,
+            &q.id,
+            Some((t, q.path.clone())),
+            answer,
+            None,
+        );
         let once = matches!(s.answer, ConnectAnswer::AllowOnce | ConnectAnswer::Deny);
         if q.count() == 0 && once && s.who != BY_RULE {
             g.once.insert(t.clone(), s.clone());

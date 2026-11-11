@@ -109,31 +109,44 @@ fn a_read_only_home_is_readable_and_not_writable() {
 
 #[test]
 fn the_network_resolves_names_and_connects() {
+    use std::io::{Read, Write};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let stop = Arc::new(AtomicBool::new(false));
+    let done = stop.clone();
+    let server = std::thread::spawn(move || {
+        while !done.load(Ordering::SeqCst) {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+                    let _ = stream.read(&mut [0; 4096]);
+                    let _ = stream.write_all(b"HTTP/1.0 200 OK\r\nContent-Length: 2\r\n\r\nok");
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(e) => panic!("accept: {e}"),
+            }
+        }
+    });
     let b = setup();
-    // The Mac has no network: nothing to check.
-    let online = std::process::Command::new("/usr/bin/curl")
-        .args(["-sI", "-m", "10", "https://example.com"])
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success());
-    if !online {
-        eprintln!("skipped: no network");
-        return;
-    }
-    let (code, out, err) = sh(
-        &b,
-        &ExecCfg::default(),
-        "curl -sI -m 10 https://example.com | head -1",
-    );
-    assert_eq!(code, 0, "{out}{err}");
-    assert!(out.starts_with("HTTP"), "{out}{err}");
+    let command = format!("curl -s -m 5 http://localhost:{port}/");
+    let (code, out, err) = sh(&b, &ExecCfg::default(), &command);
     let cfg = ExecCfg {
         network: false,
         ..ExecCfg::default()
     };
-    let (code, _, _) = sh(&b, &cfg, "curl -sI -m 5 https://example.com");
-    assert_ne!(code, 0, "a command without network connected");
+    let (denied, _, _) = sh(&b, &cfg, &command);
+    stop.store(true, Ordering::SeqCst);
+    server.join().unwrap();
+    assert_eq!(code, 0, "{out}{err}");
+    assert_eq!(out, "ok");
+    assert_ne!(denied, 0, "a command without network connected");
 }
 
 #[test]

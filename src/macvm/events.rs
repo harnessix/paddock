@@ -4,7 +4,9 @@
 //! serves `paddock app log --events` and the report; a line of a kind this
 //! paddock does not know is kept as [`Kind::Other`].
 
+use super::events_stream;
 use super::session::Profile;
+use crate::eventstream::schema::SessionState;
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
@@ -32,23 +34,25 @@ fn is_zero(v: &u16) -> bool {
     *v == 0
 }
 
-/// The writer of the event log.
+/// The writer of the event log. It also publishes the state changes of
+/// the session on the launcher event stream (`events_stream.rs`).
 pub struct Events {
     path: PathBuf,
+    /// The last state that went on the stream.
+    last: std::sync::Mutex<Option<(SessionState, Option<&'static str>)>>,
 }
 
 impl Events {
     /// The log of `profile`. The `logs/` folder is made when missing.
     pub fn open(profile: &Profile) -> Self {
         let _ = std::fs::create_dir_all(profile.logs());
-        Self {
-            path: profile.events_log(),
-        }
+        Self::at(&profile.events_log())
     }
 
     pub fn at(path: &Path) -> Self {
         Self {
             path: path.to_path_buf(),
+            last: std::sync::Mutex::new(None),
         }
     }
 
@@ -97,9 +101,46 @@ impl Events {
         if let Err(e) = self.append(&ev) {
             log::warn!("macvm: cannot write {}: {e}", self.path.display());
         }
+        self.publish(kind, text);
     }
 
-    fn append(&self, ev: &Event) -> std::io::Result<()> {
+    /// The `session` line of a state change, on the bus of the process.
+    fn publish(&self, kind: &str, text: &str) {
+        let Some(bus) = crate::eventstream::default_bus() else {
+            return;
+        };
+        let mut last = self.last.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(next) = events_stream::change(*last, kind, text) else {
+            return;
+        };
+        *last = Some(next);
+        if let Some((app, home)) = events_stream::app_of(&self.path) {
+            bus.publish(events_stream::event(&app, &home, next.0, next.1, text));
+        }
+    }
+
+    /// Append one line with one more object next to the fields of
+    /// [`Event`]: `{..., "grant": {...}}`. A reader of [`Event`] skips it.
+    pub fn record_with(&self, kind: &str, text: &str, key: &str, extra: serde_json::Value) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default();
+        let ev = Event {
+            t: crate::waiting::format_rfc3339(now.as_secs()),
+            ms: now.subsec_millis() as u16,
+            kind: kind.to_string(),
+            text: text.to_string(),
+            n: serde_json::Map::new(),
+        };
+        log::info!("macvm event {kind}: {text}");
+        let mut v = serde_json::to_value(&ev).unwrap_or_default();
+        v[key] = extra;
+        if let Err(e) = self.append(&v) {
+            log::warn!("macvm: cannot write {}: {e}", self.path.display());
+        }
+    }
+
+    fn append(&self, ev: &impl serde::Serialize) -> std::io::Result<()> {
         let mut line = serde_json::to_vec(ev)?;
         line.push(b'\n');
         let len = std::fs::metadata(&self.path).map(|m| m.len()).unwrap_or(0);
@@ -186,13 +227,16 @@ pub enum Kind {
     Badge,
     Bench,
     Guest,
+    /// A grant change: a folder, the network mode, the clipboard or a
+    /// rule. The line has a `grant` object (`grants::Change`).
+    Grant,
     /// A kind of another paddock version, kept as its word.
     Other(String),
 }
 
 impl Kind {
     /// The kinds this paddock writes, in the order of a session.
-    pub const KNOWN: [Kind; 30] = [
+    pub const KNOWN: [Kind; 31] = [
         Kind::Start,
         Kind::Prepare,
         Kind::Restore,
@@ -223,6 +267,7 @@ impl Kind {
         Kind::Badge,
         Kind::Bench,
         Kind::Guest,
+        Kind::Grant,
     ];
 
     /// The word of the log line.
@@ -258,6 +303,7 @@ impl Kind {
             Kind::Badge => "badge",
             Kind::Bench => "bench",
             Kind::Guest => "guest",
+            Kind::Grant => "grant",
             Kind::Other(w) => w,
         }
     }

@@ -1,6 +1,9 @@
 //! paddock: run coding-agent harnesses with full auto-approval inside a
 //! sandbox that only contains what the agent should see.
 
+#[cfg(all(feature = "exclave-fake-registry-test", not(debug_assertions)))]
+compile_error!("exclave-fake-registry-test is for debug test builds only");
+
 pub mod app;
 pub mod approver;
 pub mod backend;
@@ -9,6 +12,7 @@ pub mod boundary;
 pub mod broker;
 pub mod build;
 pub mod busy;
+pub mod cleanstart;
 pub mod compaction;
 pub mod credentials;
 pub mod detach;
@@ -16,11 +20,14 @@ pub mod detect;
 pub mod devices;
 pub mod doctor;
 pub mod env;
+pub mod eventstream;
+pub mod exclave;
 pub mod execbox;
 pub mod forage;
 pub mod freeze;
 pub mod gateway;
 pub mod gatewayd;
+pub mod gauge;
 pub mod guest;
 pub mod gui;
 pub mod history;
@@ -39,9 +46,11 @@ pub mod loft;
 pub mod logging;
 pub mod login;
 pub mod macvm;
+pub mod mail;
 pub mod manifest;
 pub mod mark;
 pub mod mcp;
+pub mod memory;
 pub mod mise;
 pub mod monitor;
 pub mod omarchy;
@@ -59,11 +68,13 @@ pub mod profile;
 pub mod proxy;
 pub mod ptybroker;
 pub mod reap;
+pub mod reclaim;
 pub mod recover;
 pub mod refresh;
 pub mod relay;
 pub mod report;
 pub mod run;
+mod run_end_hook;
 pub mod safefs;
 pub mod screens;
 pub mod seatbelt;
@@ -77,10 +88,13 @@ pub mod spec;
 pub mod speckit;
 pub mod state;
 pub mod storage;
+pub mod tack;
 #[cfg(test)]
 mod testutil;
 pub mod timer;
+pub mod trainer;
 pub mod training;
+pub mod turnout;
 pub mod units;
 pub mod update;
 pub mod uploads;

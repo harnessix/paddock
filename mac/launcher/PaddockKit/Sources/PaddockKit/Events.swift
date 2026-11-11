@@ -12,6 +12,8 @@ public enum PaddockEvent: Equatable, Sendable {
     case setup(SetupJSON)
     case golden(op: String)
     case disk(freeBytes: Int64)
+    /// `started` (the first line) or `lost` (the follower missed events).
+    case stream(state: String)
     case unknown(kind: String)
 
     /// Decodes one line. Returns nil for a line that is not a JSON object
@@ -29,11 +31,18 @@ public enum PaddockEvent: Equatable, Sendable {
         case "grant":
             return (try? decoder.decode(GrantEvent.self, from: data)).map(PaddockEvent.grant)
         case "setup":
-            return (try? decoder.decode(SetupJSON.self, from: data)).map(PaddockEvent.setup)
+            return LibraryDecode.setupLine(data).map(PaddockEvent.setup)
         case "golden":
-            return (try? decoder.decode(GoldenEvent.self, from: data)).map { .golden(op: $0.op) }
+            // paddock writes `state`; the older fixtures `op`.
+            return (try? decoder.decode(GoldenEvent.self, from: data)).flatMap { e in
+                (e.op ?? e.state).map { PaddockEvent.golden(op: $0) }
+            }
         case "disk":
-            return (try? decoder.decode(DiskEvent.self, from: data)).map { .disk(freeBytes: $0.freeBytes) }
+            return (try? decoder.decode(DiskEvent.self, from: data)).flatMap { e in
+                (e.freeBytes ?? e.free).map { PaddockEvent.disk(freeBytes: $0) }
+            }
+        case "stream":
+            return (try? decoder.decode(StreamEvent.self, from: data)).map { .stream(state: $0.state) }
         default:
             return .unknown(kind: head.kind)
         }
@@ -47,11 +56,18 @@ struct EventHead: Decodable {
 
 struct GoldenEvent: Decodable {
     /// `ready` or `removed`.
-    var op: String
+    var op: String?
+    var state: String?
 }
 
 struct DiskEvent: Decodable {
-    var freeBytes: Int64
+    var freeBytes: Int64?
+    /// paddock's key.
+    var free: Int64?
+}
+
+struct StreamEvent: Decodable {
+    var state: String
 }
 
 public struct SessionEvent: Codable, Equatable, Sendable {
@@ -67,6 +83,21 @@ public struct SessionEvent: Codable, Equatable, Sendable {
     public var crash: String?
     public var connected: Bool?
     public var nextStart: String?
+    /// paddock's home folder of the instance: `default` or `instance-N`.
+    public var home: String?
+    /// paddock's line for the change: `quit with save`, `opened`.
+    public var text: String?
+    /// The time of the event.
+    public var t: Date?
+}
+
+/// paddock's session words to the launcher's states.
+public enum SessionWords {
+    /// `stopped` after `quit with save` is `saved`: the next start is warm.
+    public static func state(_ e: SessionEvent) -> String {
+        if e.state == "stopped", e.text == "quit with save" { return "saved" }
+        return e.state
+    }
 }
 
 public struct QuestionEvent: Codable, Equatable, Sendable {

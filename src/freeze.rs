@@ -67,7 +67,7 @@ impl SuspendCfg {
     }
 
     pub fn parse(text: &str) -> Result<Self> {
-        let v: toml::Value = toml::from_str(text)?;
+        let v: toml::Value = crate::manifest::user_config_doc(text)?;
         let raw: RawSuspend = match v.get("suspend") {
             Some(t) => t
                 .clone()
@@ -122,12 +122,16 @@ pub fn own_scope() -> Option<String> {
 /// manager's D-Bus API (what `systemd-run --scope` does for itself), and
 /// wait until the kernel shows it there.
 #[cfg(target_os = "linux")]
-pub fn move_to_scope(env: &HostEnv, pid: u32, unit: &str, id: &str) -> Result<()> {
-    move_to_scope_limited(env, pid, unit, id, None, None)
+pub fn move_to_scope(
+    env: &HostEnv,
+    pid: u32,
+    unit: &str,
+    id: &str,
+    high: Option<u64>,
+) -> Result<bool> {
+    move_to_scope_inner(env, pid, unit, id, high, None, None)
 }
 
-/// `move_to_scope` with `MemoryMax` (bytes) and `CPUQuota` (percent of one
-/// CPU) on the scope, for a device instance with `mem` and `cpus`.
 #[cfg(target_os = "linux")]
 pub fn move_to_scope_limited(
     env: &HostEnv,
@@ -137,6 +141,19 @@ pub fn move_to_scope_limited(
     mem: Option<u64>,
     cpu_percent: Option<u32>,
 ) -> Result<()> {
+    move_to_scope_inner(env, pid, unit, id, None, mem, cpu_percent).map(|_| ())
+}
+
+#[cfg(target_os = "linux")]
+fn move_to_scope_inner(
+    env: &HostEnv,
+    pid: u32,
+    unit: &str,
+    id: &str,
+    high: Option<u64>,
+    mem: Option<u64>,
+    cpu_percent: Option<u32>,
+) -> Result<bool> {
     use zbus::zvariant::Value;
     let conn = crate::broker::notify::session(env)?;
     let p = zbus::blocking::Proxy::new(
@@ -158,8 +175,23 @@ pub fn move_to_scope_limited(
         props.push(("CPUQuotaPerSecUSec", Value::from(c as u64 * 10_000)));
     }
     let aux: Vec<(&str, Vec<(&str, Value<'_>)>)> = Vec::new();
-    let _: zbus::zvariant::OwnedObjectPath =
-        p.call("StartTransientUnit", &(unit, "fail", props, aux))?;
+    let applied = if let Some(high) = high {
+        props.push(("MemoryHigh", Value::from(high)));
+        let started: zbus::Result<zbus::zvariant::OwnedObjectPath> =
+            p.call("StartTransientUnit", &(unit, "fail", &props, &aux));
+        if started.is_ok() {
+            true
+        } else {
+            props.pop();
+            let _: zbus::zvariant::OwnedObjectPath =
+                p.call("StartTransientUnit", &(unit, "fail", &props, &aux))?;
+            false
+        }
+    } else {
+        let _: zbus::zvariant::OwnedObjectPath =
+            p.call("StartTransientUnit", &(unit, "fail", &props, &aux))?;
+        true
+    };
     let start = Instant::now();
     while scope_of(pid).as_deref() != Some(unit) {
         if start.elapsed() > Duration::from_secs(3) {
@@ -167,12 +199,18 @@ pub fn move_to_scope_limited(
         }
         std::thread::sleep(Duration::from_millis(10));
     }
-    Ok(())
+    Ok(applied)
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn move_to_scope(env: &HostEnv, pid: u32, unit: &str, id: &str) -> Result<()> {
-    let _ = (env, pid, unit, id);
+pub fn move_to_scope(
+    env: &HostEnv,
+    pid: u32,
+    unit: &str,
+    id: &str,
+    high: Option<u64>,
+) -> Result<bool> {
+    let _ = (env, pid, unit, id, high);
     Err(crate::platform::unavailable("freeze"))
 }
 
@@ -186,7 +224,7 @@ pub fn move_to_scope_limited(
     cpu_percent: Option<u32>,
 ) -> Result<()> {
     let _ = (mem, cpu_percent);
-    move_to_scope(env, pid, unit, id)
+    move_to_scope(env, pid, unit, id, None).map(|_| ())
 }
 
 /// The scopes of the device instances of a sandbox (devices/sandbox), which

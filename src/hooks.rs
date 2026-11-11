@@ -94,11 +94,13 @@ pub enum Style {
 pub struct Cfg {
     pub programs: Vec<String>,
     pub ignore: Vec<String>,
+    /// Host command and arguments to start after a run ends.
+    pub run_end: Vec<String>,
 }
 
 impl Cfg {
     pub fn parse(text: &str) -> Result<Self> {
-        let v: toml::Value = toml::from_str(text)?;
+        let v: toml::Value = crate::manifest::user_config_doc(text)?;
         Ok(match v.get("hooks") {
             Some(t) => t.clone().try_into()?,
             None => Self::default(),

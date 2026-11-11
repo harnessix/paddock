@@ -1,3 +1,4 @@
+#![cfg(target_os = "linux")]
 //! The training gate end to end: `paddock run` on a caller pty starts a
 //! fake agy dialog (a shell script that draws the recorded screens and
 //! reads keys) with the shipped agy rule. paddock unchecks the box and
@@ -62,6 +63,7 @@ fn paddock_unchecks_the_training_box_of_a_fake_agy_dialog() {
     }
     let tmp = common::tempdir();
     let root: PathBuf = tmp.path().to_path_buf();
+    std::fs::create_dir_all(root.join("home")).unwrap();
     let project = root.join("project");
     let cfg = root.join("cfg/paddock/harness.d");
     std::fs::create_dir_all(&cfg).unwrap();
@@ -108,6 +110,7 @@ fn paddock_unchecks_the_training_box_of_a_fake_agy_dialog() {
         "-y",
     ])
     .arg(&project)
+    .env("HOME", root.join("home"))
     .env("XDG_CONFIG_HOME", root.join("cfg"))
     .env("XDG_DATA_HOME", root.join("data"))
     .env("XDG_STATE_HOME", root.join("state"))

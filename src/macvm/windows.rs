@@ -11,8 +11,10 @@
 //! [`HostEvent`]s. The viewport source of `frames.rs` lives here as
 //! [`Viewport`], because it needs the window class. The Accessibility
 //! children of a window are the mirror elements of `ax_host.rs`. The
-//! host-led drag and resize, the view offset, the chrome and the full
-//! screen are in `windows_lead.rs`.
+//! host-led drag and resize, the view, the chrome and the full screen are
+//! in `windows_lead.rs`, the cover over the guest picture in
+//! `windows_cover.rs`, the delegate in `windows_delegate.rs`. Each host
+//! window sits at its guest frame plus its own offset (`place.rs`).
 
 use super::ax_host::{Elements, Posted};
 use super::axmirror::{Change as AxChange, Mirror};
@@ -22,20 +24,22 @@ use super::frames::{Frames, Source};
 use super::input::{Globe, GlobeKey, KeyEvent};
 use super::lead::Chrome;
 use super::order::Change;
+use super::place::Places;
 use super::proto::{Frame, Level, Window};
 use super::run_vm::Vm;
 use super::vz_mac_drop::{DropEvent, DropVmView};
+use super::windows_cover::CoverState;
+use super::windows_delegate::WindowDelegate;
 use super::windows_lead::{Gesture, Mouse};
 use objc2::rc::Retained;
-use objc2::runtime::{AnyObject, NSObject, NSObjectProtocol, ProtocolObject};
+use objc2::runtime::{AnyObject, ProtocolObject};
 use objc2::{define_class, msg_send, DefinedClass, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
     NSApplication, NSBackingStoreType, NSColor, NSEvent, NSEventModifierFlags, NSEventType,
     NSFloatingWindowLevel, NSNormalWindowLevel, NSPopUpMenuWindowLevel, NSScreen, NSView, NSWindow,
-    NSWindowAnimationBehavior, NSWindowCollectionBehavior, NSWindowDelegate, NSWindowOrderingMode,
-    NSWindowStyleMask,
+    NSWindowAnimationBehavior, NSWindowCollectionBehavior, NSWindowOrderingMode, NSWindowStyleMask,
 };
-use objc2_foundation::{NSArray, NSNotification, NSPoint, NSRect, NSSize, NSString};
+use objc2_foundation::{NSArray, NSPoint, NSRect, NSSize, NSString};
 use objc2_virtualization::VZVirtualMachineView;
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
@@ -77,14 +81,30 @@ pub enum HostEvent {
     /// A press of an Accessibility client on the mirror element with
     /// this id.
     AxPress(u64),
-    /// The host window moved or resized in a host-led drag or resize:
-    /// its frame in host points, and whether the user still holds it.
-    LeadMoved(u32, Rect, bool),
+    /// The host window moved or resized in a host-led drag or resize.
+    LeadMoved(LeadStep),
+    /// A press on a covered part of the window waits: the guest raises
+    /// the window first (`cover.rs`).
+    HeldClick(u32),
     /// The host window entered (true) or left its full screen.
     FullScreenDone(u32, bool),
     /// A value of an Accessibility client for the mirror element with
     /// this id.
     AxSet(u64, String),
+}
+
+/// One step of a host-led drag or resize.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LeadStep {
+    pub id: u32,
+    /// The host frame now, in host points.
+    pub host: Rect,
+    /// The user still holds the window.
+    pub held: bool,
+    /// A resize (an edge press), not a drag.
+    pub resize: bool,
+    /// When AppKit gave the event, for the timing line.
+    pub at: Instant,
 }
 
 /// Where the host events go. The callbacks run on the main thread.
@@ -119,6 +139,11 @@ pub struct WindowIvars {
     pub(super) led: Cell<bool>,
     /// The guest window is in full screen: the host window too.
     pub(super) full_screen: Cell<bool>,
+    /// The cover over the guest picture and a held click
+    /// (`windows_cover.rs`).
+    pub(super) cover: RefCell<CoverState>,
+    /// A held click goes to AppKit again: no second hold.
+    pub(super) replaying: Cell<bool>,
 }
 
 define_class!(
@@ -247,6 +272,8 @@ impl SessionWindow {
             gesture: RefCell::new(Gesture::Idle),
             led: Cell::new(false),
             full_screen: Cell::new(false),
+            cover: RefCell::new(CoverState::default()),
+            replaying: Cell::new(false),
         });
         unsafe {
             msg_send![
@@ -305,95 +332,6 @@ fn is_cmd_q(event: &NSEvent) -> bool {
     event
         .charactersIgnoringModifiers()
         .is_some_and(|s| s.to_string() == "q")
-}
-
-pub struct DelegateIvars {
-    sink: HostSink,
-}
-
-define_class!(
-    #[unsafe(super(NSObject))]
-    #[thread_kind = MainThreadOnly]
-    #[name = "PaddockSessionWindowDelegate"]
-    #[ivars = DelegateIvars]
-    pub struct WindowDelegate;
-
-    unsafe impl NSObjectProtocol for WindowDelegate {}
-
-    unsafe impl NSWindowDelegate for WindowDelegate {
-        #[unsafe(method(windowDidBecomeKey:))]
-        fn did_become_key(&self, note: &NSNotification) {
-            if let Some(id) = id_of(note) {
-                (self.ivars().sink)(HostEvent::BecameKey(id));
-            }
-        }
-
-        #[unsafe(method(windowDidResignKey:))]
-        fn did_resign_key(&self, note: &NSNotification) {
-            if let Some(id) = id_of(note) {
-                (self.ivars().sink)(HostEvent::ResignedKey(id));
-            }
-        }
-
-        #[unsafe(method(windowDidMiniaturize:))]
-        fn did_miniaturize(&self, note: &NSNotification) {
-            if let Some(id) = id_of(note) {
-                (self.ivars().sink)(HostEvent::Miniaturized(id));
-            }
-        }
-
-        #[unsafe(method(windowDidDeminiaturize:))]
-        fn did_deminiaturize(&self, note: &NSNotification) {
-            if let Some(id) = id_of(note) {
-                (self.ivars().sink)(HostEvent::Deminiaturized(id));
-            }
-        }
-
-        #[unsafe(method(windowDidMove:))]
-        fn did_move(&self, note: &NSNotification) {
-            if let Some(w) = window_of(note) {
-                super::windows_lead::moved(&w);
-            }
-        }
-
-        #[unsafe(method(windowDidResize:))]
-        fn did_resize(&self, note: &NSNotification) {
-            if let Some(w) = window_of(note) {
-                super::windows_lead::moved(&w);
-            }
-        }
-
-        #[unsafe(method(windowDidEnterFullScreen:))]
-        fn did_enter_full_screen(&self, note: &NSNotification) {
-            if let Some(w) = window_of(note) {
-                super::windows_lead::full_screen_done(&w, true);
-            }
-        }
-
-        #[unsafe(method(windowDidExitFullScreen:))]
-        fn did_exit_full_screen(&self, note: &NSNotification) {
-            if let Some(w) = window_of(note) {
-                super::windows_lead::full_screen_done(&w, false);
-            }
-        }
-    }
-);
-
-impl WindowDelegate {
-    fn new(mtm: MainThreadMarker, sink: HostSink) -> Retained<Self> {
-        let this = Self::alloc(mtm).set_ivars(DelegateIvars { sink });
-        unsafe { msg_send![super(this), init] }
-    }
-}
-
-/// The session window of a window notification.
-fn window_of(note: &NSNotification) -> Option<Retained<SessionWindow>> {
-    note.object()?.downcast::<SessionWindow>().ok()
-}
-
-/// The guest window id of a window notification.
-fn id_of(note: &NSNotification) -> Option<u32> {
-    window_of(note).map(|w| w.id())
 }
 
 /// The viewport source: one `VZVirtualMachineView` of the full guest
@@ -480,6 +418,8 @@ pub fn screens(mtm: MainThreadMarker) -> ScreenSet {
 pub struct HostWindows {
     mtm: MainThreadMarker,
     frames: Viewport,
+    /// The part of the guest display that the host screens show: the
+    /// rules of the host frames use it (`crop::screens_area`).
     display: Display,
     screens: ScreenSet,
     /// The guest's macOS major version: the corner radius of a window
@@ -493,7 +433,8 @@ pub struct HostWindows {
 }
 
 impl HostWindows {
-    /// No windows yet. `display` is the guest display; the corner radius
+    /// No windows yet. `display` is the guest display, with its room right
+    /// of the screens; the corner radius
     /// is the one of macOS 15 until the hello names the guest's macOS. A drop on a
     /// window goes to `drop_tx`, its file promises under `promise_dir`.
     pub fn new(
@@ -504,6 +445,7 @@ impl HostWindows {
         drop_tx: Sender<DropEvent>,
         promise_dir: PathBuf,
     ) -> Self {
+        let screens = screens(mtm);
         HostWindows {
             mtm,
             frames: Viewport {
@@ -512,8 +454,8 @@ impl HostWindows {
                 drop_tx,
                 promise_dir,
             },
-            display,
-            screens: screens(mtm),
+            display: crop::screens_area(display, &screens),
+            screens,
             macos: 15,
             catch_globe: super::tis::globe_switches_sources(),
             sink: sink.clone(),
@@ -528,6 +470,11 @@ impl HostWindows {
 
     pub fn display(&self) -> Display {
         self.display
+    }
+
+    /// The whole guest display, with its room right of the screens.
+    pub fn guest_display(&self) -> Display {
+        self.frames.display
     }
 
     pub fn len(&self) -> usize {
@@ -547,14 +494,21 @@ impl HostWindows {
         }
     }
 
-    /// Run the changes of the fold, in order. A `Refuse` is the session's
-    /// work (the request back and the badge), not a window change.
-    pub fn apply(&mut self, changes: &[Change]) {
+    /// Run the changes of the fold, in order, each host window at the
+    /// place that `places` gives. A `Refuse` is the session's work (the
+    /// request back and the badge), not a window change.
+    pub fn apply(&mut self, changes: &[Change], places: &Places) {
         for c in changes {
             match c {
-                Change::Open(w) => self.open(w),
+                Change::Open(w) => {
+                    let host = places.host(w.id, w.frame, self.display);
+                    self.open(w, host);
+                }
                 Change::Close(id) => self.close(*id),
-                Change::Move(id, frame) => self.move_to(*id, *frame),
+                Change::Move(id, frame) => {
+                    let host = places.host(*id, *frame, self.display);
+                    self.move_to(*id, *frame, host);
+                }
                 Change::FullScreen(id, on) => self.full_screen(*id, *on),
                 Change::Chrome(id, chrome) => self.set_chrome(*id, chrome),
                 Change::Retitle(id, title) => {
@@ -585,17 +539,18 @@ impl HostWindows {
                     }
                 }
                 // The session's work: the request back to the guest.
-                Change::Refuse { .. } | Change::Correct(..) => {}
+                Change::Refuse { .. } => {}
             }
         }
     }
 
-    /// One new host window for guest window `w`.
-    fn open(&mut self, w: &Window) {
+    /// One new host window for guest window `w`, at host frame `host`
+    /// (in guest points).
+    fn open(&mut self, w: &Window, host: Frame) {
         if self.windows.contains_key(&w.id) {
             self.close(w.id);
         }
-        let frame = crop::host_frame(w.frame, &self.screens);
+        let frame = crop::host_frame(host, &self.screens);
         let rect = ns_rect(frame);
         let window = SessionWindow::new(
             self.mtm,
@@ -609,7 +564,9 @@ impl HostWindows {
         unsafe { window.setReleasedWhenClosed(false) };
         window.setBackgroundColor(Some(&NSColor::clearColor()));
         window.setOpaque(false);
-        window.setHasShadow(matches!(w.level, Level::Normal | Level::Floating));
+        // No host shadow: the host draws nothing around a guest window, so
+        // no outline lags behind the guest picture while the window moves.
+        window.setHasShadow(false);
         window.setTitle(&NSString::from_str(&w.title));
         window.setMovableByWindowBackground(false);
         window.setAnimationBehavior(NSWindowAnimationBehavior::None);
@@ -650,6 +607,7 @@ impl HostWindows {
         if let Err(e) = self.frames.attach(w.id, &window) {
             log::warn!("macvm: window {}: {e}", w.id);
         }
+        super::windows_cover::attach(&window);
         self.clip(&window);
         super::windows_lead::place_view(&window);
         if let Some(p) = &parent {

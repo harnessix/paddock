@@ -25,6 +25,7 @@ pub(super) enum Kind {
     Device(usize),
     /// A secret file: its name and the value, held while the file is open.
     Secret(String, Arc<crate::credentials::secret::Secret>),
+    Horse(String, Vec<u8>, bool),
 }
 
 pub(super) struct Handle {

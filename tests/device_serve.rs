@@ -65,6 +65,7 @@ fn health(sock: &Path) -> bool {
 #[test]
 fn the_binary_serves_a_request_and_dies_with_its_parent() {
     let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("home")).unwrap();
     let sock = dir.path().join("dev.sock");
     let log = dir.path().join("log");
     let pidfile = dir.path().join("child-pid");
@@ -87,10 +88,13 @@ fn the_binary_serves_a_request_and_dies_with_its_parent() {
         .arg(&log)
         .arg(&tool)
         .arg(&supervisor_pid)
-        // The supervisor reads no user folder; the guard of
-        // no_real_folders.rs asks for them anyway.
+        .env("HOME", dir.path().join("home"))
+        .env("XDG_CONFIG_HOME", dir.path().join("cfg"))
         .env("XDG_DATA_HOME", dir.path().join("data"))
         .env("XDG_STATE_HOME", dir.path().join("state"))
+        .env("XDG_CACHE_HOME", dir.path().join("cache"))
+        .env("XDG_RUNTIME_DIR", dir.path().join("run"))
+        .env_remove("DBUS_SESSION_BUS_ADDRESS")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::inherit())
@@ -150,6 +154,7 @@ fn the_binary_serves_a_request_and_dies_with_its_parent() {
 #[test]
 fn the_binary_stops_on_sigterm_and_removes_its_socket() {
     let dir = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(dir.path().join("home")).unwrap();
     let sock = dir.path().join("dev.sock");
     let tool = script(dir.path(), "tool", "cat");
     let mut sup = Command::new(env!("CARGO_BIN_EXE_paddock"))
@@ -157,8 +162,13 @@ fn the_binary_stops_on_sigterm_and_removes_its_socket() {
         .arg(&sock)
         .args(["--shape", "exec", "--"])
         .arg(&tool)
+        .env("HOME", dir.path().join("home"))
+        .env("XDG_CONFIG_HOME", dir.path().join("cfg"))
         .env("XDG_DATA_HOME", dir.path().join("data"))
         .env("XDG_STATE_HOME", dir.path().join("state"))
+        .env("XDG_CACHE_HOME", dir.path().join("cache"))
+        .env("XDG_RUNTIME_DIR", dir.path().join("run"))
+        .env_remove("DBUS_SESSION_BUS_ADDRESS")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())

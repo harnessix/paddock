@@ -65,8 +65,8 @@ fn no_rule() {
 #[test]
 fn rule_is_seed() {
     has(
-        &t::rule_is_seed("seed-1", "chatgpt-desktop"),
-        &["seed-1", "profile chatgpt-desktop", "--deny"],
+        &t::rule_is_seed("seed-1", "sample-notes"),
+        &["seed-1", "profile sample-notes", "--deny"],
     );
 }
 
@@ -102,8 +102,8 @@ fn rule_line() {
     let l = t::rule_line(
         "rule-1a2b3c",
         "allow",
-        "com.openai.chat",
-        "*.openai.com",
+        "com.example.notes",
+        "*.example.com",
         "443",
         "always",
         "user",
@@ -114,8 +114,8 @@ fn rule_line() {
         &[
             "rule-1a2b3c",
             "allow",
-            "com.openai.chat",
-            "*.openai.com:443",
+            "com.example.notes",
+            "*.example.com:443",
             "always, by user, 2026-11-04T10:22:00Z",
         ],
     );
@@ -145,8 +145,8 @@ fn rules_need_macvm() {
 #[test]
 fn ask_summary() {
     assert_eq!(
-        t::ask_summary("ChatGPT", "telemetry.example.com", 443),
-        "ChatGPT wants to connect to telemetry.example.com port 443"
+        t::ask_summary("Sample Notes", "telemetry.example.com", 443),
+        "Sample Notes wants to connect to telemetry.example.com port 443"
     );
 }
 
@@ -183,8 +183,8 @@ fn connection_line() {
     let l = t::connection_line(
         "10:22:05",
         "allow",
-        "com.openai.chat",
-        "chatgpt.com",
+        "com.example.notes",
+        "notes.example.com",
         443,
         "rule-1a2b3c",
         1,
@@ -195,8 +195,8 @@ fn connection_line() {
         &[
             "10:22:05",
             "allow",
-            "com.openai.chat",
-            "chatgpt.com:443",
+            "com.example.notes",
+            "notes.example.com:443",
             "rule-1a2b3c",
             "1.5 KiB up, 2.0 MiB down, 4 s",
         ],
@@ -229,4 +229,9 @@ fn connection_refused() {
         &t::connection_refused("example.com", 443, "timeout"),
         &["refused example.com:443", "timeout"],
     );
+}
+
+#[test]
+fn rule_time_left() {
+    assert_eq!(t::rule_time_left(42), " (42 seconds left)");
 }

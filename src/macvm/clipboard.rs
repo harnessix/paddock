@@ -460,6 +460,10 @@ pub struct Sync {
     /// What was set on the host last: its echo as a host change is not a
     /// change.
     last_set: Option<Vec<Item>>,
+    /// `paddock app clipboard NAME --to-app off`: nothing goes to the guest.
+    to_app_off: bool,
+    /// `--from-app off`: nothing comes from the guest.
+    from_app_off: bool,
 }
 
 impl Sync {
@@ -474,10 +478,34 @@ impl Sync {
         self.key
     }
 
+    /// The two directions of `paddock app clipboard`, live. A direction
+    /// that turns on while a session window is key sends the host
+    /// content that the guest has not had.
+    pub fn set_directions(&mut self, to_app: bool, from_app: bool) -> Vec<Action> {
+        let was_off = self.to_app_off;
+        self.to_app_off = !to_app;
+        self.from_app_off = !from_app;
+        if was_off && to_app && self.key {
+            return self.on_key(true);
+        }
+        vec![Action::Nothing]
+    }
+
+    /// The directions now: `(to_app, from_app)`.
+    pub fn directions(&self) -> (bool, bool) {
+        (!self.to_app_off, !self.from_app_off)
+    }
+
+    /// The shares of the session after a grant change: a file URL
+    /// crosses only into a share that the guest has now.
+    pub fn set_shares(&mut self, shares: Vec<Share>) {
+        self.shares = shares;
+    }
+
     /// A session window became key (`true`) or resigned (`false`).
     pub fn on_key(&mut self, key: bool) -> Vec<Action> {
         self.key = key;
-        if !key {
+        if !key || self.to_app_off {
             return vec![Action::Nothing];
         }
         match &self.host {
@@ -500,7 +528,7 @@ impl Sync {
             self.host_sent = Some(count);
             return vec![Action::Nothing];
         }
-        if !self.key {
+        if !self.key || self.to_app_off {
             return vec![Action::Nothing];
         }
         vec![self.send_guest(count, &items)]
@@ -512,7 +540,7 @@ impl Sync {
             return vec![Action::Nothing];
         }
         self.guest_count = Some(count);
-        if !self.key {
+        if !self.key || self.from_app_off {
             return vec![Action::Nothing];
         }
         if self.last_sent.as_ref() == Some(&items) {

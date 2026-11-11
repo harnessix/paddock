@@ -1,15 +1,15 @@
 //! Tests for the spawn rules: limits, inheritance, approvals and privacy.
-
 use super::*;
 use crate::broker::{
     Answer, Approver, Broker, Context, HostPolicy, Pending, Request, Status as RStatus, PROTOCOL,
 };
 use crate::build::{build_with, Built, Options};
 use crate::profile::{Harness, Profile};
+use crate::spec::GuiMode;
 use crate::spec::{Mount, MountKind};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-const SECRET_TASK: &str = "TASK-TEXT-7f3a: refactor the parser";
+pub(super) const SECRET_TASK: &str = "TASK-TEXT-7f3a: refactor the parser";
 
 fn env_in(tmp: &Path) -> HostEnv {
     let mut vars = BTreeMap::new();
@@ -83,7 +83,6 @@ fn config_defaults_allow_no_harness() {
     };
     assert!(!none.depth_allows(0));
 }
-
 #[test]
 fn config_is_checked() {
     let doc = |t: &str| SpawnCfg::from_doc(&toml::from_str(t).unwrap());
@@ -104,7 +103,6 @@ fn config_is_checked() {
         assert!(doc(bad).is_err(), "{bad}");
     }
 }
-
 #[test]
 fn a_project_file_cannot_enable_spawn() {
     let tmp = tempfile::tempdir().unwrap();
@@ -209,7 +207,6 @@ fn a_child_spec_wider_than_the_parent_is_refused() {
         &|b| b.spec.add_host_port(5432, "manifest network.host_ports"),
         "host port",
     );
-    // Another backend is refused too.
     let b = parent_built(&env, &project);
     assert!(c.check(&b, "docker").is_err());
 
@@ -254,9 +251,10 @@ fn a_child_build_uses_the_snapshot_and_keeps_the_prompt_out_of_argv() {
     let repo = tmp.path().join("repo");
     std::fs::create_dir_all(&repo).unwrap();
     git(&repo, &["init", "-q", "-b", "main"]);
+    std::fs::write(repo.join("pyproject.toml"), "[project]\nname = \"fake\"\n").unwrap();
+    git(&repo, &["add", "pyproject.toml"]);
     git(&repo, &["commit", "-q", "--allow-empty", "-m", "one"]);
     let repo = std::fs::canonicalize(&repo).unwrap();
-    // The parent can edit the project file. The child never reads it.
     std::fs::write(repo.join("paddock.toml"), "[network]\nmode = \"host\"\n").unwrap();
     for (oneshot, file) in [
         ("[oneshot]\nargs = [\"-c\", \"cat\"]\nprompt = \"stdin\"\n", false),
@@ -272,6 +270,7 @@ fn a_child_build_uses_the_snapshot_and_keeps_the_prompt_out_of_argv() {
             base_from: repo.clone(),
             base: None,
             role: Role::Implementer,
+            trainer: false,
         };
         let opts = Options {
             harness: "fake".into(),
@@ -285,8 +284,6 @@ fn a_child_build_uses_the_snapshot_and_keeps_the_prompt_out_of_argv() {
         let privacy = "[privacy]\nenv = { FAKE_TELEMETRY = \"0\" }\nargs = [\"--no-telemetry\"]\n";
         let b = build_with(&env, &opts, fake_harness(&format!("{privacy}{oneshot}"))).unwrap();
         assert_eq!(b.spec.network, Network::None, "the project file was read");
-        // The privacy defaults apply to a child too: its variables, and its
-        // flags before the one-shot arguments.
         assert!(b
             .spec
             .env
@@ -296,6 +293,8 @@ fn a_child_build_uses_the_snapshot_and_keeps_the_prompt_out_of_argv() {
         let w = b.worktree.as_ref().unwrap();
         assert_eq!(w.branch, plan.branch);
         assert_eq!(b.home_key, repo);
+        let cache = crate::storage::package_cache::uv_dir(&env, &repo).unwrap();
+        assert!(b.spec.mounts.iter().any(|m| m.src.as_deref() == Some(cache.as_path())));
         assert!(b.spec.command.iter().all(|a| !a.contains(SECRET_TASK)));
         let rel = prompt_rel(&b.spec.id);
         let named = b
@@ -381,6 +380,7 @@ prompt = \"file\"
             base_from: repo.clone(),
             base: None,
             role: Role::Implementer,
+            trainer: false,
         };
         build_with(
             &env,
@@ -458,14 +458,14 @@ prompt = \"file\"
 }
 
 /// Records every question; answers with a fixed answer.
-struct Recorder {
+pub(super) struct Recorder {
     answer: Answer,
     asked: AtomicUsize,
     seen: Mutex<Vec<Pending>>,
 }
 
 impl Recorder {
-    fn new(answer: Answer) -> Arc<Self> {
+    pub(super) fn new(answer: Answer) -> Arc<Self> {
         Arc::new(Self {
             answer,
             asked: AtomicUsize::new(0),
@@ -484,6 +484,7 @@ impl Approver for Recorder {
 
 pub(super) fn ceiling(parent: &str, depth: u32, project: &Path) -> Ceiling {
     Ceiling {
+        horse: false,
         parent: parent.into(),
         parent_harness: "claude".into(),
         chain: vec![parent.into()],
@@ -505,13 +506,13 @@ pub(super) fn ceiling(parent: &str, depth: u32, project: &Path) -> Ceiling {
     }
 }
 
-struct Setup {
+pub(super) struct Setup {
     _tmp: tempfile::TempDir,
-    env: HostEnv,
-    project: PathBuf,
+    pub(super) env: HostEnv,
+    pub(super) project: PathBuf,
 }
 
-fn setup() -> Setup {
+pub(super) fn setup() -> Setup {
     let tmp = tempfile::tempdir().unwrap();
     let env = env_in(tmp.path());
     let project = tmp.path().join("work/app");
@@ -524,7 +525,7 @@ fn setup() -> Setup {
     }
 }
 
-fn broker(
+pub(super) fn broker(
     s: &Setup,
     id: &str,
     chain: Vec<String>,
@@ -560,7 +561,7 @@ fn broker(
     b
 }
 
-fn req(args: serde_json::Value) -> Request {
+pub(super) fn req(args: serde_json::Value) -> Request {
     Request {
         v: PROTOCOL,
         cap: "spawn".into(),
@@ -574,11 +575,11 @@ fn req(args: serde_json::Value) -> Request {
     }
 }
 
-fn start(harness: &str) -> Request {
+pub(super) fn start(harness: &str) -> Request {
     req(serde_json::json!({ "action": "start", "harness": harness, "prompt_file": "task.md" }))
 }
 
-fn cfg(harnesses: &[&str], max_running: u32) -> SpawnCfg {
+pub(super) fn cfg(harnesses: &[&str], max_running: u32) -> SpawnCfg {
     SpawnCfg {
         harnesses: harnesses.iter().map(|h| h.to_string()).collect(),
         max_running,
@@ -993,34 +994,8 @@ fn sizes_times_and_cpus_parse() {
     assert_eq!(c.max_cpu_percent, Some(50));
 }
 
-#[test]
-fn limits_can_only_be_lower_than_the_configuration() {
-    let c = SpawnCfg {
-        timeout: 1800,
-        max_mem: Some(4 << 30),
-        max_cpu_percent: Some(200),
-        ..Default::default()
-    };
-    // Without a request, the child gets the configured limits.
-    let l = c.limits(None, None, None).unwrap();
-    assert_eq!(
-        (l.timeout, l.mem, l.cpu_percent),
-        (1800, Some(4 << 30), Some(200))
-    );
-    let l = c.limits(Some(600), Some(1 << 30), Some(50)).unwrap();
-    assert_eq!(
-        (l.timeout, l.mem, l.cpu_percent),
-        (600, Some(1 << 30), Some(50))
-    );
-    assert!(c.limits(Some(3600), None, None).is_err());
-    assert!(c.limits(Some(0), None, None).is_err());
-    assert!(c.limits(None, Some(8 << 30), None).is_err());
-    assert!(c.limits(None, None, Some(400)).is_err());
-    // With no configured maximum, a request only adds a limit.
-    let open = SpawnCfg::default();
-    let l = open.limits(None, Some(2 << 30), None).unwrap();
-    assert_eq!((l.mem, l.cpu_percent), (Some(2 << 30), None));
-}
+#[path = "memory_tests.rs"]
+mod memory_tests;
 
 #[test]
 fn the_scope_holds_the_limits_and_never_the_prompt() {
@@ -1060,6 +1035,7 @@ fn the_scope_holds_the_limits_and_never_the_prompt() {
         // paddock stops the child at 600 s; the scope is the backstop.
         "RuntimeMaxSec=660",
         "MemoryMax=2147483648",
+        "MemoryHigh=2147483648",
         "MemorySwapMax=0",
         "CPUQuota=150%",
         "/usr/bin/paddock",
@@ -1301,7 +1277,7 @@ impl TimeoutSeam for FakeSeam {
 }
 
 /// A child program that runs `secs` seconds and then writes a result.
-fn child_that_runs(secs: &str) -> Vec<OsString> {
+pub(super) fn child_that_runs(secs: &str) -> Vec<OsString> {
     let script = format!(
         "sleep {secs}; printf '{{\"exit_code\":0,\"branch\":\"b\",\"base\":\"\",\"commits\":0,\"stat\":\"\",\"output\":\"\",\"output_truncated\":false,\"started\":0,\"ended\":0}}' > \"$(dirname \"$1\")/result.json\""
     );

@@ -117,7 +117,7 @@ mod tests {
             ..Default::default()
         };
         s.open.push(OpenQuestion {
-            app: "com.openai.chat".into(),
+            app: "com.example.notes".into(),
             host: "a.example".into(),
             port: 443,
             waiting: 1,

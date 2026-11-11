@@ -9,15 +9,18 @@
 mod common;
 
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+#[cfg(target_os = "linux")]
+use std::process::Child;
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-/// The fake harness: `$0` is the prompt file (`[detach] args`). It records
-/// what it got in the project, then acts on the task.
+/// The fake harness: `$0` is the prompt file (`[detach] args`). Its first
+/// line is the task; the mailbox reminder follows. It records what it got
+/// in the project, then acts on the task.
 const SCRIPT: &str = r#"f="$0"
 if test -t 0 && test -t 1; then tty=yes; else tty=no; fi
-{ echo "tty $tty"; test -r "$f" && echo "readable"; echo "task $(cat "$f")"; } > .detach-result
-case "$(cat "$f")" in
+{ echo "tty $tty"; test -r "$f" && echo "readable"; echo "task $(head -n1 "$f")"; grep -c "paddock-host mail wait" "$f"; } > .detach-result
+case "$(head -n1 "$f")" in
   ok) paddock-host done --status ok "all good" ;;
   failed) paddock-host done --status failed "it broke" ;;
   late) while [ ! -e .go ]; do sleep 0.2; done; paddock-host done "late but fine" ;;
@@ -48,6 +51,7 @@ impl World {
     fn with(detach: bool, extra: &str) -> Self {
         let tmp = common::tempdir();
         let root = tmp.path().to_path_buf();
+        std::fs::create_dir_all(root.join("home")).unwrap();
         let cfg = root.join("cfg/paddock/harness.d");
         std::fs::create_dir_all(&cfg).unwrap();
         std::fs::create_dir_all(root.join("project")).unwrap();
@@ -73,7 +77,8 @@ impl World {
 
     fn paddock(&self) -> Command {
         let mut c = Command::new(env!("CARGO_BIN_EXE_paddock"));
-        c.env("XDG_CONFIG_HOME", self.root.join("cfg"))
+        c.env("HOME", self.root.join("home"))
+            .env("XDG_CONFIG_HOME", self.root.join("cfg"))
             .env("XDG_DATA_HOME", self.root.join("data"))
             .env("XDG_STATE_HOME", self.root.join("state"))
             .env("XDG_CACHE_HOME", self.root.join("cache"))
@@ -114,11 +119,15 @@ impl World {
         );
         let text = String::from_utf8(out.stdout).unwrap();
         let lines: Vec<&str> = text.lines().collect();
-        assert_eq!(lines.len(), 2, "{text}");
+        assert_eq!(lines.len(), 3, "{text}");
         let id = lines[0].to_string();
         assert_eq!(
             lines[1],
             format!("paddock view {} --write", paddock::ids::short(&id))
+        );
+        assert_eq!(
+            lines[2],
+            format!("mail: paddock mail watch {}", paddock::ids::short(&id))
         );
         assert!(self.has_session(&id), "no tmux session {id}");
         id
@@ -170,6 +179,7 @@ impl World {
     }
 
     /// A client with write access, in control mode: it needs no terminal.
+    #[cfg(target_os = "linux")]
     fn attach(&self, id: &str) -> Child {
         self.tmux()
             .args(["-C", "attach", "-t", id])
@@ -180,6 +190,7 @@ impl World {
             .unwrap()
     }
 
+    #[cfg(target_os = "linux")]
     fn result(&self) -> String {
         let f = self.root.join("project/.detach-result");
         let start = Instant::now();
@@ -198,12 +209,14 @@ impl World {
     }
 
     /// `[detach]` and `[view]` in the user configuration, not the harness profile.
+    #[cfg(target_os = "linux")]
     fn user_config(&self, text: &str) {
         let dir = self.root.join("cfg/paddock");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("config.toml"), text).unwrap();
     }
 
+    #[cfg(target_os = "linux")]
     fn sandbox(&self, id: &str) -> serde_json::Value {
         let out = self.paddock().args(["ps", "--json"]).output().unwrap();
         assert!(out.status.success(), "{out:?}");
@@ -215,6 +228,7 @@ impl World {
     }
 
     /// Poll until `ps --json` reports `idle_since` for this run.
+    #[cfg(target_os = "linux")]
     fn wait_idle(&self, id: &str) -> u64 {
         let start = Instant::now();
         loop {
@@ -231,6 +245,7 @@ impl World {
         }
     }
 
+    #[cfg(target_os = "linux")]
     fn messages(&self) -> String {
         let out = self.tmux().args(["show-messages"]).output().unwrap();
         format!(
@@ -305,6 +320,7 @@ fn detach_starts_a_session_on_the_private_socket_and_returns() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn done_ends_the_run_and_wait_reports_it() {
     if !common::bwrap_works() || !has_tmux() {
         eprintln!("skipped: needs bwrap with a user namespace and tmux");
@@ -314,20 +330,37 @@ fn done_ends_the_run_and_wait_reports_it() {
     let id = w.detach("ok");
     let (code, out) = w.wait(&id, "60s");
     assert_eq!(code, Some(0), "{out}");
-    assert_eq!(out.trim(), "ok: all good");
+    assert_eq!(out.trim(), format!("{id}: ok: all good"));
     let r = w.result();
     assert!(r.contains("tty yes"), "{r}");
     assert!(r.contains("readable"), "{r}");
-    assert!(r.contains("task ok"), "{r}");
+    assert!(
+        r.contains("task ok\n1\n"),
+        "the prompt ends with the mailbox reminder: {r}"
+    );
+    // The mailbox saw the run from its start to its end.
+    let out = w
+        .paddock()
+        .args(["mail", "watch", &id, "--timeout", "20s"])
+        .output()
+        .unwrap();
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    assert!(text.contains("event started:"), "{text}");
+    assert!(
+        text.contains("event ended: the sandbox ended with exit code"),
+        "{text}"
+    );
 
     let w = World::new(true);
     let id = w.detach("failed");
     let (code, out) = w.wait(&id, "60s");
     assert_eq!(code, Some(1), "{out}");
-    assert_eq!(out.trim(), "failed: it broke");
+    assert_eq!(out.trim(), format!("{id}: failed: it broke"));
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn ps_marks_the_run_and_wait_times_out() {
     if !common::bwrap_works() || !has_tmux() {
         eprintln!("skipped: needs bwrap with a user namespace and tmux");
@@ -354,6 +387,7 @@ fn ps_marks_the_run_and_wait_times_out() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn wait_and_stop_take_the_short_id() {
     if !common::bwrap_works() || !has_tmux() {
         eprintln!("skipped: needs bwrap with a user namespace and tmux");
@@ -412,7 +446,94 @@ fn stop_and_wait_take_a_short_id_of_records() {
     std::fs::write(records.join(format!("{ended}.json")), rec.to_string()).unwrap();
     let (code, out) = w.wait("5e4d3c", "5s");
     assert_eq!(code, Some(0), "{out}");
-    assert_eq!(out.trim(), "ok: all good");
+    assert_eq!(out.trim(), format!("{ended}: ok: all good"));
+}
+
+#[test]
+fn wait_reports_a_dead_detached_process_without_a_mailbox() {
+    let w = World::new(true);
+    let id = "fake-project-9a8b7c";
+    let records = w.root.join("state/paddock/detach");
+    std::fs::create_dir_all(&records).unwrap();
+    let rec = serde_json::json!({
+        "id": id, "harness": "fake", "project": w.root.join("project"),
+        "started": 1, "pid": 2147483647,
+    });
+    std::fs::write(records.join(format!("{id}.json")), rec.to_string()).unwrap();
+    let (code, out) = w.wait(id, "5s");
+    assert_eq!(code, Some(2), "{out}");
+    assert!(out.contains("ended without a final status"), "{out}");
+}
+
+#[test]
+fn wait_reports_a_stopped_run_as_failed() {
+    let w = World::new(true);
+    let id = "fake-project-9a8b7d";
+    let records = w.root.join("state/paddock/detach");
+    std::fs::create_dir_all(&records).unwrap();
+    let rec = serde_json::json!({
+        "id": id, "harness": "fake", "project": w.root.join("project"),
+        "started": 1, "ended": 2, "stopped": false,
+    });
+    std::fs::write(records.join(format!("{id}.json")), rec.to_string()).unwrap();
+    std::fs::write(records.join(format!("{id}.stop")), "stopped\n").unwrap();
+    let (code, out) = w.wait(id, "5s");
+    assert_eq!(code, Some(1), "{out}");
+    assert!(out.contains("stopped before a final result"), "{out}");
+}
+
+#[test]
+fn wait_uses_the_stopped_record_after_its_marker_is_removed() {
+    let w = World::new(true);
+    let id = "fake-project-9a8b7e";
+    let records = w.root.join("state/paddock/detach");
+    std::fs::create_dir_all(&records).unwrap();
+    let rec = serde_json::json!({
+        "id": id, "harness": "fake", "project": w.root.join("project"),
+        "started": 1, "ended": 2, "stopped": true,
+    });
+    std::fs::write(records.join(format!("{id}.json")), rec.to_string()).unwrap();
+    let (code, out) = w.wait(id, "5s");
+    assert_eq!(code, Some(1), "{out}");
+    assert_eq!(out.trim(), format!("{id}: stopped before a final result"));
+}
+
+#[test]
+fn wait_keeps_detached_final_results_after_a_stop() {
+    let w = World::new(true);
+    let id = "fake-project-9a8b7f";
+    let records = w.root.join("state/paddock/detach");
+    std::fs::create_dir_all(&records).unwrap();
+    std::fs::write(records.join(format!("{id}.stop")), "stopped\n").unwrap();
+    for (status, expected) in [("ok", 0), ("failed", 1), ("idle", 1)] {
+        for stopped in [false, true] {
+            let rec = serde_json::json!({
+                "id": id, "harness": "fake", "project": w.root.join("project"),
+                "started": 1, "ended": 2, "stopped": stopped,
+                "done": {"status": status, "text": "full result", "at": 2},
+            });
+            std::fs::write(records.join(format!("{id}.json")), rec.to_string()).unwrap();
+            let (code, out) = w.wait(id, "5s");
+            assert_eq!(code, Some(expected), "{out}");
+            assert_eq!(out.trim(), format!("{id}: {status}: full result"));
+        }
+    }
+}
+
+#[test]
+fn wait_does_not_finish_a_live_run_just_because_stop_was_requested() {
+    let w = World::new(true);
+    let id = "fake-project-9a8b80";
+    let records = w.root.join("state/paddock/detach");
+    std::fs::create_dir_all(&records).unwrap();
+    let rec = serde_json::json!({
+        "id": id, "harness": "fake", "project": w.root.join("project"),
+        "started": 1, "pid": std::process::id(), "stopped": true,
+    });
+    std::fs::write(records.join(format!("{id}.json")), rec.to_string()).unwrap();
+    std::fs::write(records.join(format!("{id}.stop")), "stopped\n").unwrap();
+    let (code, out) = w.wait(id, "1s");
+    assert_eq!(code, Some(124), "{out}");
 }
 
 #[test]
@@ -430,6 +551,7 @@ fn a_short_id_that_fits_no_sandbox_fails() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn a_write_client_keeps_the_run_open_after_done() {
     if !common::bwrap_works() || !has_tmux() {
         eprintln!("skipped: needs bwrap with a user namespace and tmux");
@@ -448,10 +570,11 @@ fn a_write_client_keeps_the_run_open_after_done() {
     let _ = client.wait();
     let (code, out) = w.wait(&id, "60s");
     assert_eq!(code, Some(0), "{out}");
-    assert_eq!(out.trim(), "ok: late but fine");
+    assert_eq!(out.trim(), format!("{id}: ok: late but fine"));
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn a_quiet_pane_becomes_idle_and_then_ends() {
     if !common::bwrap_works() || !has_tmux() {
         eprintln!("skipped: needs bwrap with a user namespace and tmux");
@@ -465,14 +588,16 @@ fn a_quiet_pane_becomes_idle_and_then_ends() {
     let (code, out) = w.wait(&id, "40s");
     assert_eq!(code, Some(1), "{out}");
     assert!(
-        out.trim()
-            .starts_with("idle: ended after 10 seconds without output\nlast screen:\n"),
+        out.trim().starts_with(&format!(
+            "{id}: idle: ended after 10 seconds without output ⏎ last screen: ⏎ "
+        )),
         "{out}"
     );
     assert!(out.contains("idle-line"), "{out}");
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn output_before_the_idle_timeout_clears_the_idle_state() {
     if !common::bwrap_works() || !has_tmux() {
         eprintln!("skipped: needs bwrap with a user namespace and tmux");
@@ -502,6 +627,7 @@ fn output_before_the_idle_timeout_clears_the_idle_state() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn a_write_client_keeps_an_idle_run_and_hears_about_it() {
     if !common::bwrap_works() || !has_tmux() {
         eprintln!("skipped: needs bwrap with a user namespace and tmux");
@@ -535,12 +661,13 @@ fn a_write_client_keeps_an_idle_run_and_hears_about_it() {
     assert_eq!(code, Some(1), "{out}");
     assert!(
         out.trim()
-            .starts_with("idle: ended after 6 seconds without output"),
+            .starts_with(&format!("{id}: idle: ended after 6 seconds without output")),
         "{out}"
     );
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn idle_timeout_zero_never_ends_the_run() {
     if !common::bwrap_works() || !has_tmux() {
         eprintln!("skipped: needs bwrap with a user namespace and tmux");
@@ -563,6 +690,7 @@ fn idle_timeout_zero_never_ends_the_run() {
 }
 
 /// The Codex hooks review screen and its safe answer, as in codex.toml.
+#[cfg(target_os = "linux")]
 const SCREEN_RULE: &str = r#"
 [[screens.rule]]
 id = "codex-hooks-review"
@@ -582,6 +710,7 @@ rows = [
 "#;
 
 #[test]
+#[cfg(target_os = "linux")]
 fn a_detached_run_answers_a_known_start_screen_and_records_it() {
     if !common::bwrap_works() || !has_tmux() {
         eprintln!("skipped: needs bwrap with a user namespace and tmux");
@@ -599,7 +728,7 @@ fn a_detached_run_answers_a_known_start_screen_and_records_it() {
         String::from_utf8_lossy(&out.stderr),
     );
     assert_eq!(out.status.code(), Some(0), "{stdout}\n{stderr}");
-    assert_eq!(stdout.trim(), "ok: continued after 3");
+    assert_eq!(stdout.trim(), format!("{id}: ok: continued after 3"));
     assert!(
         stderr.contains("paddock: answered Codex hooks review: continued without trusting 1 hook"),
         "{stderr}"

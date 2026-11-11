@@ -50,17 +50,28 @@ impl Session<'_> {
             return;
         };
         if self.start == Start::Warm {
-            // The restored state already runs the app.
+            // The restored state runs the app, unless the app quit before
+            // the save (a quit from the Dock menu quits the app first). An
+            // open of a running app only brings it to the front, so the
+            // warm start always opens it.
             if appcopy::needs_copy(self.stamp.app.as_ref(), &bundle.stamp()) {
                 self.events
                     .record("copy", &text::copy_while_running(&bundle.display_name), &[]);
             }
+            self.launch_app(&bundle);
             return;
         }
         if !appcopy::needs_copy(self.stamp.app.as_ref(), &bundle.stamp()) {
             self.launch_app(&bundle);
             return;
         }
+        self.copy_app(&bundle);
+    }
+
+    /// `app.copy` of the staged archive into the guest home; the launch
+    /// follows its reply.
+    pub(super) fn copy_app(&mut self, bundle: &HostBundle) {
+        self.copy_tried = true;
         say(&text::copy_begin(&bundle.display_name, bundle.bytes));
         self.events.record(
             "copy",
@@ -68,10 +79,34 @@ impl Session<'_> {
             &[("bytes", bundle.bytes as f64)],
         );
         self.copy_begun = Some(Instant::now());
-        let request = appcopy::request(&bundle);
+        let request = appcopy::request(bundle);
         if !self.send(request, Why::AppCopy) {
             self.copy_begun = None;
         }
+    }
+
+    /// The guest has no copy of the app, for example after a warm start
+    /// of a state saved before the first copy finished. True when a copy
+    /// starts now; the launch follows it.
+    pub(super) fn copy_missing_app(&mut self) -> bool {
+        if self.copy_tried || self.quitting {
+            return false;
+        }
+        let Some(bundle) = self.app_bundle() else {
+            return false;
+        };
+        let staged = self
+            .plan
+            .app_bundle
+            .as_ref()
+            .and_then(|clone| clone.parent())
+            .map(|apps| apps.join(format!("{}.app.{}", bundle.name, appcopy::ARCHIVE_EXT)))
+            .is_some_and(|archive| archive.is_file());
+        if !staged {
+            return false;
+        }
+        self.copy_app(&bundle);
+        true
     }
 
     /// `app.launch` with the workspace folders of the profile and the

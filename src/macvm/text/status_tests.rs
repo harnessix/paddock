@@ -24,8 +24,8 @@ fn status_row() {
 #[test]
 fn status_never_started() {
     assert_eq!(
-        t::status_never_started("vscode"),
-        "vscode            never started, next start cold: the first start of this profile"
+        t::status_never_started("sample-editor"),
+        "sample-editor     never started, next start cold: the first start of this profile"
     );
 }
 
@@ -45,8 +45,8 @@ fn next_start_text() {
 #[test]
 fn status_golden_row() {
     assert_eq!(
-        t::status_golden_row("15.2 (24C101)", "0.9.0", "1.3"),
-        "macOS 15.2 (24C101), agent 0.9.0, protocol 1.3"
+        t::status_golden_row("50.2 (99B102)", "0.9.0", "1.3"),
+        "macOS 50.2 (99B102), agent 0.9.0, protocol 1.3"
     );
 }
 
@@ -59,21 +59,21 @@ fn status_golden_unknown() {
 fn status_app_row() {
     assert_eq!(
         t::status_app_row(
-            "ChatGPT",
-            "1.2025.300",
-            Some("2026-11-02"),
+            "Sample Notes",
+            "1.2.3",
+            Some("2000-01-02"),
             Some(true),
             Some(2)
         ),
-        "ChatGPT 1.2025.300 (copied 2026-11-02), running, 2 windows"
+        "Sample Notes 1.2.3 (copied 2000-01-02), running, 2 windows"
     );
     assert_eq!(
-        t::status_app_row("ChatGPT", "1.2025.300", None, Some(false), Some(1)),
-        "ChatGPT 1.2025.300, not running, 1 window"
+        t::status_app_row("Sample Notes", "1.2.3", None, Some(false), Some(1)),
+        "Sample Notes 1.2.3, not running, 1 window"
     );
     assert_eq!(
-        t::status_app_row("ChatGPT", "", None, None, None),
-        "ChatGPT"
+        t::status_app_row("Sample Notes", "", None, None, None),
+        "Sample Notes"
     );
 }
 
@@ -180,8 +180,8 @@ fn status_no_profile() {
 #[test]
 fn event_line() {
     assert_eq!(
-        t::event_line("2026-11-04T10:00:00Z", "quit", "asked", &[]),
-        "2026-11-04T10:00:00Z  quit     asked"
+        t::event_line("2000-01-04T10:00:00Z", "quit", "asked", &[]),
+        "2000-01-04T10:00:00Z  quit     asked"
     );
     assert_eq!(
         t::event_line(
@@ -205,8 +205,8 @@ fn log_missing() {
 #[test]
 fn log_follow_ended() {
     assert_eq!(
-        t::log_follow_ended("chatgpt-desktop"),
-        "the session of chatgpt-desktop ended"
+        t::log_follow_ended("sample-notes"),
+        "the session of sample-notes ended"
     );
 }
 
@@ -222,12 +222,12 @@ fn connections_fallback() {
 fn status_profile_state() {
     assert_eq!(
         t::status_profile_state(
-            "chatgpt-desktop",
+            "sample-notes",
             "default",
             63 * GIB / 10,
             "running (pid 812, 2h 14m)"
         ),
-        "  profile  chatgpt-desktop/default 6.3 GiB, running (pid 812, 2h 14m)"
+        "  profile  sample-notes/default 6.3 GiB, running (pid 812, 2h 14m)"
     );
 }
 
@@ -236,25 +236,27 @@ fn status_slots() {
     assert_eq!(t::status_slots(&[None, None]), "  slots    0 of 2 in use");
     let one = [
         Some(Holder::Mine {
-            app: "chatgpt-desktop".into(),
+            app: "sample-notes".into(),
             pid: 812,
         }),
         None,
     ];
     assert_eq!(
         t::status_slots(&one),
-        "  slots    1 of 2 in use (chatgpt-desktop (you, pid 812))"
+        "  slots    1 of 2 in use (sample-notes (you, pid 812))"
     );
     let two = [
         Some(Holder::Mine {
             app: "a".into(),
             pid: 1,
         }),
-        Some(Holder::User { name: "ana".into() }),
+        Some(Holder::User {
+            name: "demo".into(),
+        }),
     ];
     assert_eq!(
         t::status_slots(&two),
-        "  slots    2 of 2 in use (a (you, pid 1), a VM of user ana)"
+        "  slots    2 of 2 in use (a (you, pid 1), a VM of user demo)"
     );
 }
 
@@ -265,8 +267,10 @@ fn holder_short() {
         "a VM of another program"
     );
     assert_eq!(
-        t::holder_short(&Holder::User { name: "ana".into() }),
-        "a VM of user ana"
+        t::holder_short(&Holder::User {
+            name: "demo".into()
+        }),
+        "a VM of user demo"
     );
 }
 
@@ -306,8 +310,12 @@ fn report_file_heading() {
 #[test]
 fn report_profile_heading() {
     assert_eq!(
-        t::report_profile_heading("vscode", "default", Path::new("/p/vscode/default")),
-        "profile vscode/default (/p/vscode/default):"
+        t::report_profile_heading(
+            "sample-editor",
+            "default",
+            Path::new("/p/sample-editor/default")
+        ),
+        "profile sample-editor/default (/p/sample-editor/default):"
     );
 }
 

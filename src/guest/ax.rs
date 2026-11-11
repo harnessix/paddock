@@ -351,7 +351,11 @@ impl Ax {
     }
 
     /// One request on a window.
-    pub fn op(&mut self, w: &Window, op: WindowOp) -> Result<(), Fail> {
+    /// Run `op` on the window. A move sets the position only when it
+    /// changes (a live resize keeps the top left corner, and each set is
+    /// a round trip to the app), then the size, and gives the frame that
+    /// Accessibility reads back after it.
+    pub fn op(&mut self, w: &Window, op: WindowOp) -> Result<Option<Frame>, Fail> {
         if !self.trusted {
             return Err((
                 ErrorCode::Accessibility,
@@ -373,15 +377,24 @@ impl Ax {
                 let (Some(pos), Some(size)) = (pos, size) else {
                     return Err((ErrorCode::Internal, "cannot make an AXValue".into()));
                 };
-                // SAFETY: valid attribute names and values.
-                let r = unsafe {
-                    el.set_attribute_value(&CFString::from_static_str("AXPosition"), &pos)
-                };
-                if r != AXError::Success {
-                    r
-                } else {
-                    unsafe { el.set_attribute_value(&CFString::from_static_str("AXSize"), &size) }
+                let same_place = (w.frame.x - f.x).abs() < 0.5 && (w.frame.y - f.y).abs() < 0.5;
+                let same_size = (w.frame.w - f.w).abs() < 0.5 && (w.frame.h - f.h).abs() < 0.5;
+                let mut r = AXError::Success;
+                if !same_place || same_size {
+                    // SAFETY: valid attribute names and values.
+                    r = unsafe {
+                        el.set_attribute_value(&CFString::from_static_str("AXPosition"), &pos)
+                    };
                 }
+                if r == AXError::Success && !same_size {
+                    r = unsafe {
+                        el.set_attribute_value(&CFString::from_static_str("AXSize"), &size)
+                    };
+                }
+                if r == AXError::Success {
+                    return Ok(frame_of(&el));
+                }
+                r
             }
             WindowOp::Raise | WindowOp::Focus => {
                 // SAFETY: a valid action name.
@@ -409,7 +422,7 @@ impl Ax {
         if r == AXError::InvalidUIElement {
             self.elements.remove(&w.id);
         }
-        ax_result(r, op)
+        ax_result(r, op).map(|()| None)
     }
 
     /// The focused text field of the front app and its value, when it

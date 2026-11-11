@@ -1,7 +1,7 @@
 {
   "v": 1,
   "ok": false,
-  "name": "Things",
+  "name": "Sample Tasks",
   "version": "4.2.0",
   "size_bytes": 610000000,
   "app_store": true,
@@ -13,5 +13,5 @@
     6,
     8
   ],
-  "website": "https://culturedcode.com/things/"
+  "website": "https://tasks.example.com/sample-tasks/"
 }

@@ -108,6 +108,11 @@ impl Broker {
             .get("from_head")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+        // `--hitch`: the child joins this run's horse as a new session.
+        let hitch = match req.args.get("hitch").and_then(|v| v.as_bool()) {
+            Some(true) => Some(self.hitch_parent(&harness).map_err(invalid)?),
+            _ => None,
+        };
         let devices: Vec<String> = req
             .args
             .get("devices")
@@ -162,7 +167,7 @@ impl Broker {
              Branch: a new worktree of {} from {}\n\
              Limits: network {}, backend {}, no display, {} (enforced by {}), at most {} at a time\n\
              Devices: {}\n\
-             Results go to {}/{INBOX}.\n\n\
+             Results go to {}/{INBOX}{}.\n\n\
              Task ({chars} characters{}):\n{shown}",
             role.describe(),
             chosen.card,
@@ -188,6 +193,11 @@ impl Broker {
                 devices.join(", ")
             },
             self.ctx.project.display(),
+            if hitch.is_some() {
+                ", and the child is hitched: it joins the horse of this run as a new session, and its result is appended to this session"
+            } else {
+                ""
+            },
             if chars > crate::spawn::PROMPT_SHOWN {
                 format!(", the first {} shown", crate::spawn::PROMPT_SHOWN)
             } else {
@@ -216,12 +226,29 @@ impl Broker {
                     role,
                     limits,
                     from_head,
+                    hitch,
                     pick: chosen.pick,
                     devices,
                 },
                 task,
             },
         })
+    }
+
+    /// The parent run for `--hitch`: this run's horse, or a clear refusal
+    /// when this run has no horse or the child harness has no codec.
+    fn hitch_parent(
+        &self,
+        harness: &str,
+    ) -> std::result::Result<crate::horse::run::RunHorse, String> {
+        let Some(access) = self.horse.get() else {
+            return Err(
+                "--hitch needs horse mode: this run has no horse, so a child cannot join it. Start the run with horse mode on, or spawn without --hitch".into(),
+            );
+        };
+        crate::horse::hitch::wire::pinned_version(harness)
+            .map_err(|e| format!("--hitch: {e:#}"))?;
+        crate::horse::hitch::wire::parent_run(access).map_err(|e| format!("--hitch: {e:#}"))
     }
 
     pub(in crate::broker) fn refuse_reviewer(&self, req: &Request) -> Response {

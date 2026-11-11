@@ -252,6 +252,7 @@ mod tests {
                     token: token.into(),
                     v: Version { major: 1, minor: 0 },
                     bench: false,
+                    now_ms: None,
                 },
             }
             .kind(),
@@ -260,6 +261,14 @@ mod tests {
                 request: Request::DataPrepare {
                     password: token.into(),
                     data_id: "d".into(),
+                },
+            }
+            .kind(),
+            Call {
+                req: 3,
+                request: Request::ClockSet {
+                    unix_ms: 1,
+                    password: token.into(),
                 },
             }
             .kind(),
@@ -280,7 +289,7 @@ mod tests {
             log.write_line(&m).unwrap();
         }
         let text = std::fs::read_to_string(&path).unwrap();
-        assert_eq!(text.lines().count(), 4);
+        assert_eq!(text.lines().count(), 5);
         assert!(!text.contains(token), "{text}");
     }
 }

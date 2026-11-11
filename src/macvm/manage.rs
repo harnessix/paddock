@@ -253,7 +253,7 @@ pub fn status_json(layout: &Layout, host_version: Option<&str>, me: &str) -> ser
         }
     };
     serde_json::json!({
-        "dir": layout.root, "golden": golden, "prev": prev, "host_version": host_version,
+        "v": 1, "dir": layout.root, "golden": golden, "prev": prev, "host_version": host_version,
         "profiles": profiles, "sessions": sessions, "slots": slots
     })
 }

@@ -152,6 +152,16 @@ impl Node {
     }
 }
 
+/// The end of the name of a temporary file: unique per process and per
+/// thread, so two threads that write the same file do not share it.
+pub(super) fn tmp_suffix() -> String {
+    format!(
+        ".paddock-tmp-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    )
+}
+
 impl super::Dir {
     /// The fd of this open folder, for the `*at` calls of another module
     /// (the clones of shadow.rs). It stays owned here.

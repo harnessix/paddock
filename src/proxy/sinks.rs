@@ -3,6 +3,7 @@
 //! the route installs.
 
 use super::{authority, HostProxy, Identity};
+use std::os::unix::net::UnixStream;
 use std::sync::Arc;
 
 /// The sink of the egress monitor: the target host of an open connection,
@@ -49,17 +50,44 @@ impl std::fmt::Debug for Gate {
 }
 
 /// An allowed connection: what the gate wants to know at its close, the
-/// bytes up (from the app) and down (to the app).
-pub struct Opened(pub Box<dyn FnOnce(u64, u64) + Send>);
+/// bytes up (from the app) and down (to the app), and what it does with
+/// the client stream while the connection lives: the firewall of the
+/// macOS guest keeps a clone, so a switch to network mode `none` can shut
+/// the open connections down.
+pub struct Opened {
+    close: Box<dyn FnOnce(u64, u64) + Send>,
+    hold: Option<HoldFn>,
+}
+
+pub type HoldFn = Box<dyn FnOnce(&UnixStream) + Send>;
 
 impl Opened {
+    pub fn new(close: impl FnOnce(u64, u64) + Send + 'static) -> Self {
+        Self {
+            close: Box::new(close),
+            hold: None,
+        }
+    }
+
+    /// Give the client stream to `hold` once the gate allowed it.
+    pub fn holding(mut self, hold: impl FnOnce(&UnixStream) + Send + 'static) -> Self {
+        self.hold = Some(Box::new(hold));
+        self
+    }
+
     /// Nothing to do at the close.
     pub fn silent() -> Self {
-        Self(Box::new(|_, _| {}))
+        Self::new(|_, _| {})
     }
 
     pub fn close(self, up: u64, down: u64) {
-        (self.0)(up, down)
+        (self.close)(up, down)
+    }
+
+    pub fn hold(&mut self, client: &UnixStream) {
+        if let Some(h) = self.hold.take() {
+            h(client)
+        }
     }
 }
 
@@ -85,10 +113,14 @@ impl HostProxy {
         host: &str,
         port: u16,
         id: Option<&Identity>,
+        client: &UnixStream,
     ) -> Result<Option<Opened>, String> {
         match &self.gate {
             None => Ok(None),
-            Some(g) => (g.0)(host, port, id).map(Some),
+            Some(g) => (g.0)(host, port, id).map(|mut o| {
+                o.hold(client);
+                Some(o)
+            }),
         }
     }
 }

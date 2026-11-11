@@ -60,8 +60,8 @@ fn quit_not_taken() {
 #[test]
 fn app_not_running() {
     assert_eq!(
-        t::app_not_running("com.openai.chat"),
-        "com.openai.chat does not run"
+        t::app_not_running("com.example.notes"),
+        "com.example.notes does not run"
     );
 }
 
@@ -281,4 +281,9 @@ fn vsock_no_answer() {
         &t::vsock_no_answer(1030, Duration::from_secs(10)),
         &["port 1030 within 10 s"],
     );
+}
+
+#[test]
+fn clock_set_failed() {
+    assert!(super::clock_set_failed(Some(1)).contains("1"));
 }

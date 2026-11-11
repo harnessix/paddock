@@ -281,6 +281,32 @@ pub struct Removed {
     pub note: Option<String>,
 }
 
+fn layer_run<'a>(env: &HostEnv, path: &Path, running: &'a [Running]) -> Option<&'a Running> {
+    let marker = std::fs::read_to_string(path.join("project")).ok();
+    running.iter().find(|run| {
+        layers::project_dir(env, &run.project) == path
+            || marker
+                .as_deref()
+                .is_some_and(|p| Path::new(p) == run.project)
+    })
+}
+
+fn shared_cache_run<'a>(env: &HostEnv, path: &Path, running: &'a [Running]) -> Option<&'a Running> {
+    let marker = std::fs::read_to_string(path.join("project")).ok();
+    running.iter().find(|run| {
+        std::iter::once(run.project.as_path())
+            .chain(run.kv_project.as_deref())
+            .any(|project| {
+                let identity = super::package_cache::identity(project).ok();
+                identity.as_ref().is_some_and(|p| {
+                    super::package_cache::root(env).join(state::slug(p)) == path
+                        || marker.as_deref().is_some_and(|m| Path::new(m) == p)
+                }) || marker.as_deref().is_some_and(|m| Path::new(m) == project)
+                    || super::package_cache::root(env).join(state::slug(project)) == path
+            })
+    })
+}
+
 /// Remove the selected items. The running sandboxes are read again first, so
 /// one that started after the scan keeps its home.
 pub fn apply(env: &HostEnv, containers: &dyn Containers, items: &[Item]) -> Vec<Removed> {
@@ -313,6 +339,7 @@ pub fn apply(env: &HostEnv, containers: &dyn Containers, items: &[Item]) -> Vec<
                     .run(cli, &["builder", "prune", "--force", "--filter", &f])
                     .map(|_| ())
             }),
+            // Every sandbox may mount the global lower layer; its ownership is not per project.
             Action::Path { path }
                 if !running.is_empty() && path.parent() == Some(shared_cache(env).as_path()) =>
             {
@@ -320,6 +347,24 @@ pub fn apply(env: &HostEnv, containers: &dyn Containers, items: &[Item]) -> Vec<
             }
             Action::Path { path } if running_homes.contains(path) => {
                 Err(anyhow::anyhow!("a sandbox started in it; skipped"))
+            }
+            Action::Path { path }
+                if path.parent() == Some(layers::projects_root(env).as_path()) =>
+            {
+                if let Some(run) = layer_run(env, path, &running) {
+                    Err(anyhow::anyhow!("in use by run {}; skipped", run.id))
+                } else {
+                    super::package_cache::gc::remove(env, path)
+                }
+            }
+            Action::Path { path }
+                if path.parent() == Some(super::package_cache::root(env).as_path()) =>
+            {
+                if let Some(run) = shared_cache_run(env, path, &running) {
+                    Err(anyhow::anyhow!("in use by run {}; skipped", run.id))
+                } else {
+                    super::package_cache::gc::remove_shared(env, path)
+                }
             }
             Action::Path { path } => remove_path(env, path),
             Action::Caches { home, .. } if running_homes.contains(home) => {

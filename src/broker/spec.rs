@@ -58,6 +58,9 @@ impl Broker {
                 "lines": f.as_ref().map(crate::speckit::prompt::lines).unwrap_or_default(),
             }));
         }
+        if action == "gauge" {
+            return self.gauge(req);
+        }
         let spot = match self.spot(req) {
             Ok(s) => s,
             Err(r) => return r,
@@ -111,6 +114,31 @@ impl Broker {
             None,
         );
         resp
+    }
+
+    /// `paddock-host gauge`: a read of the feature's measures, computed
+    /// here because the loft history is host-only.
+    fn gauge(&self, req: &Request) -> Response {
+        let num = |k: &str| req.args.get(k).and_then(serde_json::Value::as_u64);
+        let o = crate::gauge::Opts {
+            seed: num("seed").unwrap_or(crate::gauge::forecast::SEED),
+            window_days: num("window")
+                .map_or(crate::gauge::WINDOW_DAYS, |w| w.clamp(1, 365) as usize),
+            strict: req
+                .args
+                .get("strict")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false),
+            ..Default::default()
+        };
+        match crate::gauge::gauge(&self.env, &self.ctx.project, arg_str(req, "feature"), &o) {
+            Ok(r) => {
+                let mut j = serde_json::to_value(&r).unwrap_or_default();
+                j["text"] = crate::gauge::render::text(&r).into();
+                Response::done(j)
+            }
+            Err(e) => Response::new(Status::Failed, format!("{e:#}")),
+        }
     }
 
     /// Check `spawn --task WANT` before the card: the feature and the task

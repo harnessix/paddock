@@ -210,7 +210,7 @@ impl InstanceState {
 /// folders and any mount left under them. Returns what it removed, as
 /// `device/caller`.
 pub fn clear_stale(env: &HostEnv) -> Vec<String> {
-    let mut gone = Vec::new();
+    let mut gone = clear_abandoned_writes(env);
     for s in InstanceState::list(env) {
         if s.alive() {
             continue;
@@ -229,6 +229,49 @@ pub fn clear_stale(env: &HostEnv) -> Vec<String> {
         );
         InstanceState::remove(env, &s.device, &s.caller);
         gone.push(format!("{}/{}", s.device, s.caller));
+    }
+    gone
+}
+
+/// Recover atomic state writes whose writer died before the rename.
+/// A live writer or a still-live supervisor keeps its file and sockets.
+fn clear_abandoned_writes(env: &HostEnv) -> Vec<String> {
+    let mut gone = Vec::new();
+    for device in std::fs::read_dir(instances_dir(env))
+        .into_iter()
+        .flatten()
+        .flatten()
+    {
+        for entry in std::fs::read_dir(device.path())
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            let Some((_, suffix)) = name.split_once(".json.paddock-tmp-") else {
+                continue;
+            };
+            let Some(writer) = suffix.split('-').next().and_then(|s| s.parse::<u32>().ok()) else {
+                continue;
+            };
+            if crate::state::alive(writer) {
+                continue;
+            }
+            let path = entry.path();
+            if let Some(state) = InstanceState::read(&path) {
+                if state.alive() {
+                    continue;
+                }
+                remove_dir(&state.dir);
+                crate::backend::seatbelt::device::remove_sockets(
+                    env,
+                    &super::spec::sandbox_id(&state.device, &state.caller),
+                );
+                gone.push(format!("{}/{}", state.device, state.caller));
+            }
+            let _ = std::fs::remove_file(path);
+        }
     }
     gone
 }
@@ -350,5 +393,30 @@ mod tests {
         assert_eq!(InstanceState::list(&e).len(), 1);
         InstanceState::remove(&e, "notes", "box1");
         assert!(InstanceState::of_device(&e, "notes").is_empty());
+    }
+
+    #[test]
+    fn interrupted_atomic_state_is_cleaned_without_touching_a_live_writer() {
+        let t = tempfile::tempdir().unwrap();
+        let e = env(t.path());
+        let dead = inst(t.path(), "orphan", 4_000_000);
+        std::fs::create_dir_all(&dead.dir).unwrap();
+        let state = state_file(&e, "notes", "orphan");
+        std::fs::create_dir_all(state.parent().unwrap()).unwrap();
+        let orphan = state.with_file_name("orphan.json.paddock-tmp-4000000-1-0");
+        std::fs::write(&orphan, serde_json::to_vec(&dead).unwrap()).unwrap();
+        let active = state.with_file_name(format!(
+            "active.json.paddock-tmp-{}-1-0",
+            std::process::id()
+        ));
+        std::fs::write(&active, serde_json::to_vec(&dead).unwrap()).unwrap();
+        let incomplete = state.with_file_name("incomplete.json.paddock-tmp-4000000-1-1");
+        std::fs::write(&incomplete, "{").unwrap();
+        assert!(InstanceState::list(&e).is_empty());
+        assert_eq!(clear_stale(&e), ["notes/orphan"]);
+        assert!(!orphan.exists());
+        assert!(!incomplete.exists());
+        assert!(!dead.dir.exists());
+        assert!(active.exists(), "a live writer's file stays");
     }
 }

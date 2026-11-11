@@ -11,14 +11,14 @@ const TOKEN: &str = "0123456789abcdef0123456789abcdef";
 const APP: &str = "com.apple.TextEdit";
 
 /// The host side of the control line.
-struct Host {
+pub(super) struct Host {
     s: UnixStream,
     req: u64,
     seen: Vec<Event>,
 }
 
 impl Host {
-    fn new(s: UnixStream) -> Self {
+    pub(super) fn new(s: UnixStream) -> Self {
         s.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
         Host {
             s,
@@ -49,7 +49,7 @@ impl Host {
         }
     }
 
-    fn send(&mut self, request: Request) -> u64 {
+    pub(super) fn send(&mut self, request: Request) -> u64 {
         self.req += 1;
         let call = Call {
             req: self.req,
@@ -59,26 +59,27 @@ impl Host {
         self.req
     }
 
-    fn reply(&mut self, req: u64) -> Outcome {
+    pub(super) fn reply(&mut self, req: u64) -> Outcome {
         match self.until(|e| matches!(e, Event::Reply(r) if r.req == req)) {
             Event::Reply(r) => r.outcome,
             _ => unreachable!(),
         }
     }
 
-    fn handshake(&mut self) {
+    pub(super) fn handshake(&mut self) {
         assert!(matches!(self.next(), Event::Hello(h) if h.v == VERSION && h.can_update));
         let req = self.send(Request::Token {
             token: TOKEN.into(),
             v: VERSION,
             bench: false,
+            now_ms: None,
         });
         assert_eq!(self.reply(req), Outcome::Ok { data: None });
     }
 }
 
 /// The agent in a thread, with a queue of connections to dial.
-fn start(fake: Fake, streams: Vec<UnixStream>) -> std::thread::JoinHandle<i32> {
+pub(super) fn start(fake: Fake, streams: Vec<UnixStream>) -> std::thread::JoinHandle<i32> {
     let queue = Arc::new(Mutex::new(VecDeque::from(streams)));
     std::thread::spawn(move || {
         let mut fake = fake;
@@ -106,7 +107,11 @@ fn raw(id: u32, pid: u32) -> RawWindow {
 
 fn with_app(st: &Arc<Mutex<FakeState>>) {
     let mut st = st.lock().unwrap();
-    st.windows = vec![raw(1, 100), raw(2, 100), raw(3, 200)];
+    // Window 3 is the Dock's: the desktop shell is never reported.
+    let mut dock = raw(3, 200);
+    dock.owner = "Dock".into();
+    dock.bundle = Some("com.apple.dock".into());
+    st.windows = vec![raw(1, 100), raw(2, 100), dock];
     st.procs = [(1, 0), (200, 1)].into();
     st.front = Some(100);
     st.titles.insert(1, "Untitled".into());
@@ -137,6 +142,7 @@ fn handshake_ping_restart() {
         token: "x".into(),
         v: VERSION,
         bench: false,
+        now_ms: None,
     });
     assert!(matches!(
         host.reply(req),
@@ -232,10 +238,10 @@ fn launch_windows_move_and_exit() {
         }
     ));
     assert!(st.lock().unwrap().data_prepares.is_empty());
-    // A move: the reply, then the event with the new frame.
+    // A move: the reply with the frame after it, then the event.
     let frame = Frame::new(100.0, 100.0, 800.0, 600.0);
     let req = host.send(Request::WindowMove { id: 2, frame });
-    assert_eq!(host.reply(req), Outcome::Ok { data: None });
+    assert_eq!(host.reply(req).moved(), Some(frame));
     let Event::Windows(w) = host.until(|e| matches!(e, Event::Windows(_))) else {
         unreachable!()
     };

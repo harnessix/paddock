@@ -1,6 +1,7 @@
-//! The host-led drag: the hit test of a press, the slop, the resize
-//! arithmetic, the rules a led frame passes, and the throttle of
-//! `window.move` with the follow of the guest's reports.
+//! The host-led drag and resize: the hit test of a press, the slop, the
+//! resize arithmetic, the rules a host frame passes, the guest frame of a
+//! resize, and the coalescing of `window.move` with the follow of the
+//! guest's replies and reports.
 
 use super::*;
 
@@ -200,87 +201,135 @@ fn a_resize_never_makes_a_window_larger_than_its_level_allows() {
     assert!(r.x >= 0.0 && r.y + r.h <= display.h + 0.5, "{r:?}");
 }
 
-fn f(x: f64) -> Frame {
-    Frame::new(x, 100.0, 400.0, 300.0)
+fn f(w: f64) -> Frame {
+    Frame::new(100.0, 100.0, w, 300.0)
 }
 
 #[test]
-fn one_move_in_flight_and_only_the_latest_pending() {
+fn a_resize_keeps_the_guest_corner_and_takes_the_host_size() {
+    let screens = ScreenSet::one(1440.0, 900.0);
+    let display = screens.display(2.0);
+    let base = Frame::new(100.0, 80.0, 400.0, 300.0);
+    let t = resize_target(Level::Normal, base, 520.0, 260.0, screens.main(), display);
+    assert_eq!(t, Frame::new(100.0, 80.0, 520.0, 260.0));
+    // Larger than the room right of the corner: the corner moves left.
+    let t = resize_target(Level::Normal, base, 1400.0, 300.0, screens.main(), display);
+    assert_eq!(t, Frame::new(40.0, 80.0, 1400.0, 300.0));
+    // A floating window never grows beyond its level.
+    let t = resize_target(
+        Level::Floating,
+        base,
+        3000.0,
+        2000.0,
+        screens.main(),
+        display,
+    );
+    assert!(crop::size_allowed(Level::Floating, t, screens.main()));
+}
+
+#[test]
+fn one_move_in_flight_and_only_the_newest_pending() {
     let t = Instant::now();
     let mut l = Leads::default();
-    assert_eq!(l.host_moved(1, f(10.0), true, t), Some(f(10.0)));
+    assert_eq!(l.host_resized(1, f(410.0), true, t), Some(f(410.0)));
     // In flight: the next frames wait, and only the newest is kept.
-    assert_eq!(l.host_moved(1, f(20.0), true, t), None);
-    assert_eq!(l.host_moved(1, f(30.0), true, t), None);
-    assert_eq!(l.target(1), Some(f(30.0)));
-    // The reply sends the newest pending frame, not 20.
-    assert_eq!(l.answered(1, t), Some(f(30.0)));
-    // Its reply has nothing pending.
+    assert_eq!(l.host_resized(1, f(420.0), true, t), None);
+    assert_eq!(l.host_resized(1, f(430.0), true, t), None);
+    assert_eq!(l.target(1), Some(f(430.0)));
+    assert_eq!(l.dropped(1), 1);
+    // The reply sends the newest pending frame, never the stale 420.
+    assert_eq!(l.answered(1, t), Some(f(430.0)));
     assert_eq!(l.answered(1, t), None);
-    // Nothing in flight: the next move goes at once.
-    assert_eq!(l.host_moved(1, f(40.0), true, t), Some(f(40.0)));
+    // Nothing in flight: the next step goes at once.
+    assert_eq!(l.host_resized(1, f(440.0), true, t), Some(f(440.0)));
     // A second window has its own lead.
-    assert_eq!(l.host_moved(2, f(5.0), false, t), Some(f(5.0)));
+    assert_eq!(l.host_resized(2, f(5.0), true, t), Some(f(5.0)));
     assert_eq!(l.len(), 2);
+    assert_eq!(l.dropped(9), 0);
 }
 
 #[test]
-fn a_move_to_the_same_frame_while_in_flight_sends_nothing_more() {
+fn a_step_to_the_same_frame_while_in_flight_sends_nothing_more() {
     let t = Instant::now();
     let mut l = Leads::default();
-    l.host_moved(1, f(10.0), true, t);
-    assert_eq!(l.host_moved(1, f(10.2), true, t), None);
+    l.host_resized(1, f(410.0), false, t);
+    assert_eq!(l.host_resized(1, f(410.2), false, t), None);
     assert_eq!(l.answered(1, t), None);
+    assert_eq!(l.dropped(1), 0);
 }
 
 #[test]
-fn guest_reports_move_only_the_view_until_the_guest_reaches_the_host() {
+fn the_reply_frame_moves_the_view_and_ends_the_lead_at_the_target() {
     let t = Instant::now();
     let mut l = Leads::default();
-    l.host_moved(1, f(10.0), true, t);
-    l.host_moved(1, f(50.0), true, t);
-    // An intermediate frame while the user holds the window.
-    assert_eq!(l.guest_frame(1, f(10.0), t), Follow::View);
+    l.host_resized(1, f(410.0), true, t);
+    l.host_resized(1, f(450.0), true, t);
+    // The reply of 410 sends 450 and shows 410.
+    assert_eq!(l.answered(1, t), Some(f(450.0)));
+    assert_eq!(l.reply_frame(1, f(410.0), t), Follow::View);
+    // A window event after the reply is older than it: no view move.
+    assert_eq!(l.guest_frame(1, f(400.0), t), Follow::Stale);
+    l.released(1, t);
+    let later = t + Duration::from_millis(18);
+    assert_eq!(l.answered(1, later), None);
+    assert_eq!(
+        l.reply_frame(1, f(450.0), later),
+        Follow::Reached(later.duration_since(t))
+    );
+    assert!(!l.leading(1));
+    // No lead: the host follows the guest at its offset.
+    assert_eq!(l.guest_frame(1, f(480.0), later), Follow::Guest);
+    assert_eq!(l.reply_frame(1, f(480.0), later), Follow::Guest);
+}
+
+#[test]
+fn a_reply_at_another_size_settles_the_host_window() {
+    let t = Instant::now();
+    let mut l = Leads::default();
+    l.host_resized(1, f(50.0), false, t);
     l.answered(1, t);
-    l.released(1);
-    // 50 is in flight now.
-    assert_eq!(l.guest_frame(1, f(10.0), t), Follow::View);
+    // The guest's minimum width is 200.
+    assert_eq!(l.reply_frame(1, f(200.0), t), Follow::Settle);
+    assert!(!l.leading(1));
+}
+
+#[test]
+fn an_old_agent_without_reply_frames_still_follows_the_reports() {
+    let t = Instant::now();
+    let mut l = Leads::default();
+    l.host_resized(1, f(410.0), true, t);
+    l.host_resized(1, f(450.0), true, t);
+    // An intermediate frame while the user holds the edge.
+    assert_eq!(l.guest_frame(1, f(410.0), t), Follow::View);
+    l.answered(1, t);
+    l.released(1, t);
+    assert_eq!(l.guest_frame(1, f(410.0), t), Follow::View);
     let later = t + Duration::from_millis(30);
     l.answered(1, later);
     let at = later + Duration::from_millis(5);
     assert_eq!(
-        l.guest_frame(1, f(51.0), at),
+        l.guest_frame(1, f(451.0), at),
         Follow::Reached(at.duration_since(t))
     );
-    assert!(!l.leading(1));
-    // No lead: the host follows the guest as before.
-    assert_eq!(l.guest_frame(1, f(80.0), at), Follow::Window);
-}
-
-#[test]
-fn a_stale_report_after_the_reply_waits_for_the_grace_then_the_guest_wins() {
-    let t = Instant::now();
-    let mut l = Leads::default();
-    l.host_moved(1, f(50.0), false, t);
-    l.answered(1, t);
-    // The guest list lags one poll: still the view only.
+    // A stale report after the reply waits for the grace, then the guest's
+    // frame is its answer.
+    l.host_resized(2, f(450.0), false, t);
+    l.answered(2, t);
     assert_eq!(
-        l.guest_frame(1, f(10.0), t + Duration::from_millis(100)),
+        l.guest_frame(2, f(400.0), t + Duration::from_millis(100)),
         Follow::View
     );
-    // After the grace the guest's frame is its answer (a minimum size, a
-    // refusal): the host window follows it.
-    assert_eq!(l.guest_frame(1, f(10.0), t + GRACE), Follow::Window);
-    assert!(!l.leading(1));
+    assert_eq!(l.guest_frame(2, f(400.0), t + GRACE), Follow::Settle);
+    assert!(l.is_empty());
 }
 
 #[test]
 fn an_idle_lead_without_a_matching_report_expires_after_the_grace() {
     let t = Instant::now();
     let mut l = Leads::default();
-    l.host_moved(1, f(50.0), false, t);
-    l.host_moved(2, f(50.0), true, t);
-    l.host_moved(3, f(50.0), false, t);
+    l.host_resized(1, f(50.0), false, t);
+    l.host_resized(2, f(50.0), true, t);
+    l.host_resized(3, f(50.0), false, t);
     // No reply yet: nothing expires.
     assert!(l.expired(t + GRACE * 10).is_empty());
     l.answered(1, t);
@@ -291,7 +340,7 @@ fn an_idle_lead_without_a_matching_report_expires_after_the_grace() {
     assert!(l.leading(2) && l.leading(3) && !l.leading(1));
     // A failed or timed out move counts as answered.
     assert_eq!(l.answered(3, t), None);
-    l.released(2);
+    l.released(2, t);
     assert_eq!(l.expired(t + GRACE), vec![2, 3]);
     assert!(l.is_empty());
 }
@@ -300,11 +349,33 @@ fn an_idle_lead_without_a_matching_report_expires_after_the_grace() {
 fn remove_and_clear_end_the_leads() {
     let t = Instant::now();
     let mut l = Leads::default();
-    l.host_moved(1, f(1.0), true, t);
-    l.host_moved(2, f(1.0), true, t);
+    l.host_resized(1, f(1.0), true, t);
+    l.host_resized(2, f(1.0), true, t);
     l.remove(1);
     assert!(!l.leading(1));
     assert_eq!(l.answered(1, t), None);
     l.clear();
     assert!(l.is_empty());
+}
+
+#[test]
+fn a_release_at_the_frame_the_guest_has_sends_nothing_and_ends_the_lead() {
+    let t = Instant::now();
+    let mut l = Leads::default();
+    l.host_resized(1, f(450.0), true, t);
+    l.answered(1, t);
+    // Held: the reply shows the frame, the lead stays.
+    assert_eq!(l.reply_frame(1, f(450.0), t), Follow::View);
+    // The release at the same frame: no second move, and the lead ends.
+    assert_eq!(l.host_resized(1, f(450.0), false, t), None);
+    let later = t + Duration::from_millis(40);
+    assert_eq!(l.released(1, later), Some(later.duration_since(t)));
+    assert!(!l.leading(1));
+    // A release at another frame sends it.
+    l.host_resized(2, f(450.0), true, t);
+    l.answered(2, t);
+    l.reply_frame(2, f(450.0), t);
+    assert_eq!(l.host_resized(2, f(470.0), false, t), Some(f(470.0)));
+    assert_eq!(l.released(2, t), None);
+    assert!(l.leading(2));
 }

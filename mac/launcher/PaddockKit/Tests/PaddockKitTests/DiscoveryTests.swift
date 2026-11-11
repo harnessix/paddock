@@ -79,19 +79,34 @@ final class DiscoveryTests: XCTestCase {
         XCTAssertEqual(gate.check(versionOutput: "garbage"), .unreadable(output: "garbage"))
     }
 
+    // The launcher's own gate: paddock 0.2.2 or newer, by major, minor and
+    // patch, any 0.x after it, never a 0.3 minimum.
+    func testCurrentGateIsTwoTwoTwoWithPatch() {
+        let gate = VersionGate.current
+        XCTAssertEqual(gate.minimumText, "0.2.2")
+        XCTAssertEqual(gate.check(versionOutput: "paddock 0.2.1\n"), .tooOld(have: "0.2.1", need: "0.2.2"))
+        XCTAssertEqual(gate.check(versionOutput: "paddock 0.1.9"), .tooOld(have: "0.1.9", need: "0.2.2"))
+        XCTAssertEqual(gate.check(versionOutput: "paddock 0.2.2"), .ok(version: "0.2.2"))
+        XCTAssertEqual(gate.check(versionOutput: "paddock 0.2.10"), .ok(version: "0.2.10"))
+        XCTAssertEqual(gate.check(versionOutput: "paddock 0.3.0"), .ok(version: "0.3.0"))
+        XCTAssertEqual(gate.check(versionOutput: "paddock 0.2"), .tooOld(have: "0.2.0", need: "0.2.2"))
+        XCTAssertEqual(gate.check(versionOutput: "paddock 0.2.2-dev"), .ok(version: "0.2.2"))
+        XCTAssertEqual(gate.check(versionOutput: "paddock 1.0.0"), .tooNew(have: "1.0.0"))
+        XCTAssertEqual(LauncherError.tooOld(have: "0.2.1", need: gate.minimumText).body?.english,
+                       "This version of paddock for Mac needs paddock 0.2.2 or newer. You have 0.2.1.")
+    }
+
     func testVersionGateTitles() {
         let gate = VersionGate.current
-        XCTAssertEqual(gate.error(for: .tooOld(have: "0.2.1", need: "0.3"))?.title?.english, "Update paddock")
+        XCTAssertEqual(gate.error(for: .tooOld(have: "0.2.1", need: "0.2.2"))?.title?.english, "Update paddock")
         XCTAssertEqual(gate.error(for: .tooNew(have: "1.0.0"))?.title?.english, "Update paddock for Mac")
         XCTAssertNil(gate.error(for: .ok(version: "0.3.0")))
-        XCTAssertEqual(LauncherError.tooOld(have: "0.2.1", need: "0.3").body?.english,
-                       "This version of paddock for Mac needs paddock 0.3 or newer. You have 0.2.1.")
     }
 
     @MainActor
     func testOldAndNewVersionStopTheStart() async throws {
         let old = try await Harness("old-version")
-        XCTAssertEqual(old.store.binary, .found(path: "/fake/paddock", verdict: .tooOld(have: "0.2.1", need: "0.3")))
+        XCTAssertEqual(old.store.binary, .found(path: "/fake/paddock", verdict: .tooOld(have: "0.2.1", need: "0.2.2")))
         XCTAssertTrue(old.calls(["app", "list"]).isEmpty)
         let new = try await Harness("new-version")
         XCTAssertEqual(new.store.binary, .found(path: "/fake/paddock", verdict: .tooNew(have: "1.0.0")))
@@ -147,7 +162,7 @@ final class DiscoveryTests: XCTestCase {
     }
 
     func testOldPaddockRowOffersUpgrade() {
-        let r = Prerequisites.rows(doctor: nil, binary: .tooOld(have: "0.2.1", need: "0.3"), binaryMissing: false)
+        let r = Prerequisites.rows(doctor: nil, binary: .tooOld(have: "0.2.1", need: "0.2.2"), binaryMissing: false)
         let row = r.first { $0.kind == .paddock }!
         XCTAssertEqual(row.command, "brew upgrade paddock")
         XCTAssertEqual(row.status, .fail)

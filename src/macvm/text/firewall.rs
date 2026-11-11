@@ -125,7 +125,7 @@ pub fn ask_count(count: u64) -> String {
 
 /// The help of `paddock approvals answer` for a `connect` question.
 pub fn connect_answers() -> String {
-    "a connect question takes --allow-once, --allow-session, --allow-always, --deny or --deny-always".into()
+    "a connect question takes --allow-once, --allow-site, --allow-everything, --allow-session, --allow-always, --deny or --deny-always".into()
 }
 
 /// `paddock approvals answer ID --allow-always` and the others.
@@ -177,3 +177,8 @@ pub fn connection_refused(host: &str, port: u16, rule: &str) -> String {
 #[cfg(test)]
 #[path = "firewall_tests.rs"]
 mod tests;
+
+/// Remaining lifetime of a temporary rule.
+pub fn rule_time_left(seconds: u64) -> String {
+    format!(" ({seconds} seconds left)")
+}

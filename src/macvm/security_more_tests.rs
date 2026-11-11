@@ -207,7 +207,7 @@ fn s12_golden_flags() {
     assert!(!crate::macvm::manage::sealed_ok(&layout.golden.disk));
     // The doctor says so.
     let mut m = Manifest::new("15.2", "24C101", "0.9.0");
-    m.sealed = Some("2026-11-01T10:00:00Z".into());
+    m.sealed = Some("2000-01-01T03:04:05Z".into());
     m.at(State::Sealed);
     let mut v = view();
     v.golden = crate::macvm::manage::GoldenView::Sealed {
@@ -376,7 +376,7 @@ fn s15_header_bounds() {
 fn s16_slots() {
     let t = tempfile::tempdir().unwrap();
     let dir = t.path().join("missing").join("dev.paddock.macvm");
-    let a = Slot::take_in(&dir, "u", "chatgpt-desktop", 812).unwrap();
+    let a = Slot::take_in(&dir, "u", "sample-notes", 812).unwrap();
     assert_eq!(
         slots_dir_mode(&dir),
         Some(SLOTS_DIR_MODE),
@@ -399,7 +399,7 @@ fn s16_slots() {
     assert_eq!(
         full.holders[0],
         Holder::Mine {
-            app: "chatgpt-desktop".into(),
+            app: "sample-notes".into(),
             pid: 812
         }
     );
@@ -476,7 +476,7 @@ fn s18_bundle_redaction() {
     let mut m = Manifest::new("15.2", "24C101", "0.9.0");
     m.at(State::Sealed);
     layout.golden.write_manifest(&m).unwrap();
-    let p = layout.profile("chatgpt-desktop", "default");
+    let p = layout.profile("sample-notes", "default");
     std::fs::create_dir_all(p.logs()).unwrap();
     now().stamp("abcd1234-3".into()).write(&p.stamp()).unwrap();
     std::fs::write(p.state(), b"STATE-BYTES-PLANT").unwrap();
@@ -514,7 +514,7 @@ fn s18_bundle_redaction() {
     for path in [p.shim_log(), p.console_log(), p.boundary_log()] {
         let mut f = std::fs::File::create(&path).unwrap();
         for l in raw.iter().chain(kinds.iter()) {
-            writeln!(f, "2026-11-04T10:00:00Z INFO {l}").unwrap();
+            writeln!(f, "2000-01-03T03:04:05Z INFO {l}").unwrap();
         }
     }
     let ev = Events::open(&p);
@@ -532,7 +532,7 @@ fn s18_bundle_redaction() {
         assert!(!out.contains(leak), "{leak} leaked:\n{out}");
     }
     assert!(
-        out.contains("profile chatgpt-desktop/default (")
+        out.contains("profile sample-notes/default (")
             && out.contains("shim.log (last 200 lines):"),
         "{out}"
     );
@@ -571,8 +571,8 @@ fn s19_rules_file() {
         .contains("host = \"*\""));
     rules.seed(
         &[
-            "chatgpt.com".into(),
-            "*.openai.com".into(),
+            "notes.example.com".into(),
+            "*.example.com".into(),
             "not a host".into(),
         ],
         1_700_000_000,
@@ -589,7 +589,7 @@ fn s19_rules_file() {
     assert!(
         !std::fs::read_to_string(&path)
             .unwrap()
-            .contains("chatgpt.com"),
+            .contains("notes.example.com"),
         "the seeds stay out of the file"
     );
     assert!(rules

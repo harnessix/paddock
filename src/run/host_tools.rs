@@ -40,6 +40,18 @@ pub(super) fn add(env: &HostEnv, built: &mut Built, run_dir: &Path) -> Result<()
     built
         .spec
         .add_tool("paddock-host", wrapper, "host passthrough client");
+    let prefer = crate::exclave::prefer::load(env)?;
+    if !prefer.is_empty() {
+        let wrapper = run_dir.join("cargo-exclave");
+        gui::write_file(
+            &wrapper,
+            &crate::exclave::prefer::cargo_wrapper(&prefer),
+            0o755,
+        )?;
+        built
+            .spec
+            .add_tool("cargo", wrapper, "exclave preferred commands");
+    }
     // Plain `git push` and `gh` reach the host too. The sandbox .gitconfig
     // sends pushes to the paddock:: remote helper.
     let helper = run_dir.join("git-remote-paddock");
@@ -54,6 +66,16 @@ pub(super) fn add(env: &HostEnv, built: &mut Built, run_dir: &Path) -> Result<()
     let gh = run_dir.join("gh");
     gui::write_file(&gh, "#!/bin/sh\nexec paddock host gh \"$@\"\n", 0o755)?;
     built.spec.add_tool("gh", gh, "gh through the host");
+    // The tack stand-ins, first on PATH: an allowlisted program in the
+    // sandbox says that it has the references only here, instead of
+    // failing on a value that is not there.
+    if let Some(d) = crate::tack::tackshims::sandbox_shims(env, run_dir)? {
+        built
+            .spec
+            .add_mount(crate::spec::Mount::same(&d, false, "tack stand-ins"));
+        built.spec.path.retain(|p| p != &d);
+        built.spec.path.insert(0, d);
+    }
     // tea and glab only when the user has them: without them the sandbox
     // sees "not found", as before.
     for tool in ["tea", "glab"] {

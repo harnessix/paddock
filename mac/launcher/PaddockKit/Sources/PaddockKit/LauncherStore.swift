@@ -69,6 +69,10 @@ public final class LauncherStore {
     public var paused: PausedJSON?
     /// False while the event stream is down: the UI shows `Live updates paused`.
     public var streamHealthy = true
+    /// True once `app list --json` answered.
+    public var listLoaded = false
+    /// paddock's line when `app list --json` failed and no list is shown.
+    public var listError: String?
 
     // MARK: UI state
     public var selection: SidebarItem?
@@ -83,6 +87,10 @@ public final class LauncherStore {
     public var buildRunning = false
     /// A failed command, shown in place with paddock's line.
     public var lastError: LauncherError?
+    /// The optional commands of this paddock (`app suspend`).
+    public var capabilities = Capabilities()
+    /// paddock's answer to Pause or Resume of a build, shown under the steps.
+    public var buildNote: UIText?
 
     // MARK: Plumbing
     @ObservationIgnored public private(set) var service: PaddockService?
@@ -123,6 +131,7 @@ public final class LauncherStore {
         let verdict = versionGate.check(versionOutput: output)
         binary = .found(path: path, verdict: verdict)
         guard case .ok = verdict else { return }
+        capabilities = await LibraryActions.probe(service)
         await refreshAll()
         startEvents()
     }
@@ -134,7 +143,12 @@ public final class LauncherStore {
             if let status = try? await service.macvmStatus() { applyStatus(status) }
         }
         if gate.allow("app list", now: clock.now()) {
-            if let list = try? await service.listApps() { applyList(list) }
+            do {
+                applyList(try await service.listApps())
+            } catch {
+                let line = LauncherStore.line(of: error)
+                listError = line.isEmpty ? UIText("paddock did not list the apps. Click Try Again.").english : line
+            }
         }
         if gate.allow("approvals", now: clock.now()) {
             if let approvals = try? await service.approvals() {
@@ -169,14 +183,18 @@ public final class LauncherStore {
     }
 
     public func applyList(_ list: [AppJSON]) {
+        listLoaded = true
+        listError = nil
         apps = list.map(AppItem.init(json:))
-        if case .app(let name)? = selection, !apps.contains(where: { $0.name == name }) {
-            selection = apps.first.map { .app($0.name) }
+        if case .app(let key)? = selection, !apps.contains(where: { $0.key == key }) {
+            selection = apps.first.map { .app($0.key) }
         }
     }
 
-    public func app(named name: String) -> AppItem? {
-        apps.first { $0.name == name }
+    /// The row of a sidebar key: the profile name, or `NAME--N` for
+    /// instance N.
+    public func app(named key: String) -> AppItem? {
+        apps.first { $0.key == key }
     }
 
     public var runningApps: [AppItem] { apps.filter { $0.state.isRunning } }
@@ -270,6 +288,12 @@ public final class LauncherStore {
             } else {
                 disk = DiskJSON(freeBytes: free)
             }
+        case .stream(let state):
+            // The follower missed events: read the state again.
+            if state == "lost" {
+                gate.reset()
+                Task { await self.refreshAll() }
+            }
         case .unknown:
             break
         }
@@ -281,12 +305,13 @@ public final class LauncherStore {
     }
 
     func applySession(_ e: SessionEvent) {
+        let key = InstanceRef(app: e.app, home: e.home).key
         if e.state == "removed" {
-            apps.removeAll { $0.name == e.app }
-            details[e.app] = nil
+            apps.removeAll { $0.key == key }
+            details[key] = nil
             return
         }
-        guard let index = apps.firstIndex(where: { $0.name == e.app }) else {
+        guard let index = apps.firstIndex(where: { $0.key == key }) else {
             Task { await self.reloadList() }
             return
         }
@@ -294,20 +319,20 @@ public final class LauncherStore {
         if e.state == "agent" {
             json.agentConnected = e.connected
         } else {
-            json.state = e.state
+            json.state = SessionWords.state(e)
             json.phase = e.phase
-            if let since = e.since { json.since = since }
+            if let since = e.since ?? (json.state == "running" || json.state == "saved" ? e.t : nil) { json.since = since }
             if let windows = e.windows { json.windows = windows }
-            json.reason = e.reason
+            json.reason = e.reason ?? (json.state == "error" ? e.text : nil)
             json.blockCode = e.blockCode
             if let next = e.nextStart { json.nextStart = next }
-            if e.state == "running" || e.state == "starting" { appErrors[e.app] = nil }
-            if e.state == "error", e.crash != nil {
-                appErrors[e.app] = .crashed(app: e.app, crashRow: e.crash)
+            if json.state == "running" || json.state == "starting" { appErrors[key] = nil }
+            if json.state == "error", e.crash != nil {
+                appErrors[key] = .crashed(app: apps[index].title, crashRow: e.crash)
             }
         }
         apps[index] = AppItem(json: json)
-        details[e.app]?.sessionChanged(apps[index])
+        details[key]?.sessionChanged(apps[index])
     }
 
     func reloadList() async {

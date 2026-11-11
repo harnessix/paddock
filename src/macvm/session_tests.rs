@@ -376,7 +376,7 @@ fn stale_golden_keeps_data_and_app_copy() {
     let g = golden(t.path());
     let p = full_profile(t.path());
     std::fs::write(p.data(), b"precious").unwrap();
-    std::fs::write(p.apps().join("ChatGPT.app"), b"bundle").unwrap();
+    std::fs::write(p.apps().join("Sample Notes.app"), b"bundle").unwrap();
     std::fs::write(p.machine_id(), b"keep the id").unwrap();
     std::fs::write(&g.disk, b"new golden disk").unwrap();
     let mut other = now();
@@ -392,7 +392,7 @@ fn stale_golden_keeps_data_and_app_copy() {
     assert_eq!(std::fs::read(p.system()).unwrap(), b"new golden disk");
     assert_eq!(std::fs::read(p.data()).unwrap(), b"precious");
     assert_eq!(
-        std::fs::read(p.apps().join("ChatGPT.app")).unwrap(),
+        std::fs::read(p.apps().join("Sample Notes.app")).unwrap(),
         b"bundle"
     );
     assert_eq!(std::fs::read(p.machine_id()).unwrap(), b"keep the id");

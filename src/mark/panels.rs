@@ -113,12 +113,24 @@ pub fn answer_of(b: AskButton) -> ConnectAnswer {
 }
 
 /// The three buttons of the row (the macOS order: cancel left, default
-/// right) and the rest of the table for the menu.
+/// right) and the rest of the table for the menu. Return is `Allow
+/// once`: a reflex
+/// Return must not make a permanent rule, so `Always allow` takes a
+/// click or Command-A.
 const ROW: [(AskButton, Role); 3] = [
     (AskButton::Deny, Role::Cancel),
     (AskButton::AllowOnce, Role::Plain),
     (AskButton::AlwaysAllow, Role::Default),
 ];
+
+/// The key of a button besides its role: Command-A for `Always allow`.
+/// `None` for the others.
+pub fn command_key(answer: ConnectAnswer) -> Option<&'static str> {
+    match answer {
+        ConnectAnswer::AllowAlways => Some("a"),
+        _ => None,
+    }
+}
 
 /// The content of the panel of a card. `None` for a card that is no
 /// `connect` question.
@@ -157,15 +169,41 @@ pub fn content(p: &Pending) -> Option<Content> {
             role,
         }
     };
-    let buttons = ROW.iter().map(|(b, r)| button(*b, *r)).collect();
-    let menu = AskButton::ALL
+    let site = crate::macvm::firewall::site::registrable_site(&c.host);
+    let target = site.as_deref().unwrap_or(&c.host);
+    let mut buttons: Vec<Button> = ROW.iter().map(|(b, r)| button(*b, *r)).collect();
+    buttons[2] = Button {
+        title: format!("Allow {target}"),
+        label: if site.is_some() {
+            format!("Allow {target} and all its subdomains")
+        } else {
+            format!("Always allow {target}")
+        },
+        answer: ConnectAnswer::AllowSite,
+        role: Role::Default,
+    };
+    let mut menu: Vec<Button> = AskButton::ALL
         .iter()
         .filter(|b| !ROW.iter().any(|(r, _)| r == *b))
         .map(|b| button(*b, Role::Plain))
         .collect();
+    menu.push(button(AskButton::AlwaysAllow, Role::Plain));
+    menu.push(Button {
+        title: "Allow everything for 10 minutes".into(),
+        label: "Allow everything for 10 minutes".into(),
+        answer: ConnectAnswer::AllowEverything,
+        role: Role::Plain,
+    });
     Some(Content {
         title: text::ask_title(app, &c.host),
-        detail: text::ask_detail(c.port),
+        detail: if site.is_some() {
+            format!(
+                "{} · {target} and all its subdomains",
+                text::ask_detail(c.port)
+            )
+        } else {
+            text::ask_detail(c.port)
+        },
         more: text::ask_more(c.more),
         buttons,
         menu,
@@ -301,12 +339,12 @@ mod tests {
             created,
             capability: "connect".into(),
             connect: Some(Connect {
-                app: "com.openai.chat".into(),
+                app: "com.example.notes".into(),
                 host: format!("{id}.example"),
                 port: 443,
                 pid,
-                profile: "chatgpt-desktop".into(),
-                label: "ChatGPT".into(),
+                profile: "sample-notes".into(),
+                label: "Sample Notes".into(),
                 more: 3,
                 notice,
                 ..Default::default()
@@ -345,8 +383,8 @@ mod tests {
     fn a_panel_closes_only_when_its_card_is_gone() {
         let cards = [card("a", 10, 1, false)];
         let picked: Vec<&Pending> = cards.iter().collect();
-        let key = (10, "chatgpt-desktop".to_string());
-        let other = (20, "vscode".to_string());
+        let key = (10, "sample-notes".to_string());
+        let other = (20, "sample-editor".to_string());
         let panels = vec![
             ("a".to_string(), key.clone()),
             ("gone".to_string(), other.clone()),
@@ -364,8 +402,11 @@ mod tests {
     #[test]
     fn the_panel_says_app_host_port_and_the_queue() {
         let c = content(&card("api", 10, 1, false)).unwrap();
-        assert_eq!(c.title, "ChatGPT wants to connect to api.example");
-        assert_eq!(c.detail, "port 443 · first connection to this host");
+        assert_eq!(c.title, "Sample Notes wants to connect to api.example");
+        assert_eq!(
+            c.detail,
+            "port 443 · first connection to this host · api.example and all its subdomains"
+        );
         assert_eq!(c.more, "and 3 more waiting");
         let row: Vec<(&str, Role)> = c
             .buttons
@@ -377,20 +418,35 @@ mod tests {
             [
                 ("Deny", Role::Cancel),
                 ("Allow once", Role::Plain),
-                ("Always allow", Role::Default)
+                ("Allow api.example", Role::Default)
             ]
         );
-        assert_eq!(c.buttons[2].answer, ConnectAnswer::AllowAlways);
+        assert_eq!(c.buttons[2].answer, ConnectAnswer::AllowSite);
+        // Command-A is the key of the permanent rule of this host only.
+        assert_eq!(command_key(ConnectAnswer::AllowAlways), Some("a"));
+        for a in [
+            ConnectAnswer::AllowOnce,
+            ConnectAnswer::AllowSession,
+            ConnectAnswer::Deny,
+            ConnectAnswer::DenyAlways,
+        ] {
+            assert_eq!(command_key(a), None);
+        }
         assert_eq!(c.buttons[0].label, "Deny for api.example");
         let menu: Vec<ConnectAnswer> = c.menu.iter().map(|b| b.answer).collect();
         assert_eq!(
             menu,
-            [ConnectAnswer::AllowSession, ConnectAnswer::DenyAlways]
+            [
+                ConnectAnswer::AllowSession,
+                ConnectAnswer::DenyAlways,
+                ConnectAnswer::AllowAlways,
+                ConnectAnswer::AllowEverything
+            ]
         );
         // The notice: two buttons, deny all on the left.
         let n = content(&card("n", 10, 1, true)).unwrap();
         assert!(n.title.contains("many new connections"), "{}", n.title);
-        assert!(n.detail.contains("paddock app status chatgpt-desktop"));
+        assert!(n.detail.contains("paddock app status sample-notes"));
         assert_eq!(n.buttons.len(), 2);
         assert_eq!(
             (n.buttons[0].answer, n.buttons[1].answer),

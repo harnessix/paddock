@@ -141,14 +141,18 @@ impl Super {
     fn start(dir: &Path, name: &str, d: &DeviceDef, args: &[&str], command: &[&str]) -> Self {
         let sdir = dir.join(name);
         std::fs::create_dir_all(&sdir).unwrap();
+        std::fs::create_dir_all(sdir.join("home")).unwrap();
         let socket = sdir.join("dev.sock");
         let mut c = Command::new(env!("CARGO_BIN_EXE_paddock"));
         // The supervisor touches no user folder; the guard of the tests
         // wants every paddock to get temporary ones all the same.
-        c.env("XDG_DATA_HOME", sdir.join("data"))
+        c.env("HOME", sdir.join("home"))
+            .env("XDG_DATA_HOME", sdir.join("data"))
             .env("XDG_STATE_HOME", sdir.join("state"))
             .env("XDG_CONFIG_HOME", sdir.join("cfg"))
-            .env("XDG_RUNTIME_DIR", &sdir);
+            .env("XDG_CACHE_HOME", sdir.join("cache"))
+            .env("XDG_RUNTIME_DIR", sdir.join("run"))
+            .env_remove("DBUS_SESSION_BUS_ADDRESS");
         c.arg("device-serve")
             .arg("--socket")
             .arg(&socket)

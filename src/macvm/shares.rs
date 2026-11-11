@@ -38,10 +38,13 @@ const SYSTEM_APPS: [&str; 3] = ["/Library", "/System", "/Applications"];
 const SECRET_ENTRIES: usize = 50_000;
 
 /// A folder the user named, with `--ro`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Root {
     pub path: PathBuf,
     pub read_only: bool,
+    /// Shared with its secrets files visible: a grant of `paddock app
+    /// share NAME add --unprotected`.
+    pub unprotected: bool,
 }
 
 /// One share of the session.
@@ -171,15 +174,18 @@ pub fn build(
     profile: &Profile,
     agent_dir: Option<&Path>,
     home: &Path,
+    paddock: &[PathBuf],
     unprotected: bool,
 ) -> Result<Built> {
     let mut shares = Vec::new();
     let mut lines = Vec::new();
     let mut seen: Vec<PathBuf> = Vec::new();
+    let mut open_secrets: Vec<bool> = Vec::new();
     let real_home = real(home);
+    let real_paddock: Vec<PathBuf> = paddock.iter().map(|p| real(p)).collect();
     for r in roots {
         let path = normalize(&r.path);
-        if let Some(why) = refusal(&path, home) {
+        if let Some(why) = super::grants::refusal(&path, home, paddock) {
             lines.push(text::share_refused(app, &path, &text::share_reason(why)));
             continue;
         }
@@ -195,7 +201,7 @@ pub fn build(
         // one, and macOS has /tmp, /var and /etc as links into /private:
         // the real path is checked too, and it is the one that is shared.
         let host = real(&path);
-        if let Some(why) = refusal(&host, &real_home) {
+        if let Some(why) = super::grants::refusal(&host, &real_home, &real_paddock) {
             lines.push(text::share_refused(app, &host, &text::share_reason(why)));
             continue;
         }
@@ -207,15 +213,16 @@ pub fn build(
             host,
             read_only: r.read_only,
         });
+        open_secrets.push(unprotected || r.unprotected);
     }
     if !lines.is_empty() {
         bail!(lines.join("\n")); // not user text
     }
     let mut warnings = Vec::new();
     let mut secrets = Vec::new();
-    for s in &shares {
+    for (s, unprotected) in shares.iter().zip(&open_secrets) {
         for f in secrets_in(&s.host) {
-            if unprotected {
+            if *unprotected {
                 warnings.push(text::env_file_visible(app, &f));
             } else {
                 secrets.push(text::env_file(app, &f));

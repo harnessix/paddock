@@ -124,6 +124,7 @@ pub fn plan(inv: &Inventory, o: &GcOptions, now: u64) -> Vec<Item> {
     plan_keyrings(&mut items, inv);
     plan_sessions(&mut items, inv, now);
     plan_homes(&mut items, inv, o, now, old);
+    plan_mail(&mut items, inv, o, now, old);
     plan_snapshots(&mut items, inv, o, now, old);
     plan_pure_caches(&mut items, inv);
     plan_scratch(&mut items, inv, o, now, old);
@@ -132,7 +133,15 @@ pub fn plan(inv: &Inventory, o: &GcOptions, now: u64) -> Vec<Item> {
 }
 
 fn plan_layers(items: &mut Vec<Item>, inv: &Inventory) {
-    for l in inv.layers.iter().filter(|l| l.orphan) {
+    for l in &inv.layers {
+        let merged = l.project.as_ref().is_some_and(|project| {
+            inv.worktrees
+                .iter()
+                .any(|w| w.path == *project && !w.running && w.merged == Some(true))
+        });
+        if !l.orphan && !merged {
+            continue;
+        }
         let project = l
             .project
             .as_ref()
@@ -142,7 +151,11 @@ fn plan_layers(items: &mut Vec<Item>, inv: &Inventory) {
             what: format!("cache layers {}", l.path.display()),
             tier: Tier::Auto,
             bytes: l.bytes,
-            reason: format!("its project {project} no longer exists"),
+            reason: if merged {
+                format!("its worktree {project} is merged")
+            } else {
+                format!("its project {project} no longer exists")
+            },
             warning: None,
             needs: vec![],
             action: Action::Path {
@@ -249,6 +262,29 @@ fn plan_sessions(items: &mut Vec<Item>, inv: &Inventory, now: u64) {
             needs: vec![],
             action: Action::Path {
                 path: s.path.clone(),
+            },
+        });
+    }
+}
+
+/// The mailbox of a run is a record of the user's work, like a home: it
+/// goes only with `--homes`, once the run ended before `--older-than`.
+fn plan_mail(items: &mut Vec<Item>, inv: &Inventory, o: &GcOptions, now: u64, old: u64) {
+    for m in &inv.mailboxes {
+        let Some(ended) = m.ended.filter(|e| *e < old) else {
+            continue;
+        };
+        let mut needs = Vec::new();
+        need(&mut needs, o.homes, "--homes");
+        items.push(Item {
+            what: format!("mailbox of {}", m.id),
+            tier: Tier::Consent,
+            bytes: m.bytes,
+            reason: format!("the run ended {} days ago", now.saturating_sub(ended) / DAY),
+            warning: Some("the messages of this run will be lost".into()),
+            needs,
+            action: Action::Path {
+                path: m.path.clone(),
             },
         });
     }

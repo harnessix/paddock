@@ -14,7 +14,39 @@ fn fake_bwrap(dir: &Path, body: &str) -> HostEnv {
 }
 
 #[test]
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "linux")]
+fn a_user_manager_that_ignores_the_mount_settings_does_not_isolate() {
+    let dir = tempfile::tempdir().unwrap();
+    let env = fake_bwrap(dir.path(), "exit 0");
+    let bin = dir.path().join("bin");
+    // Runs the command as it is, like a user manager without a mount
+    // namespace: the command sees the mark.
+    let plain = bin.join("systemd-run-plain");
+    let body = "#!/bin/sh\nwhile [ \"$1\" != -- ]; do shift; done\nshift\nexec \"$@\"\n";
+    std::fs::write(&plain, body).unwrap();
+    // Hides the folder of the TemporaryFileSystem= setting, as a unit
+    // with its mount namespace does.
+    let hides = bin.join("systemd-run-hides");
+    std::fs::write(
+        &hides,
+        "#!/bin/sh\ncase \"$*\" in *TemporaryFileSystem=*) exit 0 ;; esac\nexit 1\n",
+    )
+    .unwrap();
+    for f in [&plain, &hides] {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(f, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    assert!(!systemd_isolates(&env, &plain));
+    assert!(systemd_isolates(&env, &hides));
+    // The probe folder does not stay.
+    assert!(!env
+        .paddock_cache()
+        .join(format!("exec-probe-{}", std::process::id()))
+        .exists());
+}
+
+#[test]
+#[cfg(target_os = "linux")]
 fn a_bwrap_that_cannot_start_gives_no_isolation() {
     let dir = tempfile::tempdir().unwrap();
     let e = detect(&fake_bwrap(dir.path(), "exit 1")).unwrap_err();

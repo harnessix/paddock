@@ -219,7 +219,7 @@ fn s02_shares_only_named() {
     let t = crate::macvm::shares::tests::scratch();
     let p = Profile::new(t.path().join("p"));
     let agent = t.path().join("agent");
-    let b = shares::build("app", &[], &p, Some(&agent), t.home(), false).unwrap();
+    let b = shares::build("app", &[], &p, Some(&agent), t.home(), &[], false).unwrap();
     let names: Vec<&str> = b.shares.iter().map(|s| s.name.as_str()).collect();
     assert_eq!(names, RESERVED);
     assert!(b.shares.iter().all(|s| !s.is_workspace()));
@@ -234,8 +234,9 @@ fn s02_shares_only_named() {
     let roots = [Root {
         path: ws.clone(),
         read_only: true,
+        unprotected: false,
     }];
-    let b = shares::build("app", &roots, &p, None, t.home(), false).unwrap();
+    let b = shares::build("app", &roots, &p, None, t.home(), &[], false).unwrap();
     assert_eq!(
         b.shares[0],
         Share {
@@ -310,6 +311,7 @@ fn s03_password_guard() {
             1,
             Request::Token {
                 bench: false,
+                now_ms: None,
                 token: TOKEN.into(),
                 v: VERSION
             }
@@ -328,8 +330,15 @@ fn s03_password_guard() {
         ),
         Outcome::Ok { .. }
     ));
-    // The guard: an app pid is present, so both requests are refused.
+    // The guard: an app pid is present, so password requests are refused.
     for (req, r) in [
+        (
+            6,
+            Request::ClockSet {
+                unix_ms: 1,
+                password: PASSWORD.into(),
+            },
+        ),
         (
             3,
             Request::Configure {
@@ -364,7 +373,7 @@ fn s03_password_guard() {
     );
     drop(host);
     assert_eq!(agent.join().unwrap(), 0);
-    // The password is in no other session request: only these four carry
+    // The password is in no other session request: only these five carry
     // the field. `keychain.unlock` gives it to the Security framework of
     // the guest, never to a command line (`guest/keychain.rs`).
     for r in every_request() {
@@ -372,6 +381,7 @@ fn s03_password_guard() {
         let guarded = matches!(
             r,
             Request::Configure { .. }
+                | Request::ClockSet { .. }
                 | Request::DataPrepare { .. }
                 | Request::Shutdown { .. }
                 | Request::KeychainUnlock { .. }
@@ -397,11 +407,12 @@ fn s04_token() {
     // kind() and Debug strip it.
     let req = Request::Token {
         bench: false,
+        now_ms: None,
         token: a.clone(),
         v: VERSION,
     };
     assert!(!req.kind().contains(&a), "{}", req.kind());
-    let header = ProxyHeader::new(&a, "chatgpt.com", 443, Identity::default());
+    let header = ProxyHeader::new(&a, "notes.example.com", 443, Identity::default());
     assert!(!format!("{header:?}").contains(&a));
     assert!(header.line().contains(&a), "the wire line carries it");
     let fh = FileHeader {
@@ -452,7 +463,7 @@ fn s05_modes() {
     let t = tempfile::tempdir().unwrap();
     let e = env(t.path());
     let layout = Layout::new(&e);
-    let p = prepared(&layout, "chatgpt-desktop");
+    let p = prepared(&layout, "sample-notes");
     // The copy of the backup is plain on Linux: a small data disk.
     std::fs::File::options()
         .write(true)
@@ -506,7 +517,7 @@ fn s05_modes() {
 
 #[test]
 fn s06_forged_identity() {
-    let (list, bad) = Allowlist::parse(&["api.openai.com"]);
+    let (list, bad) = Allowlist::parse(&["api.example.com"]);
     assert!(bad.is_empty());
     let rule = firewall::new_rule(
         "com.evil.app",
@@ -537,7 +548,7 @@ fn s06_forged_identity() {
         Decision::Deny(None)
     );
     // A host of the list passes the mode, and then the rules decide.
-    let ok = Conn::new("com.evil.app", "api.openai.com", 443);
+    let ok = Conn::new("com.evil.app", "api.example.com", 443);
     assert_eq!(
         firewall::decide(Mode::Api, Some(&list), &[], &ok),
         Decision::Allow(None)

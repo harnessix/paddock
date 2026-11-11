@@ -157,25 +157,49 @@
 #
 # The windows of a session (TextEdit through `bench launch`, no app copy,
 # no network). The lines of the control socket: `window host-move ID X Y`
-# moves the host window as a host drag does (then the session sends
-# `window.move`), `window frames ID` gives the host and guest frames, the
-# clip radius, the measured radius and the full screen states as JSON,
+# moves the host window as a host drag does (the guest window stays),
+# `window frames ID` gives the host and guest frames, the offset, the
+# window.move count, the clip radius and the full
+# screen states as JSON,
 # `window menu` and `window menu-press PATH` read and press the menu bar.
-#   drag     20 host moves of a TextEdit window: each gets the event line
-#            `the guest followed the host move` within 2 s, the 95th
-#            percentile of their `ms` is below 50, and in 5 samples after
-#            each move no `window frames` has host and guest more than
-#            2 points apart. INFO prints the p50 and p95.
-#   radius   the TextEdit window and an Activity Monitor window (a toolbar,
-#            its `title_bar` at least 40) each get a `measured` radius
-#            within 5 s, and the clip `radius` is within 1 point of it.
-#            No measured radius means no Screen Recording row for the
-#            agent in the guest (an old golden: run `paddock macvm setup`).
+#   drag     20 host moves of a TextEdit window (`window host-move`): after
+#            each, `window frames` has the host frame at the asked place,
+#            the guest frame of the start (the guest window stays) and the
+#            same `moves_sent` (no window.move), and the offset is the host
+#            origin minus the guest origin. events.jsonl gets 20 lines `the
+#            host drag ended, the guest window stayed`.
+#   multi    TextEdit gets two more windows through `File > New` of its
+#            menu bar: within 10 s `window list` has two more entries,
+#            each guest window has its own host window (distinct window
+#            numbers), `window state` says each one is visible, on a
+#            screen and not occluded, and each host frame is within 2
+#            points of its guest frame at the window's offset.
+#   stacked  three TextEdit windows (`File > New` twice). With the guest
+#            layout held (`window apart hold`, a bench line), `window
+#            move` puts all three at the guest frame of the first, and
+#            `window host-move` cascades their host windows. After `window
+#            apart go`, within 3 s the guest frames (`window frames`) are
+#            pairwise disjoint, the host frames did not change, each
+#            `window state` is visible and not occluded, no window has a
+#            covered part, and each host frame is its guest frame at the
+#            window's offset.
+#   click    the same three windows apart; `window host-click ID X Y` (a
+#            bench line) clicks the middle of a window that is not key
+#            through NSApplication: the guest point under the click is in
+#            that window's guest frame, and within 3 s `window list` has it
+#            `focused` (the guest) and `key` (the host).
+#   room     the cost of the room of the guest display: two cold starts,
+#            PADDOCK_MACVM_ROOM=0 and the default, print an INFO line each
+#            with the display, the seconds to the hello and the
+#            `footprint` of the VM process.
 #   fullscreen  `View > Enter Full Screen` of TextEdit through the menu
 #            bar: within 5 s `window frames` says `guest_full_screen` and
 #            `full_screen`, the clip radius is 0 and the host frame is the
-#            guest display at origin zero; `Exit Full Screen` brings both
-#            back, with host and guest within 2 points.
+#            guest display at origin zero, as high as the guest window and
+#            not wider (the guest display has room right of the screens);
+#            `Exit Full Screen` brings both
+#            back, with the host frame within 2 points of the guest frame at the
+#            window's offset.
 #   login    a `--bench` session with `[host] open-url = "allow"` and
 #            PADDOCK_MACVM_LINK_DRY=1 (an approved link opens no host
 #            browser, so no tab opens and no vendor is reached). A
@@ -845,62 +869,34 @@ app_window() {
 # frames PROFILE ID: the `window frames` JSON.
 frames() { control "$1" "window frames $2" | sed -n 's/^ok //p'; }
 
-# apart JSON: the largest difference of the host and guest frames, points.
-apart() { js 'var o = JSON.parse(argv[0]); var d = 0; for (var i = 0; i < 4; i++) d = Math.max(d, Math.abs(o.host[i] - o.guest[i])); return d.toFixed(2);' "$1"; }
+# apart JSON: the largest difference of the host frame and the guest frame
+# at the window's offset, points.
+apart() { js 'var o = JSON.parse(argv[0]); var off = o.offset || [0, 0]; var d = 0; for (var i = 0; i < 4; i++) d = Math.max(d, Math.abs(o.host[i] - o.guest[i] - (i < 2 ? off[i] : 0))); return d.toFixed(2);' "$1"; }
 
 check_drag() {
   local id ev="$profiles/drag/default/logs/events.jsonl"
   id=$(app_window drag /System/Applications/TextEdit.app) || { fail drag "$id"; return; }
-  local before i=0 worst=0
-  before=$(grep -c 'the guest followed the host move' "$ev" 2>/dev/null)
+  local j0 before i=0
+  j0=$(frames drag "$id")
+  before=$(grep -c 'the host drag ended, the guest window stayed' "$ev" 2>/dev/null)
   before=${before:-0}
   while [ "$i" -lt 20 ]; do
-    local nx=$(( 100 + (i % 5) * 40 )) ny=$(( 100 + (i / 5) * 30 )) n=0 s=0
+    local nx=$(( 100 + (i % 5) * 40 )) ny=$(( 100 + (i / 5) * 30 )) j why
     control drag "window host-move $id $nx $ny" | grep -q '^ok' || { fail drag "the host-move line was refused"; return; }
-    while [ "$(grep -c 'the guest followed the host move' "$ev")" -le $(( before + i )) ]; do
-      sleep 0.02; n=$((n + 1))
-      [ "$n" -lt 100 ] || { fail drag "move $i: the guest did not follow within 2 s ($(grep '"kind":"window"' "$ev" | tail -1))"; return; }
-    done
-    while [ "$s" -lt 5 ]; do
-      local d; d=$(apart "$(frames drag "$id")")
-      if [ "$(js 'return Number(argv[0]) > Number(argv[1]) ? "1" : "0";' "$d" "$worst")" = 1 ]; then worst=$d; fi
-      sleep 0.04; s=$((s + 1))
-    done
+    j=$(frames drag "$id")
+    why=$(js 'var a = JSON.parse(argv[0]), o = JSON.parse(argv[1]), x = Number(argv[2]), y = Number(argv[3]);
+      if (Math.abs(o.host[0] - x) > 1 || Math.abs(o.host[1] - y) > 1) return "the host window is at " + o.host[0] + "," + o.host[1] + ", not " + x + "," + y;
+      for (var k = 0; k < 4; k++) if (Math.abs(o.guest[k] - a.guest[k]) > 0.5) return "the guest window moved: " + a.guest + " -> " + o.guest;
+      if (o.moves_sent != a.moves_sent) return "window.move was sent: " + a.moves_sent + " -> " + o.moves_sent;
+      if (Math.abs(o.offset[0] - (o.host[0] - o.guest[0])) > 1 || Math.abs(o.offset[1] - (o.host[1] - o.guest[1])) > 1) return "the offset " + o.offset + " is not host minus guest";
+      return "";' "$j0" "$j" "$nx" "$ny")
+    [ -z "$why" ] || { fail drag "move $i: $why"; return; }
     i=$((i + 1))
   done
-  local sorted p50 p95
-  sorted=$(grep 'the guest followed the host move' "$ev" | tail -20 | sed -n 's/.*"ms":\([0-9.]*\).*/\1/p' | sort -n)
-  p50=$(printf '%s\n' "$sorted" | sed -n '10p')
-  p95=$(printf '%s\n' "$sorted" | sed -n '19p')
-  echo "INFO drag: p50 $p50 ms, p95 $p95 ms, host and guest at most $worst points apart after the moves"
-  [ "$(js 'return Number(argv[0]) < 50 ? "1" : "0";' "$p95")" = 1 ] || { fail drag "p95 $p95 ms, not below 50"; return; }
-  [ "$(js 'return Number(argv[0]) <= 2 ? "1" : "0";' "$worst")" = 1 ] || { fail drag "host and guest $worst points apart after a move"; return; }
+  local after; after=$(grep -c 'the host drag ended, the guest window stayed' "$ev")
+  [ "$after" -ge $(( before + 20 )) ] || { fail drag "$(( after - before )) drag end lines, not 20"; return; }
+  echo "INFO drag: 20 host moves, the guest window stayed at $(js 'return JSON.parse(argv[0]).guest.join(",");' "$j0")"
   pass drag
-}
-
-# radius_of PROFILE APP MINBAR: the clip radius of the first window of APP
-# is within 1 point of the measured one; MINBAR is the least title bar.
-radius_of() {
-  local id i=0 j=""
-  id=$(app_window "$1" "$2") || { echo "$id"; return 1; }
-  while [ "$i" -lt 50 ]; do
-    j=$(frames "$1" "$id")
-    [ "$(js 'var o = JSON.parse(argv[0]); return o.measured == null ? "0" : "1";' "$j")" = 1 ] && break
-    sleep 0.1; i=$((i + 1))
-  done
-  [ "$i" -lt 50 ] || { echo "no measured radius in 5 s (no Screen Recording row for the agent in the guest?): $j"; return 1; }
-  echo "INFO radius: $2: $j" >&2
-  js 'var o = JSON.parse(argv[0]); if (o.title_bar < Number(argv[1])) return "the title bar is " + o.title_bar + ", not a toolbar window"; return Math.abs(o.radius - o.measured) <= 1 ? "" : "the clip radius " + o.radius + " is not within 1 point of " + o.measured;' "$j" "$3"
-}
-
-check_radius() {
-  local why
-  why=$(radius_of radius /System/Applications/TextEdit.app 0) || { fail radius "TextEdit: $why"; return; }
-  [ -z "$why" ] || { fail radius "TextEdit: $why"; return; }
-  paddock app stop radius >/dev/null 2>&1
-  why=$(radius_of radius2 "/System/Applications/Utilities/Activity Monitor.app" 40) || { fail radius "Activity Monitor: $why"; return; }
-  [ -z "$why" ] || { fail radius "Activity Monitor: $why"; return; }
-  pass radius
 }
 
 # menu_path PROFILE TITLE: the path of the menu item with that title.
@@ -926,6 +922,39 @@ full_state() {
   echo "$j"; return 1
 }
 
+# window_ids PROFILE: the guest window ids of `window list`, one a line.
+window_ids() { control "$1" "window list" | sed -n 's/^ok //p' | tr '{' '\n' | sed -n 's/.*"id":\([0-9]*\)[,}].*/\1/p'; }
+
+check_multi() {
+  local id path n0 n i=0 ids w j st why
+  id=$(app_window multi /System/Applications/TextEdit.app) || { fail multi "$id"; return; }
+  sleep 2
+  n0=$(window_ids multi | grep -c .)
+  path=$(menu_path multi "New") || { fail multi "no New item in the menu bar of TextEdit"; return; }
+  control multi "window menu-press $path" | grep -q '^ok' || { fail multi "the first press was refused"; return; }
+  sleep 1
+  control multi "window menu-press $path" | grep -q '^ok' || { fail multi "the second press was refused"; return; }
+  while [ "$i" -lt 100 ]; do
+    n=$(window_ids multi | grep -c .)
+    [ "$n" -ge $(( n0 + 2 )) ] && break
+    sleep 0.1; i=$((i + 1))
+  done
+  [ "$n" -ge $(( n0 + 2 )) ] || { fail multi "$n windows in window list after two New presses, not $(( n0 + 2 ))"; return; }
+  sleep 1
+  ids=$(window_ids multi)
+  st=$(control multi "window state" | sed -n 's/^ok //p')
+  local nums; nums=$(control multi "window list" | sed -n 's/^ok //p' | tr '{' '\n' | sed -n 's/.*"number":\([0-9]*\)[,}].*/\1/p')
+  [ "$(echo "$nums" | grep -c .)" = "$(echo "$nums" | sort -u | grep -c .)" ] || { fail multi "two guest windows share a host window: $nums"; return; }
+  for w in $ids; do
+    why=$(js 'var o = JSON.parse(argv[0])[argv[1]]; if (!o) return "no host window"; if (!o.visible) return "not visible"; if (!o.on_screen) return "on no screen"; if (!o.occlusion_visible) return "occluded"; return "";' "$st" "$w")
+    [ -z "$why" ] || { fail multi "window $w: $why ($st)"; return; }
+    j=$(frames multi "$w")
+    [ "$(js 'return Number(argv[0]) <= 2 ? "1" : "0";' "$(apart "$j")")" = 1 ] || { fail multi "window $w: host and guest frames are $(apart "$j") points apart: $j"; return; }
+  done
+  echo "INFO multi: $n guest windows, each with its own host window"
+  pass multi
+}
+
 check_fullscreen() {
   local id path j
   id=$(app_window fullscreen /System/Applications/TextEdit.app) || { fail fullscreen "$id"; return; }
@@ -933,7 +962,7 @@ check_fullscreen() {
   control fullscreen "window menu-press $path" | grep -q '^ok' || { fail fullscreen "the press was refused"; return; }
   j=$(full_state fullscreen "$id" true) || { fail fullscreen "not in full screen on both sides in 5 s: $j"; return; }
   local why
-  why=$(js 'var o = JSON.parse(argv[0]); if (o.radius != 0) return "the clip radius is " + o.radius; if (o.host[0] != 0 || o.host[1] != 0) return "the host window is at " + o.host[0] + "," + o.host[1] + ", not at origin zero"; for (var i = 2; i < 4; i++) if (Math.abs(o.host[i] - o.guest[i]) > 2) return "the host window is " + o.host[2] + "x" + o.host[3] + ", the guest window " + o.guest[2] + "x" + o.guest[3]; return "";' "$j")
+  why=$(js 'var o = JSON.parse(argv[0]); if (o.radius != 0) return "the clip radius is " + o.radius; if (o.host[0] != 0 || o.host[1] != 0) return "the host window is at " + o.host[0] + "," + o.host[1] + ", not at origin zero"; if (Math.abs(o.host[3] - o.guest[3]) > 2 || o.host[2] > o.guest[2] + 2) return "the host window is " + o.host[2] + "x" + o.host[3] + ", the guest window " + o.guest[2] + "x" + o.guest[3]; return "";' "$j")
   [ -z "$why" ] || { fail fullscreen "$why"; return; }
   path=$(menu_path fullscreen "Exit Full Screen") || { fail fullscreen "no Exit Full Screen item in the menu bar of TextEdit"; return; }
   control fullscreen "window menu-press $path" | grep -q '^ok' || { fail fullscreen "the exit press was refused"; return; }
@@ -942,6 +971,151 @@ check_fullscreen() {
   j=$(frames fullscreen "$id")
   [ "$(js 'return Number(argv[0]) <= 2 ? "1" : "0";' "$(apart "$j")")" = 1 ] || { fail fullscreen "host and guest apart after the exit: $j"; return; }
   pass fullscreen
+}
+
+# stack_three PROFILE: a TextEdit session with three windows whose guest
+# windows sit at one guest frame while the layout is held, and whose host
+# windows are cascaded apart (`window host-move`, the guest windows stay).
+# Prints the three ids on one line; the layout is still held.
+stack_three() {
+  local name=$1 id path n0 n i=0 ids w target t
+  id=$(app_window "$name" /System/Applications/TextEdit.app) || { echo "$id"; return 1; }
+  sleep 2
+  n0=$(window_ids "$name" | grep -c .)
+  path=$(menu_path "$name" "New") || { echo "no New item in the menu bar of TextEdit"; return 1; }
+  control "$name" "window menu-press $path" | grep -q '^ok' || { echo "the first New press was refused"; return 1; }
+  sleep 1
+  control "$name" "window menu-press $path" | grep -q '^ok' || { echo "the second New press was refused"; return 1; }
+  while [ "$i" -lt 100 ]; do
+    n=$(window_ids "$name" | grep -c .)
+    [ "$n" -ge $(( n0 + 2 )) ] && break
+    sleep 0.1; i=$((i + 1))
+  done
+  [ "$n" -ge 3 ] || { echo "$n windows in window list after two New presses"; return 1; }
+  sleep 2
+  ids=$(window_ids "$name" | head -3 | tr '\n' ' ')
+  control "$name" "window apart hold" | grep -q '^ok' || { echo "the apart hold line was refused"; return 1; }
+  # The guest frame of the first window, for all three.
+  w=${ids%% *}
+  target=$(js 'var o = JSON.parse(argv[0]); return o.guest.map(function (v) { return Math.round(v); }).join(" ");' "$(frames "$name" "$w")")
+  for w in $ids; do
+    control "$name" "window move $w $target" | grep -q '^ok' || { echo "window move of $w was refused"; return 1; }
+  done
+  i=0
+  while [ "$i" -lt 50 ]; do
+    t=0
+    for w in $ids; do
+      [ "$(js 'var o = JSON.parse(argv[0]), t = argv[1].split(" ").map(Number); for (var k = 0; k < 4; k++) if (Math.abs(o.guest[k] - t[k]) > 1) return "0"; return "1";' "$(frames "$name" "$w")" "$target")" = 1 ] && t=$((t + 1))
+    done
+    [ "$t" = 3 ] && break
+    sleep 0.1; i=$((i + 1))
+  done
+  [ "$t" = 3 ] || { echo "the guest did not stack the three windows at $target in 5 s"; return 1; }
+  # The host windows apart, so each one shows: only their offsets change.
+  i=0
+  for w in $ids; do
+    control "$name" "window host-move $w $(( 60 + i * 140 )) $(( 80 + i * 90 ))" | grep -q '^ok' || { echo "host-move of $w was refused"; return 1; }
+    i=$((i + 1))
+  done
+  sleep 0.5
+  echo "$ids"
+}
+
+# disjoint PROFILE IDS: empty when the guest frames of the windows are
+# pairwise disjoint, else the two that overlap.
+disjoint() {
+  local name=$1 all="" w
+  for w in $2; do all="$all${all:+,}$(frames "$name" "$w")"; done
+  js 'var l = JSON.parse("[" + argv[0] + "]"); for (var a = 0; a < l.length; a++) for (var b = a + 1; b < l.length; b++) { var p = l[a].guest, q = l[b].guest; if (p[0] < q[0] + q[2] - 0.5 && q[0] < p[0] + p[2] - 0.5 && p[1] < q[1] + q[3] - 0.5 && q[1] < p[1] + p[3] - 0.5) return "[" + p + "] and [" + q + "]"; } return "";' "$all"
+}
+
+# hosts PROFILE IDS: the host frames of the windows, rounded, one string.
+hosts() {
+  local w out=""
+  for w in $2; do out="$out$w:$(js 'return JSON.parse(argv[0]).host.map(function (v) { return Math.round(v); }).join(",");' "$(frames "$1" "$w")") "; done
+  echo "$out"
+}
+
+check_stacked() {
+  local ids h0 h1 t0 i=0 why st w j
+  ids=$(stack_three stacked) || { fail stacked "$ids"; return; }
+  h0=$(hosts stacked "$ids")
+  [ -n "$(disjoint stacked "$ids")" ] || { fail stacked "the guest windows were not stacked before the layout"; return; }
+  control stacked "window apart go" | grep -q '^ok' || { fail stacked "the apart go line was refused"; return; }
+  t0=$(date +%s)
+  while [ "$i" -lt 30 ]; do
+    why=$(disjoint stacked "$ids")
+    [ -z "$why" ] && break
+    sleep 0.1; i=$((i + 1))
+  done
+  [ -z "$why" ] || { fail stacked "the guest windows still overlap after 3 s: $why"; return; }
+  sleep 0.5
+  h1=$(hosts stacked "$ids")
+  [ "$h0" = "$h1" ] || { fail stacked "the host frames changed: before $h0, after $h1"; return; }
+  st=$(control stacked "window state" | sed -n 's/^ok //p')
+  for w in $ids; do
+    why=$(js 'var o = JSON.parse(argv[0])[argv[1]]; if (!o) return "no host window"; if (!o.visible) return "not visible"; if (!o.occlusion_visible) return "occluded"; return "";' "$st" "$w")
+    [ -z "$why" ] || { fail stacked "window $w: $why ($st)"; return; }
+    j=$(frames stacked "$w")
+    why=$(js 'var o = JSON.parse(argv[0]); if (o.covered != 0) return o.covered + " covered parts"; return "";' "$j")
+    [ -z "$why" ] || { fail stacked "window $w is not live: $why ($j)"; return; }
+    [ "$(js 'return Number(argv[0]) <= 2 ? "1" : "0";' "$(apart "$j")")" = 1 ] || { fail stacked "window $w: host and guest frames are $(apart "$j") points apart: $j"; return; }
+  done
+  echo "INFO stacked: apart within $(( $(date +%s) - t0 )) s, $(grep -c 'moved apart in the guest' "$profiles/stacked/default/logs/events.jsonl") layout moves, host frames $h1"
+  pass stacked
+}
+
+check_click() {
+  local ids second j g i=0 l why
+  ids=$(stack_three click) || { fail click "$ids"; return; }
+  control click "window apart go" | grep -q '^ok' || { fail click "the apart go line was refused"; return; }
+  while [ "$i" -lt 30 ]; do
+    [ -z "$(disjoint click "$ids")" ] && break
+    sleep 0.1; i=$((i + 1))
+  done
+  [ -z "$(disjoint click "$ids")" ] || { fail click "the guest windows still overlap after 3 s"; return; }
+  sleep 0.5
+  # The second window that is not the key window.
+  l=$(control click "window list" | sed -n 's/^ok //p')
+  second=$(js 'var l = JSON.parse(argv[0]), ids = argv[1].trim().split(" ").map(Number); var o = l.filter(function (e) { return ids.indexOf(e.id) >= 0 && !e.focused; }); return o.length > 1 ? String(o[1].id) : (o.length ? String(o[0].id) : "");' "$l" "$ids")
+  [ -n "$second" ] || { fail click "no window besides the key window: $l"; return; }
+  j=$(frames click "$second")
+  # The middle of its content, below the title bar.
+  g=$(control click "window host-click $second $(js 'var o = JSON.parse(argv[0]); return Math.round(o.host[2] / 2) + " " + Math.round(o.host[3] / 2);' "$j")" | sed -n 's/^ok //p')
+  [ -n "$g" ] || { fail click "the host-click line was refused"; return; }
+  why=$(js 'var o = JSON.parse(argv[0]), p = JSON.parse(argv[1]).guest, f = o.guest; if (p[0] < f[0] || p[0] > f[0] + f[2] || p[1] < f[1] || p[1] > f[1] + f[3]) return "the click landed at guest " + p + ", outside the guest window [" + f + "]"; return "";' "$j" "$g")
+  [ -z "$why" ] || { fail click "$why"; return; }
+  i=0
+  while [ "$i" -lt 30 ]; do
+    l=$(control click "window list" | sed -n 's/^ok //p')
+    [ "$(js 'var e = JSON.parse(argv[0]).filter(function (e) { return e.id == argv[1]; })[0]; return e && e.focused && e.key ? "1" : "0";' "$l" "$second")" = 1 ] && break
+    sleep 0.1; i=$((i + 1))
+  done
+  [ "$i" -lt 30 ] || { fail click "window $second is not the key and focused window 3 s after the click: $l"; return; }
+  pass click
+}
+
+# check_room: the cost of the room of the guest display. Two cold starts
+# of a bench session, PADDOCK_MACVM_ROOM=0 and the default, each with the
+# seconds from the start to the hello and the memory footprint of the VM
+# process.
+check_room() {
+  local r name t0 secs pid fp disp
+  for r in 0 1; do
+    name=room$r
+    t0=$(date +%s)
+    PADDOCK_MACVM_ROOM=$r PADDOCK_MACVM_BENCH=1 start "$name" --bench >/dev/null
+    wait_event "$name" hello 120 || { fail room "no hello with PADDOCK_MACVM_ROOM=$r"; return; }
+    secs=$(( $(date +%s) - t0 ))
+    sleep 10
+    pid=$(pgrep -n -f com.apple.Virtualization.VirtualMachine)
+    fp=""
+    [ -n "$pid" ] && fp=$(footprint -p "$pid" 2>/dev/null | grep -i 'phys_footprint:' | head -1 | sed 's/^ *//')
+    disp=$(sed -n 's/.*"display": *"\([^"]*\)".*/\1/p' "$root/sessions/$name--default.json" 2>/dev/null | head -1)
+    echo "INFO room: PADDOCK_MACVM_ROOM=$r display ${disp:-unknown}, hello after $secs s, VM ${fp:-footprint unknown}"
+    stop_sessions
+  done
+  pass room
 }
 
 # json_text TEXT: TEXT as the inside of a JSON string.
@@ -977,11 +1151,34 @@ check_login() {
   guest_child login /bin/sh -c "$(guest_echo_server "$other")" >/dev/null
   sleep 2
   local url="http://127.0.0.1:$port/start?redirect_uri=http%3A%2F%2F127.0.0.1%3A$port%2Fcallback&state=check"
-  guest_child login /usr/bin/open "$url" | grep -q '^ok' || { fail login "open of the login link in the guest was refused"; return; }
+  # As the guest person, as an app opens a link: the child of the agent
+  # runs as root, and root has its own Launch Services database.
+  guest_child login /bin/sh -c "u=\$(stat -f %u /Volumes/paddock/home 2>/dev/null || stat -f %u /Users/paddock); /bin/launchctl asuser \$u /usr/bin/sudo -u \"#\$u\" /usr/bin/open '$url'" | grep -q '^ok' || { fail login "open of the login link as the guest person was refused"; return; }
   i=0
   while [ "$i" -lt 30 ] && ! grep -q "\"text\":\"the login callback port $port listens on" "$ev"; do sleep 1; i=$((i + 1)); done
   grep '"kind":"link"\|"kind":"login"' "$ev" | sed 's/^/INFO login: /'
-  grep -q '"text":"took the link http://127.0.0.1' "$ev" || { fail login "no link event: the guest link did not reach the host through the link helper"; return; }
+  if ! grep -q '"text":"took the link http://127.0.0.1' "$ev"; then
+    # What the guest person's Launch Services opens, the helper process,
+    # the socket and the helper's log, through the downloads share.
+    local share="$profiles/login/default/downloads"
+    cat >"$share/link-diag.sh" <<'DIAG'
+out="/Volumes/My Shared Files/downloads/link-diag.txt"
+{
+  u=$(stat -f %u /Volumes/paddock/home 2>/dev/null || stat -f %u /Users/paddock)
+  echo "uid $u, agent runs as $(id -u)"
+  /bin/launchctl asuser "$u" /usr/bin/sudo -u "#$u" /usr/bin/osascript -l JavaScript \
+    -e 'ObjC.import("AppKit"); $.NSWorkspace.sharedWorkspace.URLForApplicationToOpenURL($.NSURL.URLWithString("https://example.com")).path.js'
+  ls -le "/Library/Application Support/paddock/link.sock"
+  ps axo user,pid,command | grep -i -E 'paddock-link|Paddock Links' | grep -v grep
+  /usr/bin/log show --last 3m --style compact \
+    --predicate 'process == "paddock-link" OR eventMessage CONTAINS "dev.paddock.link"' 2>&1 | tail -40
+} >"$out" 2>&1
+DIAG
+    guest_child login /bin/sh "/Volumes/My Shared Files/downloads/link-diag.sh" >/dev/null
+    sleep 4
+    sed 's/^/INFO login diag: /' "$profiles/login/default/downloads/link-diag.txt" 2>/dev/null
+    fail login "no link event: the guest link did not reach the host through the link helper"; return
+  fi
   grep -q "\"text\":\"the login callback port $port listens on" "$ev" || { fail login "the callback port $port did not listen within 30 s"; return; }
   lsofs=$(lsof -nP -iTCP:"$port" -sTCP:LISTEN 2>/dev/null | awk 'NR > 1 {print $9}' | sort -u | tr '\n' ' ')
   echo "INFO login: listening on $lsofs"
@@ -1012,6 +1209,20 @@ run_check() {
   fi
   "check_$1"
   stop_sessions
+  # Each profile is a VM clone with its own data disk: a run of every
+  # check would fill the disk if they stayed until the end.
+  [ -n "${PADDOCK_CHECK_KEEP:-}" ] || remove_profiles
+}
+
+# remove_profiles: delete the profiles of the run, their seal flags first.
+remove_profiles() {
+  local d
+  for d in "$profiles"/*; do
+    [ -d "$d" ] || continue
+    chflags -R nouchg "$d" 2>/dev/null
+    rm -rf "$d"
+  done
+  rm -f "$root"/sessions/*.json 2>/dev/null
 }
 
 case "$what" in
@@ -1020,18 +1231,18 @@ case "$what" in
     build
     zombies_before=$(zombies | grep -c .)
     # PADDOCK_CHECKS: a subset, in this order.
-    for c in ${PADDOCK_CHECKS:-fresh warm kill9 slots suspend instances gcdata hup twice nospace console datadisk dialog noapp input locksettings lock keychain drag radius fullscreen login}; do run_check "$c"; done
+    for c in ${PADDOCK_CHECKS:-fresh warm kill9 slots suspend instances gcdata hup twice nospace console datadisk dialog noapp input locksettings lock keychain drag multi stacked click fullscreen login room}; do run_check "$c"; done
     check_format
     check_zombies
     ;;
   format)
     check_format
     ;;
-  fresh | warm | kill9 | slots | suspend | instances | gcdata | hup | twice | nospace | console | datadisk | dialog | noapp | input | locksettings | lock | keychain | drag | radius | fullscreen | login)
+  fresh | warm | kill9 | slots | suspend | instances | gcdata | hup | twice | nospace | console | datadisk | dialog | noapp | input | locksettings | lock | keychain | drag | multi | stacked | click | fullscreen | login | room)
     build
     run_check "$what"
     ;;
-  *) echo "usage: $0 build|all|format|fresh|warm|kill9|slots|suspend|instances|gcdata|hup|twice|nospace|console|datadisk|dialog|noapp|input|locksettings|lock|keychain|drag|radius|fullscreen" >&2; exit 2 ;;
+  *) echo "usage: $0 build|all|format|fresh|warm|kill9|slots|suspend|instances|gcdata|hup|twice|nospace|console|datadisk|dialog|noapp|input|locksettings|lock|keychain|drag|multi|stacked|click|fullscreen|login|room" >&2; exit 2 ;;
 esac
 echo "macOS $(sw_vers -productVersion) ($(sw_vers -buildVersion)), $(sysctl -n machdep.cpu.brand_string 2>/dev/null)"
 [ "$fails" = 0 ]

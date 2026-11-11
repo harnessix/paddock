@@ -1,0 +1,17 @@
+{
+  "v": 1,
+  "app": "Sample Notes",
+  "running": true,
+  "rules": [
+    {"id": "seed-a1b2c3", "app": "*", "host": "sample.example.net", "port": 443, "verdict": "allow", "scope": "always",
+     "made": "2026-11-01T09:00:00Z", "by": "profile", "source": "profile", "last_used": "2026-11-06T09:58:00Z", "count": 120},
+    {"id": "rule-0a0a0a", "app": "com.example.notes", "host": "example.com", "port": "*", "verdict": "allow", "scope": "always",
+     "made": "2026-11-06T09:04:00Z", "by": "user", "source": "question_panel", "last_used": "2026-11-06T09:58:00Z", "count": 2},
+    {"id": "rule-0a0a0a-subdomains", "app": "com.example.notes", "host": "*.example.com", "port": "*", "verdict": "allow", "scope": "always",
+     "made": "2026-11-06T09:04:00Z", "by": "user", "source": "question_panel", "last_used": "2026-11-06T09:57:00Z", "count": 10},
+    {"id": "session-7c7c7c", "app": "*", "host": "tracker.example.net", "port": 443, "verdict": "deny", "scope": "session",
+     "made": "2026-11-06T09:10:00Z", "by": "user", "source": "you", "count": 3},
+    {"id": "session-9e9e9e", "app": "com.example.notes", "host": "*", "port": "*", "verdict": "allow", "scope": "session",
+     "made": "2026-11-06T09:55:00Z", "expires": "2026-11-06T10:05:00Z", "by": "user", "source": "question_panel", "count": 7}
+  ]
+}

@@ -28,7 +28,7 @@ final class OnboardingUITests: XCTestCase {
 
     func testOldPaddockShowsUpdatePaddock() {
         let app = Fake("old-version").launch()
-        waitForText(app, "This version of paddock for Mac needs paddock 0.3 or newer. You have 0.2.1.")
+        waitForText(app, "This version of paddock for Mac needs paddock 0.2.2 or newer. You have 0.2.1.")
         XCTAssertTrue(app.staticTexts["Update paddock"].exists)
         XCTAssertTrue(noText(app, "Update paddock for Mac"))
         XCTAssertTrue(app.buttons["Copy Command"].exists)
@@ -108,7 +108,7 @@ final class OnboardingUITests: XCTestCase {
         waitForText(app, "Installing macOS, about 8 min", timeout: 15)
         XCTAssertTrue(app.element("step-download").images["Done"].exists)
         waitForText(app, "Waiting for the setup window…", timeout: 15)
-        XCTAssertTrue(app.buttons["Show Window"].exists)
+        waitForText(app, "Follow the steps in paddock's setup window.")
         // Seal, then done.
         XCTAssertTrue(app.element("onboarding-done").waitForExistence(timeout: 20))
         XCTAssertTrue(app.buttons["onboarding-add-app"].exists)

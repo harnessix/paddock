@@ -6,55 +6,9 @@ use std::io::{BufRead, BufReader};
 use std::net::TcpListener;
 use std::sync::Mutex;
 
-pub(crate) fn echo_server() -> u16 {
-    let l = TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = l.local_addr().unwrap().port();
-    std::thread::spawn(move || {
-        for c in l.incoming().flatten() {
-            std::thread::spawn(move || {
-                let mut r = c.try_clone().unwrap();
-                let mut w = c;
-                let _ = std::io::copy(&mut r, &mut w);
-            });
-        }
-    });
-    port
-}
-
-pub(crate) fn start(cfg: HostProxy) -> (tempfile::TempDir, std::path::PathBuf) {
-    let dir = tempfile::tempdir().unwrap();
-    let sock = dir.path().join("p.sock");
-    serve(&sock, cfg).unwrap();
-    (dir, sock)
-}
-
-/// Send a request and return the status code and the open stream.
-pub(crate) fn request(sock: &Path, text: &str) -> (u16, UnixStream) {
-    let mut s = UnixStream::connect(sock).unwrap();
-    s.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
-    // A proxy at its connection limit answers 503 and closes without reading,
-    // so the write can fail. The answer is still there to read.
-    let _ = s.write_all(text.as_bytes());
-    let (head, _) = read_head(&mut s).unwrap();
-    let mut h = [httparse::EMPTY_HEADER; 16];
-    let mut r = httparse::Response::new(&mut h);
-    r.parse(&head).unwrap();
-    (r.code.unwrap(), s)
-}
-
-pub(crate) fn connect(sock: &Path, target: &str) -> (u16, UnixStream) {
-    request(
-        sock,
-        &format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n"),
-    )
-}
-
-pub(crate) fn roundtrip(s: &mut UnixStream, msg: &[u8]) {
-    s.write_all(msg).unwrap();
-    let mut buf = vec![0u8; msg.len()];
-    s.read_exact(&mut buf).unwrap();
-    assert_eq!(buf, msg);
-}
+#[path = "test_helpers.rs"]
+mod test_helpers;
+pub(crate) use test_helpers::{connect, echo_server, request, roundtrip, start};
 
 #[test]
 fn connect_tunnel_to_an_allowed_port() {
@@ -917,17 +871,5 @@ fn a_connection_records_its_host_for_the_egress_monitor() {
     assert_eq!(h.hosts.len(), 1);
 }
 
-#[test]
-fn a_connect_target_keeps_port_80() {
-    assert_eq!(connect_target("h:80"), Some(("h".into(), 80)));
-    assert_eq!(
-        connect_target("127.0.0.1:80"),
-        Some(("127.0.0.1".into(), 80))
-    );
-    assert_eq!(
-        connect_target("example.com:443"),
-        Some(("example.com".into(), 443))
-    );
-    assert_eq!(connect_target("example.com"), None);
-    assert_eq!(connect_target("example.com:x"), None);
-}
+#[path = "registry_tests.rs"]
+mod registry_tests;

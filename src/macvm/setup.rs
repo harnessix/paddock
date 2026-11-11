@@ -26,7 +26,7 @@ use super::golden::{self, Keyring, Manifest, Outcome, State};
 use super::layout::{self, Golden, Layout};
 use super::provision::{self, Route};
 use super::text;
-use super::{seed, setup_events, setup_offline, tcc};
+use super::{seed, setup_events, setup_offline, setup_progress, tcc};
 use crate::env::HostEnv;
 use anyhow::{anyhow, bail, Context, Result};
 use std::io::Write;
@@ -111,8 +111,15 @@ pub trait Backend {
     /// server.
     fn latest(&mut self) -> Result<RestoreInfo>;
     /// Download `url` to `dest`, a `.partial` name. The backend prints the
-    /// progress lines and may continue a partial file.
-    fn download(&mut self, url: &str, dest: &Path, size: Option<u64>) -> Result<()>;
+    /// progress lines, reports to `watch` and honors its pause, and may
+    /// continue a partial file.
+    fn download(
+        &mut self,
+        url: &str,
+        dest: &Path,
+        size: Option<u64>,
+        watch: &mut super::download::Watch,
+    ) -> Result<()>;
     /// `VZMacOSRestoreImage.load` of a file: an error when this Mac cannot
     /// run it.
     fn check_image(&mut self, path: &Path) -> Result<ImageInfo>;
@@ -212,11 +219,32 @@ pub fn run(
     opts: &Opts,
     ui: &mut Ui,
 ) -> Result<i32> {
-    let r = run_states(env, layout, golden, backend, opts, ui);
+    let result = (|| {
+        let keyring = preflight(env, opts)?;
+        let password = keyring.password()?;
+        let _lock = lock(layout)?;
+        let mut progress = setup_progress::Reporter::new(env, layout);
+        let r = run_states(
+            env,
+            layout,
+            golden,
+            backend,
+            opts,
+            ui,
+            &mut progress,
+            keyring,
+            password,
+        );
+        if let Err(e) = &r {
+            progress.failed(&format!("{e:#}"));
+        }
+        r
+    })();
     backend.finish();
-    r
+    result
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_states(
     env: &HostEnv,
     layout: &Layout,
@@ -224,10 +252,13 @@ fn run_states(
     backend: &mut dyn Backend,
     opts: &Opts,
     ui: &mut Ui,
+    progress: &mut setup_progress::Reporter,
+    keyring: Keyring,
+    mut password: String,
 ) -> Result<i32> {
-    let keyring = preflight(env, opts)?;
-    let mut password = keyring.password()?;
-    let _lock = lock(layout)?;
+    let _ = env;
+    // A pause that a killed build left would stop this download at once.
+    let _ = std::fs::remove_file(setup_progress::pause_file(layout));
     let mut m = match golden.read_manifest()? {
         Some(m) => m,
         None => {
@@ -237,6 +268,7 @@ fn run_states(
     };
     if m.state == State::Sealed {
         ui.line(&text::golden_already(&m.version_text()));
+        progress.step(State::Sealed.name());
         return Ok(0);
     }
     let (state, crashed) = golden::resume_point(Some(&m), &golden.partials());
@@ -253,8 +285,13 @@ fn run_states(
         golden.write_manifest(&m)?;
         ui.line(&text::state_starts(state));
         setup_events::record(&golden.events, setup_events::STATE, false, state.name());
+        progress.step(state.name());
         let outcome = match state {
-            State::Fetch => fetch(layout, backend, opts, &mut m, ui)?,
+            State::Fetch => {
+                let result = fetch(layout, backend, opts, &mut m, ui, progress);
+                let _ = std::fs::remove_file(setup_progress::pause_file(layout));
+                result?
+            }
             State::Install => install(layout, golden, backend, opts, &mut m, ui)?,
             State::Seed => setup_offline::seed_state(layout, golden, backend, opts, ui),
             State::Guided => guided(layout, golden, backend, opts, &password, &m, ui),
@@ -278,12 +315,14 @@ fn run_states(
                 m.at(after);
                 golden.write_manifest(&m)?;
                 ui.line(&text::setup_stopped(after));
+                progress.stopped(after.name());
                 return Ok(EXIT_AGAIN);
             }
             Outcome::Failed(reason) => {
                 m.at(after);
                 golden.write_manifest(&m)?;
                 ui.line(&text::state_failed(state, reason));
+                progress.failed(reason);
                 return Ok(EXIT_AGAIN);
             }
             Outcome::ImageRejected(reason) => {
@@ -292,6 +331,7 @@ fn run_states(
                 if fetch_retries > 1 {
                     m.at(after);
                     golden.write_manifest(&m)?;
+                    progress.failed(reason);
                     return Ok(EXIT_AGAIN);
                 }
                 if let Some(p) = m.ipsw.take() {
@@ -315,6 +355,8 @@ fn run_states(
             }
             let size = golden::used_bytes(&golden.disk) + golden::used_bytes(&golden.aux);
             ui.line(&text::golden_ready(&m.version_text(), size));
+            progress.step(State::Sealed.name());
+            progress.golden_ready(&m.version_text(), size);
             return Ok(0);
         }
     }
@@ -448,6 +490,7 @@ fn fetch(
     opts: &Opts,
     m: &mut Manifest,
     ui: &mut Ui,
+    progress: &mut setup_progress::Reporter,
 ) -> Result<Outcome> {
     if let Some(path) = &opts.ipsw {
         let path = std::path::absolute(path)?;
@@ -513,7 +556,13 @@ fn fetch(
     crate::privfs::dir(&layout.ipsw)?;
     let partial = layout::partial(&dest);
     for attempt in 0..2 {
-        backend.download(&latest.url, &partial, latest.size)?;
+        let mut report = |t| progress.download(t);
+        let mut watch = super::download::Watch {
+            pause: setup_progress::pause_file(layout),
+            every: super::download::EVERY,
+            report: &mut report,
+        };
+        backend.download(&latest.url, &partial, latest.size, &mut watch)?;
         let got = std::fs::metadata(&partial).map(|x| x.len()).unwrap_or(0);
         if let Some(want) = latest.size {
             if got != want {

@@ -218,6 +218,7 @@ pub fn serve(listener: UnixListener, sink: Sink) {
                 continue;
             }
         };
+        log::info!("link: a helper connected");
         let sink = sink.clone();
         let _ = std::thread::Builder::new()
             .name("link".into())

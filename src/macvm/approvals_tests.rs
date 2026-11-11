@@ -10,8 +10,8 @@ fn asker(t: &std::path::Path, wait: Duration) -> (HostEnv, Asker) {
     let env = crate::privfs::tests::env_in(t);
     let a = Asker::new(
         env.clone(),
-        "chatgpt-desktop",
-        "ChatGPT",
+        "sample-notes",
+        "Sample Notes",
         t.join("profile"),
         std::process::id(),
     )
@@ -37,7 +37,7 @@ fn triple() -> Triple {
 
 fn host(h: &str) -> Triple {
     Triple {
-        app: "com.openai.chat".into(),
+        app: "com.example.notes".into(),
         host: h.into(),
         port: 443,
     }
@@ -45,18 +45,18 @@ fn host(h: &str) -> Triple {
 
 fn who() -> Who {
     Who {
-        app: "com.openai.chat".into(),
+        app: "com.example.notes".into(),
         parent_app: None,
-        team: Some("2DC432GLL2".into()),
+        team: Some("EXAMPLE123".into()),
     }
 }
 
 fn identity() -> Identity {
     Identity {
         pid: Some(612),
-        app: Some("com.openai.chat".into()),
-        team: Some("2DC432GLL2".into()),
-        path: Some("/Applications/ChatGPT.app/Contents/MacOS/ChatGPT".into()),
+        app: Some("com.example.notes".into()),
+        team: Some("EXAMPLE123".into()),
+        path: Some("/Applications/Sample Notes.app/Contents/MacOS/Sample Notes".into()),
         parent_app: None,
     }
 }
@@ -122,13 +122,16 @@ fn pending_map_shares_answer() {
     assert_eq!(c.count, 2);
     assert_eq!(c.asked_at, 1000);
     assert_eq!(c.pid, std::process::id());
-    assert_eq!(c.profile, "chatgpt-desktop");
-    assert_eq!((c.label.as_str(), c.more, c.notice), ("ChatGPT", 0, false));
-    assert_eq!(c.team.as_deref(), Some("2DC432GLL2"));
-    assert_eq!(q2.sandbox, "macvm-chatgpt-desktop");
+    assert_eq!(c.profile, "sample-notes");
+    assert_eq!(
+        (c.label.as_str(), c.more, c.notice),
+        ("Sample Notes", 0, false)
+    );
+    assert_eq!(c.team.as_deref(), Some("EXAMPLE123"));
+    assert_eq!(q2.sandbox, "macvm-sample-notes");
     assert_eq!(
         q2.summary,
-        "ChatGPT wants to connect to telemetry.example.com port 443"
+        "Sample Notes wants to connect to telemetry.example.com port 443"
     );
     assert!(
         q2.detail.contains("2 connections wait on this answer"),
@@ -136,8 +139,9 @@ fn pending_map_shares_answer() {
         q2.detail
     );
     assert!(
-        q2.detail
-            .contains("Why? The process /Applications/ChatGPT.app/Contents/MacOS/ChatGPT"),
+        q2.detail.contains(
+            "Why? The process /Applications/Sample Notes.app/Contents/MacOS/Sample Notes"
+        ),
         "{}",
         q2.detail
     );
@@ -179,9 +183,10 @@ fn pending_map_shares_answer() {
     let q = wait_for_question(&env);
     assert!(q.connect.unwrap().path.is_none());
     assert!(broker::answer_reply(&env, &q.id, "maybe").is_err());
-    broker::answer_reply(&env, &q.id, "deny-always").unwrap();
+    broker::answer_reply_cli(&env, &q.id, "deny-always").unwrap();
     let s = w.join().unwrap().unwrap();
     assert_eq!(s.answer, ConnectAnswer::DenyAlways);
+    assert_eq!(s.who, "cli");
     // An answer file that holds nothing readable counts as deny.
     let f2 = fw.clone();
     let w = std::thread::spawn(move || ask(&f2, &host("d.example"), None, 1300));
@@ -462,7 +467,7 @@ fn too_many_questions_pause_with_one_notice() {
         "{}",
         qs[0].summary
     );
-    assert!(qs[0].detail.contains("paddock app status chatgpt-desktop"));
+    assert!(qs[0].detail.contains("paddock app status sample-notes"));
     assert_eq!(qs[0].choices, ["allow-once", "deny"]);
     assert!(a.paused());
     // More questions while paused: still the one notice, with the count.
@@ -494,4 +499,82 @@ fn too_many_questions_pause_with_one_notice() {
     assert!(question(&env).is_none());
     assert_eq!(a.waiting(), 0);
     assert!(!a.paused());
+}
+
+/// A question opens and is answered on the launcher event stream, with
+/// the profile, the host, the process and the answer.
+#[test]
+fn questions_are_lines_on_the_event_stream() {
+    use crate::eventstream::schema::{Event, QuestionState};
+    let t = tempfile::tempdir().unwrap();
+    let (env, a) = asker(t.path(), Duration::from_secs(10));
+    let bus = crate::eventstream::Bus::of(&env);
+    let f = crate::eventstream::bus::Follower::bind(&bus, std::process::id()).unwrap();
+    let (tx, rx) = crate::eventstream::bus::queue();
+    f.serve(tx).unwrap();
+    let fw = firewall(t.path(), a);
+    let id = identity();
+    let w = {
+        let fw = fw.clone();
+        std::thread::spawn(move || ask(&fw, &triple(), Some(&id), 1000))
+    };
+    let q = wait_for_question(&env);
+    broker::answer_connect(&env, &q.id, ConnectAnswer::AllowAlways).unwrap();
+    w.join().unwrap().unwrap();
+    let mut got = Vec::new();
+    while got.len() < 2 {
+        let line = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        let l: crate::eventstream::Line = serde_json::from_str(&line).unwrap();
+        if let Event::Question(q) = l.event {
+            got.push(q);
+        }
+    }
+    assert_eq!(got[0].state, QuestionState::Open);
+    assert_eq!(got[1].state, QuestionState::Answered);
+    for e in &got {
+        assert_eq!(e.id, q.id);
+        assert_eq!(e.app, "sample-notes");
+        assert_eq!((e.host.as_str(), e.port), ("telemetry.example.com", 443));
+        assert_eq!(
+            e.process.as_deref(),
+            Some("/Applications/Sample Notes.app/Contents/MacOS/Sample Notes")
+        );
+    }
+    assert_eq!(got[1].answer.as_deref(), Some("allow-always"));
+    assert_eq!(got[1].by.as_deref(), Some("user"));
+}
+
+#[test]
+fn site_answer_settles_five_waiting_hosts() {
+    let t = tempfile::tempdir().unwrap();
+    let (env, a) = asker(t.path(), Duration::from_secs(10));
+    let fw = firewall(t.path(), a);
+    let waiters: Vec<_> = [
+        "accounts.google.com",
+        "www.google.com",
+        "google.com",
+        "mail.google.com",
+        "docs.google.com",
+    ]
+    .into_iter()
+    .map(|h| {
+        let fw = fw.clone();
+        std::thread::spawn(move || ask(&fw, &host(h), None, crate::state::now()))
+    })
+    .collect();
+    let q = wait_for_question(&env);
+    for _ in 0..1000 {
+        if fw.asker().unwrap().waiting() == 5 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(fw.asker().unwrap().waiting(), 5);
+    broker::answer_connect(&env, &q.id, ConnectAnswer::AllowSite).unwrap();
+    for w in waiters {
+        assert!(w.join().unwrap().unwrap().answer.allows());
+    }
+    assert_eq!(fw.asker().unwrap().waiting(), 0);
+    assert!(questions(&env).is_empty());
+    assert_eq!(fw.rules().file.len(), 2);
 }

@@ -1,0 +1,1 @@
+- Fix: another run's transcript stays out of a bound session's horse.

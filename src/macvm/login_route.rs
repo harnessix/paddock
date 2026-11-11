@@ -81,9 +81,9 @@ pub fn decide(url: &str, mode: Mode, granted: bool, denied: bool) -> Decision {
 /// Who asks: the app profile of the session.
 #[derive(Debug, Clone, Default)]
 pub struct Asker {
-    /// The profile name, `chatgpt-desktop`.
+    /// The profile name, `sample-notes`.
     pub profile: String,
-    /// The name of the app, `ChatGPT`.
+    /// The name of the app, `Sample Notes`.
     pub label: String,
     /// The profile folder, for the card.
     pub dir: PathBuf,

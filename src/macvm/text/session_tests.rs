@@ -152,29 +152,32 @@ fn cannot_lock() {
 
 #[test]
 fn quit_asking() {
-    assert_eq!(t::quit_asking("ChatGPT"), "asking ChatGPT to quit");
+    assert_eq!(
+        t::quit_asking("Sample Notes"),
+        "asking Sample Notes to quit"
+    );
 }
 
 #[test]
 fn quit_app_not_running() {
     has(
-        &t::quit_app_not_running("ChatGPT"),
-        &["ChatGPT does not run in the guest", "the quit goes on"],
+        &t::quit_app_not_running("Sample Notes"),
+        &["Sample Notes does not run in the guest", "the quit goes on"],
     );
 }
 
 #[test]
 fn quit_forcing() {
     has(
-        &t::quit_forcing("ChatGPT", Duration::from_secs(60)),
-        &["ChatGPT did not quit in 60 s, forcing"],
+        &t::quit_forcing("Sample Notes", Duration::from_secs(60)),
+        &["Sample Notes did not quit in 60 s, forcing"],
     );
 }
 
 #[test]
 fn quit_force_failed() {
     has(
-        &t::quit_force_failed("ChatGPT", Duration::from_secs(70)),
+        &t::quit_force_failed("Sample Notes", Duration::from_secs(70)),
         &["in 70 s", "without a save"],
     );
 }

@@ -14,8 +14,8 @@ final class FlowTests: XCTestCase {
         XCTAssertTrue(verdict.canAdd)
 
         let store = try await Harness("precheck-app-store")
-        let (_, appStore) = await store.store.precheck(path: "/Applications/Things.app")
-        XCTAssertEqual(appStore, .appStore(website: "https://culturedcode.com/things/"))
+        let (_, appStore) = await store.store.precheck(path: "/Applications/Sample Tasks.app")
+        XCTAssertEqual(appStore, .appStore(website: "https://tasks.example.com/sample-tasks/"))
         XCTAssertFalse(appStore.canAdd)
         XCTAssertEqual(appStore.message?.english,
                        "This app came from the App Store and needs an Apple ID, which the sandbox does not have. Install the version from the maker's website instead.")
@@ -34,14 +34,14 @@ final class FlowTests: XCTestCase {
     func testAddAppAppendsRowAndNamesLaunchpad() async throws {
         let h = try await Harness("added")
         XCTAssertEqual(h.store.apps.count, 2)
-        let added = await h.store.addApp(path: "/Applications/Notebook.app", name: "Notebook", memoryGB: 6, network: .ask)
+        let added = await h.store.addApp(path: "/Applications/Notebook.app", name: "Notebook", memoryGB: 6)
         XCTAssertTrue(added)
-        XCTAssertEqual(h.store.apps.map(\.name), ["ChatGPT", "Slack", "Notebook"])
+        XCTAssertEqual(h.store.apps.map(\.name), ["Sample Notes", "Sample Mail", "Notebook"])
         XCTAssertEqual(h.store.selection, .app("Notebook"))
         XCTAssertEqual(h.store.toast?.text.english,
                        "Notebook added. It also appears in Launchpad as \"Notebook (paddock)\".")
         XCTAssertEqual(h.calls(["app", "add", "/Applications/Notebook.app", "--name"]).first?.args,
-                       ["app", "add", "/Applications/Notebook.app", "--name", "Notebook", "--memory", "6", "--network", "ask", "--json"])
+                       ["app", "add", "/Applications/Notebook.app", "--name", "Notebook", "--memory", "6G", "--json"])
         XCTAssertEqual(h.calls(["app", "install", "Notebook"]).count, 1)
     }
 
@@ -51,7 +51,7 @@ final class FlowTests: XCTestCase {
         let h = try await Harness("questions")
         XCTAssertEqual(h.store.questions.count, 2)
         XCTAssertEqual(MenuModel.of(h.store, keepRunning: true).questionsItem?.english, "Open questions… (2)")
-        h.events.send(#"{"v":1,"kind":"question","op":"open","id":"q3","app":"ChatGPT","host":"files.oaiusercontent.com","port":443,"process":"ChatGPT.app","opened":"2026-11-06T10:00:00Z"}"#)
+        h.events.send(#"{"v":1,"kind":"question","op":"open","id":"q3","app":"Sample Notes","host":"files.files.example.com","port":443,"process":"Sample Notes.app","opened":"2026-11-06T10:00:00Z"}"#)
         await waitUntil { h.store.questions.count == 3 }
         XCTAssertEqual(MenuModel.of(h.store, keepRunning: true).questionsItem?.english, "Open questions… (3)")
         XCTAssertEqual(MenuModel.of(h.store, keepRunning: true).iconState, .question)
@@ -67,12 +67,12 @@ final class FlowTests: XCTestCase {
         await waitUntil { !h.store.questions.contains { $0.id == "q3" } }
 
         // Asking paused: the banner state.
-        h.events.send(#"{"v":1,"kind":"question","op":"paused","app":"ChatGPT","count":23}"#)
+        h.events.send(#"{"v":1,"kind":"question","op":"paused","app":"Sample Notes","count":23}"#)
         await waitUntil { h.store.paused != nil }
         XCTAssertEqual(QuestionsCopy.pausedBanner(h.store.paused!).english,
-                       "ChatGPT asked 23 times in a minute. paddock paused the questions.")
+                       "Sample Notes asked 23 times in a minute. paddock paused the questions.")
         await h.store.pausedDenyAll()
-        XCTAssertEqual(h.calls(["approvals", "paused"]).last?.args, ["approvals", "paused", "ChatGPT", "--deny-all"])
+        XCTAssertEqual(h.calls(["approvals", "paused"]).last?.args, ["approvals", "paused", "Sample Notes", "--deny-all"])
         XCTAssertNil(h.store.paused)
     }
 
@@ -83,12 +83,12 @@ final class FlowTests: XCTestCase {
 
     func testNotificationAfterThreshold() {
         let opened = ISO.date("2026-11-06T10:00:00Z")
-        let q = QuestionJSON(id: "a", app: "ChatGPT", host: "h", port: 443, opened: opened)
+        let q = QuestionJSON(id: "a", app: "Sample Notes", host: "h", port: 443, opened: opened)
         XCTAssertTrue(QuestionNotifier.due([q], now: opened.addingTimeInterval(29), threshold: 30, notified: []).isEmpty)
         XCTAssertEqual(QuestionNotifier.due([q], now: opened.addingTimeInterval(30), threshold: 30, notified: []).count, 1)
         XCTAssertTrue(QuestionNotifier.due([q], now: opened.addingTimeInterval(300), threshold: 30, notified: ["a"]).isEmpty)
         XCTAssertTrue(QuestionNotifier.due([q], now: opened.addingTimeInterval(300), threshold: nil, notified: []).isEmpty)
-        XCTAssertEqual(QuestionNotifier.title(q).english, "ChatGPT is waiting for an answer")
+        XCTAssertEqual(QuestionNotifier.title(q).english, "Sample Notes is waiting for an answer")
     }
 
     // MARK: Quit
@@ -103,11 +103,11 @@ final class FlowTests: XCTestCase {
 
     func testQuitStopsAppsWhenSettingOff() async throws {
         let h = try await Harness("ready")
-        XCTAssertEqual(QuitPlanner.plan(keepRunning: false, apps: h.store.apps, building: false), [.stop("ChatGPT")])
+        XCTAssertEqual(QuitPlanner.plan(keepRunning: false, apps: h.store.apps, building: false), [.stop("Sample Notes")])
         let quit = Task { await h.store.performQuit(keepRunning: false, timeout: 60) }
-        await waitUntil { h.calls(["app", "stop", "ChatGPT"]).count == 1 }
-        h.events.send(#"{"v":1,"kind":"session","app":"ChatGPT","state":"saved","since":"2026-11-06T10:00:05Z"}"#)
-        await waitUntil { if case .saved = h.store.app(named: "ChatGPT")!.state { return true } else { return false } }
+        await waitUntil { h.calls(["app", "stop", "Sample Notes"]).count == 1 }
+        h.events.send(#"{"v":1,"kind":"session","app":"Sample Notes","state":"saved","since":"2026-11-06T10:00:05Z"}"#)
+        await waitUntil { if case .saved = h.store.app(named: "Sample Notes")!.state { return true } else { return false } }
         // The stream watcher sleeps too; wait for the quit loop's own sleep.
         await waitUntil { h.clock.sleeperCount >= 2 }
         h.clock.advance(1)
@@ -129,22 +129,22 @@ final class FlowTests: XCTestCase {
 
     func testRemoveSheetSizesAndCalls() async throws {
         let h = try await Harness("ready")
-        let slack = h.store.app(named: "Slack")!
-        let sheet = RemovePresentation.of(slack)
-        XCTAssertEqual(sheet.title.english, "Remove Slack from paddock?")
+        let sampleMail = h.store.app(named: "Sample Mail")!
+        let sheet = RemovePresentation.of(sampleMail)
+        XCTAssertEqual(sheet.title.english, "Remove Sample Mail from paddock?")
         XCTAssertEqual(sheet.body.english,
                        "This removes the sandbox copy of the app (1.2 GB), its saved state (2.0 GB) and the launcher in your Applications folder. Its data (3.4 GB) goes to the Trash, where you can get it back. The original app in /Applications stays.")
         XCTAssertFalse(sheet.blockedByRunning)
-        XCTAssertTrue(RemovePresentation.of(h.store.app(named: "ChatGPT")!).blockedByRunning)
+        XCTAssertTrue(RemovePresentation.of(h.store.app(named: "Sample Notes")!).blockedByRunning)
         XCTAssertEqual(RemoveCopy.stopFirst.english, "Stop the app first.")
 
-        await h.store.removeApp("Slack", deleteData: false)
-        XCTAssertEqual(h.calls(["app", "remove"]).last?.args, ["app", "remove", "Slack", "--json"])
-        XCTAssertEqual(h.store.toast?.text.english, "Slack removed. 6.6 GB freed.")
-        XCTAssertNil(h.store.app(named: "Slack"))
+        await h.store.removeApp("Sample Mail", deleteData: false)
+        XCTAssertEqual(h.calls(["app", "remove"]).last?.args, ["app", "remove", "Sample Mail", "--yes", "--json"])
+        XCTAssertEqual(h.store.toast?.text.english, "Sample Mail removed. 6.6 GB freed.")
+        XCTAssertNil(h.store.app(named: "Sample Mail"))
 
-        await h.store.removeApp("ChatGPT", deleteData: true)
-        XCTAssertEqual(h.calls(["app", "remove"]).last?.args, ["app", "remove", "ChatGPT", "--delete-data", "--json"])
+        await h.store.removeApp("Sample Notes", deleteData: true)
+        XCTAssertEqual(h.calls(["app", "remove"]).last?.args, ["app", "remove", "Sample Notes", "--delete-data", "--yes", "--json"])
     }
 
     // MARK: Uninstall
@@ -156,14 +156,14 @@ final class FlowTests: XCTestCase {
         XCTAssertEqual(Format.gb(sizes.golden), "25.3 GB")
         XCTAssertEqual(Format.gb(sizes.data), "6.8 GB")
         let plan = UninstallPlan()
-        XCTAssertEqual(plan.commands(apps: ["ChatGPT", "Slack"]),
-                       [["app", "remove", "ChatGPT", "--json"], ["app", "remove", "Slack", "--json"], ["macvm", "remove", "--json"]])
+        XCTAssertEqual(plan.commands(apps: ["Sample Notes", "Sample Mail"]),
+                       [["app", "remove", "Sample Notes", "--yes", "--json"], ["app", "remove", "Sample Mail", "--yes", "--json"], ["macvm", "remove", "--yes", "--json"]])
         let freed = await h.store.uninstall(plan)
         XCTAssertEqual(Format.gb(freed), "38.5 GB")
         let order = h.runner.calls.map(\.args).filter { $0.contains("remove") }
-        XCTAssertEqual(order, [["app", "remove", "ChatGPT", "--json"], ["app", "remove", "Slack", "--json"], ["macvm", "remove", "--json"]])
+        XCTAssertEqual(order, [["app", "remove", "Sample Notes", "--yes", "--json"], ["app", "remove", "Sample Mail", "--yes", "--json"], ["macvm", "remove", "--yes", "--json"]])
         XCTAssertFalse(h.runner.calls.contains { $0.line.contains("brew") })
-        XCTAssertEqual(UninstallPlan(removeData: true).commands(apps: ["A"]).first, ["app", "remove", "A", "--delete-data", "--json"])
+        XCTAssertEqual(UninstallPlan(removeData: true).commands(apps: ["A"]).first, ["app", "remove", "A", "--delete-data", "--yes", "--json"])
         XCTAssertEqual(UninstallCopy.done(freed).english, "Done. 38.5 GB freed. You can now drag paddock for Mac to the Trash.")
     }
 
@@ -185,7 +185,7 @@ final class FlowTests: XCTestCase {
         XCTAssertFalse(menu.showsMore)
         XCTAssertEqual(menu.quitNote?.english, "1 app keeps running")
         XCTAssertEqual(menu.iconState, .running)
-        h.events.send(#"{"v":1,"kind":"session","app":"Slack","state":"running","windows":1}"#)
+        h.events.send(#"{"v":1,"kind":"session","app":"Sample Mail","state":"running","windows":1}"#)
         await waitUntil { h.store.activeApps.count == 2 }
         menu = MenuModel.of(h.store, keepRunning: true)
         XCTAssertEqual(menu.quitNote?.english, "2 apps keep running")
@@ -223,14 +223,14 @@ final class FlowTests: XCTestCase {
 
     func testNoFasterThanOneStatusCallPerFiveSeconds() async throws {
         let h = try await Harness("ready")
-        let detail = h.store.detail(for: "ChatGPT")
+        let detail = h.store.detail(for: "Sample Notes")
         for _ in 0..<10 {
             await detail.load()
             await h.store.refreshAll()
             h.clock.advance(1)
         }
         // Ten seconds of fake time: at most one call per 5 s per screen.
-        let status = h.calls(["app", "status", "ChatGPT"])
+        let status = h.calls(["app", "status", "Sample Notes"])
         XCTAssertLessThanOrEqual(status.count, 2)
         XCTAssertLessThanOrEqual(h.calls(["macvm", "status"]).count, 2)
         for pair in zip(status, status.dropFirst()) {
@@ -238,9 +238,9 @@ final class FlowTests: XCTestCase {
         }
         // Grant events never cause more than the gate allows.
         for _ in 0..<5 {
-            h.events.send(#"{"v":1,"kind":"grant","app":"ChatGPT","grant":"rule","op":"add","detail":"Allow always x.com","source":"question_panel"}"#)
+            h.events.send(#"{"v":1,"kind":"grant","app":"Sample Notes","grant":"rule","op":"add","detail":"Allow always x.com","source":"question_panel"}"#)
         }
         await settle()
-        XCTAssertLessThanOrEqual(h.calls(["app", "status", "ChatGPT"]).count, 3)
+        XCTAssertLessThanOrEqual(h.calls(["app", "status", "Sample Notes"]).count, 3)
     }
 }

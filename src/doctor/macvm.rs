@@ -49,7 +49,7 @@ pub struct ProfileView {
     pub name: String,
     pub bytes: u64,
     pub end: SessionEnd,
-    /// The day of the last stamp write, `2026-11-03`.
+    /// The day of the last stamp write, `2000-01-03`.
     pub when: Option<String>,
     pub running: Option<u32>,
     /// The files of the profile that are not at their mode (checklist
@@ -112,7 +112,7 @@ impl View {
     }
 }
 
-/// `2026-11-03` of `2026-11-03T10:00:00Z`.
+/// `2000-01-03` of `2000-01-03T10:00:00Z`.
 fn day_of(time: &str) -> String {
     time.split('T').next().unwrap_or(time).to_string()
 }
@@ -279,16 +279,19 @@ fn golden_manifest(g: &GoldenView) -> Option<&Manifest> {
     g.manifest()
 }
 
+#[path = "macvm_json.rs"]
+pub mod json;
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::macvm::golden::State;
 
     fn sealed(version: &str) -> GoldenView {
-        let mut m = Manifest::new("15.2", "24C101", "0.2.1");
+        let mut m = Manifest::new("50.2", "99B102", "0.2.1");
         m.version = version.into();
-        m.build = "24C101".into();
-        m.sealed = Some("2026-11-01T10:00:00Z".into());
+        m.build = "99B102".into();
+        m.sealed = Some("2000-01-01T10:00:00Z".into());
         m.at(State::Sealed);
         GoldenView::Sealed {
             manifest: m,
@@ -300,23 +303,23 @@ mod tests {
     fn view(golden: GoldenView) -> View {
         View {
             golden,
-            host_version: Some("15.2".into()),
+            host_version: Some("50.2".into()),
             apple_silicon: true,
             entitlement: Some(true),
             profiles: vec![
                 ProfileView {
-                    name: "chatgpt-desktop/default".into(),
+                    name: "sample-notes/default".into(),
                     bytes: 6_300_000_000,
                     end: SessionEnd::QuitWithSave,
-                    when: Some("2026-11-04".into()),
+                    when: Some("2000-01-04".into()),
                     running: None,
                     modes: vec![],
                 },
                 ProfileView {
-                    name: "vscode/default".into(),
+                    name: "sample-editor/default".into(),
                     bytes: 9_100_000_000,
                     end: SessionEnd::Crashed,
-                    when: Some("2026-11-03".into()),
+                    when: Some("2000-01-03".into()),
                     running: None,
                     modes: vec![],
                 },
@@ -331,13 +334,13 @@ mod tests {
 
     #[test]
     fn macvm_block_cases() {
-        let l = lines(&view(sealed("15.2")));
+        let l = lines(&view(sealed("50.2")));
         assert_eq!(l[0], "macvm:");
-        assert!(l[1].starts_with("  ok       golden macOS 15.2 (24C101), sealed 2026-11-01, 21.8 GiB, flags 0444 uchg"), "{}", l[1]);
-        assert!(l[2].starts_with("  ok       host macOS 15.2, Apple silicon, Virtualization entitlement on paddock-vm"), "{}", l[2]);
+        assert!(l[1].starts_with("  ok       golden macOS 50.2 (99B102), sealed 2000-01-01, 21.8 GiB, flags 0444 uchg"), "{}", l[1]);
+        assert!(l[2].starts_with("  ok       host macOS 50.2, Apple silicon, Virtualization entitlement on paddock-vm"), "{}", l[2]);
         assert!(
             l.iter()
-                .any(|x| x == "  ok       profiles: chatgpt-desktop/default 5.9 GiB (clean), vscode/default 8.5 GiB (crashed 2026-11-03)"),
+                .any(|x| x == "  ok       profiles: sample-notes/default 5.9 GiB (clean), sample-editor/default 8.5 GiB (crashed 2000-01-03)"),
             "{l:?}"
         );
         assert!(
@@ -346,7 +349,7 @@ mod tests {
         );
 
         // The profile notes: running, never started, crashed without a day.
-        let mut v = view(sealed("15.2"));
+        let mut v = view(sealed("50.2"));
         v.profiles[0].running = Some(812);
         v.profiles[1] = ProfileView {
             name: "x/default".into(),
@@ -367,16 +370,16 @@ mod tests {
         let l = lines(&v);
         assert!(
             l.iter().any(|x| x
-                == "  ok       profiles: chatgpt-desktop/default 5.9 GiB (running, pid 812), x/default 0 GiB (never started), y/default 1 GiB (crashed)"),
+                == "  ok       profiles: sample-notes/default 5.9 GiB (running, pid 812), x/default 0 GiB (never started), y/default 1 GiB (crashed)"),
             "{l:?}"
         );
-        assert_eq!(day_of("2026-11-03T10:00:00Z"), "2026-11-03");
+        assert_eq!(day_of("2000-01-03T10:00:00Z"), "2000-01-03");
 
         // The slots: one of two, then both, with their holders.
-        let mut v = view(sealed("15.2"));
+        let mut v = view(sealed("50.2"));
         v.slots = vec![
             Some(Holder::Mine {
-                app: "chatgpt-desktop".into(),
+                app: "sample-notes".into(),
                 pid: 812,
             }),
             None,
@@ -384,14 +387,16 @@ mod tests {
         let l = lines(&v);
         assert!(
             l.iter()
-                .any(|x| x == "  ok       slots: 1 of 2 in use (chatgpt-desktop (you, pid 812))"),
+                .any(|x| x == "  ok       slots: 1 of 2 in use (sample-notes (you, pid 812))"),
             "{l:?}"
         );
-        v.slots[1] = Some(Holder::User { name: "ana".into() });
+        v.slots[1] = Some(Holder::User {
+            name: "demo".into(),
+        });
         let l = lines(&v);
         assert!(
             l.iter().any(|x| x.starts_with(
-                "  warn     slots: 2 of 2 in use (chatgpt-desktop (you, pid 812), a VM of user ana): a third session is refused"
+                "  warn     slots: 2 of 2 in use (sample-notes (you, pid 812), a VM of user demo): a third session is refused"
             )),
             "{l:?}"
         );
@@ -408,20 +413,20 @@ mod tests {
         );
         v.profiles[0].modes = vec!["data.img 0644 (expected 0600)".into()];
         let l = lines(&v);
-        assert!(l.iter().any(|x| x.starts_with("  warn     profile modes: chatgpt-desktop/default data.img 0644 (expected 0600): chmod")), "{l:?}");
+        assert!(l.iter().any(|x| x.starts_with("  warn     profile modes: sample-notes/default data.img 0644 (expected 0600): chmod")), "{l:?}");
         assert!(
             l.iter().any(|x| x == "  ok       disk: 129 GB free"),
             "{l:?}"
         );
         assert!(!l.iter().any(|x| x.contains("older than the host")));
 
-        let mut m = Manifest::new("15.2", "24C101", "0.2.1");
-        m.version = "15.2".into();
+        let mut m = Manifest::new("50.2", "99B102", "0.2.1");
+        m.version = "50.2".into();
         m.at(State::Guided);
         let l = lines(&view(GoldenView::Unsealed(m)));
         assert!(
             l[1].starts_with(
-                "  warn     golden macOS 15.2: not sealed, setup stopped in step 4 (guided)"
+                "  warn     golden macOS 50.2: not sealed, setup stopped in step 4 (guided)"
             ),
             "{}",
             l[1]
@@ -441,17 +446,17 @@ mod tests {
         assert!(l[1].contains("paddock macvm remove"));
 
         // A golden older than the host.
-        let mut v = view(sealed("15.1"));
-        v.host_version = Some("15.2".into());
+        let mut v = view(sealed("50.1"));
+        v.host_version = Some("50.2".into());
         let l = lines(&v);
         assert!(
             l.iter().any(|x| x
-                == "  warn     golden older than the host (15.1 < 15.2): paddock macvm update"),
+                == "  warn     golden older than the host (50.1 < 50.2): paddock macvm update"),
             "{l:?}"
         );
 
         // A lost seal, a missing entitlement, little space, no silicon.
-        let mut v = view(sealed("15.2"));
+        let mut v = view(sealed("50.2"));
         if let GoldenView::Sealed { flags_ok, .. } = &mut v.golden {
             *flags_ok = false;
         }
@@ -476,30 +481,30 @@ mod tests {
                 .any(|x| x == "  warn     disk: 8 GB free, a cold start needs 9 GB"),
             "{l:?}"
         );
-        let mut v = view(sealed("15.2"));
+        let mut v = view(sealed("50.2"));
         v.entitlement = None;
         assert!(lines(&v)[2].contains("not installed"));
 
         // The previous golden: kept, then removable.
-        let mut v = view(sealed("15.3"));
+        let mut v = view(sealed("50.3"));
         assert!(!lines(&v).iter().any(|x| x.contains("golden.prev")));
         v.prev = Prev::Kept {
-            version: "15.2 (24C101)".into(),
+            version: "50.2 (99B102)".into(),
         };
         let l = lines(&v);
         assert!(
             l.iter().any(|x| x.starts_with(
-                "  ok       golden.prev macOS 15.2 (24C101), kept for paddock macvm rollback"
+                "  ok       golden.prev macOS 50.2 (99B102), kept for paddock macvm rollback"
             )),
             "{l:?}"
         );
         v.prev = Prev::Removable {
-            version: "15.2 (24C101)".into(),
+            version: "50.2 (99B102)".into(),
         };
         let l = lines(&v);
         assert!(
             l.iter()
-                .any(|x| x.contains("golden.prev macOS 15.2 (24C101)") && x.contains("paddock gc")),
+                .any(|x| x.contains("golden.prev macOS 50.2 (99B102)") && x.contains("paddock gc")),
             "{l:?}"
         );
     }

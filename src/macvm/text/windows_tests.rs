@@ -12,12 +12,12 @@ fn has(s: &str, parts: &[&str]) {
 
 #[test]
 fn menu_about() {
-    assert_eq!(t::menu_about("ChatGPT"), "About ChatGPT");
+    assert_eq!(t::menu_about("Sample Notes"), "About Sample Notes");
 }
 
 #[test]
 fn menu_hide() {
-    assert_eq!(t::menu_hide("ChatGPT"), "Hide ChatGPT");
+    assert_eq!(t::menu_hide("Sample Notes"), "Hide Sample Notes");
 }
 
 #[test]
@@ -135,7 +135,7 @@ fn level_word() {
 
 #[test]
 fn open_again() {
-    assert_eq!(t::open_again("ChatGPT"), "Open ChatGPT again");
+    assert_eq!(t::open_again("Sample Notes"), "Open Sample Notes again");
 }
 
 #[test]

@@ -1,6 +1,6 @@
 //! The `/dev/paddock` FUSE mount. macOS has no native FUSE mount in this build.
 
-use super::Device;
+use super::{Device, DeviceCtx};
 use crate::credentials::secret::SecretFiles;
 use anyhow::Result;
 use std::path::{Path, PathBuf};
@@ -24,6 +24,12 @@ impl DeviceFs {
     ) -> Self {
         let _ = (sandbox, devices, secrets);
         Self { _private: () }
+    }
+
+    /// The horse tree needs the FUSE mount; this build has none.
+    pub fn with_horse(self, setup: Option<crate::horse::device::Access>, ctx: DeviceCtx) -> Self {
+        let _ = (setup, ctx);
+        self
     }
 }
 

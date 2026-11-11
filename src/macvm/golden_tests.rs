@@ -521,7 +521,7 @@ fn prev_removed_after_clean_session() {
         },
     };
     // A profile whose last session ran on the old golden: kept.
-    let a = l.profile("chatgpt", "default");
+    let a = l.profile("sample-notes", "default");
     std::fs::create_dir_all(&a.dir).unwrap();
     now("15.2 (B1)")
         .stamp("a-0".into())

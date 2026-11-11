@@ -4,7 +4,7 @@
 
 // ---- The panel of one question -------------------------------------------
 
-/// The title of the panel: `ChatGPT wants to connect to api.example.com`.
+/// The title of the panel: `Sample Notes wants to connect to api.example.com`.
 pub fn ask_title(app: &str, host: &str) -> String {
     format!("{app} wants to connect to {host}")
 }

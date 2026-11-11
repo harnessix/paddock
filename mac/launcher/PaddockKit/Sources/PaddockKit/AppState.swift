@@ -31,13 +31,15 @@ public enum AppState: Equatable, Sendable {
     case saved(since: Date?)
     case starting(StartPhase)
     case running(since: Date?, windows: Int)
+    /// paddock saved the session to free a VM slot. `app run` resumes it.
+    case suspended(reason: String?)
     case stopping
     case error(reason: String)
     case blocked(reason: String, code: String?)
 
     public init(json: AppJSON) {
         self.init(state: json.state, phase: json.phase, since: json.since, windows: json.windows,
-                  reason: json.reason, blockCode: json.blockCode)
+                  reason: json.reason ?? json.suspendReason, blockCode: json.blockCode)
     }
 
     public init(state: String, phase: String?, since: Date?, windows: Int?, reason: String?, blockCode: String?) {
@@ -45,6 +47,7 @@ public enum AppState: Equatable, Sendable {
         case "saved": self = .saved(since: since)
         case "starting": self = .starting(StartPhase(json: phase))
         case "running": self = .running(since: since, windows: windows ?? 0)
+        case "suspended": self = .suspended(reason: reason)
         case "stopping": self = .stopping
         case "error": self = .error(reason: reason ?? "")
         case "blocked": self = .blocked(reason: reason ?? "", code: blockCode)
@@ -72,12 +75,22 @@ public enum AppState: Equatable, Sendable {
         }
     }
 
+    /// Suspended: `app run` resumes from the saved state.
+    public var canResume: Bool {
+        if case .suspended = self { return true }
+        return false
+    }
+
+    /// A suspended session stops at once: its state is on disk already.
     public var canStop: Bool {
         switch self {
-        case .running, .starting: return true
+        case .running, .starting, .suspended: return true
         default: return false
         }
     }
+
+    /// The session holds a VM slot or a saved session: data must not go.
+    public var holdsSession: Bool { isActive || canResume }
 }
 
 /// The tint of a status symbol. Only system colors, only in symbols.
@@ -112,6 +125,9 @@ public struct StatusPresentation: Equatable, Sendable {
             let text = windows == 1 ? UIText("Running · 1 window") : UIText("Running · %@ windows", "\(windows)")
             return .init(symbol: "play.circle.fill", tint: .green, text: text,
                          accessibilityLabel: UIText("Running"), showsProgress: false)
+        case .suspended:
+            return .init(symbol: "pause.circle.fill", tint: .secondary, text: UIText("Suspended · resumes in about 4 s"),
+                         accessibilityLabel: UIText("Suspended"), showsProgress: false)
         case .stopping:
             return .init(symbol: nil, tint: .secondary, text: UIText("Stopping…"),
                          accessibilityLabel: UIText("Stopping"), showsProgress: true)
@@ -135,6 +151,6 @@ public struct AppItem: Equatable, Sendable, Identifiable {
         self.state = AppState(json: json)
     }
 
-    public var id: String { json.name }
+    public var id: String { key }
     public var name: String { json.name }
 }

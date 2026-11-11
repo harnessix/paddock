@@ -18,7 +18,7 @@ pub const FIRST: u32 = 1;
 pub const MAX: u32 = 99;
 /// The folder prefix of instance 2 and later.
 pub const PREFIX: &str = "instance-";
-/// The separator of an instance key: `chatgpt--2`.
+/// The separator of an instance key: `sample-notes--2`.
 pub const KEY_SEP: &str = "--";
 
 /// The folder of instance `n` under `profiles.noindex/NAME/`.
@@ -49,7 +49,7 @@ pub fn key(app: &str, n: u32) -> String {
     }
 }
 
-/// The name of an instance for the user: `ChatGPT`, `ChatGPT 2`.
+/// The name of an instance for the user: `Sample Notes`, `Sample Notes 2`.
 pub fn label(name: &str, n: u32) -> String {
     if n <= FIRST {
         name.to_string()
@@ -58,7 +58,7 @@ pub fn label(name: &str, n: u32) -> String {
     }
 }
 
-/// The name of an instance in a command: `chatgpt`, `chatgpt --instance 2`.
+/// The name of an instance in a command: `sample-notes`, `sample-notes --instance 2`.
 pub fn arg(app: &str, n: u32) -> String {
     if n <= FIRST {
         app.to_string()

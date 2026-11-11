@@ -35,7 +35,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 /// The pass runs at most this often from `paddock run`.
 pub const EVERY: u64 = 3600;
@@ -186,8 +186,18 @@ fn try_lock(path: &Path) -> Option<PassLock> {
 /// `paddock gc-auto --now`). `deadline` stops before the next removal when it
 /// is over; the rest waits for the next pass.
 pub fn pass(env: &HostEnv, s: &Settings, force: bool, deadline: Option<Instant>) -> Outcome {
-    let Some(_lock) = try_lock(&env.paddock_state().join("storage-auto.lock")) else {
-        return Outcome::Skipped("another cleanup runs".into());
+    let path = env.paddock_state().join("storage-auto.lock");
+    // A forked child can briefly inherit the lock before exec. Background
+    // cleanup can wait for that handoff; a foreground start must not wait.
+    let until = Instant::now() + Duration::from_millis(250);
+    let _lock = loop {
+        if let Some(lock) = try_lock(&path) {
+            break lock;
+        }
+        if deadline.is_some() || Instant::now() >= until {
+            return Outcome::Skipped("another cleanup runs".into());
+        }
+        std::thread::sleep(Duration::from_millis(10));
     };
     let prev = load(env).unwrap_or_default();
     let now = state::now();
@@ -294,6 +304,7 @@ pub fn folder_sizes(env: &HostEnv) -> Vec<(String, u64)> {
         ("build cache", super::buildcache::root(env)),
         ("cache layers", layers::layers_root(env)),
         ("project cache layers", layers::projects_root(env)),
+        ("shared project caches", super::package_cache::root(env)),
     ];
     let present: Vec<(&str, PathBuf)> = folders.into_iter().filter(|(_, p)| p.is_dir()).collect();
     let paths: Vec<PathBuf> = present.iter().map(|(_, p)| p.clone()).collect();

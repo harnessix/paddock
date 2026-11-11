@@ -15,7 +15,10 @@
 //! the host windows of the session and answer `ok TEXT`, and `bench
 //! windows JSON` or `bench ax SECONDS` are the bench doors of the shim
 //! (`src/macvm/run_windows.rs`). A guest without windows answers `error`
-//! to both. `suspend REASON` asks a macOS guest session to save its state
+//! to both. `grant ...` changes the grants of a running app session
+//! (`src/macvm/grants_live.rs`) and answers `ok JSON`; a guest without
+//! grants answers `error`.
+//! `suspend REASON` asks a macOS guest session to save its state
 //! and give its VM slot back (`src/macvm/suspend.rs`): `ok` once the save
 //! began, `error TEXT` when the session cannot be suspended now.
 
@@ -44,6 +47,8 @@ pub enum Request {
     Window(String),
     /// `bench ...`: the rest of the line.
     Bench(String),
+    /// `grant ...`: the rest of the line.
+    Grant(String),
     /// `suspend REASON`: the reason, which may be empty.
     Suspend(String),
 }
@@ -54,6 +59,12 @@ pub fn parse_request(line: &str) -> Result<Request> {
             bail!("unknown request");
         }
         return Ok(Request::Window(rest.to_string()));
+    }
+    if let Some(rest) = line.strip_prefix("grant ") {
+        if rest.is_empty() {
+            bail!("unknown request");
+        }
+        return Ok(Request::Grant(rest.to_string()));
     }
     if let Some(rest) = line.strip_prefix("bench ") {
         if rest.is_empty() {
@@ -106,6 +117,11 @@ pub trait Guest: Send + Sync + 'static {
     /// answer go to `out` (`ok` first) until the bench ends.
     fn bench(&self, _args: &str, _out: &mut dyn Write) -> Result<()> {
         bail!("this guest has no bench")
+    }
+    /// A `grant` request: the rest of the line in, one line of answer
+    /// out. A guest without live grants refuses.
+    fn grant(&self, _args: &str) -> Result<String> {
+        bail!("this guest has no live grants")
     }
     /// Save the state and give the VM slot back. `Ok` once the save
     /// began. A guest without a suspend refuses.
@@ -246,6 +262,10 @@ fn handle(mut conn: UnixStream, guest: &dyn Guest) -> Result<()> {
             Err(e) => writeln!(conn, "error {}", one_line(&format!("{e:#}")))?,
         },
         Request::Window(args) => match guest.window(&args) {
+            Ok(line) => writeln!(conn, "ok {}", one_line(&line))?,
+            Err(e) => writeln!(conn, "error {}", one_line(&format!("{e:#}")))?,
+        },
+        Request::Grant(args) => match guest.grant(&args) {
             Ok(line) => writeln!(conn, "ok {}", one_line(&line))?,
             Err(e) => writeln!(conn, "error {}", one_line(&format!("{e:#}")))?,
         },

@@ -118,6 +118,46 @@ pub enum Kind {
     System,
     /// A candidate window of an input method, while the app is focused.
     InputMethod,
+    /// A window of another guest process while the app runs: a browser or
+    /// a sign-in window that the app opened, a Finder window, an installer.
+    /// The guest runs only this session, so every window that opens there
+    /// is shown.
+    Other,
+}
+
+/// The processes of the guest desktop itself. Their windows (the menu bar,
+/// the Dock, the desktop picture, Control Center) are never shown.
+pub const DESKTOP_SHELL: &[&str] = &[
+    "Window Server",
+    "Dock",
+    "SystemUIServer",
+    "Control Center",
+    "ControlCenter",
+    "Notification Center",
+    "NotificationCenter",
+    "WindowManager",
+    "Spotlight",
+    "loginwindow",
+    "TextInputMenuAgent",
+    "TextInputSwitcher",
+    "Wallpaper",
+    "WallpaperAgent",
+    "screencaptureui",
+];
+
+/// True for a window of another process that the agent shows: a window
+/// layer of an app (normal, floating, utility, pop-up), not the desktop
+/// shell, with something to see.
+fn other_window(w: &RawWindow) -> bool {
+    let layer_ok = matches!(
+        w.layer,
+        0 | FLOATING | MODAL_PANEL | UTILITY | POPUP_MENU | HELP
+    );
+    layer_ok
+        && !DESKTOP_SHELL.contains(&w.owner.as_str())
+        && w.alpha > 0.0
+        && w.bounds.w > 1.0
+        && w.bounds.h > 1.0
 }
 
 /// The kind of a window, or None for a window the agent does not report.
@@ -136,7 +176,15 @@ pub fn classify(w: &RawWindow, app_pids: &BTreeSet<u32>, follow: &Follow) -> Opt
     {
         return Some(Kind::InputMethod);
     }
-    None
+    // An input method window shows only as the popover of the focused app.
+    if w.bundle
+        .as_deref()
+        .is_some_and(|b| is_input_method(b, &follow.extra_input_methods))
+    {
+        return None;
+    }
+    // While the app runs, every other window that opens is shown.
+    (follow.root.is_some() && other_window(w)).then_some(Kind::Other)
 }
 
 /// The pids whose windows the agent reports and observes: the app pids,
@@ -237,7 +285,7 @@ impl Snapshot {
             };
             let info = ax(w);
             let (app_name, level, parent) = match kind {
-                Kind::App => (
+                Kind::App | Kind::Other => (
                     w.bundle.clone().unwrap_or_else(|| w.owner.clone()),
                     level(w.layer, info.hint.as_deref()),
                     None,

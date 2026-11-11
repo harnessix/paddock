@@ -207,6 +207,7 @@ mod tests {
 
     #[test]
     fn a_fifo_gives_the_value_once_per_open_and_goes_after_a_revoke() {
+        if crate::storage::package_cache::isolated_test("credentials::secret::fifo::tests::a_fifo_gives_the_value_once_per_open_and_goes_after_a_revoke") { return; }
         let tmp = tempfile::tempdir().unwrap();
         let revoked = tmp.path().join("revoked");
         let reads = Arc::new(Mutex::new(Vec::new()));

@@ -4,9 +4,8 @@
 //! device`. The view of the device program (`caller`, `ro`, `home`,
 //! `connect`, credentials), the ssh agent credential, the lifetime of an
 //! instance, `paddock ps`, `paddock device ls|logs|stop|restart|stats`,
-//! and the ignored `mem` of a table. Temporary folders under
-//! `~/.cache/paddock-tests`; the real home of the user is the denied
-//! home of the device sandbox. No real harness, no outside host. The
+//! and the ignored `mem` of a table. Each test uses a private scratch root
+//! and a separate fixture home. No real harness, no outside host. The
 //! Linux twins are tests/devices_sandbox.rs and
 //! tests/devices_sandbox_runs.rs.
 #![cfg(target_os = "macos")]
@@ -48,7 +47,16 @@ fn seatbelt_state(w: &World, device: &str) -> serde_json::Value {
     assert_eq!(st["run"], "sandbox", "{st}");
     assert!(st["scope"].is_null(), "{st}");
     let sock = st["socket"].as_str().unwrap();
-    assert!(sock.starts_with("/tmp/paddock-"), "{sock}");
+    assert!(
+        paddock::sockpath::fits(Path::new(sock), paddock::sockpath::MACOS_MAX),
+        "{sock}"
+    );
+    use std::os::unix::fs::PermissionsExt;
+    let folder = Path::new(sock).parent().unwrap();
+    assert_eq!(
+        std::fs::metadata(folder).unwrap().permissions().mode() & 0o077,
+        0
+    );
     assert!(sock.ends_with("/dev.sock"), "{sock}");
     assert!(Path::new(sock).exists(), "{sock}");
     st
@@ -58,6 +66,11 @@ fn seatbelt_state(w: &World, device: &str) -> serde_json::Value {
 fn the_view_of_a_device_program_under_seatbelt() {
     let (port, _server) = echo_server();
     let w = World::new("");
+    let shared_tmp = tempfile::Builder::new()
+        .prefix("pd-")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let escape = shared_tmp.path().join("escape");
     std::fs::write(
         w.root.join("cfg/paddock/config.toml"),
         view_config(&w, port),
@@ -76,7 +89,7 @@ fn the_view_of_a_device_program_under_seatbelt() {
     std::fs::write(w.root.join("dev/secret-note.txt"), "note-7f3a\n").unwrap();
     w.script(
         "rof.sh",
-        "cat \"$NOTE\"\necho \"home=$HOME entries=$(ls -A \"$HOME\" | wc -l | tr -d ' ')\"\nls \"$HOST_HOME/.ssh\" >/dev/null 2>&1 && echo SSH_VISIBLE || echo SSH_HIDDEN\ncat \"$HOST_HOME/.bash_history\" >/dev/null 2>&1 && echo HISTORY_VISIBLE || echo HISTORY_HIDDEN\necho \"term=$TERM device=$PADDOCK_DEVICE tmp=$TMPDIR\"\ntouch /tmp/paddock-device-escape 2>/dev/null && echo SHARED_TMP_WRITABLE || echo SHARED_TMP_DENIED",
+        &format!("cat \"$NOTE\"\necho \"home=$HOME entries=$(ls -A \"$HOME\" | wc -l | tr -d ' ')\"\nls \"$HOST_HOME/.ssh\" >/dev/null 2>&1 && echo SSH_VISIBLE || echo SSH_HIDDEN\ncat \"$HOST_HOME/.bash_history\" >/dev/null 2>&1 && echo HISTORY_VISIBLE || echo HISTORY_HIDDEN\necho \"term=$TERM device=$PADDOCK_DEVICE tmp=$TMPDIR\"\ntouch '{}' 2>/dev/null && echo SHARED_TMP_WRITABLE || echo SHARED_TMP_DENIED", escape.display()),
     );
     w.script(
         "net.sh",
@@ -113,7 +126,7 @@ fn the_view_of_a_device_program_under_seatbelt() {
         "the mount is the host path of the project:\n{out}"
     );
     assert!(!w.root.join("project/written").exists());
-    // ro = [FILE] reads it; the home is empty and the real one hidden;
+    // ro = [FILE] reads it; the home is empty and the fixture home hidden;
     // TERM=dumb; TMPDIR is private; the shared /tmp is denied.
     let out = w.check("rof", "");
     let b = body(&out);
@@ -123,7 +136,7 @@ fn the_view_of_a_device_program_under_seatbelt() {
     assert!(b.contains("HISTORY_HIDDEN"), "{out}");
     assert!(b.contains("term=dumb device=rof tmp="), "{out}");
     assert!(b.contains("SHARED_TMP_DENIED"), "{out}");
-    assert!(!Path::new("/tmp/paddock-device-escape").exists());
+    assert!(!escape.exists());
     if python().is_some() {
         // Without connect: no route to the host.
         let out = w.check("net", "");
@@ -199,12 +212,8 @@ fn an_ssh_agent_credential_gives_a_filtering_agent_and_no_key_file() {
         .status()
         .unwrap()
         .success());
-    // The host agent: its socket in the short socket folder of the tests.
-    let uid = unsafe { libc::getuid() };
-    let sock_dir = PathBuf::from(format!("/tmp/paddock-{uid}"));
-    std::fs::create_dir_all(&sock_dir).unwrap();
-    let sock = sock_dir.join(format!("test-agent-{}.sock", std::process::id()));
-    let _ = std::fs::remove_file(&sock);
+    // The host agent's socket belongs to this test's short runtime folder.
+    let sock = w.root.join("run/host-agent.sock");
     let mut agent = Command::new("ssh-agent")
         .args(["-D", "-a"])
         .arg(&sock)
@@ -257,7 +266,23 @@ fn an_ssh_agent_credential_gives_a_filtering_agent_and_no_key_file() {
     let _ = std::fs::remove_file(&sock);
     assert!(out.status.success(), "{}", say(&out));
     let b = body(&text);
-    assert!(b.contains("sock=/tmp/paddock-"), "{text}");
+    let socket = b
+        .lines()
+        .find_map(|line| line.strip_prefix("sock="))
+        .unwrap();
+    let run = w.root.join("run/paddock");
+    let uid = unsafe { libc::getuid() };
+    let fallback = paddock::sockpath::short_dir(
+        &PathBuf::from(format!("/tmp/paddock-{uid}")),
+        &run,
+        "",
+        paddock::sockpath::MACOS_MAX,
+    );
+    let parent = Path::new(socket).parent().and_then(Path::parent);
+    assert!(
+        parent == Some(run.as_path()) || parent == Some(fallback.as_path()),
+        "{text}"
+    );
     assert!(b.contains("-host/ssh-agent.sock"), "{text}");
     assert!(b.contains(&fingerprint), "the key is listed:\n{text}");
     assert!(

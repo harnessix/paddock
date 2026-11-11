@@ -1,6 +1,6 @@
 use super::*;
 
-const APP: &str = "com.openai.chat";
+const APP: &str = "com.example.notes";
 
 fn raw(id: u32, pid: u32, owner: &str, bundle: Option<&str>, layer: i64) -> RawWindow {
     RawWindow {
@@ -41,8 +41,8 @@ fn follow(focused: bool) -> Follow {
 
 fn list() -> Vec<RawWindow> {
     vec![
-        raw(1, 100, "ChatGPT", Some(APP), 0),
-        raw(2, 102, "ChatGPT Helper", Some(APP), 0),
+        raw(1, 100, "Sample Notes", Some(APP), 0),
+        raw(2, 102, "Sample Notes Helper", Some(APP), 0),
         raw(3, 200, "Safari", Some("com.apple.Safari"), 0),
         raw(4, 300, "SCIM", Some("com.apple.inputmethod.SCIM"), 101),
         raw(5, 400, "Finder", Some("com.apple.finder"), 0),
@@ -67,14 +67,15 @@ fn followed_set_cases() {
     let f = follow(true);
     assert_eq!(f.app_pids(), [100, 101, 102].into());
     assert!(f.app_alive());
-    // The helper, the grandchild, the input method while focused and the
-    // prompt process are followed. Safari and the Finder are not.
+    // The helper, the grandchild, the input method while focused, the
+    // prompt process, and the other processes with a window (Safari, the
+    // Finder) are followed.
     let set = followed(&list(), &f);
-    assert_eq!(set, [100, 101, 102, 300, 500].into());
+    assert_eq!(set, [100, 101, 102, 200, 300, 400, 500].into());
     // Not focused: the input method goes.
     let set = followed(&list(), &follow(false));
-    assert_eq!(set, [100, 101, 102, 500].into());
-    // No root: only the prompts.
+    assert_eq!(set, [100, 101, 102, 200, 400, 500].into());
+    // No root (the app does not run): only the prompts.
     let none = Follow {
         root: None,
         ..follow(true)
@@ -105,12 +106,14 @@ fn input_method_windows_are_popovers_of_key_window() {
         (SYSTEM_APP, Level::Floating)
     );
     assert_eq!(prompt.parent, None);
-    // Safari and the Finder are not in the list; the order is front first.
-    assert_eq!(snap.ids(), vec![1, 2, 4, 6]);
+    // Safari (a sign-in window the app opened) and the Finder show as
+    // windows of their own apps; the order is front first.
+    assert_eq!(snap.ids(), vec![1, 2, 3, 4, 5, 6]);
+    assert_eq!(snap.get(3).unwrap().app, "com.apple.Safari");
     assert_eq!(snap.key(), Some(1));
     // Without focus the input method window is gone.
     let snap = Snapshot::build(&list(), &follow(false), Some(1), ax);
-    assert_eq!(snap.ids(), vec![1, 2, 6]);
+    assert_eq!(snap.ids(), vec![1, 2, 3, 5, 6]);
 }
 
 #[test]
@@ -152,10 +155,10 @@ fn diff_cases() {
     assert_eq!(diff(&base, &base), None);
     // A new window.
     let mut l = list();
-    l.push(raw(7, 101, "ChatGPT Helper", Some(APP), 0));
+    l.push(raw(7, 101, "Sample Notes Helper", Some(APP), 0));
     let new = Snapshot::build(&l, &follow(false), None, ax);
     let ev = diff(&base, &new).unwrap();
-    assert_eq!(ev.order, vec![1, 2, 6, 7]);
+    assert_eq!(ev.order, vec![1, 2, 3, 5, 6, 7]);
     assert_eq!(ev.changed.iter().map(|w| w.id).collect::<Vec<_>>(), vec![7]);
     assert!(ev.removed.is_empty());
     // A moved window.
@@ -173,13 +176,13 @@ fn diff_cases() {
     let ev = diff(&base, &fewer).unwrap();
     assert_eq!(ev.removed, vec![2]);
     assert!(ev.changed.is_empty());
-    assert_eq!(ev.order, vec![1, 6]);
+    assert_eq!(ev.order, vec![1, 3, 5, 6]);
     // A reorder with no other change: order only.
     let mut l = list();
     l.swap(0, 1);
     let reordered = Snapshot::build(&l, &follow(false), None, ax);
     let ev = diff(&base, &reordered).unwrap();
-    assert_eq!(ev.order, vec![2, 1, 6]);
+    assert_eq!(ev.order, vec![2, 1, 3, 5, 6]);
     assert!(ev.changed.is_empty() && ev.removed.is_empty());
     // A title change.
     let retitled = Snapshot::build(&list(), &follow(false), None, |w| {
@@ -203,7 +206,7 @@ fn diff_cases() {
     // The full list after a hello carries every window.
     let f = full(&base);
     assert_eq!(f.order, base.ids());
-    assert_eq!(f.changed.len(), 3);
+    assert_eq!(f.changed.len(), 5);
 }
 
 #[test]
@@ -211,4 +214,27 @@ fn frames_compare_with_a_tolerance() {
     let a = Frame::new(0.0, 0.0, 10.0, 10.0);
     assert!(a.near(&Frame::new(1.0, -1.0, 11.0, 9.5), 1.0));
     assert!(!a.near(&Frame::new(2.5, 0.0, 10.0, 10.0), 1.0));
+}
+
+#[test]
+fn the_desktop_shell_and_invisible_windows_are_never_shown() {
+    let f = follow(true);
+    let mut l = vec![
+        raw(1, 100, "Sample Notes", Some(APP), 0),
+        raw(20, 600, "Dock", Some("com.apple.dock"), 20),
+        raw(21, 601, "Window Server", None, 24),
+        raw(
+            22,
+            602,
+            "Control Center",
+            Some("com.apple.controlcenter"),
+            0,
+        ),
+        raw(23, 603, "Finder", Some("com.apple.finder"), -2147483624),
+        raw(24, 604, "Safari", Some("com.apple.Safari"), 0),
+        raw(25, 605, "Safari", Some("com.apple.Safari"), 0),
+    ];
+    l[6].alpha = 0.0;
+    let snap = Snapshot::build(&l, &f, Some(1), ax);
+    assert_eq!(snap.ids(), vec![1, 24]);
 }

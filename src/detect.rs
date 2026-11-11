@@ -5,7 +5,7 @@
 use crate::env::HostEnv;
 use crate::manifest::Manifest;
 use crate::spec::{Mount, SandboxSpec};
-use anyhow::{bail, Context as _, Result};
+use anyhow::{Context as _, Result};
 use std::path::{Path, PathBuf};
 
 pub struct Context<'a> {
@@ -46,129 +46,8 @@ pub fn git_toplevel(dir: &Path) -> Option<PathBuf> {
     crate::hostgit::Layout::toplevel(dir)
 }
 
-pub struct Git;
-
-impl Git {
-    /// Make a file of a git directory exist, so a read-only bind can cover
-    /// it. Without the file the sandbox can create it later and point git at
-    /// its own content. The git directory is sandbox-writable, so the path is
-    /// walked without following a symlink, and an existing file is never
-    /// replaced. A symlink or a special file in its place is an error: a bind
-    /// of it would follow it on the host.
-    fn placeholder(git_dir: &Path, rel: &str, content: &str) -> Result<()> {
-        use crate::safefs::Kind;
-        let root = crate::safefs::Root::open(git_dir)?;
-        let (parent, name) = match rel.rsplit_once('/') {
-            Some((p, n)) => (Path::new(p), n),
-            None => (Path::new(""), rel),
-        };
-        let dir = root.dir(parent, true)?;
-        match dir.kind(name.as_ref())? {
-            Some(Kind::File) => Ok(()),
-            Some(other) => bail!(
-                "{} is a {:?}, not a file. paddock does not bind it, because git on the host reads it.",
-                git_dir.join(rel).display(),
-                other
-            ),
-            None => dir.write(name.as_ref(), content.as_bytes(), 0o644),
-        }
-    }
-}
-
-impl Detector for Git {
-    fn name(&self) -> &'static str {
-        "git"
-    }
-    fn apply(&self, cx: &Context, spec: &mut SandboxSpec) -> Result<()> {
-        let Some(layout) = crate::hostgit::Layout::discover(cx.project)? else {
-            return Ok(());
-        };
-        if !crate::paths::within(&layout.common_dir, cx.project) {
-            // A linked worktree: commits write to the main repository's git directory.
-            spec.add_mount(Mount::same(
-                &layout.common_dir,
-                true,
-                "detector git: common dir of a linked worktree",
-            ));
-        }
-        // `.git` gets a mount point of its own. A mount point cannot be
-        // renamed or replaced in the sandbox, so the read-only files below it
-        // cannot be moved aside with `mv .git .git2 && mkdir .git`.
-        if layout.linked {
-            spec.add_mount(Mount::same(
-                &layout.dot_git,
-                false,
-                "detector git: the .git file names the git directory",
-            ));
-        } else {
-            spec.add_mount(Mount::same(
-                &layout.dot_git,
-                true,
-                "detector git: the git directory is its own mount point",
-            ));
-        }
-        for dir in layout.protected_dirs() {
-            if dir != layout.dot_git && crate::paths::within(&dir, cx.project) {
-                // A worktree or submodule git directory inside the project
-                // gets its own mount point as well.
-                spec.add_mount(Mount::same(
-                    &dir,
-                    true,
-                    "detector git: a git directory is its own mount point",
-                ));
-            }
-            // The hooks folder: created without following a symlink, so a
-            // read-only bind of it cannot land anywhere else.
-            let hooks = dir.join("hooks");
-            crate::safefs::Root::open(&dir)?.dir(Path::new("hooks"), true)?;
-            spec.add_mount(Mount::same(
-                &hooks,
-                false,
-                "detector git: hooks run on the host",
-            ));
-            // Submodule git directories: one that the agent creates here
-            // would get no binds, and the host's `git status` reads its
-            // config when it recurses. The ones that exist now are mounted
-            // read-write above, below this read-only folder.
-            crate::safefs::Root::open(&dir)?.dir(Path::new("modules"), true)?;
-            spec.add_mount(Mount::same(
-                dir.join("modules"),
-                false,
-                "detector git: new submodule git directories steer host git",
-            ));
-            let linked = dir.join("commondir").is_file();
-            for f in crate::hostgit::PROTECTED_FILES {
-                let p = dir.join(f);
-                // `gitdir` exists only in a registered worktree. Never write
-                // one: its content is a path paddock must not invent.
-                if *f == "gitdir" {
-                    if p.is_file() {
-                        spec.add_mount(Mount::same(
-                            &p,
-                            false,
-                            "detector git: gitdir names the work tree",
-                        ));
-                    }
-                    continue;
-                }
-                // "." means "this directory", which is what a git directory
-                // without a common directory of its own needs.
-                let content = if *f == "commondir" && !linked {
-                    ".\n"
-                } else {
-                    ""
-                };
-                Self::placeholder(&dir, f, content)?;
-                spec.add_mount(Mount::same(
-                    &p,
-                    false,
-                    "detector git: config and pointer files steer host git",
-                ));
-            }
-        }
-        Ok(())
-    }
-}
+mod git;
+pub use git::Git;
 
 pub struct Mise;
 
@@ -303,14 +182,17 @@ impl Detector for Cache {
         self.name
     }
     fn apply(&self, cx: &Context, spec: &mut SandboxSpec) -> Result<()> {
-        if !self.markers.iter().any(|m| cx.project.join(m).is_file()) {
+        if crate::storage::layers::share(cx.env)? == crate::storage::layers::Share::Project
+            && !self.markers.iter().any(|m| cx.project.join(m).is_file())
+        {
             return Ok(());
         }
         let origin = format!("detector {}: package cache", self.name);
         for (cache, rel) in self.caches {
-            spec.add_mount(crate::storage::layers::mount(
+            spec.add_mount(crate::storage::layers::mount_for(
                 cx.env,
                 cx.project,
+                &spec.id,
                 cache,
                 spec.home.join(rel),
                 &origin,
@@ -321,10 +203,7 @@ impl Detector for Cache {
 }
 
 /// Mount the layered `.npm` for a harness that is an npm package (Claude
-/// Code, codex, gemini and copilot install through npm), also in a project
-/// without a `package.json`. Such a harness fills its home's npm cache
-/// through `npx` (MCP servers) and its update checks, the same downloads in
-/// every home. pnpm, bun and yarn stay for `package.json`.
+/// Code, codex, gemini and copilot), even without `package.json`.
 pub fn npm_harness(
     env: &HostEnv,
     harness: &crate::profile::Harness,
@@ -339,9 +218,10 @@ pub fn npm_harness(
         return Ok(());
     }
     let project = spec.project.clone();
-    spec.add_mount(crate::storage::layers::mount(
+    spec.add_mount(crate::storage::layers::mount_for(
         env,
         &project,
+        &spec.id,
         "npm",
         dst,
         "detector node: npm cache of an npm harness",
@@ -627,7 +507,6 @@ mod tests {
         let project = tmp.path().join("repo");
         std::fs::create_dir_all(project.join(".git/modules/old")).unwrap();
         run_git(&project, &["init", "-q", "-b", "main"]);
-        // An existing submodule git directory stays writable.
         let old = project.join(".git/modules/old");
         run_git(&old, &["init", "-q", "--bare"]);
         let spec = git_mounts(&project);

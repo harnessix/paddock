@@ -45,8 +45,8 @@ fn bench_unknown_case() {
 
 #[test]
 fn bench_needs_bench_session() {
-    let s = t::bench_needs_bench_session("chatgpt-desktop");
-    assert!(s.contains("paddock app run chatgpt-desktop --bench"), "{s}");
+    let s = t::bench_needs_bench_session("sample-notes");
+    assert!(s.contains("paddock app run sample-notes --bench"), "{s}");
 }
 
 #[test]

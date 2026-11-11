@@ -41,7 +41,12 @@ pub const DATA_DISK_SERIAL: &str = "paddock-data";
 /// Where the virtiofs shares of a session appear in the guest, by name.
 pub const SHARE_ROOT: &str = "/Volumes/My Shared Files";
 /// The protocol version of this build.
-pub const VERSION: Version = Version { major: 1, minor: 0 };
+pub const VERSION: Version = Version { major: 1, minor: 1 };
+
+/// Older agents close the connection on unknown requests.
+pub fn supports_clock_set(v: Version) -> bool {
+    v.major == 1 && v.minor >= 1
+}
 /// The hello of a cold boot comes within this time.
 pub const HELLO_COLD: Duration = Duration::from_secs(90);
 /// The hello of a restored session comes within this time.
@@ -366,6 +371,13 @@ pub enum ReplyData {
     DataPrepare { verify: String },
     /// A bench op: the pasteboard, the environment or the Dock menu.
     Text { text: String },
+    /// `shares.open`: the open files per share name.
+    OpenFiles { per_share: BTreeMap<String, u32> },
+    /// `window.move`: the frame that the window has after the move, as
+    /// Accessibility reads it back, and the time of the move in the
+    /// agent in milliseconds. The host shows the frame without waiting
+    /// for the next window event.
+    Moved { frame: Frame, ms: f64 },
 }
 
 /// Why a request failed. The host matches on the code and shows the user
@@ -416,6 +428,17 @@ pub enum Request {
         /// The session started with `--bench`: the bench ops are honored.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         bench: bool,
+        /// The host's wall clock, in milliseconds since 1970. A guest that
+        /// resumed from a saved state keeps the time of the save; the
+        /// Retained for compatibility with older agents.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        now_ms: Option<u64>,
+    },
+    /// Set the guest clock using the session password.
+    #[serde(rename = "clock.set")]
+    ClockSet {
+        unix_ms: u64,
+        password: String,
     },
     #[serde(rename = "window.move")]
     WindowMove {
@@ -605,6 +628,10 @@ pub enum Request {
     /// The items of the Dock menu of the app in the guest, as text.
     #[serde(rename = "bench.dock_menu")]
     BenchDockMenu,
+    /// The open files of the guest per share under [`SHARE_ROOT`], as
+    /// `ReplyData::OpenFiles` (`lsof`), for `paddock app share NAME list`.
+    #[serde(rename = "shares.open")]
+    SharesOpen,
     /// Lock the guest screen now, for the lock check.
     #[serde(rename = "bench.lock")]
     BenchLock,
@@ -630,6 +657,7 @@ fn default_animate_secs() -> u32 {
 pub fn timeout(r: &Request) -> Duration {
     let secs = match r {
         Request::Token { .. } => 5,
+        Request::ClockSet { .. } => 20,
         Request::WindowMove { .. }
         | Request::WindowRaise { .. }
         | Request::WindowMinimize { .. }
@@ -660,6 +688,7 @@ pub fn timeout(r: &Request) -> Duration {
         Request::BenchText { .. } | Request::BenchPasteboard { .. } | Request::BenchEnv => 5,
         Request::BenchHang => 2,
         Request::BenchSpawnChild { .. } | Request::BenchDockMenu => 10,
+        Request::SharesOpen => 15,
         Request::BenchLock => 5,
         Request::BenchKeychain => 10,
         Request::LoginForward { .. } => 10,
@@ -702,6 +731,24 @@ impl Reply {
     }
 }
 
+impl Outcome {
+    /// The frame and the agent's milliseconds of a `window.move` reply
+    /// that has them.
+    pub fn moved_with_ms(&self) -> Option<(Frame, f64)> {
+        match self {
+            Outcome::Ok {
+                data: Some(ReplyData::Moved { frame, ms }),
+            } => Some((*frame, *ms)),
+            _ => None,
+        }
+    }
+
+    /// The frame of a `window.move` reply that has one.
+    pub fn moved(&self) -> Option<Frame> {
+        self.moved_with_ms().map(|(f, _)| f)
+    }
+}
+
 impl ReplyData {
     fn kind(&self) -> String {
         match self {
@@ -710,6 +757,11 @@ impl ReplyData {
             ReplyData::Configure { steps } => format!("{} step results", steps.len()), // not user text
             ReplyData::DataPrepare { .. } => "data verify".into(),
             ReplyData::Text { text } => format!("{} bytes of text", text.len()), // not user text
+            ReplyData::OpenFiles { per_share } => format!("open files of {}", per_share.len()), // not user text
+            ReplyData::Moved { frame: f, ms } => {
+                let (x, y, w, h) = (f.x, f.y, f.w, f.h);
+                format!("frame {x},{y} {w}x{h} in {ms:.1} ms") // not user text
+            }
         }
     }
 }
@@ -727,3 +779,11 @@ pub use kind::link_kind;
 #[cfg(test)]
 #[path = "proto_tests.rs"]
 mod tests;
+
+/// The wall clock now, in milliseconds since 1970, for clock synchronization.
+pub fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}

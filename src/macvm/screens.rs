@@ -3,13 +3,15 @@
 //! keeps its size until the next start, so the map between guest points and
 //! host points stays the one of the old screen set. A window that is no
 //! longer on a screen (less than a quarter of it shows) moves onto the main
-//! screen of the new set, and the guest gets its new frame. Pure, with
-//! tests on Linux; `run_windows.rs` calls it.
+//! screen of the new set. The frames here are host frames in guest points
+//! (the guest frame at the window's offset, `place.rs`): only the host
+//! window moves, the guest window stays. Pure, with tests on Linux;
+//! `run_windows.rs` calls it.
 
 use super::crop::{self, Display, Rect, ScreenSet};
 use super::proto::{Frame, Level};
 
-/// One window of the session as the fold knows it.
+/// One window of the session: its host frame in guest points.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Shown {
     pub id: u32,
@@ -23,7 +25,7 @@ pub struct Shown {
 /// What a change of the screen set means for the session.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Rescue {
-    /// The windows that move, with their new guest frames.
+    /// The windows that move, with their new host frames in guest points.
     pub moves: Vec<(u32, Frame)>,
     /// The badge `display changed, restart for full size`: the union of
     /// the screens or their scale is not the one of the guest display.

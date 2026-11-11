@@ -55,6 +55,14 @@ pub(super) struct Files {
     spill_count: u64,
     /// The paths in `drop/` that the app had open when the quit began.
     open_at_quit: Vec<PathBuf>,
+    /// The live grants of the session (`run_grants.rs`).
+    pub grants: super::grants_live::Live,
+    pub grant_pending: Option<super::run_grants::Pending>,
+    pub fresh_handles: Option<(Sender<Result<String, String>>, std::time::Instant)>,
+    /// When the shim last asked the guest for the open file handles.
+    pub handles_asked: Option<std::time::Instant>,
+    /// The agent does not count open files: no more asking.
+    pub handles_off: bool,
 }
 
 impl Files {
@@ -69,8 +77,20 @@ impl Files {
             })
             .collect();
         let (drop_tx, drop_rx) = mpsc::channel();
+        let (saved, skipped) = super::grants::load_for_start(&plan.profile);
+        if let Some(line) = skipped {
+            say(&line);
+        }
+        let clip = saved.clipboard;
+        let mut sync = Sync::new(shares.clone());
+        sync.set_directions(clip.to_app, clip.from_app);
         Files {
-            sync: Sync::new(shares.clone()),
+            grants: super::grants_live::Live::new(&plan.app, shares.clone(), clip, &plan.network),
+            grant_pending: None,
+            fresh_handles: None,
+            handles_asked: None,
+            handles_off: false,
+            sync,
             shares,
             host_count: pasteboard::count(),
             active: false,
@@ -83,6 +103,13 @@ impl Files {
             spill_count: 0,
             open_at_quit: Vec::new(),
         }
+    }
+
+    /// The shares after a grant change: the clipboard translates paths
+    /// with them.
+    pub fn set_shares(&mut self, shares: Vec<Share>) {
+        self.sync.set_shares(shares.clone());
+        self.shares = shares;
     }
 }
 
@@ -155,7 +182,7 @@ impl Session<'_> {
             .collect()
     }
 
-    fn act_clipboard(&mut self, actions: Vec<Action>) {
+    pub(super) fn act_clipboard(&mut self, actions: Vec<Action>) {
         for a in actions {
             match a {
                 Action::SendToGuest(p) => self.send_clipboard(p),

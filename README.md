@@ -272,7 +272,7 @@ A sandbox uses your existing login of the harness. See [Logins and MCP](#logins-
 | Credential files of the harness | copied from your home directory, or from an isolated store |
 | Harness settings and skills, read-only | the files that the harness profile lists in `import_ro` |
 | The harness program, read-only | its install directory, found through PATH or mise |
-| Package caches (cargo, npm, uv, go) | cache layers: a shared layer under `$XDG_CACHE_HOME/paddock/layers` and one layer per project under `$XDG_CACHE_HOME/paddock/projects` |
+| Package caches (cargo, npm, uv, go) | uv and npm use writable caches per repository under `$XDG_CACHE_HOME/paddock/package-projects`. Other caches use worktree layers under `$XDG_CACHE_HOME/paddock/projects` and verified read-only layers under `$XDG_CACHE_HOME/paddock/layers`. |
 | mise tools from the registry, read-only | `$XDG_CACHE_HOME/paddock/shared/mise-tools` |
 | `/usr`, `/etc`, read-only (bwrap backend) | the host system |
 
@@ -407,6 +407,7 @@ Each harness gets its own home in each project, so the homes grow with the numbe
 - The paddock images of docker and podman, and whether each is current or in use.
 - The worktrees that `--worktree` created, with their total size, last use, unmerged commits and merged state.
 - The build caches of worktree runs.
+- The shared project caches and the package cache layers of each worktree.
 - The session records of `paddock files`, and the keyring passwords of app homes.
 - The project snapshots and the undo trash of `paddock undo`.
 - The caches in the homes, by class (see [Caches](#caches)).
@@ -430,7 +431,7 @@ paddock gc --homes --yes                    # remove them
 - Session records that ended more than 30 days ago.
 - Homes of harnesses whose profile no longer exists.
 - Old shared caches that paddock no longer uses, such as `~/.cache/paddock/shared/mise-installs` and the old writable package caches in `~/.cache/paddock/shared`. paddock keeps them while a sandbox runs.
-- The cache layers of projects that no longer exist, in `~/.cache/paddock/projects`.
+- The package caches of gone projects and gone or merged paddock worktrees. Caches in use by a run or held by a live lease are kept; unrelated runs do not block their removal. If a shared uv or npm cache is empty, paddock moves an idle old worktree cache into it.
 - Project snapshots whose project is gone.
 - Pure caches in the homes of sandboxes that do not run (see [Caches](#caches)).
 
@@ -473,6 +474,10 @@ Each floor is the smaller of its two numbers, so it fits both small and large di
 
 A `--worktree` run or a worker of a Rust project does not build into `target/` of its worktree. Its cargo target folder (`CARGO_TARGET_DIR`) is in `~/.cache/paddock/build/<repository>/`. At the start, paddock copies the newest target folder of the same repository with copy-on-write, so the worker does not compile the project from nothing. When the worker ends, its folder becomes the newest one. Each worker has its own copy. Two workers that build different commits do not wait for each other, and they do not see each other's output. A project never sees the build cache of another project.
 
+A run started in a worktree that paddock made, without `--worktree`, uses the same build cache.
+
+Builds in a sandbox write less to the disk by default (`[storage] lean_builds = true`). paddock sets `CARGO_INCREMENTAL=0`, so cargo does not rewrite its incremental folder on every build, and `CARGO_PROFILE_DEV_DEBUG` and `CARGO_PROFILE_TEST_DEBUG` to `line-tables-only`, so backtraces keep file and line numbers but the test binaries are much smaller. A value that you set in `[env]` stays. Set `lean_builds = false` to build as on the host.
+
 On btrfs and xfs the copy takes almost no space. On ext4 and other file systems without copy-on-write, each worker starts with an empty folder, and paddock deletes it when the worker ends. On macOS the build cache is off. The cleanup keeps the build caches of all repositories under `build_cache_gib` and removes the least recently used first.
 
 A script that reads `target/` directly does not find the build output. For such a project, set this in its `paddock.toml`:
@@ -497,9 +502,15 @@ soft_floor_gib = 50          # warn below the smaller of these two
 soft_floor_percent = 10
 build_cache = true           # the build cache of worktree runs
 build_cache_gib = 40         # the size of all build caches together
+package_cache_project_gib = 20  # package caches for one repository or folder
+package_cache_total_gib = 100   # package caches for all projects
 ```
 
 If a value is wrong, paddock uses the default, and the run and `paddock doctor` print a warning.
+
+The package cache limits apply before and after a run. paddock removes the oldest whole tool caches first. It keeps caches that a run uses, so the limits can be exceeded until runs end. Set either package cache limit to 0 to turn off that limit. These limits apply even when `auto_gc` is off.
+
+`paddock doctor` warns when a filesystem is nearly full. On Btrfs, it also reports unallocated space and metadata use. If it cannot read those values, it reports that they are unavailable.
 
 ### Caches
 
@@ -741,6 +752,22 @@ allow = ["my-server"]   # mount the host paths that this server needs, read-only
 host_ports = [8765]     # a local MCP server on the host loopback
 ```
 
+For Codex and Gemini, paddock can choose which configured servers start. On Linux it leaves `xcodebuildmcp` off by default. Set a per-server policy in the user configuration or project manifest:
+
+```toml
+[mcp.servers.xcode]
+start = "always"  # keep this server eligible even on Linux
+
+[mcp.servers.search]
+start = "never"   # do not start this server
+```
+
+`auto` uses the platform default. `always` overrides paddock's platform filter; it does not turn on a server that the harness itself has disabled. `never` turns the server off. A project choice other than `never` needs approval, because it can override a user or platform restriction. `lazy` is reserved for harnesses that can defer starting the server process; paddock currently refuses it for these harnesses. Claude Code is not filtered yet; an explicit `never` or `lazy` policy for a configured Claude server fails clearly. For other harnesses, a matching explicit `never` or `lazy` choice is refused rather than ignored. Platform filtering is currently limited to Codex and Gemini.
+
+For Codex, platform filtering inspects the user and root project configuration; it does not inspect nested `--cd` layers, selected profile files, plugin configuration, or alternate account configuration. `paddock explain` lists these limits. `never` is applied to discovered server names with a command-line override; an undiscovered name is not yet enforced.
+
+`paddock explain` shows the startup decision and boundary requirements for each discovered server. A name defined in more than one source follows the harness profile's source precedence. Different names with the same configuration stay separate so their tool names remain available; `paddock explain` identifies them. Claude Code continues to use its own MCP configuration.
+
 Some harnesses can keep MCP tokens in the system keyring instead of a file. The sandbox cannot reach the keyring. For Codex, set `mcp_oauth_credentials_store = "file"` to share the tokens.
 
 ## Environment variables
@@ -866,6 +893,147 @@ For every way:
 - The paddock process locks delivered and gateway values in RAM, so they never go to swap. It overwrites them with zeros after a revoke and when the sandbox ends.
 - The bar panel marks a sandbox that holds a delivered value, and names the gateway credentials that it uses.
 - `paddock credentials list` shows the registered credentials, whether their source is there, how often each was delivered, how many requests went through the gateway, how many ssh signatures were allowed, and how often each secret file was opened. The audit log (`paddock log`) records each question, answer, request (method, host, path without its query) and revocation by name, never a value.
+
+### tack: secrets that only allowlisted programs receive
+
+tack keeps a secret such as `GH_TOKEN` out of your shell startup files and out of the environment of your processes. A process sees a reference, `tack://GH_TOKEN`, in place of the value. The reference holds only the name. It holds no part of the value and no hash of it. tack works on the host, inside and outside a sandbox.
+
+This version stores the values, writes the references, and checks the configuration. With the service tackd installed on Linux, it also starts the allowlisted programs with the real values: `gh` gets the value of `GH_TOKEN` when you type `gh`, and every other process sees the reference (see [tackd](#tackd-the-service-that-decides) and [starting programs](#starting-allowlisted-programs-with-their-secrets)). tackd keeps an audit log of each decision and each start. Each allowlist entry has a level of protection (see [protection levels](#protection-levels-uid-and-refs)). At `protect = "uid"`, the program runs as a helper account of your user, and your other processes cannot read its environment or memory. At `protect = "refs"`, the program runs as you, and the only promise is that shells, startup files and other programs see references: other processes of your user can still read the program's environment while it runs. Without tackd, and on macOS for now, every process, `gh` too, sees the reference and not the value.
+
+The values stay in the stores that you already have:
+
+- `backend = "keyring"` (the default) is the system keyring. On Linux, paddock uses `secret-tool` (package libsecret) and a Secret Service such as gnome-keyring or KeePassXC. On macOS, it uses the login keychain through `security`. The items have the service `paddock-tack` and the name of the secret.
+- `backend = "command"` is a password manager command that prints the value, as `from = "command"` of `[credentials]` does. paddock only reads it.
+
+Only the user configuration, `~/.config/paddock/config.toml`, can have the `[tack]` table. paddock refuses a project `paddock.toml` that names it, because an agent can edit the project.
+
+```toml
+[tack.secrets.GH_TOKEN]
+hosts = ["api.github.com", "github.com"]   # optional
+
+[[tack.secrets.GH_TOKEN.allow]]
+program = "/usr/bin/gh"
+sha256 = "..."      # optional: sha256sum /usr/bin/gh
+# signer = "..."    # optional, macOS: the signing identity
+# args = ["pr *", "api **"]   # optional: the allowed argument shapes
+# protect = "uid"   # or "refs"; gh and the git credential helpers default to "uid"
+# write = true      # protect = "uid" only: the program may write the working folder
+
+[[tack.secrets.GH_TOKEN.callers]]
+kind = "sandbox"    # or "agent", or program = "/path"
+action = "refuse"   # or "ask"; for a kind also "allow"
+
+[tack.secrets.OPENAI_API_KEY]
+backend = "command"
+command = ["op", "read", "op://Private/OpenAI/key"]
+```
+
+An allowlist entry names a program by its absolute path. paddock refuses shells, interpreters (`python`, `node` and others), `env`, `printenv` and `sudo`, also through a symbolic link: they run any command that they get, so they would give the value to that command. `args` lists the argument shapes that the program may get, word by word, as for host tools: `*` is one word, `**` as the last word is the rest, and neither matches a word that starts with `-`. Without `args`, any arguments are fine. tackd checks `args` and `callers`. It records `hosts` with each decision; the version that starts programs with the value enforces them.
+
+To move a value out of your files, name the variable:
+
+```sh
+paddock tack import GH_TOKEN                      # print what would change
+paddock tack import GH_TOKEN --file ~/src/app/.env --yes
+```
+
+- The command reads `~/.profile`, the bash and zsh startup files, the fish configuration, `~/.config/environment.d/*.conf`, and each file that you name with `--file`.
+- It changes only plain lines, such as `export GH_TOKEN=value`, `GH_TOKEN='value'` or `set -gx GH_TOKEN value`. It names a line where the shell computes the value, such as `$(pass show gh)`, and does not change that line.
+- Without `--yes`, it prints the plan and changes nothing.
+- With `--yes`, it first writes the value into the store and reads it back. It changes a file only after the store holds the same value. Each changed file gets a backup under `~/.local/state/paddock/tack/backups/`, with mode 0600. The command prints the `cp` command that undoes the change. The backup holds the old value, so delete it when the new file works.
+- If the files hold two different values, or the store holds a different value, the command stops for that variable. `--replace` overwrites the value in the keyring.
+- A file that changes while the command runs is not written. A crash leaves each file whole, the old one or the new one. If you run the command again, it finishes the work.
+- No output and no log line holds a value.
+
+`paddock tack list` shows the secrets, their store, their reference and their programs. `paddock explain` shows what the sandbox sees for each secret. `paddock doctor` has a block for tack. The block shows if the store is reachable or locked, the plain values that are still in your files or in the current environment, and the allowlisted programs that are missing or whose content changed since you wrote their `sha256`.
+
+#### tackd: the service that decides
+
+tackd is a system service that runs as root. It answers one question: may this program, started by these processes, receive which secrets? On Linux it then starts the program with them, as you. It reads no value to decide. Install it once, and again after each paddock update:
+
+```sh
+sudo paddock tack setup     # install, or update to this paddock, and start;
+                            # also the stand-ins of your user (below)
+paddock tack status         # installed, running, version, socket
+paddock tack check gh pr list   # what tackd would decide here; starts nothing
+paddock tack audit          # your decisions and starts, newest last
+sudo paddock tack remove    # stop it and delete every file it made
+```
+
+How tackd decides:
+
+- The kernel tells tackd which user and which process asks. tackd reads only the `[tack]` table in `~/.config/paddock/config.toml` of that user, and only if that user owns the file. It never decides for one user with the configuration of another, and it gives nothing to root.
+- The program counts by its real path, after every symbolic link. tackd computes its SHA-256 and compares it with `sha256`. On macOS it can also check the `signer`. If an entry has neither, the program must be a file that only root can change, in folders that only root can change. A program under your home or under Homebrew needs a `sha256`, because any process of yours could replace it. The message gives the hash to write.
+- tackd walks the parent processes up to the first one. If a paddock sandbox (another pid namespace or root folder, bwrap, or Seatbelt) or a coding agent that paddock knows is among them, tackd refuses, unless a `callers` rule for that kind says `ask` or `allow`. A rule with a caller `program` applies when that program is among the parents. The strictest rule wins. The sandbox mark comes from the kernel, so a process cannot remove it. The agent mark uses program names: a process that detaches from its parents leaves that chain.
+- `ask` comes back as its own answer. This version cannot ask you yet, so a start that needs asking is refused.
+- A program on no allowlist gets the same answer whether it exists or not, and tackd does not read it.
+
+The audit log has one line per decision: the time, the user and process, the program with its real path and hash, the parent processes, the names of the secrets, the decision and the reason. A start adds a line when the program starts (`started`, with its pid, its level of protection and the uid that it runs as, its cgroup, the ACL that tackd added, and the names of the variables that tackd dropped; `paddock tack audit --json` has the level and the uid as the fields `protect` and `run_uid`), a line when it ends (`ended`, with its exit code or signal), or a line when it could not start (`failed`). It never holds a value or an argument. It is root's file, `/var/log/paddock/tackd.log`, mode 0600. It rotates at 4 MiB and keeps four old files. `paddock tack audit` shows your own lines through tackd. If tackd cannot write the log, it allows nothing, and `paddock tack status` says so.
+
+The service:
+
+- On Linux it is the systemd unit `/etc/systemd/system/paddock-tackd.service`. It runs `/usr/local/libexec/paddock/tackd`, a copy of paddock that only root can change: root never runs a file that your user could replace. The unit keeps six capabilities: to read files, to read the process table of all users, to become a user and that user's groups, to send signals to the programs it started, and to move a program into your cgroup. `NoNewPrivileges` holds for tackd and for the programs that it starts. A started program inherits the namespaces and system call filters of the unit, so the unit has none: the program sees the file system and the network as it would from your shell. The unit file explains each option. A restart or an update of tackd does not stop the programs that it started.
+- On macOS it is the LaunchDaemon `/Library/LaunchDaemons/io.paddock.tackd.plist`, which runs `/Library/PrivilegedHelperTools/io.paddock.tackd`. Its error output goes to `/var/log/paddock/tackd.err`.
+- The socket is `/run/paddock-tackd/tackd.sock` (macOS: `/var/run/paddock-tackd/tackd.sock`). Every user can connect to it. tackd takes the user from the kernel and not from the request.
+- `setup` refuses a service file that paddock did not write, and folders that a user other than root can write. It checks that the new copy runs and reports this version before it replaces the old one. If the check fails, the old tackd stays. After `paddock update`, `paddock tack status` and `paddock doctor` show `CHECK` until you run `sudo paddock tack setup` again.
+- `remove` deletes the service file, the binary, the socket and the audit log (`--keep-audit` keeps the log), and the folders when they are empty. On Linux it also removes every ACL that tackd added, gives the files that a helper account wrote to their user, ends the programs that still run as a helper account, deletes the helper accounts and their groups, and deletes `/var/lib/paddock-tackd`.
+- A client has 5 seconds to send its request. tackd serves 32 connections at once, and at most 6 of one user, so one user cannot block the others. A slow, too large or malformed request gets an error, and the other clients are still served. After a crash, the service manager starts tackd again within seconds.
+
+Without tackd, tack works in rootless mode. Values stay out of shells, startup files and agent environments. A program that gets a value is not protected from other processes of your user. `paddock doctor` and `paddock tack status` say which mode you have.
+
+#### Starting allowlisted programs with their secrets
+
+A program does not ask tackd for its secrets: something must send its start there. paddock puts a stand-in first on PATH, one small script for each allowlisted program name:
+
+```sh
+paddock tack setup          # as you: the stand-ins and the PATH lines
+sudo paddock tack setup     # tackd, and the same for the user who runs sudo
+paddock tack run gh pr list # start one program through tackd explicitly
+paddock tack remove         # as you: delete the stand-ins and the PATH lines
+```
+
+- The stand-ins are in `~/.local/share/paddock/tack/bin`. Setup puts that folder first on PATH with one marked line in `~/.profile`, `~/.bash_profile`, `~/.bash_login` and `~/.zprofile` (those that exist, and the one that your login shell needs), in `~/.config/fish/conf.d/paddock-tack.fish` when you use fish, and in `~/.config/environment.d/60-paddock-tack.conf` for the systemd user session. A paddock sandbox gets stand-ins of its own, first on its PATH. Log in again after setup. Run setup again when you add a program to an allowlist: it writes the new stand-ins and deletes the old ones.
+- Typing `gh` runs the stand-in. It finds the next `gh` on PATH and asks tackd to start it. tackd decides as above, takes the values from your store (it runs `secret-tool` or your password manager command as you), and starts the program as you: your user and the groups of your shell, your umask, resource limits, nice value and cgroup, your working folder, and your environment with the real values in place of the references. It drops variables that load code into a program, such as `LD_PRELOAD`, `LD_LIBRARY_PATH`, `NODE_OPTIONS` and `PYTHONPATH`. It starts the file that it checked: it opens it, checks the hash again, and runs that open file. A script (`#!`) runs by its path.
+- The program uses your terminal or your pipes directly: the stand-in hands its standard input, output and error to tackd. Ctrl-C, Ctrl-Z and a new window size reach the program. When the program stops, the stand-in stops too, and `fg` continues both. The program's exit code is the stand-in's, and a program that a signal ends, ends the stand-in with the same signal. If the stand-in is killed, tackd kills the program.
+- Exit codes of the stand-in itself: 77 when tackd refuses (it prints the reason once), 69 when tackd is installed but does not answer or cannot start the program (a locked keyring, a program that changed), 70 when tackd went away while the program ran.
+- Without tackd, in a sandbox, and on macOS for now, the stand-in runs the program itself with the references, and says so once in each shell session. A session whose first process is gone, such as a terminal that was closed while a program still runs, stays one session: the note does not come again. When paddock is gone, the stand-in script runs the next program of that name itself.
+- Not covered: a program that something starts by its absolute path (`/usr/bin/gh`), a process with its own PATH, and a folder that comes before the stand-ins on PATH (a version manager that puts its folder first at each prompt). These get the references only. `paddock doctor` shows whether each allowlisted name reaches its stand-in in your shell; `paddock tack run PROGRAM` starts a program through tackd in every case.
+- A program that tackd starts has no controlling terminal: it reads and writes yours through the descriptors, but cannot open `/dev/tty`, and a program that you send to the background with `bg` can still read the terminal. It cannot gain privileges through `sudo` or another setuid program. At `protect = "refs"`, the programs that it starts (its pager, its editor, `git`) get the values in their environment, as they would from a shell. At `protect = "uid"`, they get the references (see below).
+- Why a PATH stand-in: every shell finds programs through PATH, so it works the same in bash, zsh, fish and the others, needs no root to set up, and touches no other process. The other ways reach further and break more: a `binfmt_misc` handler changes how every program of every user (root too) starts; an `LD_PRELOAD` hook misses static programs (`gh` is one) and any process that clears its environment, and loads into every process; a FUSE view of the program folders needs a mount for each user and blocks every start when it hangs.
+
+#### Protection levels: uid and refs
+
+Each allowlist entry has a level, `protect = "uid"` or `protect = "refs"`. `paddock tack status`, `paddock doctor` and `paddock explain` show the level of each entry and where it comes from. `paddock tack check` shows the level of one start.
+
+- `protect = "uid"`: tackd runs the program as a helper account of your user. On Linux, a process cannot read the environment or the memory of a process of another uid, so your shell, your editor and your other programs cannot read the value from the program while it runs. This is the default of the built-in profiles for `gh` and the git credential helpers (`git-credential-*`): they talk to the network and write no project files.
+- `protect = "refs"`: tackd runs the program as you. This is the default for every other program. The only promise is that shells, startup files and other programs see references, never values. Other processes of your user can still read the program's environment and memory while it runs (`/proc/PID/environ`, a debugger).
+
+`sudo paddock tack setup` makes one helper account for each user whose configuration has an entry at `protect = "uid"`: `_tack_<user>` (or `_tack_u<uid>` for a long name), a system account with its own group, no password, no login shell, and a home of its own in `/var/lib/paddock-tackd/homes`. Run it again after you add such an entry: until then, the start fails with a message that says so. The list of helper accounts is `/var/lib/paddock-tackd/helpers.json`.
+
+What a program at `protect = "uid"` can reach:
+
+- Your working folder, through a POSIX ACL that tackd adds when the program starts. tackd adds it as you, so it changes only files that you own. The helper account can read the folder and every file and folder in it on the same file system. With `write = true` in the entry, it can also write there. The folders above get "enter" (`x`) for the helper account when others cannot enter them already. A folder that you do not own and that others cannot enter stops the start, with a message.
+- Files that the helper account creates in the folder get your user in their ACL (from a default ACL), so you can read them and, as far as the program's file mode allows, write them. `sudo paddock tack remove` gives them to you.
+- Its own home folder, the network, and the files that every user can read. It gets your standard streams, your terminal, your limits and your cgroup, as at `refs`.
+
+The program file itself must be one that every user can run, such as a program in `/usr/bin` or `/usr/local/bin`. A program under your home folder is not, when others cannot enter your home: the start fails with a message that says so.
+
+What it cannot reach:
+
+- Your home folder and its settings (`~/.config/gh`, `~/.gitconfig`, `~/.ssh`), your keyring, your ssh agent, your session bus and your other folders. `HOME` is the helper's home. tackd removes `XDG_CONFIG_HOME`, `XDG_RUNTIME_DIR`, `SSH_AUTH_SOCK` and similar variables from its environment. The value of the secret is what the program uses to sign in.
+- A working folder without `write = true`: `gh pr checkout`, `gh repo clone` and other commands that write files fail there. Set `write = true` for such a program.
+
+More details:
+
+- tackd adds the ACL to every file once. A start in the same folder later finds the ACL on the folder and does not walk it again. New files inherit the ACL. A file that you move into the folder keeps its own ACL. One grant changes at most 200,000 files and takes at most 100 seconds. The ACLs of a folder are the sum of the grants: after a program with `write = true` ran there, every program at `protect = "uid"` can write there.
+- git refuses a repository that another uid owns. tackd adds `safe.directory = *` to the git configuration of the program's command line (`GIT_CONFIG_COUNT`). That covers only what the ACLs let the helper account read.
+- A file system without POSIX ACLs (some network and FUSE file systems) cannot give the folder to the helper account. `paddock doctor` tries ACLs in your paddock state folder and says if they work.
+- tackd records each grant in `/var/lib/paddock-tackd/acl.jsonl` before it starts the grant. `sudo paddock tack remove` uses this file to remove the ACLs, also after a crash.
+
+The programs that a program at `protect = "uid"` starts get references, not values. tackd puts a folder first on the program's PATH, with one link for each program name on your PATH. When the program runs `git`, the link runs paddock, which puts the references back in the environment and then runs the real `git`. When the name is on your allowlist, such as `gh` that git runs as its credential helper, paddock asks tackd to start it, as a stand-in does. tackd decides with your configuration and runs that program as the same helper account, at `uid`. The limits:
+
+- A program that starts another program by its absolute path (`/usr/bin/git`), or that gives a child its own copy of the environment from before, does not pass the link. That child gets the values.
+- A child runs as the same helper account. It could read the program's memory if it tried. The link keeps the values out of the environment of children such as a pager or a hook that prints it, not out of a child that means harm.
 
 ## Privacy defaults
 
@@ -1114,6 +1282,55 @@ To make reads ask too, or to turn either capability off, set it in `[host]`, for
 
 `paddock log` shows every request with its decision and result. The log is `~/.local/state/paddock/host-audit.jsonl`. It does not keep text that can be private. For `clipboard-write`, it keeps only the length of the text. For `exec`, it keeps the program and the number of arguments, because arguments can hold tokens. With `[exec] remember_allowed = true`, an allowed command line of plain words stays whole, for `paddock tools suggest` (see [Named host tools](#named-host-tools)); it is off by default. For `forge`, it keeps the command without the body text. For `notify`, it keeps the lengths of the title and the body. For `open-url`, it keeps the scheme and the host. paddock makes its folders readable only by you (mode 0700) and its files too (mode 0600), and tightens older ones that other users can read. Request text never goes into the arguments of a host process, which other users can see: notifications go over the desktop bus, and `gh` reads the body on its standard input (`tea` and `glab` cannot, see above). To teach agents the client, run `paddock skill install`: it copies a short skill into the skill folders of your harnesses. Inside a sandbox, `paddock-host --help` is the full reference.
 
+### Exclave
+
+Exclave runs a command in a sandbox on a peer, which is another machine. The agent stays on the local host. The person configures the transport on the local host in `~/.config/paddock/config.toml`:
+
+```toml
+[exclave]
+prefer = ["build", "test"]
+
+[exclave.peers.worker]
+transport = ["ssh", "worker", "paddock", "exclave", "serve"]
+```
+
+The transport is a command that connects its standard input and output to the peer. Keep its arguments and credentials on the local host. Do not put them in a project file. Agents name only the peer. The preference routes `cargo build` and `cargo test` from a sandbox to a peer.
+
+On the peer, set limits and package sources in its own `~/.config/paddock/config.toml`:
+
+```toml
+[exclave.serve]
+memory_bytes = 4294967296
+cpu_percent = 200
+seconds = 3600
+registries = ["index.crates.io", "static.crates.io", "mirror.example:443"]
+private_registries = ["mirror.example:443"]
+cache_root = "/srv/paddock-exclave"
+cache_bytes = 21474836480
+# devices = ["gpu"]
+# ro_paths = ["/opt/example-tools"]
+# allow_shared_disk = true
+# http_registries = ["packages.example.com:80"]
+# allow_egress = true
+
+[exclave.serve.env]
+PIP_INDEX_URL = "https://mirror.example/simple"
+UV_INDEX_URL = "https://mirror.example/simple"
+PIP_CERT = "/etc/ssl/certs/ca-certificates.crt"
+```
+
+Mount a dedicated, fixed-size filesystem at `cache_root` before starting the peer. The peer user must own that folder and be able to write it. Paddock refuses a cache root on the root filesystem unless the peer owner sets `allow_shared_disk = true`; that override removes the dedicated-volume bound. Before a run, `cache_bytes` limits the combined size of project build caches. The peer evicts the least recently used idle caches until they fit, and refuses the run if active caches still exceed the limit. This is not a live quota; caches can grow during a run. The dedicated volume bounds total disk use during a run. On the peer, `paddock exclave cache ls` lists project IDs and sizes; `paddock exclave cache rm ID` removes a project cache when it is not in use. Pip and uv caches and `/work/.venv` persist per project. Remove the cache to rebuild an environment.
+
+The peer owner can list existing absolute paths in `ro_paths` to make installed tools available read-only in every run, including targets of symlinks from `/usr/local/bin`. Paths overlapping the peer user's home, `/srv`, protected credential paths or sandbox mounts are refused, including symlink targets. Choose paths that contain no credentials; their contents are exposed to every run. GPU runs also receive `/sys` read-only for NVIDIA discovery.
+
+The default network mode is `registries`. It permits only the listed package hosts through the peer proxy. The proxy refuses loopback and addresses of the peer. A registry on a private network also needs its exact `host:port` in `private_registries`. An HTTP source needs an explicit entry in `http_registries`. For HTTPS, list the host in `registries` too. The peer owner sets `env`; its values reach commands in the sandbox and can be visible in process arguments, so do not put secrets there. The peer mounts its system CA bundle read-only when present; add your mirror CA to that bundle on the peer. The peer must have bubblewrap and a systemd user manager with CPU and memory controllers. The peer refuses a run when it cannot enforce the limits. Swap is disabled for the run.
+
+From a sandbox, run `paddock-host exclave run --on worker -- cargo test`. On the host, use `paddock exclave run --on worker -- cargo test`. Use `--gpu` to request NVIDIA devices when the peer owner has enabled `devices = ["gpu"]`; GPU requests do not fall back to local execution. Use `--network none` to disable network access. Use `--network egress` only when the peer enables `allow_egress`. To fetch dependencies before an offline build, run `cargo fetch` with registry access, then run the build with `--network none` and Cargo's `--offline` flag.
+
+In a Git worktree, paddock sends tracked files and paths named with `--include`. In a plain folder, it sends the folder contents, using `.gitignore` files and a root `.paddockignore` with Git-style patterns; Git is not required. The current folder is the root when there is no worktree. Inside a worktree, the worktree root is used by default. Use `--root DIR` to select a different root, for example a plain folder inside a repository; the working directory must be inside it. In a sandbox, the selected root must also be inside the sandbox project. The host CLI reports the root it selects and why. Relative symlinks that stay inside the project are preserved; escaping links are refused by name. Ignored files and credential paths stay out, even when named with `--include`. Use `--output PATH` for each regular file to copy back. Paths are relative to the project root. A file can be at most 256 MiB, and a snapshot can hold at most 512 MiB across 50,000 files. The peer keeps a separate build cache for each project.
+
+If the transport cannot start or connect before an ordinary command starts, the command runs locally and reports why. A busy peer or an error returned by the peer fails the command without local fallback. The sandbox mailbox records fallback reasons. If the connection fails after dispatch, paddock reports an unknown result. It does not start a second copy locally. Mailbox events for peer runs include the peer name and snapshot hash. To attach that evidence to a host-owned gate, pass `--peer NAME --snapshot-hash HASH` to `paddock spec gate`. Copy the hash from the mailbox event.
+
 ### Spawn other agents
 
 An agent in a sandbox can start an agent of another harness. For example, Claude plans the work and Codex writes one part of it. The agent asks with `paddock-host spawn`. paddock then starts a second sandbox on the host, next to the first one. It does not put a sandbox inside a sandbox.
@@ -1206,13 +1423,13 @@ paddock run codex ~/src/app --detach --prompt-file task.md --worktree
 paddock run claude --detach --prompt "Fix the failing test in src/parser.rs"
 ```
 
-paddock starts the run as if you typed `paddock run codex ~/src/app` in that session, and returns at once. It prints the sandbox id and `paddock view <id> --write`. The other flags (`--worktree`, `--pasture`, `--env`, `--auth`, ...) work as without `--detach`.
+paddock starts the run as if you typed `paddock run codex ~/src/app` in that session, and returns at once. It prints the sandbox id, `paddock view <id> --write` and `mail: paddock mail watch <id>`. The other flags (`--worktree`, `--pasture`, `--env`, `--auth`, ...) work as without `--detach`.
 
 - `paddock view <id> --write` attaches to the terminal of the agent: your keys go to the agent, and you take over. Without `--write`, the view is read-only. In the bar panel, the take-over button shows only for detached runs.
 - The agent calls `paddock-host done [--status ok|failed] [TEXT]` when the task ends. paddock then ends the run as `paddock stop` does. When you are attached with `--write`, paddock tells you once and leaves the run to you: it ends when you close the view. The status and the first 4 KiB of the text go into the run record.
-- `paddock wait <id> [--timeout 30m]` blocks until the run ends and prints the `done` status and text. It exits with 0 for ok, 1 for failed, idle or no `done`, and 124 when the time runs out. Scripts that start detached workers use it.
-- A detached run that has produced output and then stays quiet becomes idle after `[detach] idle_after` (default `10m`). `paddock ps --json` adds `idle_since` (a Unix time) on that run. The bar row says `waiting for input`. paddock sends one desktop notification, `HARNESS in PROJECT waits for input: view it or stop it`. New output clears the idle state and the next quiet period notifies once more.
-- After `[detach] idle_timeout` more quiet time (default `30m`), paddock ends the run the same way `paddock-host done` does. The run record status is `idle`. `paddock wait` prints `idle: ended after N minutes without output` and exits 1. N is the quiet time. A quiet time that is not a whole number of minutes is written in seconds. `idle_timeout = "0"` never ends a run for being idle. A client attached with `paddock view ID --write` keeps the run. paddock tells that client once and ends the run when the client leaves.
+- `paddock wait RUN...` waits for all named runs to end. `--any` returns when the first run ends. `--status` also accepts an agent status of `done:` or `blocked:` while the run is still open. Each result has the full run ID and status text on one line. The command exits 0 for success, 1 for failure or blocked, 2 when the outcome is unknown or the arguments are invalid, and 124 on `--timeout 30m`.
+- A detached run whose visible screen stays quiet becomes idle after `[detach] idle_after` (default `10m`). `paddock ps --json` adds `idle_since` (a Unix time) on that run. The bar row says `waiting for input`. paddock sends one desktop notification, `HARNESS in PROJECT waits for input: view it or stop it`. A visible screen change clears the idle state and the next quiet period notifies once more.
+- After `[detach] idle_timeout` more quiet time (default `30m`), paddock ends the run the same way `paddock-host done` does. The run record status is `idle`. `paddock wait` prints the run ID and `idle: ended after N minutes without output` and exits 1. N is the quiet time. A quiet time that is not a whole number of minutes is written in seconds. `idle_timeout = "0"` never ends a run for being idle. A client attached with `paddock view ID --write` keeps the run. paddock tells that client once and ends the run when the client leaves.
 - `[view] keep_ended` (default `2h`) is how long the view session of an ended run stays. The run record of a detached run stays, so `paddock wait` still reads it.
 - A task timer (`paddock timer`) works as for any other run.
 - The harness profile says how the interface takes a first prompt, in a `[detach]` table. claude, codex and grok have one. Other harnesses refuse `--detach`. `--detach` needs tmux.
@@ -1221,8 +1438,9 @@ paddock starts the run as if you typed `paddock run codex ~/src/app` in that ses
 
 A harness can stop at a screen that waits for a choice before it starts the task. An example is the Codex screen `Hooks need review`, which comes when one of your hooks changed. In a detached run nobody is there to answer it.
 
-- The harness profile names such screens in `[[screens.rule]]`, each with a safe answer. For the Codex hooks review, paddock chooses `3. Continue without trusting (hooks won't run)`. The changed hooks do not run. paddock never chooses an answer that trusts, approves, accepts terms or logs in. A rule with such an answer does not load.
-- paddock answers in detached runs and on terminals that no window shows. In a run that you watch, paddock does not answer, so you see the screen. A rule with `always = true` is the exception. When you are attached with `paddock view ID --write`, or when you press a key, paddock answers no more screens in that run.
+- The harness profile names such screens in `[[screens.rule]]`. For known agy and Codex folder screens, paddock can trust the project folder of the run. Every folder that the screen names must resolve to that project. If paddock cannot confirm that, the screen waits for a person and the mailbox gets a `trust-screen` event. The Claude Code screen has no confirmed pattern yet. Other rules cannot approve terms or log in.
+- For the Codex hooks review, paddock chooses `3. Continue without trusting (hooks won't run)`. The changed hooks do not run. The mailbox gets a `hooks-untrusted` event. If the changed hooks include paddock's compaction hook, paddock cannot restore its context after compaction.
+- paddock answers in detached runs and on terminals that no window shows. In a run that you watch, it answers only rules marked `always = true`. This includes the folder trust rules. If you press a key, paddock answers no more screens in that run.
 - paddock tells you about each answer. It writes one line in the view log and one line in the audit log. For a detached run, `paddock wait` and `paddock ps` show a note such as `answered Codex hooks review: continued without trusting 1 hook`.
 - When the screen of a detached run does not change for `[detach] stuck_after` (default `3m`), paddock puts the last screen into the run record (`stuck` in `paddock ps --json`) and sends one desktop notification. For a spawn child it writes `stuck:<RUN-ID>` into the tree scope of kv, and for a pasture member into the pasture scope, so a parent can `paddock-host kv watch` for it. `stuck_after = "0"` turns this off.
 - The idle end keeps working. Its done text also shows the last lines of the screen. A known message on the screen, such as `Individual quota reached` or a rate limit, gets clear words in the done text.
@@ -1237,6 +1455,73 @@ stuck_after = "3m"
 ```
 
 You can let an agent on the host answer requests for you (`paddock approver`). paddock trusts that setting only from a root-owned file (`sudo paddock approver enable --system`) or from a file signed with a password that you type when a sandbox starts, so that a process on your computer cannot turn it on for itself. The agent approver can only answer the capabilities that you list, the rules above still hold, and if it does not answer clearly, the request comes to you.
+
+### The run mailbox
+
+Each run has a mailbox from its start. You talk to the agent through it, and paddock tells you through it what happens to the run. You do not read the screen or type into the pane. The starter of a run is the person, script or host agent that started it. A run that `paddock-host spawn` started has its parent sandbox as starter.
+
+```sh
+paddock run claude --detach --prompt-file task.md     # prints: mail: paddock mail watch 1a2b3c
+paddock mail watch 1a2b3c                             # one line per message or event, until the run ends
+paddock mail send 1a2b3c "Use the branch release/2.4"
+paddock mail send 1a2b3c --ask - < question.md       # a question: the agent answers with a reply
+paddock mail ls                                       # the runs with a mailbox and their state
+paddock mail ls 1a2b3c                                # the messages of one run
+paddock mail show 1a2b3c 7                            # one message in full
+```
+
+`paddock mail watch` prints one line for each message of the agent and for each event of paddock. Status lines keep their full text. Each line names its sender, for example `[1a2b3c #7 13:05:01] from sandbox claude-app-1a2b3c, agent text, say: TEXT`. A line from `paddock` is an event. The command ends with exit code 0 after the end of the run. If end records conflict, paddock reports an unknown outcome. It also reports an unknown outcome if it cannot identify a live writer for an incomplete end event. It exits with code 2. It does not advance the reader's position for that event. With `--mine`, it reports the uncertainty once and keeps following other runs. With `--timeout 30m` it ends with 124 when the time runs out first. `--json` prints one JSON object per line. The output works with Claude Code's Monitor tool and with scripts.
+
+paddock writes these events:
+
+- `started`: the run started.
+- `ended`: the sandbox ended, with its exit code.
+- `gone`: the paddock process of the run was killed, so the run ended without an end record. Its pane can still show the last screen, but nothing runs behind it. A watch finds this within a few seconds.
+- `idle`: a detached run has unread mail and its screen is quiet for `[mail] idle_after` (default `2m`), or its screen is quiet for `[detach] idle_after` (default `10m`). The latter includes the last agent status and the desktop notice.
+- `done`: a detached agent reported `done` and the run is still running. After `[mail] end_after_done` (default `2m`) paddock ends it unless a view is attached or new mail arrived.
+- `card`: an approval card waits for you. The line says what the card asks.
+- `child-started`, `child-ended`: a child of `paddock-host spawn` started or ended. The line names the child.
+- `claim-lapsed`: a relay write did not finish before its claim expired. The mail remains available for another delivery.
+- `delivered`: messages that you sent reached the agent. The line names the messages and how they came, for example `#7 given to the agent at the end of its turn (stop hook)`.
+
+A message reaches a Claude Code agent also when the agent never reads its mailbox. paddock gives Claude Code two hooks in each sandbox:
+
+- At the end of a turn, the Stop hook looks for unread messages. If there are some, the hook keeps the turn going, and the agent gets the messages as the reason. A turn that ends without new mail ends as usual.
+- A message that you send with `--interrupt` comes after the agent's next tool call, together with the unread messages before it.
+
+Each message reaches the agent once, by whichever way comes first. A read with `paddock-host mail wait` counts too. The hook keeps a turn going only one time in a row, so mail never keeps an agent running in a loop. If the host does not answer, the turn ends as usual. Outside horse pty custody, a message that comes while the agent waits at its prompt reaches the agent at the end of its next turn. The `idle` event tells you about such a message.
+
+In horse mode, a Codex, Grok, agy, or Claude Code TUI with pty custody also gets unread mail at its idle prompt. paddock types the message only after the harness reports a safe point and the prompt is empty. An interrupt first sends the harness interrupt key. This path needs a terminal and a profile for the pinned harness version. The profile must use bracketed paste and a one-byte submit key. Horse mode does not support detached runs.
+
+`paddock mail send` says when the agent gets the message. `paddock mail ls RUN` shows the state of each message that you sent: `unread`, `read by the agent`, `given to the agent at the end of its turn (stop hook)`, `given to the agent after a tool call (interrupt)`, or `typed at the idle prompt`. With `--json`, each message has `state` and `delivered_via`. Other agent programs get their mail when they read it.
+
+Each line comes once for each reader. A watch keeps its place in the mailbox, so a new `paddock mail watch` continues where the last one stopped, also after a restart. Two watchers with different `--reader NAME` values each get every line. `--all` and `--from SEQ` print older lines again.
+
+`paddock mail watch --mine` follows every run that you started from the host, also runs that start later. Set `PADDOCK_CALLER` to a short name when several managers start runs, and each one follows only its own runs.
+
+Inside the sandbox, the agent uses `paddock-host mail`:
+
+```sh
+paddock-host mail wait --timeout 60      # new messages, or exit 75 when none came
+paddock-host mail send "Tests pass, PR is open"
+paddock-host mail ask "Which branch?"    # waits for the reply
+paddock-host mail status blocked: no network for the package mirror
+```
+
+With devices in the sandbox, the same mailbox is also a pair of files. `cat /dev/paddock/mail/in` reads the new messages, and `echo TEXT > /dev/paddock/mail/out` sends one. The prompt of a detached run ends with a short note about the mailbox. Claude Code gets the same note at the start of each session.
+
+- A message holds at most 64 KiB of text. For a longer text, write a file in `.paddock/` of the project (the loft) and name it with `--ref .paddock/FILE`. A ref is a path in the project. It is never a host path.
+- One sender writes at most 60 messages a minute into one mailbox.
+- Mail is text from another party. It carries no right to do anything, so no approval card guards it. An agent writes only to the mailbox of its own run. paddock takes the run from the sandbox's own channel, never from the message.
+- `paddock mail send` refuses a run that ended, because nobody reads its mailbox.
+- The mailboxes are in `~/.local/state/paddock/mail/`, one folder for each run. They stay after the run, like the session record. `paddock gc --homes` removes the mailbox of a run that ended longer ago than `--older-than`.
+
+```toml
+# ~/.config/paddock/config.toml
+[mail]
+idle_after = "2m"
+end_after_done = "2m"
+```
 
 ## Shared state: paddock kv
 
@@ -1468,6 +1753,9 @@ paddock is the only writer of `tasks.md`. Workers do not edit it. paddock keeps 
 | `paddock-host spec status` | the feature, each task with state, owner and branch, what is ready, and what waits for review |
 | `paddock-host spec review T012 pass` | marks a task done after you merged its branch. `changes "TEXT"` sends it back, and TEXT goes to the next worker |
 | `paddock spec status` | the same status on the host, for the current folder |
+| `paddock gauge` | how far the feature is: done with evidence, new and reopened tasks, open ages, and a forecast of the finish date (see [How far a feature is](#how-far-a-feature-is-paddock-gauge)). `paddock-host gauge` gives a coordinator the same |
+| `paddock spec appetite 001-albums 3d` | the time budget of a feature. paddock warns in the mailbox and never stops the work |
+| `paddock spec gate T012 tests pass` | records a gate result on the host: `pass`, `fail` or `skip` |
 | `paddock spec adopt` | moves `.specify/` and `specs/` of a repository into the external store (see below) |
 
 `changes` also reopens a failed task and sends the note to the next worker.
@@ -1488,6 +1776,374 @@ store = "external"   # default: "repo", where Spec Kit puts them
 ```
 
 Then run `paddock spec adopt` once in the repository. It asks, then moves both folders to the loft, `~/.local/share/paddock/loft/<repository key>/tree/`. A store of an earlier paddock moves there by itself. Every sandbox of the repository sees them at `.specify/` and `specs/`, also each `--worktree` sandbox and each worker, with the same content. paddock adds both paths to `.git/info/exclude`, which git does not track, so `git status` does not show them. If the files were committed, adopt tells you how to remove them from the index, and how to remove them from the history. It does not change the history itself.
+
+### How far a feature is: paddock gauge
+
+`paddock gauge` tells you how far a Spec Kit feature is and when it can end. It does not ask an agent for a percentage. It reads the history of `tasks.md`, the task records, the gate results and the mailboxes of the workers.
+
+```sh
+paddock gauge                 # the active feature of the current folder
+paddock gauge 001-albums      # one feature
+paddock gauge --json          # the same numbers as JSON (api_version paddock.gauge/v1)
+paddock gauge --strict        # count only tasks with evidence as finished
+paddock gauge --at 2026-11-08T09:00:00Z   # what the gauge said at that time
+```
+
+Inside a sandbox, a coordinator runs `paddock-host gauge`. The host computes it, because the sandbox cannot see the history of the loft.
+
+The output has these parts:
+
+- done: the done tasks, split into tasks with evidence, tasks that are only checked, and tasks that are not done although their box is checked.
+- discovered: the tasks that appeared after the start, and how many a day.
+- reopened, and fails after done: tasks that went back from done, and gate failures on done tasks.
+- open: each open task with its age.
+- almost done: the time that tasks sat in review, or with a worker that reported `blocked`.
+- forecast: the P50 and P85 of the finish date and of the final task count. P85 means that 85 of 100 simulated futures end by that date.
+- P85 trend: the P85 date at earlier times. A range that narrows is healthy. A date that slips, or a range that widens, is an alarm.
+- appetite: the share of the time budget that the feature used, when it has one.
+- a burn-up chart: `#` is done work, and the `-` line on top is the scope.
+- paddock cannot know: what this project does not show, for example a history before the first snapshot.
+
+#### Done with evidence
+
+A checked box is a claim. A task counts as done with evidence only when a party other than its worker saw the result:
+
+1. Its work is merged. Its branch, or a commit that its result names, is in the history of `HEAD` of the project or of its main work tree.
+2. Or its review passed (`paddock-host spec review T012 pass`).
+3. Or a gate passed for it.
+
+A gate result speaks against a task. If the newest result of a gate is `skip`, the task is not done: a test that did not run proves nothing. If a gate failed after the task was done, the task is not done either. A worker report that says that its tests skipped, and names no passing run, counts as a skipped gate. A report that names both is "partly skipped". The task keeps its evidence, and gauge lists it, because the skipped part still waits for a real run.
+
+The forecast counts a checked task without evidence as finished, and says how many such tasks there are. `--strict` counts it as open.
+
+Record a gate result on the host:
+
+```sh
+paddock spec gate T012 real-sandbox skip --note "no bwrap in the sandbox"
+paddock spec gate T012 real-sandbox pass
+```
+
+The results go to `gates.jsonl` next to the task records. Only the host writes them, never a worker.
+
+#### The forecast
+
+The forecast simulates 10,000 futures. Each simulated day draws how many tasks finish and how many new tasks arrive from a random day of the last 7 days (`--window`). New tasks are discovered and reopened tasks, less removed ones. One history and one seed (`--seed`, default 1) always give the same forecast.
+
+- If new tasks arrive at least as fast as tasks finish, gauge says "not converging" and shows no date. More workers do not help then. Cut scope, or shape the tasks again.
+- Before 5 tasks finished, or with less than three steps of history, gauge shows a wide range that it labels as an early forecast.
+- A history shorter than the window is cut into at least six steps of at least one hour each.
+- If more tasks appear at once than the list had before, gauge takes this as a rewrite of `tasks.md` and measures from there.
+- gauge prints a warning when most tasks were done at the start of the window and the open count did not go down since. This is the "90 % done" trap.
+
+#### Where the history comes from
+
+1. The history of the loft, when the Spec Kit files live there. paddock commits the loft at the end of each run.
+2. The git history of the repository, when git tracks `tasks.md`.
+3. paddock's own state log, `history.jsonl` next to the task records. paddock adds a line each time a task changes state, and each time gauge runs.
+
+A project without git still works. The first gauge has no history: it shows the current state, and it says what it cannot know. From then on, the state log is the history.
+
+#### Appetite
+
+The appetite is the time that you want to spend on a feature, counted from its start.
+
+```sh
+paddock spec appetite 001-albums 3d      # also 36h or 1d12h
+paddock spec appetite 001-albums         # print it
+paddock spec appetite 001-albums off     # remove it
+```
+
+paddock never stops the work because of the appetite. It sends a warning at 50 %, 80 % and 100 % of the appetite, and at every 25 % after that. Each warning comes once, as an `appetite` event in the mailbox of the run that works on the feature: to its starter, and to the coordinator while the run lives. The warning has the forecast and three choices: cut scope, extend the appetite once with a reason, or stop the feature. paddock checks the appetite when a worker ends and each time gauge runs.
+## Turnout: scheduled host checks
+
+Turnout requires Linux and a systemd user manager. It runs host-owned jobs from `~/.config/paddock/config.toml`. A project `paddock.toml` cannot define a job. The check is a host shell command: only exit 0 with `work` on stdout admits the wake. Other output, a failure or a check timeout ends it without mail. Turnout does not call a model.
+
+For example, to test new commits of a local branch, add a job to the user configuration (replace the project path):
+
+```toml
+[turnout.host-checks]
+harness = "none"
+trigger = "git"
+project = "/home/demo/src/paddock"
+branch = "integration"
+poll_interval = "60s"
+check = "echo work"
+check_timeout = "30s"
+suites = ["horse", "horse_e2e", "mail_sandbox", "mail_relay_sandbox", "mail_hooks_sandbox", "detach", "omarchy_agent"]
+suite_timeout = "15m"
+max_runtime = "2h"
+max_mem = "4G"
+quiet_hours = "23:00-07:00"
+max_load = 8.0
+```
+
+Run `paddock turnout ls` and `paddock turnout show host-checks` to inspect the configuration, then `paddock turnout install host-checks` to install its user timer. `paddock turnout remove host-checks` removes it. Git polling is at least 60 seconds apart. The job tests the selected commit in a detached worktree, one suite at a time with `CARGO_BUILD_JOBS=4`, and saves the output under paddock's state directory. Runtime and memory are limited by a systemd user service. A report goes to `paddock mail ls turnout-host-checks`; set `mailbox` to use another mailbox. `paddock turnout log host-checks` prints health records and `paddock turnout health` summarizes them.
+
+For a calendar timer, set `trigger = "timer"` and `schedule` to a systemd calendar expression such as `daily`. `jitter` is a duration; it defaults to one minute. A calendar wake waits for quiet hours and load limits to clear; its recovery service resumes that pending wake when the user systemd manager starts again. A git wake retries at the next poll. `paddock turnout run NAME` starts a wake manually. `paddock turnout pause NAME` stops a job, and `paddock turnout pause` stops all jobs, including later timer wakes. `paddock turnout resume` clears the pause. These commands run on the host and require user systemd for timers and budgeted work. Agent jobs are not yet supported.
+## Trainer (experimental)
+
+A trainer gives a live horse-mode run an independent review. On the host, use `paddock train RUN` or `paddock train RUN --deep`. The worker can request one with `paddock-host train [--deep]`. The trainer starts a separate session with network disabled, no approvals and read-only access to the target worktree. It gets a bounded brief, then can ask for more with its scoped, time-limited `paddock-host peek --grant trainer` grant. `--deep` increases the brief and peek limits; it does not copy the target session into the trainer's context. The target's encrypted session files remain ciphertext in the trainer mount.
+
+A trainer sends structured advice to the worker's mailbox. Normal advice waits for a turn end; severe findings interrupt. The worker decides what to do. Trainers can run periodically during active work, on stall signals, on request and before final completion, subject to the run's frequency cap and budget. If the final review fails, the worker receives the failure and the final report waits for a successful retry. In user config:
+
+```toml
+[trainer]
+enabled = true
+interval = "45m"
+no_commit = "90m"
+min_interval = "5m"
+budget = 8
+```
+
+`paddock train stats` shows recorded advice and follow-up facts for all runs; add a run ID to narrow it. Adoption starts as unknown. Record an explicit decision with `paddock train feedback RUN ADVICE adopted|not-adopted --note TEXT` on the host or `paddock-host train feedback ADVICE adopted|not-adopted [NOTE]` in the worker. Repeated negative feedback reduces the matching automatic trigger. Later check results and commits are observations, not proof that the advice caused them.
+
+## horse (experimental)
+
+In horse mode, paddock keeps the sessions of a run in its own store on the host, `~/.local/share/paddock/horse/` (mode 0700). A horse is a group of sessions with one DNA, a set of traits. paddock reads each session from the native files of the harness and keeps every row, also the rows that the harness later removes or rewrites. During the run, you can queue messages for a session or fork it. You can also ask whether a change keeps the prompt cache of the model.
+
+Horse content in the host store is authenticated and encrypted. The master key is in the host paddock keyring; each horse has a wrapped data key. Back up the master key to a private, secure location and retain it alongside your store backup plan:
+
+```sh
+paddock horse key export /secure/horse-master.key
+paddock horse key import /secure/horse-master.key  # restore a matching key into an empty keyring
+```
+
+A missing or wrong key stops access without deleting the store. Native harness transcripts remain in the harness's own format. An existing plaintext store is never migrated automatically:
+
+```sh
+paddock horse migrate --verify       # copy and verify; retain horse.plain
+paddock horse migrate --drop-plain   # warning: permanently remove the verified plaintext copies
+```
+
+Keep the plaintext backup until you have checked your encrypted store and saved a key backup. Migration refuses active runs, unsafe source files, and records larger than 256 MiB; it leaves the source intact on refusal. A failed migration can be retried.
+
+Horse mode is off by default. Turn it on for one run, or for every run in the user configuration:
+
+```sh
+paddock run codex --horse                     # a new horse
+paddock run dsh --horse-id h-1a2b3c4d5e6f     # continue a horse, resume its newest dsh session
+```
+
+```toml
+[horse]
+enabled = true
+# dsh_model = "deepseek-flash"
+# dsh_provider = "deepseek-official"
+# dsh_effort = "high"
+```
+
+Horse mode works with the harness versions below. Before the run starts, paddock asks the harness for its version. If the version is not in this list, or the harness is not supported, the run fails and says why. This is also true with `enabled = true`. If you run other harnesses or versions, turn horse mode on per run with `--horse`.
+
+| Harness | Version |
+|---|---|
+| dsh | 0.2.1-rc.5 |
+| Claude Code | 2.1.317 |
+| Codex | 0.166.0, 0.167.0 |
+| Grok Build | 1.0.70 |
+| agy | 1.4.12 |
+
+Codex rollout reading supports 0.166.0 and 0.167.0. The codec preserves complete records byte for byte and records the first metadata row's producer version separately from the version used to read it. Later rows may have a different producer. A fork, swap or delivery refuses unknown or unverified records and nested variants, and reports the line. This conservative check also refuses some valid record types until they are validated. A swap refuses a rollout that changed since ingest.
+
+The interactive Codex screen pattern is still limited to 0.166.0. With 0.167.0, the interactive run continues and its session is ingested when it ends, but safe-point message delivery stays unavailable until the screen pattern is verified. The versioned rollout fixtures use upstream types.
+
+`--horse-id` works for dsh only. A detached run (`--detach`) cannot use horse mode yet.
+
+### How paddock holds a run
+
+In custody, paddock delivers your queued messages at a safe point and reads the session into the store after every turn. A safe point is a moment with no running turn. paddock never puts a message into a running turn.
+
+A dsh run starts as `dsh --profile sdk` instead of `dsh web`, so there is no browser page. You type your prompts in the terminal, and paddock prints the answers. A prompt that you type during a reply waits until the reply is complete. Ctrl-D ends the run after the running turn and the queued messages. If the input ends, for example with stdin from `/dev/null`, paddock still delivers the queued messages, and then ends dsh. paddock prints a `horse:` line when the run waits for them. Press Ctrl-D a second time to end the run at once.
+
+A child of `paddock-host spawn` with a task has no terminal (a headless child). paddock gives the task as the first message after the DNA message. It delivers queued messages after each turn. If the child is idle and its inbox is empty, paddock ends it. The output of the custody is the output of the child. An empty task fails before paddock writes to the store. Each harness runs in its own machine mode:
+
+- Claude Code: `claude -p` over stream-json, with a session id that paddock picks.
+- Codex: `codex app-server` on stdio. An approval request of Codex gets the answer that the plain run of the profile gives, never a wider one.
+- Grok Build: `grok agent stdio` over ACP. Tool permissions get the answer of the plain run of the profile.
+- agy: `--input-format stream-json --output-format stream-json`. paddock stops a running turn with SIGINT.
+
+An interactive run keeps its terminal user interface (TUI). paddock relays the terminal through a pty that it owns (the pty relay), and types each queued message into it at a safe point. The hooks or the `notify` program of the harness tell the host about the start and the end of each turn. paddock adds them only to the sandbox copy of the configuration of the harness, and the host copy does not change:
+
+- Claude Code: the `Stop` and `UserPromptSubmit` hooks, and a session id that paddock picks.
+- Codex: the `notify` program in `~/.codex/config.toml`. Your own `notify` still runs after it.
+- Grok Build: the `UserPromptSubmit`, `Stop`, `StopCancelled` and `StopFailure` hooks, and the `idle_prompt` notification.
+- agy: the `PreInvocation` and `Stop` hooks in `.gemini/config/hooks.json`.
+
+paddock types a message only if all three of these are true:
+
+- The last hook says that the turn ended, and no newer user row is in the session file.
+- The screen shows the empty input row of the TUI, and no row shows that a turn runs.
+- The screen did not change for 1.5 seconds.
+
+paddock sends each message as one bracketed paste, then the Enter key. It removes control characters from a message, so a message cannot send keys of its own. While paddock types, your keys wait, and they go to the TUI right after the Enter key. The screen patterns are in the `[horse.pty]` table of each profile. None of them comes from a recorded screen, so `paddock doctor` lists them as unverified. A wrong pattern only holds messages back.
+
+If the user row of a message is in the session file, paddock marks the message landed. If a message does not land within 60 seconds of an idle TUI, paddock types it once more. After a second miss, the message stays recorded but not landed, and `paddock horse status` shows it so. Each step is one line in the device ledger: `pty.deliver`, `pty.interrupt`, `pty.retry` or `pty.lost`. If the screen looks idle but no hook ever came, the line is `pty.no_stop`.
+
+If paddock cannot hold an interactive run, the run goes on, and paddock reads the session files into the store when it ends. Your queued messages stay in the inbox, and the run says why in one line:
+
+```text
+horse: no safe-point delivery for codex 0.166.0 in the TUI (the run has no terminal for paddock's relay); entries stay queued
+```
+
+These are the causes:
+
+- The run has no terminal.
+- The profile has no `[horse.pty]` table for the version.
+- Your command sets what paddock sets itself: `--resume`, `--continue` or `--session-id` for Claude Code, or `-c notify=...` for Codex.
+
+paddock also has a channel path for Claude Code 2.1.318. A channel is an MCP server, `paddock-host channel`, that pushes messages into a running session. A horse run needs Claude Code 2.1.317 today, so paddock does not use the channel yet.
+
+On macOS, the relay, the hooks and the host requests are the same. The `run.end` event of each run names its custody: `live`, `pty`, `channel` or `final-only`. It also has the counts, and `error` if the custody failed.
+
+### Queue a message
+
+On the host:
+
+```sh
+paddock horse status                                   # live sessions, heads, inboxes, guard verdicts
+paddock horse append s-1a2b3c4d5e6f --text "The tests pass on main now."
+paddock horse append s-1a2b3c4d5e6f --role note --text "Use the staging database."
+paddock horse append s-1a2b3c4d5e6f --text "Stop, read the new spec first." --interrupt
+```
+
+A message waits in the inbox of the session. paddock delivers it at the next safe point, as the newest message. The roles are `user`, `system`, `developer` and `note`. A harness that takes only user messages gets the other roles as a user message with a short role tag. `--interrupt` marks a message as urgent: in a TUI, paddock stops the running turn with the interrupt key of the harness, and delivers the message first. dsh has no cancel, so a dsh turn always runs to its end.
+
+### The prefix guard
+
+A model provider keeps the start of a prompt in a cache, so the next request is cheaper and faster. The prefix guard compares what the model sees before and after an operation. It warns if one of these loses the cached prefix: a fork, a message that is not at the end, a change of model, effort, tools, system prompt or cwd, or a long pause. The warning shows the size of the lost part and the cost. Where a message at the end can do the same, it shows that form.
+
+```sh
+paddock horse guard s-1a2b3c4d5e6f --model deepseek-v4-pro
+paddock horse guard s-1a2b3c4d5e6f --fork-at 3f9a2c
+```
+
+For Claude Code, the guard reads the request shape from the transcript. It says if the cache is warm (under 5 minutes), maybe warm (under 1 hour) or cold. Codex keys its cache by the thread id, so a fork under a new id starts cold. For agy, the cache scope is unknown, and a fork with a new conversation id counts as a cold start.
+
+### Forks and swaps
+
+```sh
+paddock horse list                                     # every session in the store
+paddock horse log s-1a2b3c4d5e6f -n 20                 # the last 20 nodes of a session
+paddock horse fork s-1a2b3c4d5e6f --at 3f9a2c          # a new session from that node
+```
+
+A swap continues a Codex or Grok Build session at another branch under the same id. The prompt up to the fork point stays cached. The old head stays in the store as a session of its own:
+
+```sh
+paddock horse swap s-1a2b3c4d5e6f 3f9a2c1b7d4e                  # a session that a headless run holds
+paddock horse swap s-1a2b3c4d5e6f 3f9a2c1b7d4e --interrupt      # stop the running turn first
+paddock horse swap s-1a2b3c4d5e6f s-7e6d5c4b3a21 --codex-home ~/old-sandbox-home/.codex
+paddock horse swap s-2b3c4d5e6f7a 4c5d6e7f8a9b --grok-home ~/old-sandbox-home/.grok
+```
+
+If a headless run holds a Codex session, the swap waits until no turn runs, and Codex loads the thread again. An interactive Codex run cannot load its thread again, so paddock refuses the swap until the run ends. If no run holds the session, name the home folder of the harness. If the guard says that the swap loses cached tokens, add `--yes`.
+
+A warm side branch is a fork of a held Codex session that keeps the cache key. Codex writes no file for it, so paddock stores its turns from the live channel and marks them `live` in `paddock horse log`. paddock cannot write such a session back as a native file. The parent session waits until the side branch closes:
+
+```sh
+paddock horse fork s-1a2b3c4d5e6f --warm      # prints the new session, for example s-9c8b7a6d5e4f
+paddock horse append s-9c8b7a6d5e4f --text "Try the other approach."
+paddock horse fork s-9c8b7a6d5e4f --close     # or the run ends
+```
+
+### Hitch mode
+
+A run in horse mode can start a child that joins its horse as a new session (a hitched child):
+
+```sh
+paddock-host spawn claude --prompt-file task.md --hitch
+```
+
+The result of the child goes into the session of the parent at its next safe point, once: from `paddock-host done TEXT` of the child, or from its end, whichever comes first. A run does not end while one of its hitched children still owes its result, and it prints a `horse:` line that says so. A plain spawn without `--hitch` makes a child horse with the DNA of its parent. `--hitch` outside horse mode is an error. A hitched child sees only its own session in `/dev/paddock/horse`, never the session of its parent or of a sibling.
+
+### DNA
+
+The DNA of a horse is a TOML document with traits, policies and capabilities. The capabilities are recorded only and grant nothing. The first message of every new session tells the model the DNA of its horse. Every change is an event, and the old DNA stays in the store.
+
+```sh
+paddock horse dna show h-1a2b3c4d5e6f
+paddock horse dna set h-1a2b3c4d5e6f dna.toml          # hot-load
+paddock horse dna history h-1a2b3c4d5e6f
+paddock horse dna revert h-1a2b3c4d5e6f HASH           # back to a DNA from history
+paddock horse graft h-1a2b3c4d5e6f h-6f5e4d3c2b1a      # add the traits of the second horse
+paddock horse move s-1a2b3c4d5e6f h-6f5e4d3c2b1a       # move an idle session to another horse
+paddock horse explain h-1a2b3c4d5e6f                   # where each trait comes from
+```
+
+```toml
+[traits]
+style = "careful"
+```
+
+- Inherit: a child horse of a plain spawn starts with the DNA of its parent.
+- Hot-load: after `dna set`, each running session of the horse gets the new DNA as one `system` message at its next safe point. Inside the sandbox, pipe the DNA to `paddock-host horse dna put` to do the same.
+- Graft: the first horse keeps its id, its sessions and its own trait values, and a different value of the second horse becomes an alternative. A different policy, or a capability that the first horse does not have, refuses the graft, and nothing changes. A move grafts the DNA of the old horse into the new one. `paddock horse guard SESSION --move HORSE` shows that a move keeps the cached prefix.
+- Adapt: at the end of each run, three rules set the traits `runs`, `harnesses` and `reliability`.
+- Explain: `explain` shows the origin of each trait, the DNA events and the lineage of each session. `paddock explain` shows the same for a run in horse mode.
+- Revert: `dna revert` sets an earlier DNA from `history` again. The history stays.
+
+### Published DNA (registry)
+
+You can publish a DNA to an index and use it in other horses. An index is a folder on the host, or a git checkout of one. A reference has the form `registry://org/name@version`, `@latest` or `@sha256:HASH`. You keep the signing key, the trusted keys and the index list on the host only, in `~/.local/state/paddock/registry/`. The folder is 0700 and each file is 0600.
+
+```sh
+paddock horse registry key new                          # make the signing key, print its public key
+paddock horse registry trust add acme 3f9a...e1 --name release   # trust this key for the org acme
+paddock horse registry index add team /srv/dna-index    # add an index after the local one
+paddock horse registry publish h-1a2b3c4d5e6f registry://acme/review@1.0.0
+paddock horse registry resolve registry://acme/review@latest     # manifest, verdict, hash; no import
+paddock horse dna use h-6f5e4d3c2b1a registry://acme/review@1.0.0
+paddock horse registry sync team                        # git pull --ff-only, for a git checkout only
+```
+
+The default local registry is encrypted with the horse store. Configured external indexes keep their shared transport format; protect those folders separately.
+
+A publish signs with the key of the host. If there is no key, run `paddock horse registry key new` first, or publish with `--unsigned`. A published version cannot change. By default, the trust policy refuses an unsigned manifest and a manifest that an untrusted key signed. `resolve` prints the verdict. If the policy refuses the reference, it exits 1. `dna use` grafts the DNA into the horse, with the same checks as a graft.
+
+A sandbox in horse mode can ask for published DNA, but each request goes to you first:
+
+```sh
+paddock-host horse registry fetch registry://acme/review@1.0.0 --use
+paddock-host horse registry sync team
+```
+
+If you deny the request, nothing is written, and the command exits 1 with `fetch of <ref> was not approved`. If you approve it, the host resolves the reference with its own indexes and trust policy. With `--use`, the host grafts the DNA into the horse, and the session gets the new traits at its next safe point. The answer to the sandbox holds the reference, the hash, the manifest fields and the verdict. It never holds a path, a key, an index name or the trust list. `sync` is the only network path of the registry, and it runs only after your approval. The device ledger and the audit log get one line for each request.
+
+### The horse device
+
+A sandbox in horse mode sees its own horse at `/dev/paddock/horse/self/`. Files that carry session or DNA content contain ciphertext. Names and IDs remain visible; `edges` and `instances` expose relationship and run metadata, and `ctl` is a command channel. Use the broker to read content deliberately:
+
+```sh
+paddock-host peek ls                      # list node selectors and metadata
+paddock-host peek cat 0                   # content of node 0
+paddock-host peek ls | paddock-host peek cat
+paddock-host peek grep 'error'            # basic regular expression
+paddock-host peek range 0 3              # inclusive node range
+paddock-host peek dna
+paddock-host peek binding
+paddock-host peek inbox                  # queued entries of this run
+printf '[traits]\nstyle = "careful"\n' | paddock-host horse dna put
+```
+
+The output is marked as data. Reads use the run's grant, are counted and logged, and stop when the grant is revoked or exhausted. A trainer grant selects its target with `--grant ID`. A closed output pipe exits cleanly. If the mount is unavailable, the run reports why.
+
+A sandbox can also change the context of its own horse, one command per write to `self/ctl`. It needs your grant first. Without a grant, a write fails with EACCES:
+
+```sh
+paddock horse grant 1a2b3c --allow fork,append,view --commands 20 --tokens 50000   # on the host
+paddock horse grants                                                              # what each grant used
+paddock horse grant 1a2b3c --revoke
+```
+
+```sh
+echo "fork s-1a2b3c4d5e6f" > /dev/paddock/horse/self/ctl          # inside the sandbox
+cat /dev/paddock/horse/self/ctl                                     # the answer: the new session
+echo "view s-1a2b3c4d5e6f errors grep:error" > /dev/paddock/horse/self/ctl
+paddock-host horse ctl append s-1a2b3c4d5e6f note Check the logs.   # the same through the broker
+```
+
+The commands are `fork SESSION [AT_NODE]`, `append SESSION ROLE TEXT`, `move SESSION HORSE`, `view SESSION NAME FILTER` and `disconnect SESSION`. A view is the encrypted read-only file `self/views/NAME`, built from messages that pass the filter: `all`, `role:ROLE`, `last:N` or `grep:TEXT`. `disconnect` ends the custody of a session at its next safe point. `move` can go only to a horse that you named with `--horse`.
+
+The prefix guard judges each command before anything changes. An append at the end passes at once. A command that breaks the cached prefix shows an approval card with the lost tokens and the cost. Its tokens come from the token budget of the grant, so with `--tokens 0` every such command is refused. A command works only on the sessions of the sandbox's own horse, and a hitched child only on its own session. A denied command fails with EPERM and changes nothing. Each command writes one line to the device ledger.
 
 ## Timers
 
@@ -1604,6 +2260,8 @@ ignore = ["other-hook"]               # left out without a notice
 - Grok Build gets the same rule: the folder trust that paddock writes would turn on every entry, so paddock leaves out the entries that run no listed program.
 - An `ignore` entry is a program name or a path (`~/` is your home). A hook entry that runs it is left out for every harness, with no notice line. Use it for a hook that does a job paddock does already, such as a note after a compaction. `ignore` wins over `programs`.
 - Only the user configuration can set `[hooks]`. A project `paddock.toml` with `[hooks]` is an error.
+
+A host command can run after each run ends. Add `run_end = ["/path/to/command", "argument"]` to `[hooks]` in the user configuration. The array is the command and its arguments. paddock starts it without a shell and does not wait for it. `PADDOCK_RUN_ID` contains the full run ID. `PADDOCK_RUN_STATUS` contains the latest agent status, the detached run result, or `exit: CODE` when no status exists. If the exit code is unknown, it contains `ended: unknown`. For a killed run, paddock starts the hook when it detects the loss.
 
 `paddock explain HARNESS` lists each hook entry of the sandbox copy with its origin: paddock, your file, or left out and why.
 
@@ -2141,6 +2799,12 @@ paddock ps                                    # shows "frozen 12m"
 
 With a systemd user instance, every bwrap or srt sandbox runs in a scope of its own, `paddock-sb-<id>`, and `paddock freeze` freezes that scope with the cgroup freezer. paddock never freezes a scope that is not its own, such as the one of your terminal. docker and podman sandboxes are paused with `pause` instead. A sandbox that started without a systemd user instance cannot be frozen. The bar panel has a key for it on each row, and shows how long a sandbox has been frozen.
 
+For a systemd scope, paddock sets `memory.high` to 2 GiB by default. This is a soft boundary: the kernel reclaims and throttles above it, and it is not a hard memory limit. Set `[memory] high = "4G"` in `~/.config/paddock/config.toml` to change it, or `high = "max"` to disable it. Spawned child scopes use the same setting alongside any `--mem` hard limit. A run without a systemd scope does not get this boundary. `paddock explain` shows the planned setting; `paddock ps --mem` shows the effective cgroup value when it is available.
+
+When a detached run becomes idle, paddock asks the kernel to reclaim up to 1 GiB of its inactive file cache from its own verified scope. It does not freeze the run. The request normally uses `swappiness=0`; on kernels that reject that option it retries without the override, which can also reclaim anonymous memory. The run note says which request was used. Reclaim is best effort, so the kernel may reclaim less or none.
+
+The memory savings from these changes have not yet been measured in a run started with this version. Compare runs with similar workloads using `paddock ps --mem`; file cache and swap can vary over time.
+
 macOS has no cgroups: a Seatbelt run starts in a process group of its own, and `paddock freeze` sends SIGSTOP to that group and to every process under the sandbox process, again and again until it finds no new one, so a process that forks during the freeze cannot get away. `paddock thaw` sends SIGCONT the same way. A process that left both the group and the tree (with `setsid` after its parent ended) is not frozen, and a thaw also continues a process that the agent had stopped itself. The device instances of the run are not frozen with it: `paddock device ls` keeps showing them as running. When the run has your terminal, its group gets the terminal while it runs, and paddock takes it back at the end.
 
 - A session of the macOS guest (`paddock app run` on macOS) is frozen with the pause of its VM: the id is `macvm-<app>`. See [The marks and freeze](#the-marks-and-freeze).
@@ -2255,7 +2919,48 @@ Known limits:
 
 ### App mode on macOS in a guest VM
 
-<a id="app-mode-in-the-macos-guest"></a>On macOS, `paddock app run NAME` runs a desktop app in a macOS guest of paddock's own, in Apple's Virtualization framework. Each window of the app in the guest is a window on your desktop, with its own Dock icon `ChatGPT (paddock)`. This is the default route for every app profile once the golden image is sealed. Without the golden image, `paddock app run` stops with one line that names `paddock macvm setup`. `--backend seatbelt` keeps the older route of [App mode on macOS under Seatbelt](#app-mode-on-macos) for the apps that ran there. `paddock app run` never downloads anything.
+<a id="the-cli-for-the-mac-launcher"></a>The Mac launcher (a native app) drives this route only through the commands below. Each JSON output has a top-level `v`, the version of its schema. A new field keeps `v`. A field that changes its meaning raises `v`. The human output of each command is the same as before.
+
+```sh
+paddock events --follow --json            # live state, one JSON line per event
+paddock app list --json                   # every guest profile: state, sizes, next start, bundle
+paddock app add /Applications/Notebook.app --dry-run --json   # the precheck of an add
+paddock app add /Applications/Notebook.app --name notebook --memory 6G
+paddock app remove notebook --yes --json     # freed bytes; add --delete-data to skip the trash
+paddock macvm setup --yes --json          # build progress as JSON lines
+paddock macvm setup --pause-download      # pause the download of the running build
+paddock macvm setup --resume              # continue it, or start the build where it stopped
+paddock macvm status --json               # with "paused" and "setup"
+paddock macvm remove --yes --json         # freed bytes
+paddock approvals --json                  # open questions with "process" and "age_s"
+paddock doctor --json                     # chip, macOS, free space, memory, entitlement, VM slots
+```
+
+`paddock events --follow --json` prints one line per event: `session` (a state change of an app session, with its phase), `question` (a firewall question opens, gets an answer, or the asking pauses), `grant` (a firewall rule changes), `setup` (the progress of a golden build), `golden` (ready or removed) and `disk` (the free space of the `macvm` folder, every 30 s while a session runs or a golden builds). The first line has kind `stream` and state `started`. After it, query the state once with the commands above. A `stream` line with state `lost` means that the follower missed events, for example because its reader was slow. Then query the state again. A follower exits when its output pipe closes. Publishers limit the time spent connecting to a follower. The stream has no history and no daemon: each follower listens on its own socket in the `events` folder of paddock's run directory (on macOS, long paths use a private short folder under `/tmp`), and the session helpers, the firewall, the setup and `paddock app rules` write to each socket. The tests replay the files in `tests/fixtures/launcher/`, one per kind.
+
+Known limits of these commands:
+
+- `paddock app add` writes `[apps.NAME] bundle` and `vm_memory`. It does not set the network mode or install the Dock launcher: run `paddock app install NAME` after it.
+- `paddock app remove` without `--delete-data` moves the disk pair (the login and the files of the app) into `macvm/trash/` for 7 days. Only the saved state, the app copy and the drops are freed at once.
+- `--pause-download` pauses only the download of the restore image. The install and the later states of the build cannot pause. A build that was killed while paused continues the partial download at the next `paddock macvm setup`.
+- The `grant` lines cover firewall rules only. Folder, clipboard and device grants have a kind in the schema, but no publisher yet.
+- The network and privacy screens of the launcher (the rules table, the recent connections, the clipboard of one session, and keeping a folder of one session) need commands that paddock does not have yet: `paddock app rules NAME list --json`, `add ... --site --session --json`, `change ID`, `remove ID... --json`, `paddock app connections NAME --json`, `paddock app clipboard NAME --session` and `paddock app share NAME keep PATH`. Until they exist, those screens show `Update paddock` with the upgrade command. The open questions already work: the launcher sends the seven answers of the panel, including `--allow-site` and `--allow-everything`.
+- paddock has not run the stream, the pause, `app add`, `app remove` or the doctor JSON on a Mac yet. `packaging/macos/checks/launcher-cli.sh` checks them, and the macOS tests in `src/eventstream/macos_tests.rs` check the socket folder and the doctor fields.
+
+The Mac launcher (`mac/launcher/`) needs paddock 0.2.2 or newer. It compares the major, minor and patch numbers of `paddock --version`, and it accepts every 0.x release from 0.2.2 on. Its app library has these limits on macOS:
+
+- You can add an app with `+`, with `File > Add App…`, or by a drop of the app on the window or on the launcher's Dock icon. Each way shows the result of `paddock app add PATH --dry-run --json` as a checklist before the add. `paddock app add` has no network flag, so the profile's default network mode applies to a new app.
+- The launcher lists each instance of an app (`paddock app run NAME --new`) under the app. `paddock app list --json` has no session status for instance 2 and higher, so these rows show `Stopped` until an event of the stream changes them.
+- paddock suspends a session by itself when a third session needs a VM slot. The launcher shows `Suspended` and a `Resume` button, which runs `paddock app run`. It shows a `Suspend` button only when `paddock app --help` lists an `app suspend` command. paddock 0.2.x has no such command.
+- One guest VM runs one app instance. The launcher cannot put several apps into one guest, because the CLI has no option for that.
+- Settings > Storage shows `paddock du --json`. `Clean Up…` shows the preview of `paddock gc --json` first. `Remove` runs `paddock gc --yes --json` and takes every item of that preview, also the paddock data of coding agents outside the Mac apps. The sheet lists those items.
+- The base image stays in the folder that `paddock macvm status --json` names. `paddock macvm setup` has no option for another folder.
+- When the launcher runs outside an Applications folder, for example from a disk image or from Downloads, it offers once to copy itself into `~/Applications`.
+- paddock has not built or run these screens on a Mac yet. The UI tests in `mac/launcher/UITests/LibraryUITests.swift` check them against the fake paddock.
+
+<a id="app-mode-in-the-macos-guest"></a>On macOS, `paddock app run NAME` runs a desktop app in a macOS guest of paddock's own, in Apple's Virtualization framework. Each window of the app in the guest is a window on your desktop, with its own Dock icon `Sample Notes (paddock)`. This is the default route for every app profile once the golden image is sealed. Without the golden image, `paddock app run` stops with one line that names `paddock macvm setup`. `--backend seatbelt` keeps the older route of [App mode on macOS under Seatbelt](#app-mode-on-macos) for the apps that ran there. `paddock app run` never downloads anything.
+
+At each cold or warm start, when the guest password is available, paddock compares the guest clock with the host and uses sudo in the guest to correct a difference over two seconds. The guest has no network time service. If the password is missing, sudo fails, or the agent is too old to support clock correction, the clock can remain wrong; check the guest agent log for a clock warning.
 
 The guest is a real macOS. So an app that uses Apple's App Sandbox, such as ChatGPT, runs unchanged under Apple's own sandbox in the guest. The app sees only the workspace folders that you name, never your home. All its traffic goes through paddock's proxy, and paddock asks you about each new host in network mode `ask`.
 
@@ -2304,6 +3009,9 @@ paddock macvm bench CASE --json     # one case of the bench, for packaging/macos
 paddock app run chatgpt-desktop ~/src/web   # the guest route on macOS
 paddock app install chatgpt-desktop         # the Dock launcher in ~/Applications
 paddock app status NAME [--json]            # one screen about the session
+paddock app share NAME add|remove|mode|list # the folders of the app, live
+paddock app network NAME ask|allowlist|none # the network mode, live
+paddock app clipboard NAME [--to-app on|off] [--from-app on|off]
 paddock app stop | files | rules NAME
 paddock app log NAME [--events | --shim | --guest] [--follow]
 paddock app reset NAME [--data | --all]     # the reset tiers below
@@ -2313,11 +3021,35 @@ paddock app backups NAME
 paddock app install --drop                  # Paddock Apps.app, the drag target
 ```
 
-`paddock app files NAME` opens the downloads folder of the profile in the Finder. `paddock app rules NAME` shows the firewall rules of the app. A bundle that you drop on `Paddock Apps.app` becomes an app profile with its own launcher `<Name> (paddock).app`, and it starts.
+`paddock app files NAME` opens the downloads folder of the profile in the Finder. `paddock app rules NAME` shows the firewall rules of the app.
+
+#### Grants while the app runs
+
+You can change the folders, the network mode and the clipboard of an app while it runs. You do not restart it. paddock also keeps each change in the profile (`grants.json`), so the next start has it.
+
+```
+paddock app share chatgpt-desktop add ~/Projects        # read only
+paddock app share chatgpt-desktop add ~/Notes --rw      # read and write
+paddock app share chatgpt-desktop mode ~/Notes ro
+paddock app share chatgpt-desktop remove ~/Projects
+paddock app share chatgpt-desktop list --json
+paddock app network chatgpt-desktop none
+paddock app clipboard chatgpt-desktop --to-app off
+```
+
+A new folder is read only unless you give `--rw`. The app sees it under `/Volumes/My Shared Files/ws-N`. paddock refuses your home folder, a system folder, `~/Library`, `~/.ssh`, the keyring folders, and every folder that holds paddock's own data or is above it, with one line that names the reason. If a folder holds a `.env` or key file, paddock refuses it. The line names the file and the command with `--unprotected`, which shares the folder with those files visible to the app.
+
+While the app runs, paddock gives the running VM a new share set (Apple's `VZVirtioFileSystemDevice.share`), so an add, a remove and a mode change apply at once. Every 10 s the guest agent counts the files that the app holds open in each folder. `share list` shows that count and the last time a file was open. If the app holds files of a folder open during a mode change, the row says `reopen-files` for 30 s: the app must open those files again to see the change. If the app holds files of a folder open, `share remove` refuses, because the app can lose unsaved changes. `--force` removes it anyway. If the count is unavailable, removal also needs `--force`. Before removal, paddock asks the guest for a new count. Files can open after the count and before removal.
+
+The proxy reads the mode and the rules for each new connection, so `paddock app network` and `paddock app rules` apply at once. When the mode changes, paddock closes open connections that the new mode denies. `allowlist` allows only the hosts of the app profile and `[network] allow`. `paddock app clipboard` turns each direction on or off. The clipboard still moves only while a window of the app is key. Devices (camera, microphone, USB) are not attached to a session of the guest. `paddock app status NAME --json` lists them with `applies: next-start`.
+
+If the grants file is damaged or from a newer version, the guest starts without its saved folders or network mode, and both clipboard directions are off. A warning identifies the file.
+
+If the app runs, a change goes to the session first. paddock writes the profile only after the session took the change. If the session refuses the change or does not answer, the profile keeps the old grants, and the command says so. If saving fails after a live change, paddock tries to restore the previous live setting and reports whether that succeeded. If a share change finishes after the command times out, paddock tries to restore the previous shares. It logs an error if restoration fails. Each change is a `grant` line in the event log of the profile, with a `grant` object (`what`, `action`, `target`, `value`, `applies`, `source`, `t`). `paddock app status NAME --json` has the last 20 changes in `changes`, the newest first, next to `open_handles_per_share`, `clipboard` and `devices`. Rules that you answer on the firewall panel are there too, with the source `question-panel`. paddock has not confirmed the live share swap, the open file count and the reopen note on a Mac yet. `packaging/macos/checks/macvm-grants.sh` checks them. A bundle that you drop on `Paddock Apps.app` becomes an app profile with its own launcher `<Name> (paddock).app`, and it starts.
 
 #### The marks and freeze
 
-Every window of a session carries the paddock marks, as every app sandbox does: the frame, the badge and an entry in the shield menu of the menu bar. The frame is sage, because every connection of the guest goes through paddock's proxy, in each network mode. Network mode `host` is refused with one line, because the guest has no host network. The badge has the word `vm`, for example `paddock · chatgpt-desktop · ask · vm · 2h`. While the input source of the guest differs from the one that the host shows, the badge names it: `paddock · chatgpt-desktop · ask · vm · Pinyin - Simplified · 2h`. A note of the session, such as `waking`, comes at the end. The menu entry names the app, for example `ChatGPT (paddock) · web · ask · vm · 2h`.
+Every window of a session carries the paddock marks, as every app sandbox does: the frame, the badge and an entry in the shield menu of the menu bar. The frame is sage, because every connection of the guest goes through paddock's proxy, in each network mode. Network mode `host` is refused with one line, because the guest has no host network. The badge has the word `vm`, for example `paddock · sample-notes · ask · vm · 2h`. While the input source of the guest differs from the one that the host shows, the badge names it: `paddock · sample-notes · ask · vm · Pinyin - Simplified · 2h`. A note of the session, such as `waking`, comes at the end. The menu entry names the app, for example `Sample Notes (paddock) · web · ask · vm · 2h`.
 
 `paddock freeze macvm-chatgpt-desktop` pauses the VM: the guest uses no CPU and keeps its memory, and the badge says `frozen: paddock thaw resumes it`. The windows keep the last picture. `paddock thaw macvm-chatgpt-desktop` resumes the VM, and the guest goes on where it stopped. A second freeze and a thaw of a running session do nothing. The audit log gets each freeze and thaw, and the members of a pasture see the state in paddock kv, as for every sandbox. A quit of a frozen session thaws it first: `paddock app stop`, Cmd-Q and the Dock menu. Then the app can save its work, and paddock can save the state. The paused time does not count as a silence of the guest.
 
@@ -2325,7 +3057,7 @@ Every window of a session carries the paddock marks, as every app sandbox does: 
 
 Your data is on the data disk of the profile, which holds the guest home with the app, its login and its documents. No failure below removes it.
 
-- If the app crashes in the guest, its windows close and the session stays. The Dock menu offers `Open ChatGPT again`. After three crashes in a minute, paddock stops opening it and prints the path of the crash report.
+- If the app crashes in the guest, its windows close and the session stays. The Dock menu offers `Open Sample Notes again`. After three crashes in a minute, paddock stops opening it and prints the path of the crash report.
 - If the guest hangs, the badge says `guest not answering` after 10 s. After 30 s the Dock menu offers `Restart guest`. After 120 s paddock restarts the guest by itself, with the same shares, and the windows come back.
 - If the session process crashes, the VM stops with it. The next `paddock app run` or `paddock app list` cleans up, and the next start is a cold boot with the line `the last session ended without a save`.
 - If the terminal closes or paddock is updated during a session, the session goes on. It depends on no other paddock process after the start.
@@ -2371,13 +3103,13 @@ An input method that composes text, such as Pinyin, Japanese, Korean or Vietname
 
 #### Screens, Spaces and full screen
 
-The guest has one display, as large as all your screens together, at the scale of the main screen. With two screens of two scales, windows on the other screen are soft, and the start lines say so. The display keeps its size until the next start. If a screen goes away during a session, the windows on it move to the main screen, and the badge says `display changed, restart for full size`.
+The guest has one display, as high as all your screens together and twice as wide, at the scale of the main screen. paddock uses the extra width to keep the app's windows apart in the guest. With two screens of two scales, windows on the other screen are soft, and the start lines say so. The display keeps its size until the next start. If a screen goes away during a session, the windows on it move to the main screen, and the badge says `display changed, restart for full size`.
 
-A session window moves to another Space as any window does. But all windows of the guest are on its one display. If you put two windows that overlap on two Spaces, the one of the other Space can show through. paddock raises the windows of the active Space in the guest, to keep this rare. When an app window goes to full screen in the guest, its session window goes to full screen on your Mac and shows the whole guest display. When the guest window leaves full screen, the session window comes back to the guest window's frame. A window that the guest puts on a window server level outside the levels of app windows (below the desktop, or at the levels of a drag image and the screen saver) is still refused, and the badge says `full screen is not available in the guest`.
+A session window moves to another Space as any window does. But all windows of the guest are on its one display. If you put two windows that overlap on two Spaces, the one of the other Space can show through. paddock raises the windows of the active Space in the guest, to keep this rare. When an app window goes to full screen in the guest, its session window goes to full screen on your Mac and shows the guest display from its left edge. The extra width of the guest display does not show, so the right part of a full screen window is cut off. If you use apps in full screen, set `PADDOCK_MACVM_ROOM=0`. When the guest window leaves full screen, the session window comes back to the guest window's frame. A window that the guest puts on a window server level outside the levels of app windows (below the desktop, or at the levels of a drag image and the screen saver) is still refused, and the badge says `full screen is not available in the guest`.
 
 #### VoiceOver
 
-In the first version, VoiceOver read only the title of a session window and `ChatGPT (paddock)`. paddock now mirrors the Accessibility tree of the key window of the guest, four levels deep, with the roles, the titles and the values. A press or a new value goes to the guest. Keyboard navigation with Tab, the arrow keys and Full Keyboard Access works, because the guest handles it. Reduce Motion and Increase Contrast of the Mac go to the guest. The Dynamic Type of the Mac has no counterpart in the guest.
+In the first version, VoiceOver read only the title of a session window and `Sample Notes (paddock)`. paddock now mirrors the Accessibility tree of the key window of the guest, four levels deep, with the roles, the titles and the values. A press or a new value goes to the guest. Keyboard navigation with Tab, the arrow keys and Full Keyboard Access works, because the guest handles it. Reduce Motion and Increase Contrast of the Mac go to the guest. The Dynamic Type of the Mac has no counterpart in the guest.
 
 #### Clipboard and drag and drop
 
@@ -2481,16 +3213,19 @@ These checks have not run on a Mac. The scripts under `packaging/macos/checks/` 
 - paddock has not confirmed that `paddock freeze` stops the guest and `paddock thaw` lets it go on (`macvm-marks.sh freeze`) on a Mac yet.
 - paddock has not confirmed that a window on a screen that goes away comes to the main screen (`macvm-marks.sh screen`) on a Mac yet.
 - paddock has not confirmed that a quit of a frozen session saves it (`macvm-marks.sh quit-frozen`) on a Mac yet.
-- paddock has not confirmed that the guest window follows a host drag within 50 ms at the 95th percentile, with no frame more than 2 points apart after the move (`macvm-session.sh drag`) on a Mac yet.
-- paddock has not confirmed that the clip of a session window has the corner radius that the agent measured, within 1 point, for TextEdit and a toolbar window (`macvm-session.sh radius`) on a Mac yet.
-- paddock has not confirmed that a guest window in full screen puts its session window in full screen with the whole guest display, and back (`macvm-session.sh fullscreen`) on a Mac yet.
+- paddock has not confirmed that a host drag leaves the guest window where it is and sends no `window.move` (`macvm-session.sh drag`, `macvm-windows.sh drag`), and that a live resize shows no guest desktop (`macvm-windows.sh resize`) on a Mac yet.
+- paddock has not confirmed that each of three TextEdit windows has its own session window, each visible and placed on its guest window (`macvm-session.sh multi`) on a Mac yet.
+- paddock has not confirmed that the guest windows that an app stacks go apart in the guest within 3 s while their session windows stay where they are, each one visible and live (`macvm-session.sh stacked`) on a Mac yet.
+- paddock has not confirmed that a click on a session window after its guest window went apart reaches that guest window and makes it the key window (`macvm-session.sh click`) on a Mac yet.
+- paddock has not confirmed the memory and the start time that the room of the guest display costs (`macvm-session.sh room`) on a Mac yet.
+- paddock has not confirmed that a guest window in full screen puts its session window in full screen with the guest display, and back (`macvm-session.sh fullscreen`) on a Mac yet.
 - paddock has not confirmed that a guest link opens through the link helper and that a login callback on the host loopback reaches a guest server, and only that port (`macvm-session.sh login`) on a Mac yet.
 
 #### Links and logins in the guest
 
 <a id="links-and-logins-in-the-guest"></a>A link that an app in the guest opens goes to the browser of your Mac. The default browser of the guest account is `Paddock Links`, a small helper of the guest agent. The setup of the golden image writes this choice into the guest disk while the guest is stopped, so macOS in the guest never asks to change the default browser. The helper hands each link to the agent, and the agent sends it to the session on the Mac.
 
-The session uses the rules of the host requests of a terminal run. Only http and https links pass. The mode of `open-url` in `[host]` of `~/.config/paddock/config.toml` decides: `ask` (the default) shows the approval card with the full link, `allow` opens it, and `deny` keeps it closed. The card offers "allow for this session" and "deny for this session". The event log of the profile names each link by its scheme, its host and its length, never by its path or its query.
+Only http and https links pass. A link that the app opens is your own click in that app, so it opens in your browser at once, as on the Mac itself. To change that, set `open-url` in `[host]` of `~/.config/paddock/config.toml`: `ask` shows the approval card with the full link, and `deny` keeps every link closed. The card offers "allow for this session" and "deny for this session". The event log of the profile names each link by its scheme, its host and its length, never by its path or its query.
 
 Many apps log in with OAuth: they listen on a port of the guest loopback and wait for the browser to come back to `http://localhost:PORT/...`. When the session opens a link whose callback address (`redirect_uri` and the like, also in a nested link) is a loopback port, it listens on `127.0.0.1:PORT` and `[::1]:PORT` of your Mac for 10 minutes. The session forwards each connection on that port to the same port of the guest loopback, through vsock 1033, and only while a program in the guest listens there. The port closes 10 seconds after the first callback that the guest answered, so the page that the app redirects to still loads. No other port of the guest is reachable from the Mac, and nothing listens on an address of your Mac that is not a loopback address. When a program of your Mac holds the port, the event log says so, and the login cannot finish in the guest.
 
@@ -2502,15 +3237,16 @@ The proxy settings of the guest send `localhost`, `127.0.0.1` and `::1` around t
 
 Suspend and instances. Apple runs at most two macOS VMs per Mac, so paddock holds two slots. If both slots are in use and you start a third session, paddock saves the least recently used session first: the one whose windows were not active for the longest time. The save takes about the RAM size in disk space and a few seconds, and it frees the slot within 15 s. paddock never suspends a session with an open dialog of its app (a save dialog, for example), a session that copies its app into the guest, or a session whose guest prepares its data disk: it takes the next one, or it refuses the start with one line that names each session and the reason. The suspended session keeps its icon in the Dock. A click on the icon, `Resume` in its Dock menu, or `paddock app run NAME` resumes it from the saved state in about 4 s, and suspends another session if it needs the slot. `paddock app list` and `paddock app status NAME --json` show the state `suspended`, and `events.jsonl` of the profile has a `suspend` line and a `resume` line, each with its reason. `paddock app stop NAME` ends a suspended session at once: its state is on disk already. To turn automatic suspend off, set `auto_suspend = false` in `[macvm]` of `~/.config/paddock/config.toml`. Then a third start is refused, as before.
 
-`paddock app run NAME --instance N` runs instance N of an app: another profile with its own system and data disk, login keychain and firewall rules, cloned from the golden like the first. `--new` picks the lowest free number. Instance 1 is the folder `profiles.noindex/NAME/default/`, and instance N is `profiles.noindex/NAME/instance-N/`. The Dock names the instance (`ChatGPT 2 (paddock)`). `paddock app stop`, `status`, `files`, `reset`, `backup`, `restore` and `backups` take `--instance N` too. The firewall rules of instance N are in `~/.config/paddock/firewall/NAME--N.toml`, and `paddock app rules NAME--N` edits them.
+`paddock app run NAME --instance N` runs instance N of an app: another profile with its own system and data disk, login keychain and firewall rules, cloned from the golden like the first. `--new` picks the lowest free number. Instance 1 is the folder `profiles.noindex/NAME/default/`, and instance N is `profiles.noindex/NAME/instance-N/`. The Dock names the instance (`Sample Notes 2 (paddock)`). `paddock app stop`, `status`, `files`, `reset`, `backup`, `restore` and `backups` take `--instance N` too. The firewall rules of instance N are in `~/.config/paddock/firewall/NAME--N.toml`, and `paddock app rules NAME--N` edits them.
 
 `paddock du` lists the macvm folder after the Linux sections: the golden image, the restore images, the trash, and each profile instance with its disks, saved state, app copies and backups, and whether it runs, is suspended or is stopped. `paddock du --json` has the same data under `macvm`. `paddock gc --yes` removes the app archives of stopped profiles (the next copy of a new version makes them again) and the saved states of profiles that were not used for `--older-than` days (their next start is a cold boot). A profile is a user asset, like a home: `paddock gc` lists a profile that was not used for `--older-than` days, but removes it only with `--homes --include-app-logins`, because the app's login in it will be lost. paddock never removes anything of a running or suspended instance. When a start finds less than 8 GiB free on the volume, it runs the automatic tier of `paddock gc` on the macvm folder first. paddock has not confirmed on a Mac yet: the suspend of the least recently used session, the warm resume from the Dock, two instances at once, and the macvm items of `paddock du` and `paddock gc`; `packaging/macos/checks/macvm-session.sh` checks them (`suspend`, `instances`, `gcdata`).
 
 The guest sees the workspace folders that you name, as `ws-1`, `ws-2` and so on under `/Volumes/My Shared Files` (virtiofs), read-write, or read-only with `--ro PATH`. It never gets `/`, your home folder or a parent of it, `/Users`, `/Volumes`, `/private`, `/tmp`, `/var`, `/etc`, `/Library`, `/System`, `/Applications`, `~/.ssh`, `~/Library` or the keyring folders: the start refuses with one line per folder. paddock checks the folder as you named it and its real path, and shares the real path. So a symlink in your home that points into `/etc` or `/tmp` is refused too. A folder inside your home is never a system folder, even when the home itself is under `/private/var`. The secrets detector runs over each folder, and a `.env`, key or token file stops the start with the file named, unless `[apps.NAME] unprotected_workspaces = true` in `~/.config/paddock/config.toml`; virtiofs shares a whole folder, so paddock cannot hide a single file inside one. A file, text or image dropped on a session window is copied (an APFS clone) into `drop/<time>-<n>/` of the profile, never the original, at most 2 GiB per drop, and opened in the guest app ("dropped as open"); the staging folders go at quit unless the app still has a file open. A drag out of a session window to the host is not possible: use the downloads folder or the clipboard. The clipboard moves both ways only while a session window is key on the host, with plain text, RTF, HTML, PNG, TIFF and file URLs (into a share), up to 16 MiB per transfer; an HTML item without plain text gets the text of the HTML as a second type, a TIFF image without PNG gets a PNG as a second type, and an image over 16 MiB crosses as its PNG when that fits, or not at all (the badge says `image too large for the clipboard (max 16 MiB)`); an item that a password manager marks concealed or transient never crosses, and a file URL from the guest crosses only when it points into a share. The guest's `Downloads` folder is `profile/downloads/` on the host (`paddock app files NAME` opens it), and the agent remakes the link at each boot. The `guest-files` port of the agent takes 16 MiB per transfer, 64 transfers per minute, and closes a transfer idle for 10 s. paddock has not confirmed the shares, the drops and the clipboard on a Mac yet; `packaging/macos/checks/macvm-files.sh` checks them.
-- The windows. Every window of the app in the guest is a borderless window on your desktop that shows exactly that window: a view of the full guest display, placed so that only that window's rectangle shows. There is no pixel copy and no Screen Recording permission on your Mac. The window follows the guest's moves, resizes, titles, order, minimize and focus, and your clicks, keys and Cmd-Tab reach the guest window. A drag of the title bar or an edge moves or resizes the session window on your Mac at once, and the guest window follows (one move to the guest at a time, then the newest). The content moves with the frame, and the guest's own reports move only the content until the guest window is where you put it. A drag that ends where the guest cannot show the window (the gap between two screens, beyond the size of its level) moves the window back to the nearest allowed place. A click on the title bar without a move, a double click (the guest's zoom) and a click on a button of the title bar or the toolbar go to the guest. The guest agent reads the title bar height and its buttons from Accessibility (28 points when it cannot), and it measures the corner radius of each window once on the window's image, so the clip of the session window has the same corners. The image needs Screen Recording in the guest: `paddock macvm setup` sets that permission for the agent with the Accessibility and Full Disk Access permissions. A golden image from before this version has no such permission until `paddock macvm setup` runs again, and its windows get the radius of the guest's macOS version. Menus, tooltips, popovers and sheets of the app are windows of their own, attached to their parent, and never take the keyboard. The guest display is as large as the union of your screens in points, at the scale of your main screen, and that size is fixed at the start of the session (`PADDOCK_MACVM_DISPLAY` overrides it). With two screens of two scales, the start lines say so, and a window on the other screen is drawn soft. A window that the guest puts in the gap between two screens goes onto the nearest screen, and the guest follows. Your keyboard layout follows you into the guest: while a session window is key, the guest holds the host's input source. An input method that composes (Pinyin, Wubi, Zhuyin, Cangjie, Kotoeri, Hangul, Telex and the third party ones) composes in the guest: your Mac shows the plain layout (ABC) while the window is key, the badge shows the guest's source (`input: Pinyin - Simplified`), and the candidates show as a window of their own next to the caret. When the window resigns key or the session ends, your Mac gets its input source back; after a crash of the session helper, the next `paddock app list` puts it back. A lone press of the Globe key on a session window switches the guest's input source, not the host's. Reduce Motion and Increase Contrast of your Mac are set in the guest. A keyboard layout that the guest does not have is named in the badge (`keyboard layout X not in the guest`). When the guest cannot select your input source (for example Pinyin, when its input method is not on in the guest), the guest uses the ABC layout (or US) instead, and `agent.log` has one info line that names both. VoiceOver and other Accessibility clients read the controls of the guest window through the host window: the first query of a session window's children starts a mirror of the guest window's Accessibility tree (roles, titles, values, frames, four levels deep, read by the guest agent and kept current while the window is key), a press on a mirrored button presses it in the guest, and a value set on a mirrored field sets it in the guest. A tree above 64 KiB or 1500 elements loses whole subtrees. A press on an element from an earlier tree is dropped with a line in the event log, never sent to another control. Keyboard navigation inside the guest window (Tab, the arrow keys) is the guest's own. Limits of this version: a menu, popover or tooltip larger than a quarter of your main screen, or a floating window larger than your main screen, is refused the same way; two overlapping windows of one session on two Spaces show through each other, because the guest has one display; a full screen guest window fills one screen of your Mac, so with two screens the guest display is larger than the full screen window and its lower part does not show; and a window without a measured radius has the radius of the guest's macOS, so a wrong guess shows a black corner, not your desktop. The host menu bar shows the app's own menus from the guest (`File`, `Edit`, `View` and the rest, with their shortcuts and their enabled and checked states, two levels deep), and a click on an item presses it in the guest; the paddock app menu (`About`, `Firewall rules…`, `Hide`, `Quit`) stays first, and the app's own first menu (`Settings…`) is not shown, its shortcut Cmd-, still reaches the guest. A menu bar above 20 KiB loses whole submenus. When the guest agent is slow, restarts or is away, the host keeps the last menu bar, a click then is dropped with a line in the event log, and after the app exits the paddock menu with its `Window` menu is back. The Dock menu has the windows, `Open <App> again` after the app exited, `Restart guest agent`, `Restart guest` after 30 s without a health report, and `Quit`. Cmd-Q on a session window quits the session the same way as `paddock app stop`. paddock has not confirmed on a Mac yet: the windows themselves, the latency of a key press and of a drag, the context menus, the second screen, and the rounded corners (`packaging/macos/checks/macvm-windows.sh` checks them), nor the keyboard layouts and input methods, the Globe key, the restore after a crash, two screens of two scales and Spaces (`packaging/macos/checks/macvm-input.sh` checks them), nor the menu bar of the app, a press through it, the switch between two sessions and the menu after an agent restart (`packaging/macos/checks/macvm-menu.sh` checks them), nor the Accessibility mirror of the guest window (`packaging/macos/checks/macvm-input.sh voiceover` checks it).
+- The windows. Every window of the app in the guest is a borderless window on your desktop that shows exactly that window: a view of the full guest display, placed so that only that window's rectangle shows. There is no pixel copy and no Screen Recording permission on your Mac. The window follows the guest's moves, resizes, titles, order, minimize and focus, and your clicks, keys and Cmd-Tab reach the guest window. A drag of the title bar moves only the session window on your Mac: the guest window stays where it is, and paddock sends the guest nothing, also at the release. Each session window keeps its own offset from its guest window, and its menus, popovers, sheets, tooltips and input method candidates open at that offset. When the app moves or zooms its own window, the session window moves by the same amount. A drag of an edge resizes the session window at once. The guest window keeps its top left corner and gets the new size (one move to the guest at a time, then the newest, never an old one), and the agent's reply moves the content. Until the guest has drawn the new size, the part that it has not drawn yet shows the window's own edge colors, never the guest desktop. Each resize writes its timings into the event log (`the host resize ended`). A drag that ends where the window cannot show (the gap between two screens, off the screens, beyond the size of its level) moves the session window back to the nearest allowed place. paddock keeps the app's windows apart inside the guest, so every session window shows its window live, also when the app opens its windows on top of each other. When a window opens, moves or grows so that it lies on another window, paddock moves it in the guest to the nearest free place, within about 0.2 s. The session window stays where it is on your Mac: only the guest window moves. Menus, popovers, sheets, tooltips and input method candidates stay with their window, and a window in full screen or minimized stays as it is. The guest display has room for this: it is twice as wide as your screens. A window that the guest makes wider than your screens (for example with a zoom) gets the width of your screens. When the windows do not fit, the window that you used least recently can lie under another one, never under the key window. That session window then shows its last picture from before (or its edge color) where the other window lies on it. The window that you click comes to the front in the guest, and a click on a covered part waits until the guest raised the window, at most 0.4 s. A click on the title bar without a move, a double click (the guest's zoom) and a click on a button of the title bar or the toolbar go to the guest. The guest agent reads the title bar height and its buttons from Accessibility (28 points when it cannot),. The clip of a session window has the corner radius of the guest's macOS version for the window's kind. The agent never captures a window, so the guest never asks for Screen Recording. Menus, tooltips, popovers and sheets of the app are windows of their own, attached to their parent, and never take the keyboard. The guest display is as high as the union of your screens in points and twice as wide, at the scale of your main screen, and that size is fixed at the start of the session. `PADDOCK_MACVM_ROOM` sets the extra width as a share of the width of your screens (`0` for none, at most `2`), and `PADDOCK_MACVM_DISPLAY` sets the whole size. With two screens of two scales, the start lines say so, and a window on the other screen is drawn soft. A window that the guest puts in the gap between two screens shows on the nearest screen, and the guest window stays where it is. Your keyboard layout follows you into the guest: while a session window is key, the guest holds the host's input source. An input method that composes (Pinyin, Wubi, Zhuyin, Cangjie, Kotoeri, Hangul, Telex and the third party ones) composes in the guest: your Mac shows the plain layout (ABC) while the window is key, the badge shows the guest's source (`input: Pinyin - Simplified`), and the candidates show as a window of their own next to the caret. When the window resigns key or the session ends, your Mac gets its input source back; after a crash of the session helper, the next `paddock app list` puts it back. A lone press of the Globe key on a session window switches the guest's input source, not the host's. Reduce Motion and Increase Contrast of your Mac are set in the guest. A keyboard layout that the guest does not have is named in the badge (`keyboard layout X not in the guest`). When the guest cannot select your input source (for example Pinyin, when its input method is not on in the guest), the guest uses the ABC layout (or US) instead, and `agent.log` has one info line that names both. VoiceOver and other Accessibility clients read the controls of the guest window through the host window: the first query of a session window's children starts a mirror of the guest window's Accessibility tree (roles, titles, values, frames, four levels deep, read by the guest agent and kept current while the window is key), a press on a mirrored button presses it in the guest, and a value set on a mirrored field sets it in the guest. A tree above 64 KiB or 1500 elements loses whole subtrees. A press on an element from an earlier tree is dropped with a line in the event log, never sent to another control. Keyboard navigation inside the guest window (Tab, the arrow keys) is the guest's own. Limits of this version: a menu, popover or tooltip larger than a quarter of your main screen, or a floating window larger than your main screen, is refused the same way; two overlapping windows of one session on two Spaces show through each other, because the guest has one display; a full screen guest window fills one screen of your Mac, so with two screens the guest display is larger than the full screen window and its lower part does not show; a full screen guest window is as wide as the guest display with its room, so its right part does not show (with `PADDOCK_MACVM_ROOM=0` it fits your screen, but then the windows that an app opens on top of each other do not all show live); and a window whose corners differ from the radius of the guest's macOS shows a black corner, not your desktop. The host menu bar shows the app's own menus from the guest (`File`, `Edit`, `View` and the rest, with their shortcuts and their enabled and checked states, two levels deep), and a click on an item presses it in the guest; the paddock app menu (`About`, `Firewall rules…`, `Hide`, `Quit`) stays first, and the app's own first menu (`Settings…`) is not shown, its shortcut Cmd-, still reaches the guest. A menu bar above 20 KiB loses whole submenus. When the guest agent is slow, restarts or is away, the host keeps the last menu bar, a click then is dropped with a line in the event log, and after the app exits the paddock menu with its `Window` menu is back. The Dock menu has the windows, `Open <App> again` after the app exited, `Restart guest agent`, `Restart guest` after 30 s without a health report, and `Quit`. Cmd-Q on a session window quits the session the same way as `paddock app stop`. paddock has not confirmed on a Mac yet: the windows themselves, the latency of a key press and of a drag, the context menus, the second screen, and the rounded corners (`packaging/macos/checks/macvm-windows.sh` checks them), nor the keyboard layouts and input methods, the Globe key, the restore after a crash, two screens of two scales and Spaces (`packaging/macos/checks/macvm-input.sh` checks them), nor the menu bar of the app, a press through it, the switch between two sessions and the menu after an agent restart (`packaging/macos/checks/macvm-menu.sh` checks them), nor the Accessibility mirror of the guest window (`packaging/macos/checks/macvm-input.sh voiceover` checks it).
 - Upgrades. A new paddock never needs a new golden: the session shares the guest agent of its own version read-only (`macvm/agent/<version>/`, made from `paddock-guest` next to `paddock-vm`), and the agent in the guest replaces itself with it at the next start, also for a downgrade, in under 5 s. When the new agent fails three times at once, the guest falls back to its previous agent, the session logs `agent rollback` and talks to it. A new macOS for the guest is `paddock macvm update` (or `--ipsw PATH`; `--force` rebuilds the same version): it builds into `golden.new`, with the first boots again, and swaps the folders when the build is sealed. The old golden stays as `golden.prev` until a profile completes a session on the new one, then `paddock gc` removes it; `paddock macvm rollback` puts it back before that. An existing profile keeps its own system disk and its macOS version: the home on the data disk belongs to the account on the system disk, and a data disk that the guest formatted mounts only under the system disk that formatted it (the keys live there), so paddock never replaces the system disk under a data disk. A new profile whose data disk was never used counts as a pair too. New profiles clone the new golden, and `paddock app reset NAME --data` moves an existing profile to it after a backup of the pair; the login and the files of the guest go with that. A macOS update of your Mac costs one cold boot per profile: the saved state is discarded, the data stays. A swap that a crash interrupted is finished at the next command, with one line. paddock has not confirmed the agent update, the golden update and the rollback on a Mac yet (`packaging/macos/checks/macvm-upgrade.sh`).
-- The app, the Dock face and the launchers. The app profile names the host bundle (`/Applications/ChatGPT.app`, `/Applications/Visual Studio Code.app`, `/Applications/Claude.app`), and `[apps.NAME] bundle = "PATH"` in `~/.config/paddock/config.toml` names another one. The route never signs or edits the bundle, so an App Sandbox app and a hardened app run unchanged, under Apple's own sandbox inside the guest. At each start paddock compares `CFBundleShortVersionString` and `CFBundleVersion` with the stamp of the profile and, when they differ, clones the bundle into the profile (an APFS clone, no space) and the guest copies it into its home with `ditto`, about 20 s for a 500 MB app, once per version. The copy is written as `<Name>.app.partial` and renamed, so a killed session never leaves half an app, and the old copy stays until the new one is whole: a failed copy is one line and the app runs from the copy that is already there. The guest needs the size of the bundle plus 500 MiB free on its data disk, and refuses the copy with that line otherwise. An App Store app is refused with one line, because the guest has no Apple ID: install the vendor's download into `/Applications` instead. The quarantine attribute is removed from the copy only when the host bundle carried your approval, so Gatekeeper shows no dialog in the guest for an app you have opened on your Mac. A session is one process with the app's own name and icon in the Dock, in Cmd-Tab and in Mission Control: paddock makes `macvm/shims/NAME.app` with a copy of `paddock-vm` inside, the app's icon, `CFBundleName` `ChatGPT (paddock)`, and an ad hoc signature with the virtualization entitlement, and builds it again when the paddock version in it differs. `paddock app install NAME` puts the same bundle in `~/Applications/<Name> (paddock).app`, so the app starts from the Dock, Launchpad and Spotlight; `paddock app install --drop` puts `~/Applications/Paddock Apps.app` there, and an app bundle dropped on it becomes a profile (`[apps.<slug>] bundle = "PATH"`, the slug from the app's name) with its own launcher, and starts. `paddock app uninstall NAME` and `paddock app uninstall --drop` remove them. `[apps.NAME] vm_memory = "6G"` gives the guest more memory, at most half of the Mac's. paddock has not confirmed on a Mac yet: the copy into the guest, the login that survives a quit, a chat with no direct connection, the Dock name and icon, the half copy after a kill, the relaunch from the Dock menu, the absence of a Gatekeeper dialog, the drag target, and VS Code with a workspace folder; `packaging/macos/checks/macvm-chatgpt.sh` checks them, and it is the end-to-end check of this route.
-- The firewall of the guest (network mode `ask`). An app profile in the guest runs in network mode `ask` unless `--network` says otherwise: `egress`, `api`, `allowlist` and `none` work as on every route, `host` is refused, and `ask` is refused on every other route with one line. In mode `ask`, only the app asks: the processes of its bundle and their children, as the guest proxy names them. The guest system never asks. A connection of a daemon, a widget or an Apple service that no rule allows is denied at once with the rule word `system`, written to the connection log with its host and its process, and counted per host. A seed or a rule of your own can still allow such a host. When the app connects to a host that no rule covers, the connection is held, and paddock asks you: a panel next to the app's window (drawn by the window marker), the same question in `paddock approvals`, and `paddock approvals answer ID --allow-once | --allow-session | --allow-always | --deny | --deny-always` from a terminal, whichever comes first. A session shows one panel at a time. The other questions wait behind it, and the panel says how many (`and 3 more waiting`). At most three questions come up per minute. When more than 20 questions are open, asking pauses for that session: one line goes to the session log, `paddock app status NAME` says `asking paused` and lists the open questions, and one notice replaces the panel. The notice has two buttons. `Deny all` denies every open question once, and `Ask one by one` goes on. A panel never closes by itself while its question is open. The panel uses the system material and the system colors in Light and Dark mode, with `Deny` (Esc), `Allow once` and `Always allow` (Return), and the other answers under `More…`. `paddock approvals` keeps the `Why?` line with the process in the guest that opened the connection. `--allow-always` and `--deny-always` write a rule into `~/.config/paddock/firewall/NAME.toml` (mode 0600, written whole and renamed into place); `--allow-session` makes a rule of this session only. A second connection to the same app, host and port while one asks waits on the same question. After 60 s with no answer, that connection is denied once and the question stays. An answer that comes later still counts: the next connection to that host gets it; a question from before a sleep of the Mac is denied once and asked again, so the panel you did not see is fresh. An approver hook (`paddock approver`) with the capability `connect` answers before you. The rules decide by the most specific match: the exact app, host and port first, then wildcards from the right (the port, then the host, then the app); at the same specificity your own rule beats a seed of the profile, a session rule beats an always rule, and deny beats allow. The host of a rule is a name, `*.name` (every name under it, not the name itself), an IP address or `*`; a rule that allows every host needs `--yes-all-hosts`. `paddock app rules NAME` lists the rules with their ids, `add HOST [--port P] [--app BUNDLE] [--deny]` and `remove ID` edit the file, also while the session runs. The profile seeds `allow` rules for the hosts of a plain login (`seed_hosts` of `[app.macos]` in the profile, `by = "profile"`), so the first run of ChatGPT asks nothing; a seed never covers a host outside its list, and your own deny rule wins over it. In modes `api` and `allowlist`, the host list of the mode decides before any rule, because the identity of the guest process can be forged by a root process in the guest. Every decision goes into `logs/connections.jsonl` of the profile (the time, the app, the team, the host, the port, the verdict, the rule id or `ask`, `once`, `timeout`, `stale`, `mode`, `egress`, and at the close the bytes up and down and the seconds; never the content), merged per minute and capped at 5000 lines like the boundary log, a new file per session with the last five kept. The golden also turns off the guest services that phone home and have no use in a paddock guest: desktop widgets, Siri and suggestions, the iCloud setup nag, the News, Weather and Siri agents, automatic macOS installs, location services, analytics and personalized ads. Each one is a documented setting. Each is best effort: a setting that does not take on a new macOS is a warning of the setup, not a failed golden. paddock has not confirmed on a Mac yet: the panel next to the window and how it looks, the answer from a terminal, the rule file after `--allow-always`, the 60 s timeout, the panel after a restart of the marker, a first ChatGPT login with no question, the guest system denied without a question, the queue, the rate limit and the pause, and the effect of each quiet setting. `packaging/macos/checks/macvm-firewall.sh` and `packaging/macos/checks/macvm-quiet.sh` check them.
+- The app, the Dock face and the launchers. The app profile names the host bundle (`/Applications/ChatGPT.app`, `/Applications/Visual Studio Code.app`, `/Applications/Claude.app`), and `[apps.NAME] bundle = "PATH"` in `~/.config/paddock/config.toml` names another one. The route never signs or edits the bundle, so an App Sandbox app and a hardened app run unchanged, under Apple's own sandbox inside the guest. At each start paddock compares `CFBundleShortVersionString` and `CFBundleVersion` with the stamp of the profile and, when they differ, clones the bundle into the profile (an APFS clone, no space) and the guest copies it into its home with `ditto`, about 20 s for a 500 MB app, once per version. The copy is written as `<Name>.app.partial` and renamed, so a killed session never leaves half an app, and the old copy stays until the new one is whole: a failed copy is one line and the app runs from the copy that is already there. The guest needs the size of the bundle plus 500 MiB free on its data disk, and refuses the copy with that line otherwise. An App Store app is refused with one line, because the guest has no Apple ID: install the vendor's download into `/Applications` instead. The quarantine attribute is removed from the copy only when the host bundle carried your approval, so Gatekeeper shows no dialog in the guest for an app you have opened on your Mac. A session is one process with the app's own name and icon in the Dock, in Cmd-Tab and in Mission Control: paddock makes `macvm/shims/NAME.app` with a copy of `paddock-vm` inside, the app's icon, `CFBundleName` `Sample Notes (paddock)`, and an ad hoc signature with the virtualization entitlement, and builds it again when the paddock version in it differs. `paddock app install NAME` puts the same bundle in `~/Applications/<Name> (paddock).app`, so the app starts from the Dock, Launchpad and Spotlight; `paddock app install --drop` puts `~/Applications/Paddock Apps.app` there, and an app bundle dropped on it becomes a profile (`[apps.<slug>] bundle = "PATH"`, the slug from the app's name) with its own launcher, and starts. `paddock app uninstall NAME` and `paddock app uninstall --drop` remove them. `[apps.NAME] vm_memory = "6G"` gives the guest more memory, at most half of the Mac's. paddock has not confirmed on a Mac yet: the copy into the guest, the login that survives a quit, a chat with no direct connection, the Dock name and icon, the half copy after a kill, the relaunch from the Dock menu, the absence of a Gatekeeper dialog, the drag target, and VS Code with a workspace folder; `packaging/macos/checks/macvm-chatgpt.sh` checks them, and it is the end-to-end check of this route.
+- Live grants and launcher events work together: grant changes continue to update a running guest session, and firewall rule changes are published for the launcher. These combined flows still need verification on a Mac, including firewall questions from apps that opened a guest window.
+- The firewall of the guest (network mode `ask`). An app profile in the guest runs in network mode `ask` unless `--network` says otherwise: `egress`, `api`, `allowlist` and `none` work as on every route, `host` is refused, and `ask` is refused on every other route with one line. In mode `ask`, only the app asks: the processes of its bundle and their children, as the guest proxy names them. The guest system never asks. A connection of a daemon, a widget or an Apple service that no rule allows is denied at once with the rule word `system`, written to the connection log with its host and its process, and counted per host. A seed or a rule of your own can still allow such a host. When the app connects to a host that no rule covers, the connection is held, and paddock asks you: a panel next to the app's window (drawn by the window marker), the same question in `paddock approvals`, and `paddock approvals answer ID --allow-once | --allow-session | --allow-always | --deny | --deny-always` from a terminal, whichever comes first. A session shows one panel at a time. The other questions wait behind it, and the panel says how many (`and 3 more waiting`). At most three questions come up per minute. When more than 20 questions are open, asking pauses for that session: one line goes to the session log, `paddock app status NAME` says `asking paused` and lists the open questions, and one notice replaces the panel. The notice has two buttons. `Deny all` denies every open question once, and `Ask one by one` goes on. A panel never closes by itself while its question is open. The panel uses the system material and the system colors in Light and Dark mode, with `Deny` (Esc), `Allow once` and `Allow <site>` (Return), and the other answers under `More…`. `paddock approvals` keeps the `Why?` line with the process in the guest that opened the connection. `--allow-always` and `--deny-always` write a rule into `~/.config/paddock/firewall/NAME.toml` (mode 0600, written whole and renamed into place); `--allow-session` makes a rule of this session only. A second connection to the same app, host and port while one asks waits on the same question. After at most 10 minutes with no answer, that connection is denied once and the question stays. An answer that comes later still counts: the next connection to that host gets it; a question from before a sleep of the Mac is denied once and asked again, so the panel you did not see is fresh. An approver hook (`paddock approver`) with the capability `connect` answers before you. `Allow <site>` saves rules for the registrable domain and all its subdomains; IP addresses and public suffixes fall back to the exact host. The site calculation uses a built-in list of common two-level and shared-hosting suffixes, not a complete public suffix list. `More…` offers an allow-all session rule for 10 minutes. An answer that adds a rule also settles waiting questions that it allows. `paddock app rules NAME allow '*.example.com'` and `deny` add wildcard rules, and `remove` accepts a host or rule ID. The rules decide by the most specific match: the exact app, host and port first, then wildcards from the right (the port, then the host, then the app); at the same specificity your own rule beats a seed of the profile, a session rule beats an always rule, and deny beats allow. The host of a rule is a name, `*.name` (every name under it, not the name itself), an IP address or `*`; a rule that allows every host needs `--yes-all-hosts`. `paddock app rules NAME` lists the rules with their ids, `add HOST [--port P] [--app BUNDLE] [--deny]` and `remove ID` edit the file, also while the session runs. The profile seeds `allow` rules for the hosts of a plain login (`seed_hosts` of `[app.macos]` in the profile, `by = "profile"`), so the first run of ChatGPT asks nothing; a seed never covers a host outside its list, and your own deny rule wins over it. In modes `api` and `allowlist`, the host list of the mode decides before any rule, because the identity of the guest process can be forged by a root process in the guest. Every decision goes into `logs/connections.jsonl` of the profile (the time, the app, the team, the host, the port, the verdict, the rule id or `ask`, `once`, `timeout`, `stale`, `mode`, `egress`, and at the close the bytes up and down and the seconds; never the content), merged per minute and capped at 5000 lines like the boundary log, a new file per session with the last five kept. The golden also turns off the guest services that phone home and have no use in a paddock guest: desktop widgets, Siri and suggestions, the iCloud setup nag, the News, Weather and Siri agents, automatic macOS installs, location services, analytics and personalized ads. Each one is a documented setting. Each is best effort: a setting that does not take on a new macOS is a warning of the setup, not a failed golden. paddock has not confirmed on a Mac yet: the panel next to the window and how it looks, the answer from a terminal, the rule file after `--allow-always`, the 10 minute maximum wait, the panel after a restart of the marker, a first ChatGPT login with no question, the guest system denied without a question, the queue, the rate limit and the pause, and the effect of each quiet setting. `packaging/macos/checks/macvm-firewall.sh` and `packaging/macos/checks/macvm-quiet.sh` check them.
 - Performance. The targets of the route are in `packaging/macos/bench/targets.json`: a warm start to the first window in 6 s (p50) and 10 s (p95), a cold start in 45 s, a first start with the copy of a 500 MB app in 120 s, a quit with save in 10 s, the agent self-update in 5 s, 40 ms from a key on the host to the value change of a guest text field, 8 ms from a guest window event to the host frame, 60 fps for a guest animation with no frame older than 50 ms, 3 percent of one core and the configured 4 GiB at idle (the guest keeps its memory: the memory balloon is off), 60 percent of one core with a 1080p video, and 6 GiB of disk per profile without the app copy. `packaging/macos/bench.sh` measures every target through `paddock macvm bench CASE` (warm, cold, first, quit, update, input, move, frames, idle, video, disk), writes `.paddock/bench/<date>.json`, prints the table and exits non-zero with the case named when a target is missed. The bench runs in a development build, or in a release build with `PADDOCK_MACVM_BENCH=1`, and only in a session started with `paddock app run NAME --bench`: that flag lets the guest agent honor the bench ops (`bench.animate`, `bench.text`, `bench.hang`, `bench.spawn_child`, `bench.pasteboard`, `bench.env`, `bench.dock_menu`), which every other session refuses. The committed reference run is `packaging/macos/bench/baseline.json`, and a Linux test checks that it meets every target, so a target change and a baseline change are one commit. paddock has not run the bench on a Mac yet: the baseline is a placeholder at the targets, marked `measured: false`, until `packaging/macos/bench.sh --baseline` writes a real run; `packaging/macos/checks/macvm-bench.sh` checks the bench.
 - Status, logs and the support bundle. `paddock app status NAME` is one screen about a profile of the guest: the session (pid, age, `warm start in 4.1 s`), the golden, the agent and the protocol of its stamp, the app with its version and the day of its copy, how many windows it has, the guest's last health (age, load, free RAM, free data disk), the sizes of the profile and the free space, the network mode with the counts of allowed and denied connections, the shares and the logs folder; `--json` gives the same as a struct. A stopped profile shows how the last session ended (`quit with save`, `quit without save`, `crashed`) and what the next start does (`warm`, `cold: the guest image changed`). `paddock macvm status` lists every profile with that state and the two VM slots of the Mac with their holders. The logs of a profile are in `profiles.noindex/NAME/default/logs/`: `shim.log` (the session helper, 5 files of 1 MiB), `events.jsonl` (one JSON line per state change, 2 MiB cap), `console.log` (the serial console of the guest, 5 files of 1 MiB), `agent.log` (the log of the agent in the guest, fetched at each quit, the previous one kept as `agent.log.1`) and `boundary.jsonl` (the dropped frames of the guest network). `paddock app log NAME` prints the connection log of the session, one decision per line with the app, the host, the rule and the bytes (the boundary log of the profile when a session never ran), `--events`, `--shim`, `--guest` and `--console` the others, `--follow` keeps printing until the session ends. No log holds the session token, the guest password or clipboard text: every message is logged by its kind without its payload, and a test writes the clipboard messages through each log and greps for a marker. `paddock doctor` has a `macvm` block: the golden and its seal, the host and the entitlement of `paddock-vm`, each profile with its size and last end, the slots, the permissions (none needed) and the free space. `paddock doctor --report` adds a `MACVM` section with that block, the manifest, each stamp, the last 200 lines of each log of each profile, the firewall rules files and the counts of the connection logs by verdict, through the redaction of the report plus two passes of its own: a 32-digit hex run on a line with `token` becomes `<token>`, a line with a password is removed; `--no-hosts` turns every host name of the rules files and the connection logs into `host-N`. paddock has not confirmed on a Mac yet: the status of a running session, the four logs after a quit, `--follow`, the report and the doctor block; `packaging/macos/checks/macvm-status.sh` checks them.
 - The security checklist. The 21 items of the route (no share of a system folder, a share only for a folder you named, the guest password never in a session request, the token never on disk or in a log, the modes of the profile files, a forged guest identity that cannot pass the host list of the mode, no forward of a host socket but the proxy, every unanswered frame dropped and logged, the clipboard only while a window is key, a crash that leaves no VM and discards the state, no host permission, the sealed golden, one control connection per session, the limits of the files port, the bounded header line, the sticky slots folder, the hash of an agent update, the redaction of the support bundle, the rules file, the window size per level, and the input source restore) are each one test in `src/macvm/security_tests.rs`, named `s01` to `s21` after the item numbers, and a test counts them. Four of them need a Mac: the `uchg` flag of the golden, `kill -9` of the session helper, the TCC database and the slots folder; `packaging/macos/checks/security.sh` prints one line per item, and the `macvm` block of `paddock doctor` says the state of the modes, the seal, the permissions and the slots folder. paddock has not confirmed those four on a Mac yet.
@@ -2584,6 +3320,8 @@ The limits:
   - the private keyring, login ports and links into the sandbox
   - credentials that go through the gateway
 - `paddock doctor --escape` is for the Linux backends. The Seatbelt checks run with `cargo test` on a Mac.
+- tackd on macOS reads the parent processes by their program path only, not by their command line. An agent that runs as a script of `node` counts as an agent only if its path has the agent's name.
+- tackd on macOS decides but starts no program yet, and `protect = "uid"` is for Linux only: setup makes no helper account on macOS, and `paddock tack status` says so for each entry at that level. The stand-ins that `paddock tack setup` puts on PATH run the program with the references, and say so once in each shell session. macOS has no `/proc`, so a session id that the system gives again to a new session counts as the old one, and that new session gets no note. A start request to tackd on macOS gets a refusal that says so.
 
 New terminals (ptys) come from paddock. Some agents open a pty for their shell tool, for example Codex's unified exec. paddock opens each pty on the host and sends both ends into the sandbox over a Unix socket. A small library asks for them in place of `openpty`, `forkpty` and `posix_openpt`. paddock loads it into the agent with `DYLD_INSERT_LIBRARIES`. This works only when the agent's program takes the library:
 
@@ -2844,17 +3582,30 @@ The agent can read its own API token and the variables that it inherits. With ne
 
 pasta hides the host addresses that exist when the sandbox starts. If the host gets a new address while a sandbox runs, for example from a VPN that starts later, services on it are reachable from that sandbox until the next start. paddock watches for new addresses, shows a warning in the bar panel, and prints it at exit.
 
-Shared package caches connect the sandboxes of different projects. The shared mise installs are read-only in every project sandbox, and no project file runs while paddock writes them (see mise toolchains). The package caches (cargo, npm, pnpm, bun, yarn, uv, pip, go) are in layers. On the bwrap backend each cache is an overlay. The lower layer under `$XDG_CACHE_HOME/paddock/layers` is shared by all projects, is read-only in every sandbox, and only paddock writes it on the host. The upper layer under `$XDG_CACHE_HOME/paddock/projects` belongs to one project and takes all writes. A file that one project changes in its cache never reaches another project.
+By default, uv and npm share writable caches within a repository or plain project folder. Worktrees, spawn children and trainers use the same project caches; other projects cannot see them. These tools support concurrent cache writers. Other tools keep separate worktree upper layers. Peer caches use the peer and repository identity, so worktrees share a peer cache. When an eligible old worktree cache is idle and the project cache is empty, paddock moves it into the project cache without copying it.
 
-After a bwrap sandbox ends, paddock checks the new downloads in the project's upper layer in the background, for at most two minutes. It copies a package into the shared layer only when its content matches a source that no project can change:
+Choose the sharing boundary in the user configuration (`~/.config/paddock/config.toml`):
+
+```toml
+[cache]
+share = "project" # default; also "verified" or "none"
+```
+
+`verified` gives each run its own writable cache and uses verified read-only lower layers where available. `none` uses only per-run caches. Both choices isolate writable peer caches too. Project files cannot set this option. `paddock explain` shows the choice and layer. `paddock pasture list` names active `lease:cache:TOOL` locks and their runs. GC and limits keep a cache while its lock is held. The host `XDG_CACHE_HOME` is not inherited by default; an explicit `[env] pass` can still pass it.
+
+The srt and Seatbelt backends cannot remap these cache mounts. Their caches stay in the sandbox home, and `[cache] share` does not apply to them. Seatbelt can also refuse a run that requests an overlay. `paddock explain` reports these limitations for the selected backend.
+
+The shared mise installs are read-only in every project sandbox, and no project file runs while paddock writes them (see mise toolchains). On the bwrap backend, other package caches use overlays. The lower layer under `$XDG_CACHE_HOME/paddock/layers` is shared by all projects and is read-only in every sandbox. Only paddock writes it on the host. The upper layer under `$XDG_CACHE_HOME/paddock/projects` belongs to one worktree and takes its writes. A file that one project changes in its cache never reaches another project.
+
+After a bwrap sandbox with worktree overlays ends, paddock checks eligible downloads in the upper layer in the background, for at most two minutes. It copies a package into the shared layer only when its content matches a source that no project can change:
 
 - cargo: a `.crate` file from crates.io, against the `cksum` in the crates.io sparse index, fetched on the host.
-- npm: a file of `_cacache/content-v2`, against the sha512 or sha256 hash in its own path.
+- npm: existing worktree upper-layer files of `_cacache/content-v2`, against the sha512 or sha256 hash in their own paths.
 - go: a module zip and its `go.mod`, against the `h1:` hashes of the checksum database `sum.golang.org`, fetched on the host.
 
-A file that fails the check, or that paddock cannot check (no network, another registry), stays in the project. paddock never replaces a file that is already in the shared layer. The audit log records each result with the cache, the package and the version, never the content. A small record in the paddock state keeps each checked package version, so paddock asks the index only once for it. pip, uv, pnpm, bun and yarn have no shared layer: their packages stay in each project. Unpacked sources and build caches always stay in each project.
+A file that fails the check, or that paddock cannot check (no network, another registry), stays in the project. paddock never replaces a file that is already in the shared layer. The audit log records each result with the cache, the package and the version, never the content. A small record in the paddock state keeps each checked package version, so paddock asks the index only once for it. pip, pnpm, bun and yarn have no shared lower layer. uv and npm normally use the separate project caches described above. Unpacked sources and build caches always stay in each project.
 
-The docker, podman and srt backends have no overlay. They bind the project's own folder, read-write, so each project downloads its packages again. `[storage] layered_caches = false` does the same on the bwrap backend. No setting goes back to one writable cache for all projects.
+The docker and podman backends have no overlay. They bind each worktree's folder read-write. `[storage] layered_caches = false` does the same on the bwrap backend. uv and npm use their project caches on these backends too. No setting gives all projects one writable cache.
 
 Some profile entries come from documentation, not from a test on a real install. `paddock doctor` lists them for each installed harness.
 

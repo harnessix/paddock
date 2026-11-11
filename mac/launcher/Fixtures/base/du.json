@@ -1,0 +1,71 @@
+{
+  "api_version": "paddock.du/v1",
+  "size_kind": "allocated",
+  "homes": [],
+  "images": [],
+  "worktrees": [],
+  "sessions": [],
+  "keyrings": [],
+  "notes": [],
+  "old_caches": [],
+  "any_running": true,
+  "build_cache": [],
+  "scratch": [],
+  "snapshots": [],
+  "tmpfs_caches": false,
+  "classes": [],
+  "layers": [],
+  "build_caches": [],
+  "macvm": {
+    "root": "/Users/demo/Library/Application Support/paddock/macvm",
+    "bytes": 61500000000,
+    "golden": 20000000000,
+    "golden_prev": 0,
+    "golden_new": 0,
+    "ipsw": 14000000000,
+    "agent": 42000000,
+    "trash": 2100000000,
+    "shims": 61000000,
+    "profiles": [
+      {
+        "app": "sample-notes",
+        "instance": 1,
+        "path": "/Users/demo/Library/Application Support/paddock/macvm/profiles.noindex/sample-notes/default",
+        "state": "running",
+        "bytes": 9100000000,
+        "disks": 6800000000,
+        "saved_state": 2000000000,
+        "apps": 300000000,
+        "archives": 0,
+        "backups": 0,
+        "last_used": 1770000000
+      },
+      {
+        "app": "sample-notes",
+        "instance": 2,
+        "path": "/Users/demo/Library/Application Support/paddock/macvm/profiles.noindex/sample-notes/instance-2",
+        "state": "stopped",
+        "bytes": 4200000000,
+        "disks": 4200000000,
+        "saved_state": 0,
+        "apps": 0,
+        "archives": 0,
+        "backups": 0,
+        "last_used": 1750000000
+      },
+      {
+        "app": "sample-mail",
+        "instance": 1,
+        "path": "/Users/demo/Library/Application Support/paddock/macvm/profiles.noindex/sample-mail/default",
+        "state": "suspended",
+        "bytes": 7300000000,
+        "disks": 3000000000,
+        "saved_state": 4100000000,
+        "apps": 200000000,
+        "archives": 0,
+        "backups": 0,
+        "last_used": 1760000000
+      }
+    ]
+  }
+}

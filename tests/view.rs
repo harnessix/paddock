@@ -1,3 +1,4 @@
+#![cfg(target_os = "linux")]
 //! The live view end to end: `paddock run` without a terminal gives the
 //! caller the same stdout, stderr and exit code with and without tmux, the
 //! tmux session exists while the sandbox runs and stays after it, and
@@ -23,6 +24,7 @@ impl World {
     fn new(tmux: bool, slow: bool) -> Self {
         let tmp = common::tempdir();
         let root = tmp.path().to_path_buf();
+        std::fs::create_dir_all(root.join("home")).unwrap();
         let cfg = root.join("cfg/paddock/harness.d");
         std::fs::create_dir_all(&cfg).unwrap();
         std::fs::create_dir_all(root.join("project")).unwrap();
@@ -53,7 +55,8 @@ impl World {
 
     fn paddock(&self) -> Command {
         let mut c = Command::new(env!("CARGO_BIN_EXE_paddock"));
-        c.env("XDG_CONFIG_HOME", self.root.join("cfg"))
+        c.env("HOME", self.root.join("home"))
+            .env("XDG_CONFIG_HOME", self.root.join("cfg"))
             .env("XDG_DATA_HOME", self.root.join("data"))
             .env("XDG_STATE_HOME", self.root.join("state"))
             .env("XDG_CACHE_HOME", self.root.join("cache"))

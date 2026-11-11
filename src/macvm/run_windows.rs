@@ -4,8 +4,8 @@
 //! `windows.rs`, the host's own events (key, minimize, Space, the Dock,
 //! the input source and the Globe key, which `run_input.rs` handles)
 //! become requests to the guest, a refusal sends the window back and
-//! sets the badge, a window in the gap between two screens gets its
-//! corrected frame, and the `window` and `bench` lines of the control
+//! sets the badge, each host window goes to its guest frame at its own
+//! offset (`place.rs`), and the `window` and `bench` lines of the control
 //! socket drive the Mac checks (the `window menu` lines are in
 //! `run_menu.rs`, the `window ax` lines in `run_ax.rs`). `run.rs` holds
 //! the session.
@@ -56,6 +56,15 @@ pub(super) struct Shell {
     pub(super) ax: super::run_ax::AxShell,
     /// The host-led drags and resizes (`run_lead.rs`).
     pub(super) lead: super::lead::Leads,
+    /// The offset of each host window (`place.rs`).
+    pub(super) places: super::place::Places,
+    /// The timings of each resize that runs (`trace.rs`).
+    pub(super) traces: BTreeMap<u32, super::trace::Trace>,
+    /// The `window.move` requests sent for each window, for `window
+    /// frames`.
+    pub(super) moves_sent: BTreeMap<u32, u32>,
+    /// The guest layout that keeps the windows apart (`apart.rs`).
+    pub(super) apart: super::apart::Apart,
 }
 
 impl Shell {
@@ -99,6 +108,10 @@ impl Shell {
             menu: super::run_menu::MenuShell::default(),
             ax: super::run_ax::AxShell::default(),
             lead: super::lead::Leads::default(),
+            places: super::place::Places::default(),
+            traces: BTreeMap::new(),
+            moves_sent: BTreeMap::new(),
+            apart: super::apart::Apart::default(),
         }
     }
 
@@ -120,12 +133,19 @@ impl Session<'_> {
             .unwrap_or(15);
         self.shell.windows.set_macos(major);
         self.shell.lead.clear();
+        self.shell.traces.clear();
+        self.shell.apart.clear();
         self.shell.expect_full = true;
     }
 
     /// A `windows` event of the guest, or an injected one of the bench.
     pub(super) fn on_windows(&mut self, ev: WindowsEvent) {
         let arrived = Instant::now();
+        // A browser or sign-in window that the app opened may then ask
+        // for its own connections.
+        for w in &ev.changed {
+            self.firewall.saw_window_of(&w.app);
+        }
         let changes = if self.shell.expect_full {
             self.shell.expect_full = false;
             let before = self.shell.order.len();
@@ -164,6 +184,7 @@ impl Session<'_> {
     /// the rest to AppKit, then the Dock menu learns the windows.
     fn apply_changes(&mut self, changes: Vec<Change>) {
         let changes = self.lead_filter(changes);
+        self.apart_filter(&changes);
         let mut refused = false;
         for c in &changes {
             log::debug!("macvm: window change {}", c.kind());
@@ -187,23 +208,6 @@ impl Session<'_> {
                     refused = true;
                     self.shell.refusal = Some(badge.clone());
                     self.set_badge(Some(badge));
-                }
-                Change::Correct(id, frame) => {
-                    // The guest put the window in the gap between two
-                    // screens: the host shows it on the nearest one and the
-                    // guest follows. No badge.
-                    self.send(
-                        Request::WindowMove {
-                            id: *id,
-                            frame: *frame,
-                        },
-                        Why::Other,
-                    );
-                    self.events.record(
-                        "window",
-                        "moved out of the screen gap",
-                        &[("id", *id as f64)],
-                    );
                 }
                 Change::Open(w) => {
                     self.events
@@ -237,7 +241,15 @@ impl Session<'_> {
                 }
             }
         }
-        self.shell.windows.apply(&changes);
+        let again = self.shell.places.follow(
+            &changes,
+            &self.shell.order,
+            self.shell.windows.screens(),
+            self.shell.windows.display(),
+        );
+        self.shell.windows.apply(&changes, &self.shell.places);
+        self.shell.windows.reposition(&again, &self.shell.places);
+        self.update_covers();
         let titles = self.shell.order.titles();
         self.shell.dock.update(|s| s.windows = titles);
     }
@@ -247,6 +259,7 @@ impl Session<'_> {
         log::debug!("macvm: host event {ev:?}");
         let requests = match ev {
             HostEvent::BecameKey(id) => {
+                self.pictures_before_raise(id);
                 self.note_key();
                 self.input_became_key();
                 self.ax_became_key(id);
@@ -307,8 +320,12 @@ impl Session<'_> {
                 self.ax_set(id, value);
                 Vec::new()
             }
-            HostEvent::LeadMoved(id, frame, held) => {
-                self.lead_moved(id, frame, held);
+            HostEvent::LeadMoved(step) => {
+                self.lead_moved(step);
+                Vec::new()
+            }
+            HostEvent::HeldClick(id) => {
+                self.held_click(id);
                 Vec::new()
             }
             HostEvent::FullScreenDone(id, entered) => {
@@ -376,19 +393,24 @@ impl Session<'_> {
         self.ax_app_exited();
         self.shell.windows.close_all();
         self.shell.lead.clear();
+        self.shell.traces.clear();
+        self.shell.places.clear();
+        self.shell.apart.clear();
         self.shell.order = Windows::with_screens(self.shell.windows.screens().clone());
         self.shell.dock.update(|s| s.windows.clear());
     }
 
-    /// A change of the host screen set: the windows that are
-    /// off the new set move onto the main screen, the guest gets their
-    /// frames, and the badge says that a restart gives the full size.
+    /// A change of the host screen set: the host windows that are off
+    /// the new set move onto the main screen. Only their offsets change:
+    /// the guest windows stay where they are. The badge says that a
+    /// restart gives the full size.
     fn on_screens_changed(&mut self) -> Vec<Request> {
         let Some(mtm) = objc2::MainThreadMarker::new() else {
             return Vec::new();
         };
         let new = super::windows::screens(mtm);
         let old = self.shell.windows.screens().clone();
+        let display = self.shell.windows.display();
         let shown: Vec<super::screens::Shown> = self
             .shell
             .order
@@ -398,30 +420,34 @@ impl Session<'_> {
                 let e = self.shell.order.get(*id)?;
                 Some(super::screens::Shown {
                     id: *id,
-                    frame: e.frame,
+                    frame: self.shell.places.host(*id, e.frame, display),
                     level: e.level,
-                    child: e.parent.is_some(),
+                    child: e.parent.is_some() || self.shell.places.is_child(*id),
                     minimized: e.minimized,
                 })
             })
             .collect();
-        let r = super::screens::rescue(&shown, &old, &new, self.shell.windows.display());
+        let r = super::screens::rescue(&shown, &old, &new, display);
         let line = text::screens_changed(new.screens.len(), r.moves.len());
         self.events
             .record("screens", &line, &[("moved", r.moves.len() as f64)]);
-        let changes: Vec<Change> = r
-            .moves
-            .iter()
-            .map(|(id, f)| Change::Move(*id, *f))
-            .collect();
-        self.shell.windows.apply(&changes);
+        let mut moved = Vec::new();
+        for (id, host) in &r.moves {
+            let Some(guest) = self.shell.windows.guest_of(*id) else {
+                continue;
+            };
+            self.shell
+                .places
+                .set(*id, super::place::Offset::between(*host, guest));
+            moved.push(*id);
+            moved.extend(self.shell.places.anchored(*id));
+        }
+        self.shell.windows.reposition(&moved, &self.shell.places);
+        self.update_covers();
         if r.badge {
             self.set_badge(Some(text::display_changed()));
         }
-        r.moves
-            .into_iter()
-            .map(|(id, frame)| Request::WindowMove { id, frame })
-            .collect()
+        Vec::new()
     }
 
     /// The badge text of the session's windows, into the record of the
@@ -484,6 +510,9 @@ impl Session<'_> {
         if let Some(answer) = self.lead_control(&words) {
             return answer;
         }
+        if let Some(answer) = self.apart_control(&words) {
+            return answer;
+        }
         match words.as_slice() {
             ["move", id, x, y, w, h] => {
                 let id: u32 = id
@@ -542,7 +571,7 @@ impl Session<'_> {
                     .collect();
                 Ok(serde_json::Value::Array(list).to_string())
             }
-            // The Dock menu, so the Mac check of ChatGPT reads the entries
+            // The Dock menu, so the Mac check of Sample Notes reads the entries
             // the user would see.
             ["dock"] => {
                 let state = self.shell.dock.state();

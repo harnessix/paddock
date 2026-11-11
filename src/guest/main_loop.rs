@@ -12,6 +12,7 @@
 
 use super::apps::{Relaunch, CRASH_WAIT};
 use super::configure;
+use super::pace::MovePace;
 use super::platform::{monotonic_ms, Platform, Waker, WindowOp};
 use super::windows::{self, Follow, Snapshot, SYSTEM_APP};
 use crate::macvm::proto::{
@@ -145,6 +146,8 @@ struct Session<'a, P: Platform> {
     rx: Receiver<Msg>,
     waker: Waker,
     next_poll: Instant,
+    /// The poll around the moves of a live resize (`pace.rs`).
+    pace: MovePace,
     /// The first poll after a hello sends every window.
     first: bool,
 }
@@ -166,6 +169,7 @@ impl<'a, P: Platform> Session<'a, P> {
             rx,
             waker,
             next_poll: Instant::now(),
+            pace: MovePace::default(),
             first: true,
         }
     }
@@ -251,7 +255,10 @@ impl<'a, P: Platform> Session<'a, P> {
                 }
             }
             let now = Instant::now();
-            if now >= self.next_poll || self.p.take_dirty() {
+            if self.p.take_dirty() {
+                self.next_poll = self.pace.dirty(now, self.next_poll);
+            }
+            if now >= self.next_poll {
                 if let Err(e) = self.poll() {
                     return End::Lost(e);
                 }
@@ -283,7 +290,13 @@ impl<'a, P: Platform> Session<'a, P> {
         match self.rx.recv_timeout(TOKEN_WAIT) {
             Ok(Msg::Call(Call {
                 req,
-                request: Request::Token { token, v, bench },
+                request:
+                    Request::Token {
+                        token,
+                        v,
+                        bench,
+                        now_ms: _,
+                    },
             })) => {
                 log::info!("req {req} token from host v{v} bench {bench}");
                 super::proxy::set_token(&token);
@@ -497,6 +510,17 @@ impl<'a, P: Platform> Session<'a, P> {
             Request::Token { .. } => {
                 Reply::error(req, ErrorCode::BadRequest, "the token was already given")
             }
+            Request::ClockSet { unix_ms, password } => {
+                if busy {
+                    Reply::error(req, ErrorCode::NotInSession, "an app runs in the guest")
+                } else {
+                    match super::clock::follow_host(unix_ms, &password, super::configure::run_plan)
+                    {
+                        Ok(()) => Reply::ok(req),
+                        Err(e) => Reply::error(req, ErrorCode::Io, e),
+                    }
+                }
+            }
             Request::WindowMove { id, frame } => self.window(req, id, WindowOp::Move(frame)),
             Request::WindowRaise { id } => self.window(req, id, WindowOp::Raise),
             Request::WindowMinimize { id } => self.window(req, id, WindowOp::Minimize),
@@ -674,6 +698,7 @@ impl<'a, P: Platform> Session<'a, P> {
             Request::BenchEnv => bench::env(req),
             Request::BenchDockMenu => bench::dock_menu(req, self.st.app.as_deref()),
             Request::Shutdown { password } => self.shutdown(req, &password),
+            Request::SharesOpen => return self.shares_open(req).map(|_| None),
             Request::KeychainUnlock { password } => self.keychain_unlock(req, &password),
             Request::BenchLock => self.bench_lock(req),
             Request::BenchKeychain => self.bench_keychain(req),
@@ -690,49 +715,20 @@ impl<'a, P: Platform> Session<'a, P> {
         let Some(w) = self.st.snapshot.get(id).cloned() else {
             return Reply::error(req, ErrorCode::NoSuchWindow, text::no_window(id));
         };
-        match self.p.window_op(&w, op) {
-            Ok(()) => {
-                self.next_poll = Instant::now();
-                Reply::ok(req)
+        let started = Instant::now();
+        let r = self.p.window_op(&w, op);
+        let now = Instant::now();
+        self.next_poll = match op {
+            WindowOp::Move(_) => self.pace.moved(now, self.next_poll),
+            _ => now,
+        };
+        match r {
+            Ok(Some(frame)) => {
+                let ms = now.saturating_duration_since(started).as_secs_f64() * 1000.0;
+                Reply::data(req, ReplyData::Moved { frame, ms })
             }
+            Ok(None) => Reply::ok(req),
             Err((code, text)) => Reply::error(req, code, text),
-        }
-    }
-}
-
-/// The socket thread: every line to the agent thread, except `ping`,
-/// answered here at once.
-fn read_loop(mut stream: UnixStream, tx: Sender<Msg>, writer: Writer, waker: Waker) {
-    loop {
-        match crate::macvm::proto::read_line::<Call>(&mut stream) {
-            Ok(Some(call)) => {
-                if let Request::Ping { .. } = call.request {
-                    log::debug!("<- {}", call.kind());
-                    let sent = writer
-                        .send(&Event::Pong { t: monotonic_ms() })
-                        .and_then(|_| writer.send(&Event::Reply(Reply::ok(call.req))));
-                    if sent.is_err() {
-                        let _ = tx.send(Msg::Closed(Some("cannot answer a ping".into())));
-                        waker();
-                        return;
-                    }
-                    continue;
-                }
-                if tx.send(Msg::Call(call)).is_err() {
-                    return;
-                }
-                waker();
-            }
-            Ok(None) => {
-                let _ = tx.send(Msg::Closed(None));
-                waker();
-                return;
-            }
-            Err(e) => {
-                let _ = tx.send(Msg::Closed(Some(format!("{e:#}"))));
-                waker();
-                return;
-            }
         }
     }
 }
@@ -755,9 +751,17 @@ mod link;
 pub use link::send_link;
 #[path = "main_loop_menu.rs"]
 mod menu;
+#[path = "main_loop_read.rs"]
+mod read;
+use read::read_loop;
 #[path = "main_loop_screen.rs"]
 mod screen;
+#[path = "main_loop_shares.rs"]
+mod shares;
 
+#[cfg(test)]
+#[path = "main_loop_shares_tests.rs"]
+mod shares_tests;
 #[cfg(test)]
 #[path = "main_loop_tests.rs"]
 mod tests;

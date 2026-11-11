@@ -10,7 +10,7 @@ use crate::state::Running;
 /// What the marks of one guest session show besides the run record.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct VmFacts {
-    /// `ChatGPT (paddock)`, the Dock name of the session.
+    /// `Sample Notes (paddock)`, the Dock name of the session.
     pub display_name: String,
     /// The name of the guest input source while it differs from the
     /// host's. None while they match.

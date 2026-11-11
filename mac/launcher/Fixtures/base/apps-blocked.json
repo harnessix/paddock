@@ -2,8 +2,8 @@
   "v": 1,
   "apps": [
     {
-      "name": "ChatGPT",
-      "bundle_path": "/Applications/ChatGPT.app",
+      "name": "Sample Notes",
+      "bundle_path": "/Applications/Sample Notes.app",
       "state": "blocked",
       "next_start": "Warm, about 10 s",
       "memory_bytes": 6442450944,

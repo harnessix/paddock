@@ -6,6 +6,8 @@ use crate::spec::{MountKind, SandboxSpec};
 use anyhow::{bail, Result};
 use std::path::{Path, PathBuf};
 
+mod git;
+
 /// Paths under HOME that hold credentials or private data. They are never
 /// mounted, and no mount may contain them.
 pub const DENIED_HOME: &[&str] = &[
@@ -140,6 +142,7 @@ pub const HOST_ONLY_ENV: &[&str] = &[
 /// Variables that redirect package caches. Inheritance drops them so the
 /// sandbox uses the shared cache mounts. `[env] pass` can still hand one over.
 pub const CACHE_ENV: &[&str] = &[
+    "XDG_CACHE_HOME",
     "CARGO_HOME",
     "CARGO_TARGET_DIR",
     "RUSTUP_HOME",
@@ -376,47 +379,7 @@ pub fn enforce(env: &HostEnv, spec: &SandboxSpec) -> Result<()> {
         }
     }
 
-    // Every writable mount that contains a git directory must also carry the
-    // read-only overrides for its hooks, config and pointer files, and the
-    // git directory must be a mount point of its own: a mount point cannot be
-    // renamed, so the read-only entries below it cannot be moved aside.
-    for m in spec.mounts.iter().filter(|m| m.kind == MountKind::Rw) {
-        let src = m.src.as_ref().unwrap();
-        for git_dir in git_dirs_under(src) {
-            let is_mount = |p: &Path, kind: MountKind| {
-                spec.mounts.iter().any(|o| o.dst == p && o.kind == kind)
-            };
-            if git_dir.starts_with(src) && git_dir != *src && !is_mount(&git_dir, MountKind::Rw) {
-                bail!(
-                    "policy: {} is not a mount point of its own inside {} (from {}). The sandbox could rename it and plant a new one.",
-                    git_dir.display(),
-                    src.display(),
-                    m.origin
-                );
-            }
-            let layout = match crate::hostgit::Layout::discover(src) {
-                Ok(Some(l)) => l,
-                _ => continue,
-            };
-            for dir in layout.protected_dirs() {
-                let mut needed = vec![dir.join("hooks")];
-                needed.extend(crate::hostgit::PROTECTED_FILES.iter().map(|f| dir.join(f)));
-                for p in needed {
-                    if !p.exists() || !p.starts_with(src) {
-                        continue;
-                    }
-                    if !is_mount(&p, MountKind::Ro) {
-                        bail!(
-                            "policy: {} is writable inside {} (from {}). Git reads and runs it on the host.",
-                            p.display(),
-                            src.display(),
-                            m.origin
-                        );
-                    }
-                }
-            }
-        }
-    }
+    git::check(spec)?;
 
     for (k, v) in &spec.env {
         let explicit = ["profile", "manifest", "host env", "network", "credentials"]
@@ -427,18 +390,6 @@ pub fn enforce(env: &HostEnv, spec: &SandboxSpec) -> Result<()> {
         }
     }
     Ok(())
-}
-
-fn git_dirs_under(root: &Path) -> Vec<PathBuf> {
-    let mut v = Vec::new();
-    let top = root.join(".git");
-    if top.is_dir() {
-        v.push(top);
-    }
-    if root.join("HEAD").is_file() && root.join("objects").is_dir() {
-        v.push(root.to_path_buf());
-    }
-    v
 }
 
 #[cfg(test)]
@@ -524,6 +475,7 @@ mod tests {
         assert!(inheritable_var("EDITOR", "nvim"));
         assert!(!inheritable_var("CARGO_HOME", "/host/cargo"));
         assert!(!inheritable_var("UV_CACHE_DIR", "/host/uv"));
+        assert!(!inheritable_var("XDG_CACHE_HOME", "/host/cache"));
     }
 
     #[test]

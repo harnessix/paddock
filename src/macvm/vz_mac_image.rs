@@ -157,62 +157,39 @@ pub(crate) fn content_length(url: &str) -> Option<u64> {
 }
 
 /// Download with curl into `dest`, continuing a partial file, with one
-/// progress line per 5 percent and the time left.
-pub(crate) fn download(url: &str, dest: &Path, size: Option<u64>) -> Result<()> {
+/// progress line per 5 percent and the time left, and the pause of
+/// `download.rs`: a pause stops curl, a resume starts it again with `-C -`.
+pub(crate) fn download(
+    url: &str,
+    dest: &Path,
+    size: Option<u64>,
+    watch: &mut super::download::Watch,
+) -> Result<()> {
     println!("{}", text::downloading(url));
-    let mut child = Command::new("/usr/bin/curl")
-        .args([
-            "-L",
-            "--fail",
-            "--silent",
-            "--show-error",
-            "--retry",
-            "5",
-            "--retry-delay",
-            "5",
-            "--retry-all-errors",
-            "-C",
-            "-",
-            "-o",
-        ])
-        .arg(dest)
-        .arg(url)
-        .stdin(std::process::Stdio::null())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .with_context(|| text::cannot_run("/usr/bin/curl"))?;
-    let begin = Instant::now();
-    let start_bytes = std::fs::metadata(dest).map(|m| m.len()).unwrap_or(0);
-    let mut last = 0u64;
-    loop {
-        if let Some(status) = child.try_wait()? {
-            if !status.success() {
-                let mut err = String::new();
-                if let Some(mut e) = child.stderr.take() {
-                    let _ = std::io::Read::read_to_string(&mut e, &mut err);
-                }
-                bail!(text::download_failed(&status.to_string(), err.trim()));
-            }
-            println!(
-                "{}",
-                text::progress(SetupPhase::Download, 100, Some(Duration::ZERO))
-            );
-            return Ok(());
-        }
-        std::thread::sleep(Duration::from_secs(2));
-        if let Some(total) = size.filter(|t| *t > 0) {
-            let have = std::fs::metadata(dest).map(|m| m.len()).unwrap_or(0);
-            let pct = (have * 100 / total) / 5 * 5;
-            if pct > last {
-                last = pct;
-                let done = have.saturating_sub(start_bytes) as f64;
-                let rate = done / begin.elapsed().as_secs_f64().max(0.001);
-                let left =
-                    (rate > 0.0).then(|| Duration::from_secs_f64((total - have) as f64 / rate));
-                println!("{}", text::progress(SetupPhase::Download, pct as u8, left));
-            }
-        }
-    }
+    let mut spawn = || -> Result<std::process::Child> {
+        Command::new("/usr/bin/curl")
+            .args([
+                "-L",
+                "--fail",
+                "--silent",
+                "--show-error",
+                "--retry",
+                "5",
+                "--retry-delay",
+                "5",
+                "--retry-all-errors",
+                "-C",
+                "-",
+                "-o",
+            ])
+            .arg(dest)
+            .arg(url)
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .with_context(|| text::cannot_run("/usr/bin/curl"))
+    };
+    super::download::run(&mut spawn, dest, size, watch, &mut |l| println!("{l}"))
 }
 
 pub(crate) fn make_sparse(path: &Path, bytes: u64) -> Result<()> {

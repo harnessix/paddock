@@ -62,7 +62,13 @@ A tracked `.rs`, `.qml` or `.swift` file must stay at or under 800 lines, unless
 
 ## Tests
 
-A test that runs the paddock binary must give it temporary folders: `XDG_DATA_HOME` and `XDG_STATE_HOME` (and the other XDG folders), or a cleared environment with a temporary `HOME`. `tests/no_real_folders.rs` checks this. A build that runs with your own folders can write its own path into your launchers and shell commands. paddock refuses that when the home folder is your real one, but the test must not rely on it.
+A test that runs the paddock binary must use separate temporary folders for `HOME` and the XDG paths. Set `XDG_CONFIG_HOME`, `XDG_DATA_HOME`, `XDG_STATE_HOME`, `XDG_CACHE_HOME` and `XDG_RUNTIME_DIR`. You can instead clear the environment and set a temporary `HOME`. `tests/no_real_folders.rs` checks each test file for these settings. Review each command too. The check does not prove that its paths are temporary.
+
+Sandbox tests create a new private directory for each test. They do not prune or unmount directories from other runs. On Linux, the default parent is `/var/tmp`. Its sticky permissions let only a directory's owner or root remove it. The sandbox binds the project paths that it needs.
+
+If the default parent is unsafe or unavailable, set `PADDOCK_TEST_PARENT` before you run the tests. Use a short private directory outside the account home and cache. You can also use a root-owned sticky temporary directory. Give the override as a real path without symlinks. If the parent is too long for Unix sockets, the tests refuse it.
+
+On macOS, the default parent is the short `/tmp` path. Other platforms use their standard temporary directory if it meets the same checks. A nested sandbox can need an override. This change has not been tested on macOS. Keep the test command's home and XDG directories separate from the user's real folders.
 
 ## Changelog
 

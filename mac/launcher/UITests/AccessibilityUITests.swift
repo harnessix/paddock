@@ -50,7 +50,7 @@ final class AccessibilityUITests: XCTestCase {
         empty.terminate()
 
         let app = Fake("ready", env: ["PADDOCK_LAUNCHER_PICK_APP": "/Applications/Notebook.app"]).launch()
-        app.selectApp("ChatGPT")
+        app.selectApp("Sample Notes")
         audit(app, "overview")
         app.openTab("Grants")
         audit(app, "grants")
@@ -66,14 +66,14 @@ final class AccessibilityUITests: XCTestCase {
         audit(app, "add app sheet")
         app.typeKey(.escape, modifierFlags: [])
 
-        app.selectApp("Slack")
+        app.selectApp("Sample Mail")
         // The detail keeps the tab of the last app: Log, from above.
         app.openTab("Overview")
         app.buttons["remove-app-button"].click()
         audit(app, "remove sheet")
         app.typeKey(.escape, modifierFlags: [])
 
-        app.selectApp("ChatGPT")
+        app.selectApp("Sample Notes")
         app.openTab("Grants")
         app.buttons["add-rule-button"].click()
         audit(app, "add rule sheet")
@@ -90,7 +90,7 @@ final class AccessibilityUITests: XCTestCase {
         XCTAssertTrue(app.element("sidebar").waitForExistence(timeout: 10))
         app.typeKey(",", modifierFlags: .command)
         for pane in ["General", "Storage", "Network", "Advanced"] {
-            let row = app.outlines.staticTexts[pane]
+            let row = app.settingsRow(pane)
             XCTAssertTrue(row.waitForExistence(timeout: 5), pane)
             row.click()
             audit(app, "settings " + pane)
@@ -101,22 +101,25 @@ final class AccessibilityUITests: XCTestCase {
     func testEveryStatusSymbolHasALabel() {
         let app = Fake("ready").launch()
         XCTAssertTrue(app.element("sidebar").waitForExistence(timeout: 10))
-        for name in ["ChatGPT", "Slack"] {
+        for name in ["Sample Notes", "Sample Mail"] {
             let symbol = app.element("status-symbol-" + name)
             XCTAssertTrue(symbol.exists, name)
             XCTAssertFalse(symbol.label.isEmpty, name)
         }
-        XCTAssertEqual(app.element("status-symbol-ChatGPT").label, "Running")
-        XCTAssertEqual(app.element("status-symbol-Slack").label, "Ready")
+        XCTAssertEqual(app.element("status-symbol-Sample Notes").label, "Running")
+        XCTAssertEqual(app.element("status-symbol-Sample Mail").label, "Ready")
     }
 
     // Tab moves the keyboard focus through the controls and every stop has one
-    // focused element. AppleKeyboardUIMode 2 is "Keyboard navigation" of
-    // System Settings for this launch only: with it off, Tab reaches only
-    // lists and text fields, whatever the views do.
-    func testKeyboardTraversalReachesControls() {
+    // focused element. AppleKeyboardUIMode is the system setting "Keyboard
+    // navigation". A launch argument does not change it. 2 means every
+    // control; anything else means Tab reaches only lists and text fields.
+    func testKeyboardTraversalReachesControls() throws {
+        let raw = CFPreferencesCopyAppValue("AppleKeyboardUIMode" as CFString, kCFPreferencesAnyApplication)
+        let mode = (raw as? NSNumber)?.intValue
+        try XCTSkipIf(mode != 2, "Full keyboard access is off (AppleKeyboardUIMode is \(mode.map(String.init) ?? "unset")). Tab reaches only lists and text fields until Keyboard navigation is on in System Settings.")
         let app = Fake("ready", arguments: ["-AppleKeyboardUIMode", "2"]).launch()
-        app.selectApp("ChatGPT")
+        app.selectApp("Sample Notes")
         let focused = app.descendants(matching: .any).matching(NSPredicate(format: "hasKeyboardFocus == true"))
         var seen = Set<String>()
         for _ in 0..<40 {

@@ -63,8 +63,8 @@ fn env_file_visible() {
 #[test]
 fn downloads_folder() {
     has(
-        &t::downloads_folder("chatgpt", Path::new("/p/downloads")),
-        &["chatgpt", "/p/downloads", "lands there"],
+        &t::downloads_folder("sample-notes", Path::new("/p/downloads")),
+        &["sample-notes", "/p/downloads", "lands there"],
     );
 }
 

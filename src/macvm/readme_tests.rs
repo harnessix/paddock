@@ -33,9 +33,12 @@ const OPEN_MAC_CHECKS: &[&str] = &[
     "that `paddock freeze` stops the guest and `paddock thaw` lets it go on (`macvm-marks.sh freeze`)",
     "that a window on a screen that goes away comes to the main screen (`macvm-marks.sh screen`)",
     "that a quit of a frozen session saves it (`macvm-marks.sh quit-frozen`)",
-    "that the guest window follows a host drag within 50 ms at the 95th percentile, with no frame more than 2 points apart after the move (`macvm-session.sh drag`)",
-    "that the clip of a session window has the corner radius that the agent measured, within 1 point, for TextEdit and a toolbar window (`macvm-session.sh radius`)",
-    "that a guest window in full screen puts its session window in full screen with the whole guest display, and back (`macvm-session.sh fullscreen`)",
+    "that a host drag leaves the guest window where it is and sends no `window.move` (`macvm-session.sh drag`, `macvm-windows.sh drag`), and that a live resize shows no guest desktop (`macvm-windows.sh resize`)",
+    "that each of three TextEdit windows has its own session window, each visible and placed on its guest window (`macvm-session.sh multi`)",
+    "that the guest windows that an app stacks go apart in the guest within 3 s while their session windows stay where they are, each one visible and live (`macvm-session.sh stacked`)",
+    "that a click on a session window after its guest window went apart reaches that guest window and makes it the key window (`macvm-session.sh click`)",
+    "the memory and the start time that the room of the guest display costs (`macvm-session.sh room`)",
+    "that a guest window in full screen puts its session window in full screen with the guest display, and back (`macvm-session.sh fullscreen`)",
     "that a guest link opens through the link helper and that a login callback on the host loopback reaches a guest server, and only that port (`macvm-session.sh login`)",
 ];
 

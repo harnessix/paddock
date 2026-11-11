@@ -46,15 +46,20 @@ impl Tap for crate::training::live::Gate {
 }
 
 /// Several taps. The first one writes the user's keys. The others hear
-/// about each key first.
-pub struct Taps(Vec<Arc<dyn Tap>>);
+/// about each key first. With the horse tap (horse/live/pty.rs), the
+/// user's keys go out under its lock, so they never mix with an entry
+/// that paddock types.
+pub struct Taps(Vec<Arc<dyn Tap>>, Option<Arc<PtyTap>>);
+
+use crate::horse::live::pty::PtyTap;
 
 impl Taps {
-    /// The training gate first, then the start screen watcher. None when
-    /// neither runs.
+    /// The training gate first, then the start screen watcher, then the
+    /// horse tap. None when none runs.
     pub fn of(
         gate: Option<Arc<crate::training::live::Gate>>,
         screens: Option<Arc<crate::screens::live::Watcher>>,
+        horse: Option<Arc<PtyTap>>,
     ) -> Option<Arc<dyn Tap>> {
         let mut all: Vec<Arc<dyn Tap>> = Vec::new();
         if let Some(g) = gate {
@@ -63,10 +68,15 @@ impl Taps {
         if let Some(s) = screens {
             all.push(s);
         }
+        if all.is_empty() {
+            return horse.map(|h| h as Arc<dyn Tap>);
+        }
+        if let Some(h) = &horse {
+            all.push(h.clone());
+        }
         match all.len() {
-            0 => None,
             1 => all.pop(),
-            _ => Some(Arc::new(Taps(all))),
+            _ => Some(Arc::new(Taps(all, horse))),
         }
     }
 }
@@ -91,7 +101,12 @@ impl Tap for Taps {
         for t in &self.0[1..] {
             t.user_key();
         }
-        self.0[0].write_user(master, data)
+        match &self.1 {
+            Some(h) => {
+                crate::horse::live::pty::serialized(h, &mut || self.0[0].write_user(master, data))
+            }
+            None => self.0[0].write_user(master, data),
+        }
     }
     fn resize(&self) {
         for t in &self.0 {

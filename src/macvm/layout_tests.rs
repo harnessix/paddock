@@ -31,12 +31,12 @@ fn every_path_for_a_fake_home() {
     assert_eq!(l.sessions, root.join("sessions"));
     assert_eq!(l.trash, root.join("trash"));
     assert_eq!(
-        l.profile("chatgpt-desktop", "default").dir,
-        root.join("profiles.noindex/chatgpt-desktop/default")
+        l.profile("sample-notes", "default").dir,
+        root.join("profiles.noindex/sample-notes/default")
     );
     assert_eq!(
-        l.record("chatgpt-desktop", "default"),
-        root.join("sessions/chatgpt-desktop--default.json")
+        l.record("sample-notes", "default"),
+        root.join("sessions/sample-notes--default.json")
     );
     assert_eq!(l.shims, root.join("shims"));
     // Spotlight stays out of the golden and the profiles.
@@ -151,8 +151,8 @@ fn profile_dirs_lists_app_and_home() {
     let l = Layout::at(t.path().join("macvm"));
     assert!(l.profile_dirs().is_empty());
     std::fs::create_dir_all(l.profile("vscode", "default").dir).unwrap();
-    std::fs::create_dir_all(l.profile("chatgpt-desktop", "work").dir).unwrap();
-    std::fs::write(l.profiles.join("chatgpt-desktop/stray"), "").unwrap();
+    std::fs::create_dir_all(l.profile("sample-notes", "work").dir).unwrap();
+    std::fs::write(l.profiles.join("sample-notes/stray"), "").unwrap();
     let names: Vec<(String, String)> = l
         .profile_dirs()
         .into_iter()
@@ -161,7 +161,7 @@ fn profile_dirs_lists_app_and_home() {
     assert_eq!(
         names,
         vec![
-            ("chatgpt-desktop".to_string(), "work".to_string()),
+            ("sample-notes".to_string(), "work".to_string()),
             ("vscode".to_string(), "default".to_string())
         ]
     );

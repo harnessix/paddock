@@ -3,15 +3,15 @@
   "questions": [
     {
       "id": "q1",
-      "app": "ChatGPT",
-      "host": "api.openai.com",
+      "app": "Sample Notes",
+      "host": "api.example.com",
       "port": 443,
-      "process": "ChatGPT.app → helper (Renderer)",
+      "process": "Sample Notes.app → helper (Renderer)",
       "opened": "2026-11-06T09:59:00Z"
     }
   ],
   "paused": {
-    "app": "ChatGPT",
+    "app": "Sample Notes",
     "count": 23
   }
 }

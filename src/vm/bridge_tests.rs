@@ -33,6 +33,10 @@ fn parse_request_knows_three_requests() {
         parse_request("bench ax 5").unwrap(),
         Request::Bench("ax 5".into())
     );
+    assert_eq!(
+        parse_request("grant share add ro /a b").unwrap(),
+        Request::Grant("share add ro /a b".into())
+    );
     for bad in [
         "connect 22",
         "connect",
@@ -46,6 +50,8 @@ fn parse_request_knows_three_requests() {
         "window ",
         "bench",
         "bench ",
+        "grant",
+        "grant ",
     ] {
         assert!(parse_request(bad).is_err(), "{bad}");
     }
@@ -167,6 +173,8 @@ fn control_socket_connects_stops_and_refuses() {
     assert_eq!(answer, "error this guest has no host windows");
     let (answer, _) = ask(&path, "bench ax 1\n");
     assert_eq!(answer, "error this guest has no bench");
+    let (answer, _) = ask(&path, "grant list\n");
+    assert_eq!(answer, "error this guest has no live grants");
     // A guest that cannot pause refuses both lines.
     for line in ["pause\n", "resume\n"] {
         assert_eq!(ask(&path, line).0, "error this guest cannot pause");

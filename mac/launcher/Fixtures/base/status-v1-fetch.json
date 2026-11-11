@@ -1,0 +1,31 @@
+{
+  "v": 1,
+  "dir": "/Users/demo/Library/Application Support/paddock/macvm",
+  "golden": {
+    "state": "fetch",
+    "version": "50.1",
+    "build": "99A101",
+    "offline_failed": null
+  },
+  "prev": null,
+  "host_version": "50.1 (99A101)",
+  "profiles": [],
+  "sessions": [],
+  "slots": [
+    null,
+    null
+  ],
+  "paused": false,
+  "setup": {
+    "running": true,
+    "paused": false,
+    "last": {
+      "step": "fetch",
+      "bytes": 6600000000,
+      "total": 14000000000,
+      "rate": 28000000,
+      "paused": false,
+      "stopped": false
+    }
+  }
+}

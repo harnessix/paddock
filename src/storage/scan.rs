@@ -520,6 +520,7 @@ pub fn scan(env: &HostEnv, host: &Host, with_sizes: bool) -> Inventory {
         classes: vec![],
         layers: layers::scan(env),
         build_caches: super::buildcache::scan(env),
+        mailboxes: crate::mail::stored(env),
     };
     if with_sizes {
         measure(&mut inv, |_| true);

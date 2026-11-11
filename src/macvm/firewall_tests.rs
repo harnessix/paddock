@@ -31,15 +31,15 @@ fn deny(app: &str, host: &str) -> Rule {
 #[test]
 fn glob_cases() {
     // Exact, case and a trailing dot aside.
-    assert!(host_matches("chatgpt.com", "chatgpt.com"));
-    assert!(host_matches("ChatGPT.com", "chatgpt.com."));
-    assert!(!host_matches("chatgpt.com", "ab.chatgpt.com"));
-    assert!(!host_matches("chatgpt.com", "evilchatgpt.com"));
+    assert!(host_matches("chat.example", "chat.example"));
+    assert!(host_matches("Chat.Example", "chat.example."));
+    assert!(!host_matches("chat.example", "ab.chat.example"));
+    assert!(!host_matches("chat.example", "evilchat.example"));
     // `*.x.y`: every name under x.y, not x.y itself.
-    assert!(host_matches("*.openai.com", "auth.openai.com"));
-    assert!(host_matches("*.openai.com", "a.b.openai.com"));
-    assert!(!host_matches("*.openai.com", "openai.com"));
-    assert!(!host_matches("*.openai.com", "evilopenai.com"));
+    assert!(host_matches("*.service.example", "auth.service.example"));
+    assert!(host_matches("*.service.example", "a.b.service.example"));
+    assert!(!host_matches("*.service.example", "service.example"));
+    assert!(!host_matches("*.service.example", "evilservice.example"));
     // `*`: everything, an IP too.
     assert!(host_matches("*", "anything.example"));
     assert!(host_matches("*", "10.0.0.5"));
@@ -52,8 +52,8 @@ fn glob_cases() {
     // The glob check of `add`.
     for ok in [
         "*",
-        "*.openai.com",
-        "chatgpt.com",
+        "*.service.example",
+        "chat.example",
         "10.0.0.5",
         "::1",
         "x_y.example",
@@ -65,7 +65,7 @@ fn glob_cases() {
         "a b",
         "*.",
         "**",
-        "chatgpt.com:443",
+        "chat.example:443",
         "-",
         "a..b",
         "http://x",
@@ -76,19 +76,19 @@ fn glob_cases() {
 
 #[test]
 fn specificity_order() {
-    let exact = allow("com.openai.chat", "chatgpt.com");
+    let exact = allow("com.example.notes", "chat.example");
     let any_port = rule(
-        "com.openai.chat",
-        "chatgpt.com",
+        "com.example.notes",
+        "chat.example",
         Port::Any,
         Verdict::Allow,
         Scope::Always,
         BY_USER,
     );
-    let sub = allow("com.openai.chat", "*.chatgpt.com");
-    let deep_sub = allow("com.openai.chat", "*.a.chatgpt.com");
-    let star_host = allow("com.openai.chat", "*");
-    let any_app = allow("*", "chatgpt.com");
+    let sub = allow("com.example.notes", "*.chat.example");
+    let deep_sub = allow("com.example.notes", "*.a.chat.example");
+    let star_host = allow("com.example.notes", "*");
+    let any_app = allow("*", "chat.example");
     assert!(specificity(&exact) > specificity(&any_port));
     assert!(
         specificity(&any_port) > specificity(&sub),
@@ -102,64 +102,64 @@ fn specificity_order() {
     );
     // The winner is the most specific match: a deny for the exact host
     // under an allow for the domain, and the other way round.
-    let conn = Conn::new("com.openai.chat", "ab.chatgpt.com", 443);
+    let conn = Conn::new("com.example.notes", "ab.chat.example", 443);
     let rules = vec![
-        allow("*", "*.chatgpt.com"),
-        deny("com.openai.chat", "ab.chatgpt.com"),
+        allow("*", "*.chat.example"),
+        deny("com.example.notes", "ab.chat.example"),
     ];
     assert_eq!(winner(&rules, &conn).unwrap().id, rules[1].id);
-    let rules = vec![deny("*", "*"), allow("com.openai.chat", "*.chatgpt.com")];
+    let rules = vec![deny("*", "*"), allow("com.example.notes", "*.chat.example")];
     assert_eq!(winner(&rules, &conn).unwrap().id, rules[1].id);
     // A helper matches the rule of its outermost app.
     let id = Identity {
-        app: Some("com.openai.chat.helper".into()),
-        parent_app: Some("com.openai.chat".into()),
+        app: Some("com.example.notes.helper".into()),
+        parent_app: Some("com.example.notes".into()),
         team: Some("T1".into()),
         ..Default::default()
     };
     let name = id.app_name();
-    let conn = Conn::of(&id, &name, "chatgpt.com", 443);
-    assert!(matches(&allow("com.openai.chat", "chatgpt.com"), &conn));
+    let conn = Conn::of(&id, &name, "chat.example", 443);
+    assert!(matches(&allow("com.example.notes", "chat.example"), &conn));
     assert!(matches(
-        &allow("com.openai.chat.helper", "chatgpt.com"),
+        &allow("com.example.notes.helper", "chat.example"),
         &conn
     ));
-    assert!(!matches(&allow("com.other", "chatgpt.com"), &conn));
+    assert!(!matches(&allow("com.other", "chat.example"), &conn));
     // A team in the rule must match.
-    let mut teamed = allow("com.openai.chat", "chatgpt.com");
+    let mut teamed = allow("com.example.notes", "chat.example");
     teamed.team = Some("T2".into());
     assert!(!matches(&teamed, &conn));
     teamed.team = Some("T1".into());
     assert!(matches(&teamed, &conn));
     // The port.
     assert!(!matches(
-        &allow("*", "chatgpt.com"),
-        &Conn::new("x", "chatgpt.com", 80)
+        &allow("*", "chat.example"),
+        &Conn::new("x", "chat.example", 80)
     ));
     assert!(matches(
         &rule(
             "*",
-            "chatgpt.com",
+            "chat.example",
             Port::Any,
             Verdict::Allow,
             Scope::Always,
             BY_USER
         ),
-        &Conn::new("x", "chatgpt.com", 80)
+        &Conn::new("x", "chat.example", 80)
     ));
 }
 
 #[test]
 fn deny_wins_ties() {
-    let conn = Conn::new("com.openai.chat", "chatgpt.com", 443);
-    let a = allow("com.openai.chat", "chatgpt.com");
-    let d = deny("com.openai.chat", "chatgpt.com");
+    let conn = Conn::new("com.example.notes", "chat.example", 443);
+    let a = allow("com.example.notes", "chat.example");
+    let d = deny("com.example.notes", "chat.example");
     assert_eq!(winner(&[a.clone(), d.clone()], &conn).unwrap().id, d.id);
     assert_eq!(winner(&[d.clone(), a.clone()], &conn).unwrap().id, d.id);
     // A user rule beats a seed of the same specificity, even an allow
     // over a seed deny would (seeds are allows, so the case is a deny).
-    let seed = seed_rule("chatgpt.com", 1);
-    let mut user_deny = deny("*", "chatgpt.com");
+    let seed = seed_rule("chat.example", 1);
+    let mut user_deny = deny("*", "chat.example");
     user_deny.port = Port::Num(443);
     assert_eq!(
         winner(&[seed.clone(), user_deny.clone()], &conn)
@@ -169,17 +169,17 @@ fn deny_wins_ties() {
     );
     assert_eq!(
         decide(Mode::Ask, None, &[seed], &conn),
-        Decision::Allow(Some(format!("seed-{}", hash6(&["chatgpt.com"]))))
+        Decision::Allow(Some(format!("seed-{}", hash6(&["chat.example"]))))
     );
 }
 
 #[test]
 fn session_beats_always() {
-    let conn = Conn::new("com.openai.chat", "chatgpt.com", 443);
-    let always_allow = allow("com.openai.chat", "chatgpt.com");
+    let conn = Conn::new("com.example.notes", "chat.example", 443);
+    let always_allow = allow("com.example.notes", "chat.example");
     let session_deny = rule(
-        "com.openai.chat",
-        "chatgpt.com",
+        "com.example.notes",
+        "chat.example",
         Port::Num(443),
         Verdict::Deny,
         Scope::Session,
@@ -190,10 +190,10 @@ fn session_beats_always() {
     let rules = [always_allow.clone(), session_deny.clone()];
     assert_eq!(winner(&rules, &conn).unwrap().id, session_deny.id);
     // And a session allow over an always deny: a one-session exception.
-    let always_deny = deny("com.openai.chat", "chatgpt.com");
+    let always_deny = deny("com.example.notes", "chat.example");
     let session_allow = rule(
-        "com.openai.chat",
-        "chatgpt.com",
+        "com.example.notes",
+        "chat.example",
         Port::Num(443),
         Verdict::Allow,
         Scope::Session,
@@ -214,9 +214,9 @@ fn session_beats_always() {
 fn api_list_before_rules() {
     // Checklist item 6: a forged identity with an allow rule for a host
     // outside the list of mode api is denied before any rule.
-    let (list, _) = Allowlist::parse(&["api.openai.com"]);
-    let evil = Conn::new("com.openai.chat", "evil.example", 443);
-    let rules = [allow("com.openai.chat", "evil.example"), allow("*", "*")];
+    let (list, _) = Allowlist::parse(&["api.service.example"]);
+    let evil = Conn::new("com.example.notes", "evil.example", 443);
+    let rules = [allow("com.example.notes", "evil.example"), allow("*", "*")];
     assert_eq!(
         decide(Mode::Api, Some(&list), &rules, &evil),
         Decision::Deny(None)
@@ -231,12 +231,12 @@ fn api_list_before_rules() {
         "no list: nothing passes"
     );
     // A host on the list passes, and a deny rule still denies it.
-    let ok = Conn::new("com.openai.chat", "api.openai.com", 443);
+    let ok = Conn::new("com.example.notes", "api.service.example", 443);
     assert_eq!(
         decide(Mode::Api, Some(&list), &[], &ok),
         Decision::Allow(None)
     );
-    let d = deny("*", "api.openai.com");
+    let d = deny("*", "api.service.example");
     assert_eq!(
         decide(Mode::Api, Some(&list), std::slice::from_ref(&d), &ok),
         Decision::Deny(Some(d.id))
@@ -267,9 +267,9 @@ fn api_list_before_rules() {
 #[test]
 fn answers_write_rules() {
     let id = Identity {
-        app: Some("com.openai.chat.helper".into()),
-        parent_app: Some("com.openai.chat".into()),
-        team: Some("2DC432GLL2".into()),
+        app: Some("com.example.notes.helper".into()),
+        parent_app: Some("com.example.notes".into()),
+        team: Some("EXAMPLE123".into()),
         ..Default::default()
     };
     let name = id.app_name();
@@ -286,10 +286,10 @@ fn answers_write_rules() {
     let s = rule_of_answer(ConnectAnswer::AllowSession, &conn, BY_USER, now).unwrap();
     assert_eq!((s.verdict, s.scope), (Verdict::Allow, Scope::Session));
     assert_eq!(
-        s.app, "com.openai.chat",
+        s.app, "com.example.notes",
         "the rule is for the outermost app"
     );
-    assert_eq!(s.team.as_deref(), Some("2DC432GLL2"));
+    assert_eq!(s.team.as_deref(), Some("EXAMPLE123"));
     assert_eq!(s.host, "telemetry.example.com");
     assert_eq!(s.port, Port::Num(443));
     assert_eq!(s.made, "2025-11-04T09:53:20Z");
@@ -303,7 +303,7 @@ fn answers_write_rules() {
     assert_eq!((d.verdict, d.scope), (Verdict::Deny, Scope::Always));
     // Into the rules: a session rule to the session, the others to the file.
     let t = tempfile::tempdir().unwrap();
-    let mut rules = Rules::load_at(t.path().join("firewall").join("chatgpt-desktop.toml")).unwrap();
+    let mut rules = Rules::load_at(t.path().join("firewall").join("sample-notes.toml")).unwrap();
     rules.add(s.clone(), false).unwrap();
     rules.add(a.clone(), false).unwrap();
     rules.add(d.clone(), false).unwrap();
@@ -332,7 +332,7 @@ fn answers_write_rules() {
 fn session_rule_beats_file_rule_of_same_target() {
     // The case the test above ends on, spelled out: a session allow and a
     // file deny for the same target, the session rule wins.
-    let conn = Conn::new("com.openai.chat", "t.example", 443);
+    let conn = Conn::new("com.example.notes", "t.example", 443);
     let now = 1;
     let s = rule_of_answer(ConnectAnswer::AllowSession, &conn, BY_USER, now).unwrap();
     let d = rule_of_answer(ConnectAnswer::DenyAlways, &conn, BY_USER, now).unwrap();
@@ -362,19 +362,16 @@ fn all_hosts_allow_needs_flag() {
     bad.host = "a b".into();
     assert!(rules.add(bad, false).is_err());
     // `remove`: by id; a seed cannot go; an unknown id says so.
-    rules.seed(&["chatgpt.com".into(), "not a host".into()], 1);
+    rules.seed(&["chat.example".into(), "not a host".into()], 1);
     assert_eq!(rules.seeds.len(), 1, "a seed that is no glob is skipped");
     let seed_id = rules.seeds[0].id.clone();
     let e = rules
-        .remove(&seed_id, "chatgpt-desktop")
+        .remove(&seed_id, "sample-notes")
         .unwrap_err()
         .to_string();
-    assert!(
-        e.contains("seed rule of the profile chatgpt-desktop"),
-        "{e}"
-    );
+    assert!(e.contains("seed rule of the profile sample-notes"), "{e}");
     let e = rules
-        .remove("rule-nope", "chatgpt-desktop")
+        .remove("rule-nope", "sample-notes")
         .unwrap_err()
         .to_string();
     assert!(e.contains("no rule rule-nope"), "{e}");
@@ -393,7 +390,7 @@ fn save_mode_0600_atomic() {
     let mut rules = Rules::load_at(path.clone()).unwrap();
     assert!(!path.exists(), "a load makes no file");
     rules
-        .add(allow("com.openai.chat", "*.openai.com"), false)
+        .add(allow("com.example.notes", "*.service.example"), false)
         .unwrap();
     rules.save().unwrap();
     let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
@@ -413,7 +410,7 @@ fn save_mode_0600_atomic() {
     let text = std::fs::read_to_string(&path).unwrap();
     assert!(text.starts_with("# The firewall rules"), "{text}");
     assert!(text.contains("[[rule]]"));
-    assert!(text.contains("host = \"*.openai.com\""));
+    assert!(text.contains("host = \"*.service.example\""));
     assert!(text.contains("port = 443"));
     // A loosened mode is tightened at the next save.
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();

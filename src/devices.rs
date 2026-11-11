@@ -59,6 +59,8 @@ pub mod config;
 pub mod doctor;
 pub mod escape;
 pub mod examples;
+#[cfg(target_os = "linux")]
+mod folders;
 pub mod forward;
 pub mod grant;
 pub mod host;
@@ -73,6 +75,7 @@ pub mod sandbox;
 mod serve;
 pub mod shared;
 pub mod socket;
+mod stale;
 pub mod supervise;
 pub mod user;
 
@@ -88,7 +91,11 @@ pub use serve::{
 #[cfg(target_os = "linux")]
 mod fuse;
 #[cfg(target_os = "linux")]
+use fuse::lazy_unmount;
+#[cfg(target_os = "linux")]
 pub use fuse::{mount, DeviceFs, Mounted};
+#[cfg(not(target_os = "linux"))]
+use fuse_stub::lazy_unmount;
 
 #[cfg(not(target_os = "linux"))]
 mod fuse_stub;
@@ -97,6 +104,10 @@ pub use fuse_stub::{mount, DeviceFs, Mounted};
 
 /// Where the devices appear inside the sandbox.
 pub const MOUNT_IN_SANDBOX: &str = "/dev/paddock";
+
+/// The notice of a run in horse mode whose sandbox gets no device mount.
+const HORSE_OFF: &str =
+    "/dev/paddock/horse is off in this sandbox (paddock-host horse still works)";
 /// The read-only description of the devices.
 pub const CATALOG: &str = ".catalog";
 /// The folder of the secret files.
@@ -328,6 +339,11 @@ pub trait Device: Send + Sync {
     fn details(&self) -> Option<serde_json::Value> {
         None
     }
+    /// A write without a read sends the request when the file closes
+    /// (`echo TEXT > /dev/paddock/mail/out`). The response is dropped.
+    fn sends_on_close(&self) -> bool {
+        false
+    }
 }
 
 /// The built-in test device: the response is the request.
@@ -432,7 +448,7 @@ impl DevicesCfg {
     }
 
     pub fn parse_with(text: &str, penv: config::ParseEnv<'_>) -> Result<Self> {
-        let v: toml::Value = toml::from_str(text)?;
+        let v: toml::Value = crate::manifest::user_config_doc(text)?;
         let mut cfg = Self::default();
         let Some(t) = v.get("devices") else {
             return Ok(cfg);
@@ -677,5 +693,9 @@ pub fn check_requested(env: &HostEnv, names: &[String]) -> Result<()> {
     Ok(())
 }
 
+#[cfg(all(test, target_os = "linux"))]
+mod horse_ctl_tests;
+#[cfg(all(test, target_os = "linux"))]
+mod horse_run_tests;
 #[cfg(test)]
 pub(crate) mod tests;

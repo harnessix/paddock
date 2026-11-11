@@ -6,6 +6,8 @@
 //! and no outside host: refused names are in reserved domains.
 #![cfg(target_os = "macos")]
 
+mod common;
+
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 
@@ -34,7 +36,7 @@ impl Drop for World {
 
 impl World {
     fn new(script: &str) -> Self {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = common::tempdir();
         let root = std::fs::canonicalize(tmp.path()).unwrap();
         let cfg = root.join("cfg/paddock/harness.d");
         std::fs::create_dir_all(&cfg).unwrap();
@@ -229,5 +231,8 @@ fn paddock_host_done_ends_a_detached_run() {
         .arg("kill-server")
         .status();
     assert_eq!(wait.status.code(), Some(0), "{}", say(&wait));
-    assert_eq!(String::from_utf8_lossy(&wait.stdout).trim(), "ok: all good");
+    assert_eq!(
+        String::from_utf8_lossy(&wait.stdout).trim(),
+        format!("{id}: ok: all good")
+    );
 }

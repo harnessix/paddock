@@ -147,6 +147,24 @@ fn ps_json_keeps_existing_fields_and_adds_activity_and_ended() {
     assert_eq!(sb["detached"], false);
     assert_eq!(sb["boundary_count"], 0);
     assert_eq!(sb["activity"], "compiling crate");
+    assert!(sb.get("memory").is_none());
+    let out = w
+        .paddock()
+        .args(["ps", "--mem", "--json"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let with_memory: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let row = with_memory["sandboxes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["id"] == id)
+        .unwrap();
+    assert_eq!(row.get("memory"), Some(&serde_json::Value::Null));
+    let out = w.paddock().args(["ps", "--mem"]).output().unwrap();
+    assert!(out.status.success());
+    assert!(String::from_utf8_lossy(&out.stdout).contains("memory: unavailable"));
 
     let blank = sandboxes.iter().find(|s| s["id"] == quiet).unwrap();
     assert!(blank["activity"].is_null(), "{blank}");

@@ -101,6 +101,15 @@ pub fn parse_netstat(output: &str, port: u16) -> Option<u32> {
         if f.len() < 10 || !f[0].starts_with("tcp") || !f[3].ends_with(&suffix) {
             continue;
         }
+        // macOS 26 and later: a `process:pid` column after the byte counts.
+        if let Some(pid) = f[6..].iter().find_map(|t| {
+            let (name, pid) = t.rsplit_once(':')?;
+            (!name.is_empty()).then_some(())?;
+            pid.parse::<u32>().ok()
+        }) {
+            return (pid != 0).then_some(pid);
+        }
+        // Earlier releases: the `pid` and `epid` columns.
         let pid: u32 = f[8].parse().ok()?;
         let epid: u32 = f[9].parse().unwrap_or(0);
         return Some(if pid != 0 { pid } else { epid }).filter(|p| *p != 0);
@@ -108,7 +117,19 @@ pub fn parse_netstat(output: &str, port: u16) -> Option<u32> {
     None
 }
 
-/// The search over the buffer, apart from the sysctl.
+/// `so_last_pid` in `xsocket_n`, after `so_uid` at 64.
+pub const SO_LAST_PID: usize = 68;
+/// `so_e_pid` in `xsocket_n`: the process a daemon acts for.
+pub const SO_E_PID: usize = 72;
+
+/// The search over the buffer of `net.inet.tcp.pcblist_n`, apart from the
+/// sysctl: a header of `xig_len` bytes, then records of `xi_len`,
+/// `xi_kind` and the structure, each starting on an 8-byte boundary.
+/// Kind 0x10 is `xinpcb_n` with the foreign port at 16 and the local port
+/// at 18 (network order). Kind 0x01 is `xsocket_n` (pids at
+/// [`SO_LAST_PID`] and [`SO_E_PID`]). The inpcb record comes before its
+/// socket. Measured on macOS 27.2: a record of 204 bytes is followed by
+/// padding, and without the rounding the walk stops after a few records.
 pub fn pcblist_find(buf: &[u8], port: u16) -> Option<u32> {
     let u32_at = |o: usize| {
         buf.get(o..o + 4)
@@ -127,15 +148,15 @@ pub fn pcblist_find(buf: &[u8], port: u16) -> Option<u32> {
         match kind {
             0x10 => lport = u16_be(off + 18),
             0x01 if lport.take() == Some(port) => {
-                let e_pid = i32_at(off + 76)?;
-                let last = i32_at(off + 72)?;
+                let e_pid = i32_at(off + SO_E_PID)?;
+                let last = i32_at(off + SO_LAST_PID)?;
                 let pid = if e_pid > 0 { e_pid } else { last };
                 return (pid > 0).then_some(pid as u32);
             }
             0x01 => lport = None,
             _ => {}
         }
-        off += rlen;
+        off += rlen.next_multiple_of(8);
     }
     None
 }
@@ -195,11 +216,7 @@ mod macos {
     use objc2_foundation::{NSDictionary, NSNumber, NSString};
     use std::ffi::{c_void, CString};
 
-    /// The sysctl buffer: records of `xi_len`, `xi_kind`, then the
-    /// structure. Kind 0x10 is `xinpcb_n` with the foreign port at 16
-    /// and the local port at 18 (network order). Kind 0x01 is
-    /// `xsocket_n` with `so_uid` at 68, `so_last_pid` at 72 and
-    /// `so_e_pid` at 76. The inpcb record comes right before its socket.
+    /// The sysctl buffer: see [`super::pcblist_find`].
     pub fn pcblist_pid(port: u16) -> Option<u32> {
         let name = CString::new("net.inet.tcp.pcblist_n").ok()?;
         let mut len: libc::size_t = 0;

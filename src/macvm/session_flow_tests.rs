@@ -129,6 +129,7 @@ impl Host {
             token: TOKEN.into(),
             v: super::proto::VERSION,
             bench: false,
+            now_ms: None,
         });
         if early {
             h.hello(false);

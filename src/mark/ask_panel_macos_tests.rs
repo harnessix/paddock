@@ -47,3 +47,13 @@ fn the_text_of_the_panel_passes_aa_in_light_and_dark() {
         eprintln!("{name}: labelColor {ratio:.2}:1, secondaryLabelColor {secondary:.2}:1");
     }
 }
+
+#[test]
+fn new_answer_tags_round_trip() {
+    use crate::broker::ConnectAnswer;
+    for answer in [ConnectAnswer::AllowSite, ConnectAnswer::AllowEverything] {
+        let tag = super::tag_of(answer);
+        assert!(tag >= 0);
+        assert_eq!(ConnectAnswer::ALL[tag as usize], answer);
+    }
+}

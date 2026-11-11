@@ -97,6 +97,8 @@ fn is_zero(n: &u64) -> bool {
 #[serde(rename_all = "kebab-case")]
 pub enum ConnectAnswer {
     AllowOnce,
+    AllowSite,
+    AllowEverything,
     AllowSession,
     AllowAlways,
     Deny,
@@ -104,8 +106,10 @@ pub enum ConnectAnswer {
 }
 
 impl ConnectAnswer {
-    pub const ALL: [ConnectAnswer; 5] = [
+    pub const ALL: [ConnectAnswer; 7] = [
         ConnectAnswer::AllowOnce,
+        ConnectAnswer::AllowSite,
+        ConnectAnswer::AllowEverything,
         ConnectAnswer::AllowSession,
         ConnectAnswer::AllowAlways,
         ConnectAnswer::Deny,
@@ -116,6 +120,8 @@ impl ConnectAnswer {
     pub fn word(self) -> &'static str {
         match self {
             Self::AllowOnce => "allow-once",
+            Self::AllowSite => "allow-site",
+            Self::AllowEverything => "allow-everything",
             Self::AllowSession => "allow-session",
             Self::AllowAlways => "allow-always",
             Self::Deny => "deny",
@@ -126,7 +132,11 @@ impl ConnectAnswer {
     pub fn allows(self) -> bool {
         matches!(
             self,
-            Self::AllowOnce | Self::AllowSession | Self::AllowAlways
+            Self::AllowOnce
+                | Self::AllowSite
+                | Self::AllowEverything
+                | Self::AllowSession
+                | Self::AllowAlways
         )
     }
 
@@ -330,6 +340,15 @@ pub fn pending(env: &HostEnv) -> Vec<Pending> {
 /// the notification all come here, so they never disagree. Only the host
 /// can call this, like `answer`.
 pub fn answer_connect(env: &HostEnv, id: &str, a: ConnectAnswer) -> Result<()> {
+    answer_connect_origin(env, id, a, false)
+}
+
+/// Answer a connection question from the approvals command.
+pub fn answer_connect_cli(env: &HostEnv, id: &str, a: ConnectAnswer) -> Result<()> {
+    answer_connect_origin(env, id, a, true)
+}
+
+fn answer_connect_origin(env: &HostEnv, id: &str, a: ConnectAnswer, cli: bool) -> Result<()> {
     if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
         bail!("invalid request id");
     }
@@ -345,7 +364,8 @@ pub fn answer_connect(env: &HostEnv, id: &str, a: ConnectAnswer) -> Result<()> {
     write_answer(
         &dir,
         id,
-        serde_json::json!({ "reply": a.word() }).to_string(),
+        serde_json::json!({ "reply": a.word(), "source": if cli { "cli" } else { "panel" } })
+            .to_string(),
     )
 }
 
@@ -358,6 +378,20 @@ pub fn answer(env: &HostEnv, id: &str, a: Answer) -> Result<()> {
 /// Record the user's answer with a note for the agent. Only a denial
 /// carries a note.
 pub fn answer_with_note(env: &HostEnv, id: &str, a: Answer, note: Option<&str>) -> Result<()> {
+    answer_with_note_origin(env, id, a, note, false)
+}
+
+pub fn answer_with_note_cli(env: &HostEnv, id: &str, a: Answer, note: Option<&str>) -> Result<()> {
+    answer_with_note_origin(env, id, a, note, true)
+}
+
+fn answer_with_note_origin(
+    env: &HostEnv,
+    id: &str,
+    a: Answer,
+    note: Option<&str>,
+    cli: bool,
+) -> Result<()> {
     if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
         bail!("invalid request id");
     }
@@ -371,7 +405,7 @@ pub fn answer_with_note(env: &HostEnv, id: &str, a: Answer, note: Option<&str>) 
         if note.is_some() {
             bail!("a connect question takes no note");
         }
-        return answer_connect(env, id, ConnectAnswer::from_answer(a)?);
+        return answer_connect_origin(env, id, ConnectAnswer::from_answer(a)?, cli);
     }
     if p.capability == ASK_CAPABILITY && a != Answer::Deny {
         bail!("{id} is a question: answer it with --text TEXT, or dismiss it with deny");
@@ -418,6 +452,14 @@ fn write_answer(dir: &Path, id: &str, text: String) -> Result<()> {
 /// the agent that asked; nothing runs on the host. Only the host can call
 /// this, like `answer`.
 pub fn answer_reply(env: &HostEnv, id: &str, text: &str) -> Result<()> {
+    answer_reply_origin(env, id, text, false)
+}
+
+pub fn answer_reply_cli(env: &HostEnv, id: &str, text: &str) -> Result<()> {
+    answer_reply_origin(env, id, text, true)
+}
+
+fn answer_reply_origin(env: &HostEnv, id: &str, text: &str, cli: bool) -> Result<()> {
     if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
         bail!("invalid request id");
     }
@@ -428,7 +470,7 @@ pub fn answer_reply(env: &HostEnv, id: &str, text: &str) -> Result<()> {
     }
     let p: Pending = serde_json::from_str(&std::fs::read_to_string(&pending)?)?;
     if p.capability == CONNECT_CAPABILITY {
-        return answer_connect(env, id, text.trim().parse()?);
+        return answer_connect_origin(env, id, text.trim().parse()?, cli);
     }
     // A card of paddock itself with fixed choices: only those.
     if p.capability != ASK_CAPABILITY && !p.choices.is_empty() {
@@ -541,10 +583,8 @@ impl Pending {
 pub fn write_pending(env: &HostEnv, p: &Pending) -> std::io::Result<PathBuf> {
     let p = &p.cleaned();
     let pending = approvals_dir(env).join(format!("{}.json", p.id));
-    // Whole and renamed into place: a reader never sees half a card, and
-    // two writers of the same card (the waiters of one firewall question)
-    // never leave a mix of both.
     crate::privfs::write_atomic(&pending, serde_json::to_string(p).unwrap_or_default())?;
+    crate::mail::events::card(env, p);
     Ok(pending)
 }
 

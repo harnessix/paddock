@@ -29,6 +29,13 @@
 #   window move ID X Y W H      `window.move` to the guest, with the event
 #                               log line `moved after window.move` and its ms
 #   window raise ID             raise and activate the host window
+#   window frames ID            the host frame, the guest frame, the frame
+#                               the view shows, the offset, `moves_sent`
+#                               (the window.move requests sent for the
+#                               window), `undrawn` (the rectangles the
+#                               cover paints over what the guest has not
+#                               drawn yet), `edge` (the sampled side
+#                               color, 0 to 1) as JSON
 #   bench launch PATH           `app.launch` in the guest
 #   bench ax SECONDS            `ax.watch` on, one `WINDOW TEXT` line per
 #                               `ax.value` event, for that long
@@ -63,6 +70,22 @@
 #   corners        with the desktop set to pure green, a screenshot of the
 #                  four corner pixels of the front host window shows green
 #                  (the host desktop), not black and not the guest desktop.
+#   drag           a synthetic drag of the title bar of the key window (a
+#                  press, ten mouse steps, a release): the host window
+#                  moves, the guest frame stays the same, `moves_sent`
+#                  does not change (no window.move, not even at the
+#                  release), and events.jsonl has `the host drag ended,
+#                  the guest window stayed`. A right click in the moved
+#                  window then opens a menu whose offset is the window's.
+#   resize         a synthetic drag of the right edge of the key window,
+#                  eight steps of 30 points: after each step `window
+#                  frames` has `undrawn` above 0 whenever the host window
+#                  is wider than the frame the view shows, and a
+#                  screenshot of the new strip right of the old edge has
+#                  the sampled edge color (within 60 per channel), not the
+#                  guest desktop. After the release the guest width is the
+#                  host width within 2 points, and events.jsonl has `the
+#                  host resize ended` with its timings, which INFO prints.
 #   cmdq           Cmd-Q posted to the key host window runs the quit path:
 #                  the shim exits, events.jsonl has `quit (quit)` and
 #                  stamp.json has `"clean": true`.
@@ -115,6 +138,14 @@ case "click":
   post(CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: p, mouseButton: .left))
   post(CGEvent(mouseEventSource: nil, mouseType: right ? .rightMouseDown : .leftMouseDown, mouseCursorPosition: p, mouseButton: right ? .right : .left))
   post(CGEvent(mouseEventSource: nil, mouseType: right ? .rightMouseUp : .leftMouseUp, mouseCursorPosition: p, mouseButton: right ? .right : .left))
+case "down", "drag", "up":
+  // down|drag|up X Y: a left press, a drag step or the release at the point.
+  let p = CGPoint(x: Double(a[2])!, y: Double(a[3])!)
+  let kind: CGEventType = a[1] == "down" ? .leftMouseDown : (a[1] == "drag" ? .leftMouseDragged : .leftMouseUp)
+  if a[1] == "down" {
+    post(CGEvent(mouseEventSource: nil, mouseType: .mouseMoved, mouseCursorPosition: p, mouseButton: .left))
+  }
+  post(CGEvent(mouseEventSource: nil, mouseType: kind, mouseCursorPosition: p, mouseButton: .left))
 case "key":
   // key CODE [cmd]: a key down and up, with Command when asked.
   let code = CGKeyCode(UInt16(a[2])!)
@@ -146,7 +177,14 @@ default:
   print("unknown"); exit(2)
 }
 EOF
-helper() { swift "$tmp/win.swift" "$@"; }
+# Compiled once, so each call takes milliseconds: the drag and resize
+# checks post one step per call.
+helper() {
+  if [ ! -x "$tmp/win" ]; then
+    swiftc -O "$tmp/win.swift" -o "$tmp/win" >"$tmp/swiftc.log" 2>&1 || { swift "$tmp/win.swift" "$@"; return; }
+  fi
+  "$tmp/win" "$@"
+}
 
 build() {
   if ! cargo build --release --bin paddock --bin paddock-vm >"$tmp/build.log" 2>&1; then
@@ -240,6 +278,18 @@ frame() {
   echo "$(field "$entry" x) $(field "$entry" y) $(field "$entry" w) $(field "$entry" h)"
 }
 
+# js CODE ARG...: a JavaScript function body over argv, its answer.
+js() { local code=$1; shift; osascript -l JavaScript -e "function run(argv) { $code }" "$@"; }
+
+# hostframe ID: the host frame of a window as `X Y W H` in screen points
+# from the top left: where it shows, which is not the guest frame once the
+# person moved the host window.
+hostframe() {
+  local j; j=$(control "window frames $1" | sed -n 's/^ok //p')
+  [ -n "$j" ] || return 1
+  js 'var o = JSON.parse(argv[0]); return o.host.join(" ");' "$j"
+}
+
 check_two() {
   local list; list=$(wins)
   local n; n=$(field "$list" id | wc -l | tr -d ' ')
@@ -290,7 +340,7 @@ check_agent_restart() {
 check_menu() {
   control "window raise $key" >/dev/null
   sleep 0.3
-  read -r x y w h <<<"$(frame "$key")"
+  read -r x y w h <<<"$(hostframe "$key")"
   helper click $(( ${x%.*} + ${w%.*} / 2 )) $(( ${y%.*} + ${h%.*} / 2 )) right
   local i=0 found=""
   while [ "$i" -lt 5 ]; do
@@ -326,7 +376,7 @@ check_corners() {
   sleep 1
   control "window raise $key" >/dev/null
   sleep 0.5
-  read -r x y w h <<<"$(frame "$key")"
+  read -r x y w h <<<"$(hostframe "$key")"
   x=${x%.*}; y=${y%.*}; w=${w%.*}; h=${h%.*}
   screencapture -x -R "$x,$y,$w,$h" "$tmp/win.png" || { fail corners "screencapture failed (Screen Recording for the terminal?)"; return; }
   local scale; scale=$(system_profiler SPDisplaysDataType 2>/dev/null | grep -q Retina && echo 2 || echo 1)
@@ -340,6 +390,107 @@ check_corners() {
     fi
   done
   pass corners
+}
+
+# frames_of ID: the `window frames` JSON of a window.
+frames_of() { control "window frames $1" | sed -n 's/^ok //p'; }
+
+# jnum JSON PATH: one number of a JSON object, by a JavaScript path.
+jnum() { osascript -l JavaScript -e 'function run(a) { var o = JSON.parse(a[0]); var v = eval("o" + a[1]); return v == null ? "" : String(v); }' "$1" "$2"; }
+
+check_drag() {
+  control "window raise $key" >/dev/null
+  sleep 0.5
+  local j0 j1 lines
+  j0=$(frames_of "$key")
+  [ -n "$j0" ] || { fail drag "no window frames for $key"; return; }
+  lines=$(wc -l <"$events")
+  local hx hy hw gx gy moves
+  hx=$(jnum "$j0" '.host[0]'); hy=$(jnum "$j0" '.host[1]'); hw=$(jnum "$j0" '.host[2]')
+  gx=$(jnum "$j0" '.guest[0]'); gy=$(jnum "$j0" '.guest[1]'); moves=$(jnum "$j0" '.moves_sent')
+  # The title bar, away from the buttons.
+  local px=$(( ${hx%.*} + ${hw%.*} / 2 )) py=$(( ${hy%.*} + 12 ))
+  helper down "$px" "$py"
+  local i=1
+  while [ "$i" -le 10 ]; do
+    helper drag $(( px + i * 20 )) $(( py + i * 10 ))
+    i=$((i + 1))
+  done
+  helper up $(( px + 200 )) $(( py + 100 ))
+  sleep 1
+  j1=$(frames_of "$key")
+  echo "INFO drag: before $j0"
+  echo "INFO drag: after $j1"
+  local nhx nhy ngx ngy nmoves
+  nhx=$(jnum "$j1" '.host[0]'); nhy=$(jnum "$j1" '.host[1]')
+  ngx=$(jnum "$j1" '.guest[0]'); ngy=$(jnum "$j1" '.guest[1]'); nmoves=$(jnum "$j1" '.moves_sent')
+  [ "$nmoves" = "$moves" ] || { fail drag "window.move was sent: moves_sent $moves -> $nmoves"; return; }
+  [ "${ngx%.*}" = "${gx%.*}" ] && [ "${ngy%.*}" = "${gy%.*}" ] || { fail drag "the guest window moved: $gx,$gy -> $ngx,$ngy"; return; }
+  [ $(( ${nhx%.*} - ${hx%.*} )) -ge 150 ] && [ $(( ${nhy%.*} - ${hy%.*} )) -ge 50 ] || { fail drag "the host window did not move with the mouse: $hx,$hy -> $nhx,$nhy"; return; }
+  tail -n +"$((lines + 1))" "$events" | grep -q 'the host drag ended, the guest window stayed' || { fail drag "no event line of the drag end"; return; }
+  # A right click in the moved window still reaches the guest at the
+  # right place, and its menu opens at the window's offset.
+  local x y w h
+  read -r x y w h <<<"$(hostframe "$key")"
+  helper click $(( ${x%.*} + ${w%.*} / 2 )) $(( ${y%.*} + ${h%.*} / 2 )) right
+  local k=0 menu=""
+  while [ "$k" -lt 25 ]; do
+    menu=$(wins | tr '{' '\n' | grep '"level":"menu"' | sed -n 's/.*"id":\([0-9]*\)[,}].*/\1/p' | head -1)
+    [ -n "$menu" ] && break
+    sleep 0.02; k=$((k + 1))
+  done
+  [ -n "$menu" ] || { fail drag "no menu after a right click in the moved window"; helper key 53; return; }
+  local jm; jm=$(frames_of "$menu")
+  helper key 53 # Escape
+  [ "$(js 'var a = JSON.parse(argv[0]).offset, b = JSON.parse(argv[1]).offset; return Math.abs(a[0] - b[0]) <= 1 && Math.abs(a[1] - b[1]) <= 1 ? "1" : "0";' "$jm" "$j1")" = 1 ] || { fail drag "the menu is not at the window's offset: $jm"; return; }
+  pass drag
+}
+
+check_resize() {
+  control "window raise $key" >/dev/null
+  sleep 0.5
+  local j lines
+  j=$(frames_of "$key")
+  [ -n "$j" ] || { fail resize "no window frames for $key"; return; }
+  lines=$(wc -l <"$events")
+  local hx hy hw hh
+  hx=$(jnum "$j" '.host[0]'); hy=$(jnum "$j" '.host[1]'); hw=$(jnum "$j" '.host[2]'); hh=$(jnum "$j" '.host[3]')
+  hx=${hx%.*}; hy=${hy%.*}; hw=${hw%.*}; hh=${hh%.*}
+  local ex=$(( hx + hw - 2 )) ey=$(( hy + hh / 2 ))
+  local scale; scale=$(system_profiler SPDisplaysDataType 2>/dev/null | grep -q Retina && echo 2 || echo 1)
+  helper down "$ex" "$ey"
+  local i=1 why=""
+  while [ "$i" -le 8 ]; do
+    helper drag $(( ex + i * 30 )) "$ey"
+    j=$(frames_of "$key")
+    local w vw undrawn
+    w=$(jnum "$j" '.host[2]'); vw=$(jnum "$j" '.view[2]'); undrawn=$(jnum "$j" '.undrawn')
+    if [ "$(js 'return Number(argv[0]) > Number(argv[1]) + 0.5 && Number(argv[2]) == 0 ? "1" : "0";' "$w" "$vw" "$undrawn")" = 1 ]; then
+      why="step $i: the host window is $w wide, the view shows $vw, and nothing covers the rest"; break
+    fi
+    local edge; edge=$(jnum "$j" '.edge')
+    if [ -n "$edge" ]; then
+      # The new strip right of the old edge, below the title bar.
+      local sx=$(( hx + hw + 4 )) sw=$(( i * 30 - 8 ))
+      if [ "$sw" -gt 4 ] && screencapture -x -R "$sx,$(( hy + 60 )),$sw,$(( hh - 120 ))" "$tmp/strip.png" 2>/dev/null; then
+        local rgb; rgb=$(helper pixel "$tmp/strip.png" $(( sw * scale / 2 )) $(( (hh - 120) * scale / 2 )))
+        local bad; bad=$(js 'var e = argv[0].split(","); var p = argv[1].split(" "); for (var k = 0; k < 3; k++) if (Math.abs(Number(e[k]) * 255 - Number(p[k])) > 60) return "1"; return "0";' "$edge" "$rgb")
+        if [ "$bad" = 1 ]; then why="step $i: the strip right of the old edge is $rgb, not the edge color $edge (the guest desktop?)"; break; fi
+      fi
+    else
+      echo "INFO resize: step $i: no sampled edge color (the own window capture failed), only the cover state is checked"
+    fi
+    i=$((i + 1))
+  done
+  helper up $(( ex + 240 )) "$ey"
+  [ -z "$why" ] || { fail resize "$why"; return; }
+  wait_event window "the host resize ended" 3 || { fail resize "no line the host resize ended within 3 s"; return; }
+  tail -n +"$((lines + 1))" "$events" | grep 'the host resize ended' | tail -1 | sed 's/^/INFO resize: /'
+  sleep 0.5
+  j=$(frames_of "$key")
+  local gw nw; gw=$(jnum "$j" '.guest[2]'); nw=$(jnum "$j" '.host[2]')
+  [ "$(js 'return Math.abs(Number(argv[0]) - Number(argv[1])) <= 2 ? "1" : "0";' "$gw" "$nw")" = 1 ] || { fail resize "after the release the guest is $gw wide, the host $nw"; return; }
+  pass resize
 }
 
 check_cmdq() {
@@ -369,9 +520,9 @@ case "$what" in
   build) build ;;
   all)
     build
-    for c in two type move agent-restart menu oversize corners cmdq; do run_check "$c"; done
+    for c in two type move agent-restart menu oversize corners drag resize cmdq; do run_check "$c"; done
     ;;
-  two|type|move|agent-restart|menu|oversize|corners|cmdq) run_check "$what" ;;
+  two|type|move|agent-restart|menu|oversize|corners|drag|resize|cmdq) run_check "$what" ;;
   *) echo "unknown check $what" >&2; exit 2 ;;
 esac
 echo "macOS $(sw_vers -productVersion) ($(sw_vers -buildVersion)) on $(sysctl -n hw.model)"

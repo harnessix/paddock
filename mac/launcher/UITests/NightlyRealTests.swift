@@ -49,7 +49,7 @@ final class NightlyRealTests: XCTestCase {
     func testPanelKeys() throws {
         let shimID = try XCTUnwrap(env["PADDOCK_LAUNCHER_REAL_SHIM"], "set PADDOCK_LAUNCHER_REAL_SHIM")
         try run(["app", "network", appName, "ask"])
-        try run(["app", "run", appName, "--json"])
+        try run(["app", "run", appName])
         _ = try waitForState("running")
         let shim = XCUIApplication(bundleIdentifier: shimID)
         let keys: [(XCUIKeyboardKey, XCUIElement.KeyModifierFlags, String)] = [
@@ -73,7 +73,7 @@ final class NightlyRealTests: XCTestCase {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent("paddock-nightly-share")
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try run(["app", "network", appName, "none"])
-        try run(["app", "run", appName, "--json"])
+        try run(["app", "run", appName])
         _ = try waitForState("running")
 
         let added = try json(["app", "share", appName, "add", folder.path, "--json"])

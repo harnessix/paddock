@@ -108,8 +108,8 @@ pub fn user_backend(env: &HostEnv) -> Result<Option<String>> {
     let Ok(text) = std::fs::read_to_string(&file) else {
         return Ok(None);
     };
-    let doc: toml::Value =
-        toml::from_str(&text).map_err(|e| anyhow::anyhow!("{} is invalid: {e}", file.display()))?;
+    let doc: toml::Value = crate::manifest::user_config_doc(&text)
+        .map_err(|_| anyhow::anyhow!("{} is invalid", file.display()))?;
     match doc.get("macos").and_then(|m| m.get("backend")) {
         None => Ok(None),
         Some(toml::Value::String(s)) if s == "vm" || s == "seatbelt" || s == "auto" => {

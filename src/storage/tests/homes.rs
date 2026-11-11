@@ -257,6 +257,22 @@ fn scan_reads_homes_sessions_and_keyrings() {
 }
 
 #[test]
+fn horse_master_key_is_not_a_disposable_sandbox_password() {
+    let (_temp, env) = setup();
+    crate::horse::Store::open_host(&env).unwrap();
+    let master = env.paddock_state().join("keyring/horse/master");
+    assert!(master.is_file());
+    let c = FakeContainers::default();
+    let inventory = scan(&env, &host(&c, &[]), true);
+    assert!(inventory.keyrings.iter().all(|entry| entry.path != master));
+    let items = plan(&inventory, &opts(), state::now());
+    assert!(items.iter().all(|item| match &item.action {
+        Action::Path { path } => !master.starts_with(path),
+        _ => true,
+    }));
+}
+
+#[test]
 fn clock_shows_the_time_at_an_offset() {
     // 2026-11-02 14:05:30 UTC.
     let t = 1_793_628_330;
@@ -270,4 +286,38 @@ fn clock_shows_the_time_at_an_offset() {
     assert_eq!(&l[4..5], "-");
     assert_eq!(&l[10..11], " ");
     assert_eq!(&l[13..14], ":");
+}
+
+#[test]
+fn a_mailbox_goes_only_with_homes_after_its_run_ended_long_ago() {
+    let mut inv = inventory(vec![]);
+    let now = 100 * DAY;
+    let mbox = |id: &str, ended: Option<u64>| crate::mail::Stored {
+        id: id.into(),
+        path: format!("/s/mail/{id}").into(),
+        ended,
+        bytes: 10,
+    };
+    inv.mailboxes = vec![
+        mbox("old-p-000001", Some(now - 40 * DAY)),
+        mbox("new-p-000002", Some(now - DAY)),
+        mbox("run-p-000003", None),
+    ];
+    let o = GcOptions {
+        older_than_days: 30,
+        ..Default::default()
+    };
+    let items = plan(&inv, &o, now);
+    let mail: Vec<&Item> = items
+        .iter()
+        .filter(|i| i.what.starts_with("mailbox"))
+        .collect();
+    assert_eq!(mail.len(), 1, "{mail:?}");
+    assert_eq!(mail[0].what, "mailbox of old-p-000001");
+    assert_eq!(mail[0].tier, Tier::Consent);
+    assert_eq!(mail[0].needs, ["--homes"]);
+    let o = GcOptions { homes: true, ..o };
+    assert!(plan(&inv, &o, now)
+        .iter()
+        .any(|i| i.what.starts_with("mailbox") && i.selected()));
 }

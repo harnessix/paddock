@@ -3,7 +3,7 @@ use std::path::Path;
 
 fn ctx() -> Ctx {
     Ctx {
-        app: "ChatGPT".into(),
+        app: "Sample Notes".into(),
     }
 }
 
@@ -15,7 +15,7 @@ fn secs(n: u64) -> Duration {
 fn respond_matches_table_for_every_row() {
     use Step::*;
     let c = ctx();
-    let report = PathBuf::from("/p/logs/ChatGPT-1.ips");
+    let report = PathBuf::from("/p/logs/Sample Notes-1.ips");
     let rows: Vec<(Failure, Vec<Step>)> = vec![
         (
             Failure::GuestHang(Stage::Badge),
@@ -42,10 +42,10 @@ fn respond_matches_table_for_every_row() {
                 crashes: 1,
             },
             vec![
-                Line(text::app_exited("ChatGPT", 1)),
+                Line(text::app_exited("Sample Notes", 1)),
                 Event {
                     kind: "app",
-                    text: text::app_exited("ChatGPT", 1),
+                    text: text::app_exited("Sample Notes", 1),
                 },
                 CloseWindows,
                 DockEntry(Entry::OpenAgain),
@@ -150,14 +150,14 @@ fn respond_matches_table_for_every_row() {
         ),
         (
             Failure::AppCopyFailed {
-                app: "ChatGPT".into(),
+                app: "Sample Notes".into(),
                 reason: "full".into(),
             },
             vec![
-                Line(text::copy_failed("ChatGPT", "full")),
+                Line(text::copy_failed("Sample Notes", "full")),
                 Event {
                     kind: "copy",
-                    text: text::copy_failed("ChatGPT", "full"),
+                    text: text::copy_failed("Sample Notes", "full"),
                 },
             ],
         ),
@@ -178,7 +178,7 @@ fn respond_matches_table_for_every_row() {
         ),
         (
             Failure::SecondStart { pid: 812 },
-            vec![Line(text::profile_running("ChatGPT", 812)), Exit(2)],
+            vec![Line(text::profile_running("Sample Notes", 812)), Exit(2)],
         ),
     ];
     assert_eq!(rows.len(), ROWS);
@@ -235,7 +235,7 @@ fn respond_matches_table_for_every_row() {
 #[test]
 fn health_gap_timeline() {
     let t0 = Instant::now();
-    let mut w = Watch::new("ChatGPT");
+    let mut w = Watch::new("Sample Notes");
     assert!(w.alive(t0).is_empty());
     assert!(w.tick(t0 + secs(9)).is_empty());
     let at10 = w.tick(t0 + secs(10));
@@ -253,7 +253,7 @@ fn health_gap_timeline() {
     assert_eq!(w.stage(), None, "the cold boot starts the clock again");
     assert!(w.tick(t0 + secs(200)).is_empty(), "no health yet: no clock");
     // A pong at 25 s resets everything: 30 s gives nothing.
-    let mut w = Watch::new("ChatGPT");
+    let mut w = Watch::new("Sample Notes");
     w.alive(t0);
     w.tick(t0 + secs(10));
     let pong = w.alive(t0 + secs(25));
@@ -263,7 +263,7 @@ fn health_gap_timeline() {
     assert!(w.tick(t0 + secs(34)).is_empty());
     assert!(!w.tick(t0 + secs(35)).is_empty(), "10 s after the pong");
     // A tick that skips a stage still fires each stage once, in order.
-    let mut w = Watch::new("ChatGPT");
+    let mut w = Watch::new("Sample Notes");
     w.alive(t0);
     let all = w.tick(t0 + secs(130));
     let dock = all
@@ -279,7 +279,7 @@ fn health_gap_timeline() {
 
 #[test]
 fn three_timeouts_is_agent_crash() {
-    let mut w = Watch::new("ChatGPT");
+    let mut w = Watch::new("Sample Notes");
     let t0 = Instant::now();
     w.alive(t0);
     assert_eq!(w.timeout("ping").len(), 1);
@@ -306,7 +306,7 @@ fn three_timeouts_is_agent_crash() {
 
 #[test]
 fn wake_sequence() {
-    let mut w = Watch::new("ChatGPT");
+    let mut w = Watch::new("Sample Notes");
     let t0 = Instant::now();
     w.alive(t0);
     let woke = w.woke(secs(30), t0 + secs(40));
@@ -330,7 +330,7 @@ fn wake_sequence() {
     assert!(w.tick(t0 + secs(47)).is_empty());
     // The silence of the sleep itself is not a health gap: the clock
     // starts at the wake.
-    let mut w = Watch::new("ChatGPT");
+    let mut w = Watch::new("Sample Notes");
     w.alive(t0);
     w.woke(secs(300), t0 + secs(300));
     let tick = w.tick(t0 + secs(302));
@@ -340,9 +340,9 @@ fn wake_sequence() {
 
 #[test]
 fn crash_counter_stops_relaunch() {
-    let mut w = Watch::new("ChatGPT");
+    let mut w = Watch::new("Sample Notes");
     let t0 = Instant::now();
-    let report = Some(PathBuf::from("/p/logs/ChatGPT-3.ips"));
+    let report = Some(PathBuf::from("/p/logs/Sample Notes-3.ips"));
     let one = w.app_exited(1, None, t0);
     assert!(one.contains(&Step::Relaunch(true)));
     assert!(one.contains(&Step::DockEntry(Entry::OpenAgain)));
@@ -350,19 +350,19 @@ fn crash_counter_stops_relaunch() {
     assert!(two.contains(&Step::Relaunch(true)));
     let three = w.app_exited(1, report.clone(), t0 + secs(40));
     assert!(three.contains(&Step::Relaunch(false)));
-    let line = text::relaunch_stopped("ChatGPT", report.as_deref());
+    let line = text::relaunch_stopped("Sample Notes", report.as_deref());
     assert!(three.contains(&Step::Line(line.clone())));
-    assert!(line.contains("/p/logs/ChatGPT-3.ips"));
+    assert!(line.contains("/p/logs/Sample Notes-3.ips"));
     assert!(!w.relaunch_allowed(t0 + secs(41)));
     assert!(w.relaunch_allowed(t0 + secs(61)), "the window moved on");
     // A clean exit does not count.
-    let mut w = Watch::new("ChatGPT");
+    let mut w = Watch::new("Sample Notes");
     for i in 0..5 {
         let v = w.app_exited(0, None, t0 + secs(i));
         assert!(v.contains(&Step::Relaunch(true)));
     }
     // Three crashes spread over more than a minute do not stop it.
-    let mut w = Watch::new("ChatGPT");
+    let mut w = Watch::new("Sample Notes");
     w.app_exited(1, None, t0);
     w.app_exited(1, None, t0 + secs(30));
     let v = w.app_exited(1, None, t0 + secs(61));
@@ -372,7 +372,7 @@ fn crash_counter_stops_relaunch() {
 #[test]
 fn guest_restart_keeps_args() {
     let args = BootArgs {
-        profile: Path::new("/p/profiles/ChatGPT/default").into(),
+        profile: Path::new("/p/profiles/Sample Notes/default").into(),
         shares: vec!["ws-0=/Users/me/src:rw".into(), "agent=/a:ro".into()],
         token: "tok".into(),
         display: "2560x1600@2".into(),
@@ -391,7 +391,7 @@ fn guest_restart_keeps_args() {
 #[test]
 fn a_thaw_starts_the_health_clock_again() {
     let t0 = Instant::now();
-    let mut w = Watch::new("ChatGPT");
+    let mut w = Watch::new("Sample Notes");
     w.alive(t0);
     w.timeout("window.move 3");
     // A freeze of 5 minutes, then the thaw: the pause is not a silence.

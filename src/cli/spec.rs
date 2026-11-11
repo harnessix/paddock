@@ -1,6 +1,7 @@
 use anyhow::{Context as _, Result};
 use clap::Subcommand;
 use paddock::env::HostEnv;
+use paddock::gauge;
 use paddock::speckit::flow::{self, Spot};
 use std::path::PathBuf;
 
@@ -16,6 +17,34 @@ pub(crate) enum SpecCmd {
         feature: Option<String>,
         #[arg(long)]
         json: bool,
+    },
+    /// The appetite of a feature: the time you want to spend on it, from its start (3d, 36h, 1d12h), or off. paddock warns at 50, 80 and 100 % and every 25 % after that, and never stops the work. Without VALUE, print it.
+    Appetite {
+        feature: String,
+        value: Option<String>,
+        #[arg(long)]
+        dir: Option<PathBuf>,
+    },
+    /// Record the result of a gate run on a task (pass, fail or skip), for `paddock gauge`. A gate that only skipped is no evidence that the task is done.
+    Gate {
+        /// The task id, for example T012.
+        task: String,
+        /// The gate name, for example tests or real-sandbox.
+        gate: String,
+        /// pass, fail or skip.
+        result: String,
+        #[arg(long)]
+        feature: Option<String>,
+        #[arg(long)]
+        note: Option<String>,
+        /// Exclave peer name; requires --snapshot-hash.
+        #[arg(long, requires = "snapshot_hash")]
+        peer: Option<String>,
+        /// Snapshot BLAKE3 hash (64 lowercase hex digits); requires --peer.
+        #[arg(long, requires = "peer")]
+        snapshot_hash: Option<String>,
+        #[arg(long)]
+        dir: Option<PathBuf>,
     },
     /// Move .specify/ and specs/ of a repository into the loft, after a question. Needs the loft (`paddock loft init`) or [speckit] store = "external".
     Adopt {
@@ -85,6 +114,45 @@ pub(crate) fn run(env: &HostEnv, cmd: SpecCmd) -> Result<i32> {
             }
             Ok(0)
         }
+        SpecCmd::Appetite {
+            feature,
+            value,
+            dir,
+        } => appetite(env, &project(dir)?, &feature, value.as_deref()),
+        SpecCmd::Gate {
+            task,
+            gate,
+            result,
+            feature,
+            note,
+            peer,
+            snapshot_hash,
+            dir,
+        } => {
+            paddock::update::refuse_in_sandbox(env, "paddock spec gate")?;
+            let project = project(dir)?;
+            let layout = spec_layout(env, &project)?;
+            let feature = gauge::collect::feature(&layout, feature.as_deref())?;
+            anyhow::ensure!(
+                paddock::speckit::tasks::is_id(&task),
+                "'{task}' is no task id such as T012"
+            );
+            let g = gauge::evidence::Gate {
+                task: task.clone(),
+                gate,
+                outcome: gauge::evidence::Outcome::parse(&result)?,
+                at: paddock::state::now(),
+                note: note.unwrap_or_default(),
+                peer,
+                snapshot_hash,
+            };
+            gauge::evidence::record_gate(
+                &gauge::collect::Files::of(&layout, &feature).gates(),
+                &g,
+            )?;
+            println!("{feature} {task}: gate {} {}", g.gate, g.outcome.name());
+            Ok(0)
+        }
         SpecCmd::Adopt { dir, yes } => {
             let project = project(dir)?;
             let mut term = paddock::setup::Terminal::detect();
@@ -107,4 +175,62 @@ pub(crate) fn run(env: &HostEnv, cmd: SpecCmd) -> Result<i32> {
             Ok(0)
         }
     }
+}
+
+fn spec_layout(env: &HostEnv, project: &std::path::Path) -> Result<paddock::speckit::Layout> {
+    paddock::speckit::Layout::resolve(env, project).with_context(|| {
+        format!(
+            "{} is no Spec Kit project (no .specify/ folder), or [speckit] enabled = false",
+            project.display()
+        )
+    })
+}
+
+/// `paddock spec appetite FEATURE [VALUE]`.
+fn appetite(
+    env: &HostEnv,
+    project: &std::path::Path,
+    feature: &str,
+    value: Option<&str>,
+) -> Result<i32> {
+    let layout = spec_layout(env, project)?;
+    let feature = gauge::collect::feature(&layout, Some(feature))?;
+    let path = gauge::collect::Files::of(&layout, &feature).appetite();
+    let old = gauge::appetite::load(&path);
+    let Some(value) = value else {
+        match old {
+            Some(a) => println!("{feature}: appetite {}", a.text),
+            None => println!("{feature}: no appetite (forecasts only)"),
+        }
+        return Ok(0);
+    };
+    paddock::update::refuse_in_sandbox(env, "paddock spec appetite")?;
+    match gauge::appetite::parse(value)? {
+        None => {
+            if path.is_file() {
+                std::fs::remove_file(&path)?;
+            }
+            println!("{feature}: no appetite now (forecasts only)");
+        }
+        Some(secs) => {
+            // A new value starts its own warnings; the same value keeps them.
+            let warned = old
+                .filter(|a| a.secs == secs)
+                .map(|a| a.warned)
+                .unwrap_or_default();
+            let a = gauge::appetite::Appetite {
+                secs,
+                text: value.trim().to_string(),
+                set_at: paddock::state::now(),
+                warned,
+            };
+            gauge::appetite::save(&path, &a)?;
+            println!(
+                "{feature}: appetite {} ({}). paddock warns at 50, 80 and 100 % and every 25 % after that; it never stops the work. `paddock gauge {feature}` shows the share used.",
+                a.text,
+                gauge::appetite::human(secs)
+            );
+        }
+    }
+    Ok(0)
 }

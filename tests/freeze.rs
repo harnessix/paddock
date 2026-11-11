@@ -1,3 +1,4 @@
+#![cfg(target_os = "linux")]
 //! `paddock freeze` and `paddock thaw` end to end: a bwrap sandbox runs in
 //! a scope of its own, freezing stops it (a counter that it writes stays
 //! the same), thawing lets it continue, `paddock ps` shows the freeze, and
@@ -23,6 +24,7 @@ impl World {
     fn new() -> Self {
         let tmp = common::tempdir();
         let root = tmp.path().to_path_buf();
+        std::fs::create_dir_all(root.join("home")).unwrap();
         let cfg = root.join("cfg/paddock/harness.d");
         std::fs::create_dir_all(&cfg).unwrap();
         std::fs::create_dir_all(root.join("project")).unwrap();
@@ -50,7 +52,8 @@ impl World {
 
     fn paddock(&self) -> Command {
         let mut c = Command::new(env!("CARGO_BIN_EXE_paddock"));
-        c.env("XDG_CONFIG_HOME", self.root.join("cfg"))
+        c.env("HOME", self.root.join("home"))
+            .env("XDG_CONFIG_HOME", self.root.join("cfg"))
             .env("XDG_DATA_HOME", self.root.join("data"))
             .env("XDG_STATE_HOME", self.root.join("state"))
             .env("XDG_CACHE_HOME", self.root.join("cache"))

@@ -6,10 +6,10 @@ use crate::mark::{run_badge, run_menu_title, Target, Tone};
 fn session() -> Session {
     Session {
         pid: 812,
-        app: "chatgpt-desktop".into(),
-        profile: "/data/macvm/profiles.noindex/chatgpt-desktop/default".into(),
+        app: "sample-notes".into(),
+        profile: "/data/macvm/profiles.noindex/sample-notes/default".into(),
         started: 1000,
-        display_name: "ChatGPT (paddock)".into(),
+        display_name: "Sample Notes (paddock)".into(),
         ..Default::default()
     }
 }
@@ -18,7 +18,7 @@ fn session() -> Session {
 fn the_record_names_the_shim_with_the_macvm_backend() {
     let s = session();
     let r = record(&s, &[PathBuf::from("/work/web")], "ask", 700);
-    assert_eq!(r.id, "macvm-chatgpt-desktop");
+    assert_eq!(r.id, "macvm-sample-notes");
     assert_eq!(r.backend, "macvm");
     assert_eq!(r.gui, "app");
     assert_eq!(r.pid, 812);
@@ -37,12 +37,12 @@ fn the_record_names_the_shim_with_the_macvm_backend() {
 #[test]
 fn the_display_name_is_the_dock_name() {
     assert_eq!(
-        display_name("chatgpt-desktop", 1, None),
-        "chatgpt-desktop (paddock)"
+        display_name("sample-notes", 1, None),
+        "sample-notes (paddock)"
     );
     assert_eq!(
-        display_name("chatgpt-desktop", 2, None),
-        "chatgpt-desktop 2 (paddock)"
+        display_name("sample-notes", 2, None),
+        "sample-notes 2 (paddock)"
     );
 }
 
@@ -68,11 +68,11 @@ fn the_marks_of_a_session_come_from_both_records() {
     assert_eq!(f.note, None);
     assert_eq!(
         run_badge(&r, Some(f), 1000 + 7200),
-        "paddock · chatgpt-desktop · ask · vm · Pinyin - Simplified · 2h"
+        "paddock · sample-notes · ask · vm · Pinyin - Simplified · 2h"
     );
     assert_eq!(
         run_menu_title(&r, Some(f), 1000 + 60, 1, 2, None),
-        "ChatGPT (paddock) · web · ask · vm · 1m (1/2)"
+        "Sample Notes (paddock) · web · ask · vm · 1m (1/2)"
     );
     // Another badge of the session is a note at the end.
     s.badge = Some(crate::macvm::text::display_changed());
@@ -80,7 +80,7 @@ fn the_marks_of_a_session_come_from_both_records() {
     let facts = crate::mark::vm::match_facts(std::slice::from_ref(&r), [&s].into_iter());
     assert_eq!(
         run_badge(&r, facts[0].as_ref(), 1000),
-        "paddock · chatgpt-desktop · ask · vm · <1m · display changed, restart for full size"
+        "paddock · sample-notes · ask · vm · <1m · display changed, restart for full size"
     );
     // A session record of another shim pid gives no facts.
     s.pid = 9;
@@ -88,6 +88,6 @@ fn the_marks_of_a_session_come_from_both_records() {
     assert_eq!(facts, vec![None]);
     assert_eq!(
         run_badge(&r, None, 1000),
-        "paddock · chatgpt-desktop · ask · vm · <1m"
+        "paddock · sample-notes · ask · vm · <1m"
     );
 }

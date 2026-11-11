@@ -34,7 +34,7 @@ fn profile_lock_second_fails_with_pid() {
 fn slots_third_fails_with_holders() {
     let t = tempfile::tempdir().unwrap();
     let dir = t.path().join("slots");
-    let a = Slot::take_in(&dir, "ana", "chatgpt-desktop", 812).unwrap();
+    let a = Slot::take_in(&dir, "ana", "sample-notes", 812).unwrap();
     assert_eq!(a.index, 0);
     assert_eq!(
         std::fs::metadata(&dir).unwrap().permissions().mode() & 0o7777,
@@ -46,7 +46,7 @@ fn slots_third_fails_with_holders() {
     );
     assert_eq!(
         std::fs::read_to_string(&a.path).unwrap(),
-        "ana chatgpt-desktop 812\n"
+        "ana sample-notes 812\n"
     );
     let b = Slot::take_in(&dir, "bo", "vscode", 900).unwrap();
     assert_eq!(b.index, 1);
@@ -54,7 +54,7 @@ fn slots_third_fails_with_holders() {
         holders(&dir, "ana"),
         vec![
             Some(Holder::Mine {
-                app: "chatgpt-desktop".into(),
+                app: "sample-notes".into(),
                 pid: 812
             }),
             Some(Holder::User { name: "bo".into() })
@@ -83,7 +83,7 @@ fn slots_third_fails_with_holders() {
     };
     assert_eq!(
         full.to_string(),
-        "two macOS VMs already run on this Mac: chatgpt-desktop (you, pid 812) and a VM of user bo. Stop one (paddock app stop chatgpt-desktop), then try again"
+        "two macOS VMs already run on this Mac: sample-notes (you, pid 812) and a VM of user bo. Stop one (paddock app stop sample-notes), then try again"
     );
     // No third file appeared.
     assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 2);
@@ -102,7 +102,7 @@ fn slots_third_fails_with_holders() {
 fn holder_text_is_cut_and_one_line() {
     let t = tempfile::tempdir().unwrap();
     let dir = t.path().join("slots");
-    let _a = Slot::take_in(&dir, "ana", "chatgpt-desktop", 812).unwrap();
+    let _a = Slot::take_in(&dir, "ana", "sample-notes", 812).unwrap();
     let _b = Slot::take_in(&dir, "bo", "vscode", 900).unwrap();
     // Another program wrote junk into the slot files.
     std::fs::write(dir.join("slot-0"), "first line\nsecond line\n").unwrap();

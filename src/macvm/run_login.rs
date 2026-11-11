@@ -59,7 +59,17 @@ impl Login {
             label: plan.app.clone(),
             dir: plan.profile.dir.clone(),
         };
-        let policy = crate::broker::HostPolicy::load(env).map_err(|e| format!("{e:#}"));
+        let mut policy = crate::broker::HostPolicy::load(env).map_err(|e| format!("{e:#}"));
+        // A link that the app of a guest session opens is the person's own
+        // click in that app (a sign-in, a help page): it opens in the host
+        // browser without a card, as on the Mac itself, unless `[host]
+        // open-url` says otherwise. A card that nobody sees left every
+        // sign-in waiting.
+        if let Ok(p) = &mut policy {
+            if !crate::broker::HostPolicy::configured(env, "open-url") {
+                p.set_mode("open-url", crate::broker::Mode::Allow);
+            }
+        }
         let links = Links::new(
             env.clone(),
             policy,

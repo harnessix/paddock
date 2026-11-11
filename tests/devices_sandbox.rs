@@ -367,3 +367,37 @@ fn an_instance_dies_with_its_paddock_process_and_check_measures_the_start() {
     );
     assert!(!dir.exists(), "and its folder: {}", dir.display());
 }
+
+#[test]
+fn a_host_home_under_tmp_does_not_hide_the_device_working_directory() {
+    if !can_run() {
+        return;
+    }
+    let w = World::new("");
+    let host_home = tempfile::tempdir_in("/tmp").unwrap();
+    let script = w.script("home-check.sh", "printf '%s\\n' \"$HOME\"; pwd; cat");
+    std::fs::write(
+        w.root.join("cfg/paddock/config.toml"),
+        format!(
+            "[devices.homecheck]\nshape = \"exec\"\nenabled = true\ncommand = [{}]\n[devices.homecheck.sandbox]\nro = [{}]\n",
+            serde_json::to_string(&script).unwrap(),
+            serde_json::to_string(&w.root.join("dev").display().to_string()).unwrap(),
+        ),
+    )
+    .unwrap();
+    let out = w
+        .paddock()
+        .env("HOME", host_home.path())
+        .args(["device", "check", "homecheck", "--send", "hello"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "{stdout}\n{stderr}");
+    let result = body(&stdout);
+    assert!(
+        result.contains(&host_home.path().display().to_string()),
+        "{result}"
+    );
+    assert!(result.contains("hello"), "{result}");
+}

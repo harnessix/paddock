@@ -13,8 +13,8 @@ fn window(id: u32) -> Window {
     Window {
         id,
         pid: 501,
-        app: "com.openai.chat".into(),
-        title: "ChatGPT".into(),
+        app: "com.example.notes".into(),
+        title: "Sample Notes".into(),
         frame: Frame::new(10.0, 20.0, 800.0, 600.0),
         level: Level::Normal,
         parent: None,
@@ -60,7 +60,7 @@ fn events() -> Vec<Event> {
             removed: vec![3],
         }),
         Event::Focus {
-            app: "com.openai.chat".into(),
+            app: "com.example.notes".into(),
             window: Some(1),
         },
         Event::Clipboard {
@@ -69,7 +69,7 @@ fn events() -> Vec<Event> {
             transfer: None,
         },
         Event::Menu {
-            app: "com.openai.chat".into(),
+            app: "com.example.notes".into(),
             items: vec![MenuItem {
                 title: "File".into(),
                 path: vec![2],
@@ -86,10 +86,10 @@ fn events() -> Vec<Event> {
             cut: true,
         },
         Event::AppExited {
-            app: "com.openai.chat".into(),
+            app: "com.example.notes".into(),
             code: 11,
             crash_report: Some(PathBuf::from(
-                "/Users/paddock/Library/Logs/DiagnosticReports/ChatGPT-2026-11-04-100000.ips",
+                "/Users/paddock/Library/Logs/DiagnosticReports/Sample Notes-report.ips",
             )),
             relaunch: false,
         },
@@ -144,6 +144,13 @@ fn events() -> Vec<Event> {
                 missing: vec!["com.sogou.inputmethod.sogou.pinyin".into()],
             },
         )),
+        Event::Reply(Reply::data(
+            10,
+            ReplyData::Moved {
+                frame: Frame::new(100.0, 80.0, 520.0, 300.0),
+                ms: 6.5,
+            },
+        )),
         Event::Reply(Reply::error(
             9,
             ErrorCode::Timeout,
@@ -157,6 +164,7 @@ fn events() -> Vec<Event> {
 /// request needs an entry in all three places.
 const OPS: &[&str] = &[
     "token",
+    "clock.set",
     "window.move",
     "window.raise",
     "window.minimize",
@@ -195,6 +203,11 @@ pub(super) fn requests() -> Vec<Request> {
             token: TOKEN.into(),
             v: VERSION,
             bench: false,
+            now_ms: None,
+        },
+        Request::ClockSet {
+            unix_ms: 1_709_164_800_000,
+            password: PASSWORD.into(),
         },
         Request::WindowMove {
             id: 1,
@@ -205,18 +218,18 @@ pub(super) fn requests() -> Vec<Request> {
         Request::WindowClose { id: 1 },
         Request::WindowFocus { id: 1 },
         Request::AppLaunch {
-            path: PathBuf::from("/Applications/ChatGPT.app"),
+            path: PathBuf::from("/Applications/Sample Notes.app"),
             args: vec!["--x".into()],
             env: [("SECRET".to_string(), TOKEN.to_string())].into(),
         },
         Request::AppQuit {
-            app: "com.openai.chat".into(),
+            app: "com.example.notes".into(),
             force: false,
         },
         Request::AppCopy {
-            from: PathBuf::from("/Volumes/My Shared Files/apps/ChatGPT.app"),
-            to: PathBuf::from("/Volumes/paddock/Applications/ChatGPT.app"),
-            version: "1.2025.300".into(),
+            from: PathBuf::from("/Volumes/My Shared Files/apps/Sample Notes.app"),
+            to: PathBuf::from("/Volumes/paddock/Applications/Sample Notes.app"),
+            version: "1.2.3".into(),
             unquarantine: true,
         },
         Request::ClipboardSet {
@@ -264,7 +277,7 @@ pub(super) fn requests() -> Vec<Request> {
         Request::LogFetch,
         Request::DiskLow,
         Request::Menu {
-            app: "com.openai.chat".into(),
+            app: "com.example.notes".into(),
         },
         Request::MenuPress { path: vec![2, 0] },
         Request::AxWatch { on: true },
@@ -549,4 +562,27 @@ fn an_agent_of_the_same_version_but_another_build_updates() {
         check_hello_sha(&h, VERSION, "0.2.1", host.as_deref()).unwrap(),
         HelloAction::Talk
     );
+}
+
+#[test]
+fn clock_set_requires_a_new_enough_agent() {
+    assert!(!supports_clock_set(Version { major: 1, minor: 0 }));
+    assert!(supports_clock_set(Version { major: 1, minor: 1 }));
+    assert!(!supports_clock_set(Version { major: 2, minor: 1 }));
+}
+
+#[test]
+fn a_move_reply_gives_its_frame_and_others_none() {
+    let f = Frame::new(1.0, 2.0, 300.0, 200.0);
+    let moved = Outcome::Ok {
+        data: Some(ReplyData::Moved { frame: f, ms: 4.0 }),
+    };
+    assert_eq!(moved.moved(), Some(f));
+    assert_eq!(moved.moved_with_ms(), Some((f, 4.0)));
+    assert_eq!(Outcome::Ok { data: None }.moved(), None);
+    let err = Outcome::Error {
+        code: ErrorCode::Timeout,
+        text: "late".into(),
+    };
+    assert_eq!(err.moved(), None);
 }

@@ -148,6 +148,9 @@ fn read_until(fd: RawFd, needle: &[u8], timeout: Duration) -> Vec<u8> {
 
 #[test]
 fn the_relay_copies_bytes_size_exit_code_and_the_log() {
+    let _only = super::winch::TEST_SIGNAL
+        .write()
+        .unwrap_or_else(|e| e.into_inner());
     let (caller_m, caller_s) = caller_pty();
     set_size(caller_m, 24, 80);
     let dir = tempfile::tempdir().unwrap();
@@ -232,6 +235,9 @@ fn wait_child(child: &mut std::process::Child, timeout: Duration) -> std::proces
 /// the Codex hooks review screen and waits for one key.
 #[test]
 fn the_screen_watcher_answers_through_the_relay() {
+    let _relay = super::winch::TEST_SIGNAL
+        .read()
+        .unwrap_or_else(|e| e.into_inner());
     let (caller_m, caller_s) = caller_pty();
     set_size(caller_m, 24, 100);
     let profile: crate::profile::Profile =
@@ -244,11 +250,11 @@ fn the_screen_watcher_answers_through_the_relay() {
         caller_s,
         caller_s,
         move |data| l.lock().unwrap().extend_from_slice(data),
-        Taps::of(None, Some(w.clone())),
+        Taps::of(None, Some(w.clone()), None),
     )
     .unwrap();
     let script = "printf '  Hooks need review\\n  1 hook is new or changed.\\n  Hooks can run outside the sandbox after you trust them.\\n› 1. Review hooks\\n  2. Trust all and continue\\n  3. Continue without trusting (hooks won'\\''t run)\\n  enter confirm · esc skip\\n'; \
-                  stty -icanon -echo min 1; c=$(dd bs=1 count=1 2>/dev/null); \
+                  stty -icanon -echo min 1; c=$(dd bs=1 count=7 2>/dev/null | od -An -tx1 | tr -d ' \n'); \
                   printf '\\033[2J\\033[Hgot:%s\\n' \"$c\"; sleep 1; exit 0";
     let (stdin, stdout, stderr) = relay.child_stdio().unwrap();
     let mut cmd = Command::new("sh");
@@ -263,9 +269,9 @@ fn the_screen_watcher_answers_through_the_relay() {
     }
     let mut child = cmd.spawn().unwrap();
     relay.close_slave();
-    let out = read_until(caller_m, b"got:3", Duration::from_secs(10));
+    let out = read_until(caller_m, b"got:1b5b421b5b420a", Duration::from_secs(10));
     let text = String::from_utf8_lossy(&out);
-    assert!(text.contains("got:3"), "{text}");
+    assert!(text.contains("got:1b5b421b5b420a"), "{text}");
     let status = wait_child(&mut child, Duration::from_secs(10));
     assert_eq!(status.code(), Some(0));
     relay.finish();
@@ -288,6 +294,95 @@ fn the_screen_watcher_answers_through_the_relay() {
     }
 }
 
+#[test]
+fn folder_trust_fake_terminals_answer_only_the_project() {
+    let _relay = super::winch::TEST_SIGNAL
+        .read()
+        .unwrap_or_else(|e| e.into_inner());
+    for (name, outside) in [
+        ("agy", false),
+        ("codex", false),
+        ("agy", true),
+        ("codex", true),
+    ] {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("project");
+        let other = tmp.path().join("other");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        let env = crate::privfs::tests::env_in(tmp.path());
+        let profile = crate::profile::builtin(name).unwrap();
+        let shown = if outside { &other } else { &project };
+        let screen = if name == "agy" {
+            format!("Accessing workspace: {}\nDo you trust the contents of this project?\nAntigravity CLI requires permission to read, edit, and execute files here.\n> Yes, I trust this folder\nNo, exit\n↑/↓ Navigate · enter Confirm", shown.display())
+        } else {
+            format!("Folder access\n{}\nTrust this folder? Codex can read, edit, and run files here, subject to your permission settings. Folder settings can run code automatically, even without a model request. Continue only if you trust these files. Your trust decision will be saved.\n› 1. Trust and continue\n2. Back to Agent Command Center\nenter continue · esc back", shown.display())
+        };
+        let screen_file = tmp.path().join("screen");
+        std::fs::write(&screen_file, format!("{screen}\n")).unwrap();
+        let spec = crate::spec::SandboxSpec::new(
+            "fake-screen-123abc".into(),
+            name,
+            &project,
+            tmp.path().into(),
+            tmp.path(),
+            env.uid,
+            env.gid,
+            "test",
+        );
+        crate::mail::create(&env, &spec.id, &crate::mail::Starter::host()).unwrap();
+        let w = crate::screens::prepare(&env, &profile, &spec, true, true, false).unwrap();
+        let (caller_m, caller_s) = caller_pty();
+        set_size(caller_m, 30, 100);
+        let mut relay = Relay::start(
+            caller_s,
+            caller_s,
+            |_| {},
+            Taps::of(None, Some(w.clone()), None),
+        )
+        .unwrap();
+        let (stdin, stdout, stderr) = relay.child_stdio().unwrap();
+        let mut cmd = Command::new("sh");
+        cmd.args(["-c", r#"stty -icanon -echo min 1; cat "$1"; c=$(perl -e 'my $v = ""; vec($v, 0, 1) = 1; if (select($v, undef, undef, 3) > 0) { sysread(STDIN, my $b, 1); print unpack("H*", $b); }'); printf '\033[2J\033[Hgot:%s\n' "$c"; sleep 1"#, "fake"])
+            .arg(&screen_file).stdin(stdin).stdout(stdout).stderr(stderr);
+        // SAFETY: the child creates a session and takes its slave tty.
+        unsafe {
+            cmd.pre_exec(take_controlling_tty);
+        }
+        let mut child = cmd.spawn().unwrap();
+        relay.close_slave();
+        let out = read_until(
+            caller_m,
+            if outside { b"got:\r\n" } else { b"got:0a" },
+            Duration::from_secs(10),
+        );
+        let status = wait_child(&mut child, Duration::from_secs(10));
+        assert!(status.success(), "{name}");
+        relay.finish();
+        let text = String::from_utf8_lossy(&out);
+        assert!(
+            text.contains(if outside { "got:\r\n" } else { "got:0a" }),
+            "{name}: {text}; reports: {:?}",
+            w.reports()
+        );
+        if outside {
+            assert!(w.reports().iter().any(|r| r.waiting), "{name}");
+            let messages = crate::mail::read(&env, "fake-screen-123abc", crate::mail::Dir::Up);
+            assert!(
+                messages
+                    .iter()
+                    .any(|m| m.event.as_deref() == Some("trust-screen")),
+                "{name}: {messages:?}"
+            );
+        }
+        // SAFETY: these are the two caller descriptors opened above.
+        unsafe {
+            libc::close(caller_m);
+            libc::close(caller_s);
+        }
+    }
+}
+
 /// A detached run on a desktop. The pane's pty belongs to paddock's tmux
 /// server, so the terminal looks watched. The run still gets every start
 /// screen rule and the screen tap. Codex asks the terminal for the cursor
@@ -295,6 +390,9 @@ fn the_screen_watcher_answers_through_the_relay() {
 /// user key, so the watcher still answers the screen after a slow start.
 #[test]
 fn a_detached_run_in_a_tmux_pane_still_answers_the_start_screen() {
+    let _relay = super::winch::TEST_SIGNAL
+        .read()
+        .unwrap_or_else(|e| e.into_inner());
     let server = anc(4242, "tmux: server");
     let chain = [anc(4300, "paddock"), server.clone()];
     let watched = || terminal_watched(Some(&[100]), Some(&server), &chain);
@@ -311,16 +409,23 @@ fn a_detached_run_in_a_tmux_pane_still_answers_the_start_screen() {
         toml::from_str(include_str!("../../profiles/codex.toml")).unwrap();
     let rules = crate::screens::rules_for(&profile, p.unwatched);
     assert!(rules.iter().any(|r| r.id == "codex-hooks-review-many"));
-    assert!(crate::screens::rules_for(&profile, false).is_empty());
+    assert!(crate::screens::rules_for(&profile, false)
+        .iter()
+        .all(|r| r.kind == crate::screens::RuleKind::FolderTrust));
     let (caller_m, caller_s) = caller_pty();
     set_size(caller_m, 24, 100);
     let w = crate::screens::live::Watcher::new(rules, || false, |_| {});
-    let mut relay =
-        Relay::start(caller_s, caller_s, |_| {}, Taps::of(None, Some(w.clone()))).unwrap();
+    let mut relay = Relay::start(
+        caller_s,
+        caller_s,
+        |_| {},
+        Taps::of(None, Some(w.clone()), None),
+    )
+    .unwrap();
     let script = "stty -icanon -echo min 1; printf '\\033[6n'; r=$(dd bs=1 count=6 2>/dev/null); \
                   printf 'starting MCP servers\\n'; sleep 1; \
                   printf '\\033[2J\\033[H  Hooks need review\\n  12 hooks are new or changed.\\n  Hooks can run outside the sandbox after you trust them.\\n› 1. Review hooks\\n  2. Trust all and continue\\n  3. Continue without trusting (hooks won'\\''t run)\\n  enter confirm · esc skip\\n'; \
-                  c=$(dd bs=1 count=1 2>/dev/null); \
+                  c=$(dd bs=1 count=7 2>/dev/null | od -An -tx1 | tr -d ' \n'); \
                   printf '\\033[2J\\033[Hgot:%s\\n' \"$c\"; sleep 1; exit 0";
     let (stdin, stdout, stderr) = relay.child_stdio().unwrap();
     let mut cmd = Command::new("sh");
@@ -339,9 +444,9 @@ fn a_detached_run_in_a_tmux_pane_still_answers_the_start_screen() {
     let q = read_until(caller_m, b"\x1b[6n", Duration::from_secs(10));
     assert!(q.windows(4).any(|x| x == b"\x1b[6n"));
     assert!(write_all_fd(caller_m, b"\x1b[7;1R").is_ok());
-    let out = read_until(caller_m, b"got:3", Duration::from_secs(15));
+    let out = read_until(caller_m, b"got:1b5b421b5b420a", Duration::from_secs(15));
     let text = String::from_utf8_lossy(&out);
-    assert!(text.contains("got:3"), "{text}");
+    assert!(text.contains("got:1b5b421b5b420a"), "{text}");
     let status = wait_child(&mut child, Duration::from_secs(10));
     assert_eq!(status.code(), Some(0));
     relay.finish();

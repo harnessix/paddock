@@ -47,6 +47,11 @@ fn run() -> i32 {
     };
     paddock::guest::proxy::start();
     paddock::guest::link_macos::start(std::sync::Arc::new(main_loop::send_link));
+    let _ = std::thread::Builder::new()
+        .name("wallpaper".into())
+        .spawn(|| {
+            paddock::guest::wallpaper::set_white(std::path::Path::new(paddock::guest::SUPPORT_DIR))
+        });
     let mut mac = macos::Mac::new(mtm);
     log::info!(
         "Accessibility {}",

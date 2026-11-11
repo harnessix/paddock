@@ -22,7 +22,7 @@ pub struct Identity {
     #[serde(default)]
     pub pid: Option<u32>,
     /// Its bundle identifier from the code signature, such as
-    /// `com.openai.chat`.
+    /// `com.example.notes`.
     #[serde(default)]
     pub app: Option<String>,
     /// The team identifier of the signature.
@@ -139,25 +139,25 @@ mod tests {
     fn id() -> Identity {
         Identity {
             pid: Some(612),
-            app: Some("com.openai.chat".into()),
-            team: Some("2DC432GLL2".into()),
-            path: Some("/Volumes/paddock/ChatGPT.app/Contents/MacOS/ChatGPT".into()),
+            app: Some("com.example.notes".into()),
+            team: Some("EXAMPLE123".into()),
+            path: Some("/Volumes/paddock/Sample Notes.app/Contents/MacOS/Sample Notes".into()),
             parent_app: None,
         }
     }
 
     #[test]
     fn header_round_trips() {
-        let h = ProxyHeader::new(TOKEN, "chatgpt.com", 443, id());
+        let h = ProxyHeader::new(TOKEN, "notes.example.com", 443, id());
         let line = h.line();
         assert!(line.starts_with("{\"v\":1,\"token\":\""), "{line}");
         assert!(line.ends_with('\n'));
         assert!(line.contains("\"parent_app\":null"), "{line}");
-        assert!(line.contains("\"app\":\"com.openai.chat\""), "{line}");
+        assert!(line.contains("\"app\":\"com.example.notes\""), "{line}");
         let back = ProxyHeader::parse(line.trim_end()).unwrap();
         assert_eq!(back, h);
         // A complete example line parses.
-        let example = r#"{"v":1,"token":"x","host":"chatgpt.com","port":443,"pid":612,"app":"com.openai.chat","team":"2DC432GLL2","path":"/Volumes/paddock/apps/ChatGPT.app/Contents/MacOS/ChatGPT","parent_app":null}"#;
+        let example = r#"{"v":1,"token":"x","host":"notes.example.com","port":443,"pid":612,"app":"com.example.notes","team":"EXAMPLE123","path":"/Volumes/paddock/apps/Sample Notes.app/Contents/MacOS/Sample Notes","parent_app":null}"#;
         let e = ProxyHeader::parse(example).unwrap();
         assert_eq!(e.id.pid, Some(612));
         assert_eq!(e.id.parent_app, None);
@@ -177,7 +177,7 @@ mod tests {
         assert_eq!(i.to_string(), "app = curl");
         assert_eq!(
             id().to_string(),
-            "app = com.openai.chat, team = 2DC432GLL2, pid = 612"
+            "app = com.example.notes, team = EXAMPLE123, pid = 612"
         );
     }
 
@@ -196,9 +196,9 @@ mod tests {
 
     #[test]
     fn debug_strips_the_token() {
-        let h = ProxyHeader::new(TOKEN, "chatgpt.com", 443, id());
+        let h = ProxyHeader::new(TOKEN, "notes.example.com", 443, id());
         let d = format!("{h:?}");
         assert!(!d.contains(TOKEN), "{d}");
-        assert!(d.contains("chatgpt.com"));
+        assert!(d.contains("notes.example.com"));
     }
 }

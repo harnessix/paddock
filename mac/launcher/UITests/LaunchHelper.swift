@@ -28,7 +28,10 @@ final class Fake {
         ]
         environment.merge(env) { $1 }
         app.launchEnvironment = environment
-        app.launchArguments = arguments
+        // The checks read English texts: the app runs in English whatever
+        // the language of the Mac, unless a test names a language itself.
+        let english = arguments.contains("-AppleLanguages") ? [] : ["-AppleLanguages", "(en)", "-AppleLocale", "en_US"]
+        app.launchArguments = english + arguments
     }
 
     @discardableResult
@@ -109,16 +112,52 @@ extension XCUIApplication {
         return element.exists
     }
 
+    /// The settings sidebar row. The row is a button with an identifier.
+    /// An outline is not always there, and a title such as Network is also
+    /// a label in the main window, so the identifier wins.
+    func settingsRow(_ title: String) -> XCUIElement {
+        let identified = element("settings-" + title.lowercased())
+        if identified.waitForExistence(timeout: 5) { return identified }
+        let outlined = outlines.staticTexts[title]
+        if outlined.exists { return outlined }
+        return staticTexts[title]
+    }
+
     func selectApp(_ name: String) {
         let row = element("app-row-" + name)
         XCTAssertTrue(row.waitForExistence(timeout: 10), "no row for \(name)")
         row.click()
     }
 
+    /// Scrolls every window until `element` exists. Settings is often not
+    /// the first window, so scrolling `windows.firstMatch` never reaches it.
+    @discardableResult
+    func revealAnywhere(_ element: XCUIElement) -> Bool {
+        if element.exists { return true }
+        let root = self.element("settings-root")
+        if root.exists, reveal(element, in: root) { return true }
+        for index in 0..<windows.count {
+            if reveal(element, in: windows.element(boundBy: index)) { return true }
+        }
+        return element.exists
+    }
+
+    /// A segmented picker is also a set of radio buttons on macOS. Clicking
+    /// that radio proxy does not change the picker's selection. The segment
+    /// button does, so it wins when both exist.
     func openTab(_ title: String) {
-        let tab = radioButtons[title].exists ? radioButtons[title] : tabs[title]
-        XCTAssertTrue(tab.waitForExistence(timeout: 5), "no tab \(title)")
-        tab.click()
+        let segment = segmentedControls.buttons[title]
+        let radio = radioButtons[title]
+        let tab = tabs[title]
+        let button = buttons[title]
+        let end = Date().addingTimeInterval(5)
+        while Date() < end {
+            if segment.exists || radio.exists || tab.exists || button.exists { break }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        }
+        let chosen = segment.exists ? segment : (radio.exists ? radio : (tab.exists ? tab : button))
+        XCTAssertTrue(chosen.exists, "no tab \(title)")
+        chosen.click()
     }
 
     /// The menu of the status item.

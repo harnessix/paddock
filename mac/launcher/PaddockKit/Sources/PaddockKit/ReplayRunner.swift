@@ -65,7 +65,11 @@ public final class ReplayRunner: CommandRunner, @unchecked Sendable {
                 }
                 if name.hasSuffix(".jsonl") { continue }
                 let data = try Data(contentsOf: base.appendingPathComponent(name))
-                runner.on(prefix: parts[0], output: CommandOutput(status: status, stdout: data, stderr: ""))
+                // A .err file is paddock's stderr, as in the fake script.
+                let output = name.hasSuffix(".err")
+                    ? CommandOutput(status: status, stdout: Data(), stderr: String(decoding: data, as: UTF8.self))
+                    : CommandOutput(status: status, stdout: data, stderr: "")
+                runner.on(prefix: parts[0], output: output)
             }
         }
         return runner

@@ -10,13 +10,13 @@ fn has(s: &str, parts: &[&str]) {
     assert!(!s.contains('\n'), "{s:?} is more than one line");
 }
 
-const BUNDLE: &str = "/Applications/ChatGPT.app";
+const BUNDLE: &str = "/Applications/Sample Notes.app";
 
 #[test]
 fn no_mac_bundle() {
     has(
-        &t::no_mac_bundle("chatgpt-desktop"),
-        &["chatgpt-desktop", "[app.macos]", "bundles"],
+        &t::no_mac_bundle("sample-notes"),
+        &["sample-notes", "[app.macos]", "bundles"],
     );
 }
 
@@ -47,27 +47,30 @@ fn bundle_not_a_bundle() {
 #[test]
 fn copy_begin() {
     has(
-        &t::copy_begin("ChatGPT", 600 << 20),
-        &["ChatGPT", "0.6 GiB", "guest"],
+        &t::copy_begin("Sample Notes", 600 << 20),
+        &["Sample Notes", "0.6 GiB", "guest"],
     );
 }
 
 #[test]
 fn copy_done() {
-    has(&t::copy_done("ChatGPT", 21.47), &["ChatGPT", "21.5 s"]);
+    has(
+        &t::copy_done("Sample Notes", 21.47),
+        &["Sample Notes", "21.5 s"],
+    );
 }
 
 #[test]
 fn copy_no_space() {
-    let s = t::copy_no_space("ChatGPT", 2 << 30, 1 << 30);
+    let s = t::copy_no_space("Sample Notes", 2 << 30, 1 << 30);
     has(
         &s,
         &[
-            "ChatGPT",
+            "Sample Notes",
             "2 GiB",
             "1 GiB",
             "The old copy stays",
-            "paddock app reset ChatGPT --data",
+            "paddock app reset Sample Notes --data",
         ],
     );
 }
@@ -75,16 +78,16 @@ fn copy_no_space() {
 #[test]
 fn copy_while_running() {
     has(
-        &t::copy_while_running("ChatGPT"),
-        &["ChatGPT", "still runs", "Quit the app"],
+        &t::copy_while_running("Sample Notes"),
+        &["Sample Notes", "still runs", "Quit the app"],
     );
 }
 
 #[test]
 fn copy_already_running() {
     has(
-        &t::copy_already_running("ChatGPT"),
-        &["ChatGPT", "already runs", "Wait"],
+        &t::copy_already_running("Sample Notes"),
+        &["Sample Notes", "already runs", "Wait"],
     );
 }
 
@@ -107,16 +110,16 @@ fn cannot_clone_app() {
 #[test]
 fn cannot_commit_app() {
     has(
-        &t::cannot_commit_app(Path::new("/p/apps/ChatGPT.app"), "File exists"),
-        &["/p/apps/ChatGPT.app", "File exists"],
+        &t::cannot_commit_app(Path::new("/p/apps/Sample Notes.app"), "File exists"),
+        &["/p/apps/Sample Notes.app", "File exists"],
     );
 }
 
 #[test]
 fn copy_target_refused() {
     has(
-        &t::copy_target_refused(Path::new("/etc/ChatGPT.app")),
-        &["/etc/ChatGPT.app", "Applications"],
+        &t::copy_target_refused(Path::new("/etc/Sample Notes.app")),
+        &["/etc/Sample Notes.app", "Applications"],
     );
 }
 
@@ -149,33 +152,41 @@ fn backend_reason() {
 #[test]
 fn memory_size_invalid() {
     has(
-        &t::memory_size_invalid("chatgpt-desktop", "lots"),
-        &["vm_memory", "chatgpt-desktop", "\"lots\"", "4G"],
+        &t::memory_size_invalid("sample-notes", "lots"),
+        &["vm_memory", "sample-notes", "\"lots\"", "4G"],
     );
 }
 
 #[test]
 fn launch_refused() {
     has(
-        &t::launch_refused("chatgpt-desktop", "no such app in the guest", "ChatGPT.app"),
-        &["chatgpt-desktop", "no such app in the guest", "ChatGPT.app"],
+        &t::launch_refused(
+            "sample-notes",
+            "no such app in the guest",
+            "Sample Notes.app",
+        ),
+        &[
+            "sample-notes",
+            "no such app in the guest",
+            "Sample Notes.app",
+        ],
     );
 }
 
 #[test]
 fn shim_rebuilt() {
     has(
-        &t::shim_rebuilt("ChatGPT", "0.2.0", "0.2.1"),
-        &["ChatGPT", "0.2.0", "0.2.1"],
+        &t::shim_rebuilt("Sample Notes", "0.2.0", "0.2.1"),
+        &["Sample Notes", "0.2.0", "0.2.1"],
     );
 }
 
 #[test]
 fn sign_failed() {
     has(
-        &t::sign_failed(Path::new("/x/ChatGPT.app"), "errSecInternalComponent"),
+        &t::sign_failed(Path::new("/x/Sample Notes.app"), "errSecInternalComponent"),
         &[
-            "/x/ChatGPT.app",
+            "/x/Sample Notes.app",
             "errSecInternalComponent",
             "brew reinstall",
         ],
@@ -192,17 +203,17 @@ fn no_helper_binary() {
 
 #[test]
 fn no_icon() {
-    has(&t::no_icon("ChatGPT"), &["ChatGPT", "icon"]);
+    has(&t::no_icon("Sample Notes"), &["Sample Notes", "icon"]);
 }
 
 #[test]
 fn launcher_written() {
     has(
         &t::launcher_written(
-            "ChatGPT (paddock)",
-            Path::new("/Users/me/Applications/ChatGPT (paddock).app"),
+            "Sample Notes (paddock)",
+            Path::new("/Users/me/Applications/Sample Notes (paddock).app"),
         ),
-        &["ChatGPT (paddock)", "/Users/me/Applications", "Dock"],
+        &["Sample Notes (paddock)", "/Users/me/Applications", "Dock"],
     );
 }
 

@@ -8,8 +8,9 @@ final class GrantsUITests: XCTestCase {
 
     private func grants(_ fake: Fake) -> XCUIApplication {
         let app = fake.launch()
-        app.selectApp("ChatGPT")
+        app.selectApp("Sample Notes")
         app.openTab("Grants")
+        app.openTab("Files & Clipboard")
         XCTAssertTrue(app.buttons["add-folder-button"].waitForExistence(timeout: 10))
         return app
     }
@@ -51,10 +52,10 @@ final class GrantsUITests: XCTestCase {
         app.menuItems["Remove"].click()
         let text = app.element("remove-folder-text")
         XCTAssertTrue(text.waitForExistence(timeout: 5))
-        XCTAssertTrue(text.text.hasPrefix("ChatGPT has 2 files open in"), text.text)
-        XCTAssertTrue(fake.calls("app share ChatGPT remove").isEmpty)
+        XCTAssertTrue(text.text.hasPrefix("Sample Notes has 2 files open in"), text.text)
+        XCTAssertTrue(fake.calls("app share Sample Notes remove").isEmpty)
         app.sheets.buttons["Remove"].click()
-        XCTAssertTrue(fake.waitForCall("app share ChatGPT remove /Users/demo/Projects"))
+        XCTAssertTrue(fake.waitForCall("app share Sample Notes remove /Users/demo/Projects"))
     }
 
     func testDeviceToggleIsNextStartWithRestart() {
@@ -64,38 +65,32 @@ final class GrantsUITests: XCTestCase {
         let camera = app.element("device-Camera")
         XCTAssertTrue(app.reveal(camera, in: app.element("grants-form")), "no Camera toggle")
         camera.click()
-        XCTAssertTrue(fake.waitForCall("app device ChatGPT Camera on"))
+        XCTAssertTrue(fake.waitForCall("app device Sample Notes Camera on"))
         XCTAssertTrue(app.buttons["restart-app"].waitForExistence(timeout: 5))
         waitForText(app, "On next start")
     }
 
-    func testAddRuleShowsRowAndYourChange() {
-        let fake = Fake("ready")
-        let app = grants(fake)
-        app.buttons["add-rule-button"].click()
-        let host = app.textFields["rule-host"]
-        XCTAssertTrue(host.waitForExistence(timeout: 5))
-        host.click()
-        host.typeText("files.example.com")
-        app.buttons["rule-add"].click()
-        XCTAssertTrue(fake.waitForCall("app rules ChatGPT add files.example.com --allow --always --json"))
-        XCTAssertTrue(app.element("rules-table").staticTexts["files.example.com"].waitForExistence(timeout: 5))
-        // A change row is one element: its label holds time, text and source.
-        let change = app.descendants(matching: .any).matching(identifier: "change-row")
-            .matching(NSPredicate(format: "label CONTAINS 'files.example.com'")).firstMatch
-        XCTAssertTrue(app.reveal(change, in: app.element("grants-form")), "no change row")
-        XCTAssertTrue(change.label.contains("You"), change.label)
+    // The open files show on the row before Remove; a folder that only
+    // this session shares says so.
+    func testFolderCaptionsShowOpenFilesAndSessionOnly() {
+        let app = grants(Fake("ready"))
+        let projects = folderRow(app, "/Users/demo/Projects")
+        XCTAssertTrue(projects.waitForExistence(timeout: 5))
+        XCTAssertTrue(projects.staticTexts["folder-caption"].text.contains("2 files open"),
+                      projects.staticTexts["folder-caption"].text)
+        let notes = folderRow(app, "/Users/demo/Documents/Notes")
+        XCTAssertTrue(notes.staticTexts["folder-caption"].text.contains("This session only"),
+                      notes.staticTexts["folder-caption"].text)
     }
 
-    func testAddRuleValidatesInline() {
-        let app = grants(Fake("ready"))
-        app.buttons["add-rule-button"].click()
-        let host = app.textFields["rule-host"]
-        XCTAssertTrue(host.waitForExistence(timeout: 5))
-        host.click()
-        host.typeText("not a host")
-        app.buttons["rule-add"].click()
-        XCTAssertEqual(app.text("rule-message"), "Enter a host name, for example api.example.com.")
+    func testKeepASessionFolder() {
+        let fake = Fake("ready")
+        let app = grants(fake)
+        let notes = folderRow(app, "/Users/demo/Documents/Notes")
+        XCTAssertTrue(notes.waitForExistence(timeout: 5))
+        notes.menuButtons.firstMatch.click()
+        app.menuItems["Keep for Later Starts"].click()
+        XCTAssertTrue(fake.waitForCall("app share Sample Notes keep /Users/demo/Documents/Notes --json"))
     }
 
     // MARK: Refusals
@@ -118,7 +113,7 @@ final class GrantsUITests: XCTestCase {
         XCTAssertEqual(app.text("refusal-line"), "~/Code/site has a .env file. The app could read the keys in it.")
         XCTAssertTrue(app.sheets.buttons["Cancel"].exists)
         app.buttons["share-anyway"].click()
-        XCTAssertTrue(fake.waitForCall("app share ChatGPT add /Users/demo/Code/site --unprotected"))
+        XCTAssertTrue(fake.waitForCall("app share Sample Notes add /Users/demo/Code/site --unprotected"))
         XCTAssertTrue(folderRow(app, "/Users/demo/Code/site").waitForExistence(timeout: 5))
     }
 }

@@ -160,13 +160,13 @@ fn memory_from_the_profile_with_the_host_limit() {
 #[test]
 fn staging_clones_once_per_version_and_the_face_is_rebuilt() {
     let t = tempfile::tempdir().unwrap();
-    let app = bundle_at(t.path(), "ChatGPT", "1.2026.300");
+    let app = bundle_at(t.path(), "Sample Notes", "1.2.3");
     let b = appcopy::read(&app).unwrap();
     let profile = Profile::new(t.path().join("profile"));
 
     // A fresh profile has no app stamp: the clone happens.
     assert!(stage_bundle_with(&profile, &b, &fake_archive).unwrap());
-    let clone = profile.apps().join("ChatGPT.app");
+    let clone = profile.apps().join("Sample Notes.app");
     assert!(clone.join("Contents/Info.plist").is_file());
 
     // With the version in the stamp nothing is cloned again.
@@ -190,10 +190,23 @@ fn staging_clones_once_per_version_and_the_face_is_rebuilt() {
     assert!(!stage_bundle_with(&profile, &b, &fake_archive).unwrap());
 
     // A new version of the app stages again.
-    let app = bundle_at(t.path(), "ChatGPT", "1.2026.301");
+    let app = bundle_at(t.path(), "Sample Notes", "1.2.4");
     let next = appcopy::read(&app).unwrap();
     assert!(stage_bundle_with(&profile, &next, &fake_archive).unwrap());
     assert!(crate::macvm::session::partials(&profile).is_empty());
+
+    // A second start before the guest copy stages nothing again: the
+    // archive that the first start copies from stays in place.
+    let archive = next.archive_path(&profile);
+    let before = std::fs::metadata(&archive).unwrap().modified().unwrap();
+    let refuse = |_: &std::path::Path, _: &std::path::Path| -> std::io::Result<()> {
+        panic!("the staged archive was written again")
+    };
+    assert!(stage_bundle_with(&profile, &next, &refuse).unwrap());
+    assert_eq!(
+        std::fs::metadata(&archive).unwrap().modified().unwrap(),
+        before
+    );
 
     // The Dock face: built once, then left alone, then rebuilt for a new
     // paddock version. `codesign` is not on Linux, so the test signs
@@ -245,15 +258,15 @@ fn codesign_failure_names_the_bundle_and_the_reason() {
     // The real codesign is macOS only. The argv it gets is the one the
     // shim builds, and the failure text comes from text.rs.
     let argv = shim::sign_argv(
-        Path::new("/d/ChatGPT.app.partial"),
-        Path::new("/d/ChatGPT.app.partial/Contents/Resources/paddock-vm.entitlements"),
+        Path::new("/d/Sample Notes.app.partial"),
+        Path::new("/d/Sample Notes.app.partial/Contents/Resources/paddock-vm.entitlements"),
     );
-    assert_eq!(argv.last().unwrap(), "/d/ChatGPT.app.partial");
+    assert_eq!(argv.last().unwrap(), "/d/Sample Notes.app.partial");
     let line = text::sign_failed(
-        Path::new("/d/ChatGPT.app.partial"),
+        Path::new("/d/Sample Notes.app.partial"),
         "errSecInternalComponent",
     );
-    assert!(line.contains("ChatGPT.app.partial"), "{line}");
+    assert!(line.contains("Sample Notes.app.partial"), "{line}");
     assert!(line.contains("errSecInternalComponent"), "{line}");
     assert_eq!(CODESIGN, "/usr/bin/codesign");
 }

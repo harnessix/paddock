@@ -34,7 +34,11 @@ pub(crate) enum RulesCmd {
         #[arg(long)]
         yes_all_hosts: bool,
     },
-    /// Remove a rule of the file by its id.
+    /// Allow a host or wildcard on port 443.
+    Allow { host: String },
+    /// Deny a host or wildcard on port 443.
+    Deny { host: String },
+    /// Remove a rule of the file by its id or host.
     Remove { id: String },
 }
 
@@ -53,7 +57,22 @@ pub(crate) fn rules(env: &HostEnv, name: &str, cmd: Option<RulesCmd>) -> Result<
     );
     match cmd.unwrap_or(RulesCmd::List) {
         RulesCmd::List => {
-            let all = rules.all();
+            let mut all = rules.all();
+            let layout = paddock::macvm::layout::Layout::new(env);
+            for (app, home, dir) in layout.profile_dirs() {
+                if app == name && paddock::macvm::host::running(&layout, &app, &home).is_some() {
+                    let path = dir.join("logs/session-rules.json");
+                    if let Ok(data) = std::fs::read(path) {
+                        if let Ok(session) = serde_json::from_slice::<Vec<firewall::Rule>>(&data) {
+                            all.extend(
+                                session.into_iter().filter(|r| {
+                                    r.expires.is_none_or(|e| e > paddock::state::now())
+                                }),
+                            );
+                        }
+                    }
+                }
+            }
             if all.is_empty() {
                 println!("{}", text::rules_empty(name));
                 return Ok(0);
@@ -62,6 +81,28 @@ pub(crate) fn rules(env: &HostEnv, name: &str, cmd: Option<RulesCmd>) -> Result<
             for r in &all {
                 println!("{}", firewall::rule_line(r));
             }
+            Ok(0)
+        }
+        cmd @ (RulesCmd::Allow { .. } | RulesCmd::Deny { .. }) => {
+            let (host, verdict) = match cmd {
+                RulesCmd::Allow { host } => (host, Verdict::Allow),
+                RulesCmd::Deny { host } => (host, Verdict::Deny),
+                _ => unreachable!(),
+            };
+            let r = firewall::new_rule(
+                "*",
+                None,
+                &host,
+                Port::Num(443),
+                verdict,
+                Scope::Always,
+                firewall::BY_USER,
+                paddock::state::now(),
+            );
+            let added = rules.add(r, false)?.clone();
+            rules.save()?;
+            publish(env, name, &added, "add");
+            println!("{}", text::rule_added(&added.id, &rules.path));
             Ok(0)
         }
         RulesCmd::Add {
@@ -84,18 +125,40 @@ pub(crate) fn rules(env: &HostEnv, name: &str, cmd: Option<RulesCmd>) -> Result<
                 firewall::BY_USER,
                 paddock::state::now(),
             );
-            let id = rules.add(rule, yes_all_hosts)?.id.clone();
+            let added = rules.add(rule, yes_all_hosts)?.clone();
+            let id = added.id.clone();
             rules.save()?;
+            let target = format!("{host}:{port}");
+            let value = format!("{} always", verdict.word());
+            paddock::macvm::grants::note_user_rule(env, name, "add", &target, &value);
+            publish(env, name, &added, "add");
             println!("{}", text::rule_added(&id, &rules.path));
             Ok(0)
         }
         RulesCmd::Remove { id } => {
-            rules.remove(&id, name)?;
+            let target = rules
+                .file
+                .iter()
+                .find(|r| r.host == id)
+                .map(|r| r.id.clone())
+                .unwrap_or_else(|| id.clone());
+            let gone = rules.remove(&target, name)?;
             rules.save()?;
+            paddock::macvm::grants::note_user_rule(env, name, "remove", &id, "-");
+            publish(env, name, &gone, "remove");
             println!("{}", text::rule_removed(&id, &rules.path));
             Ok(0)
         }
     }
+}
+
+/// The `grant` line of a rule change of the person, for the launcher.
+fn publish(env: &HostEnv, app: &str, r: &paddock::macvm::firewall::Rule, action: &str) {
+    use paddock::eventstream::schema::GrantSource;
+    paddock::eventstream::publish(
+        env,
+        paddock::macvm::events_stream::rule_grant(app, r, action, GrantSource::You),
+    );
 }
 
 #[cfg(test)]
@@ -103,6 +166,13 @@ mod tests {
     use super::*;
 
     fn env(t: &std::path::Path) -> HostEnv {
+        let profiles = t.join("config/paddock/harness.d");
+        std::fs::create_dir_all(&profiles).unwrap();
+        std::fs::write(
+            profiles.join("sample-notes.toml"),
+            "name = \"sample-notes\"\n[app]\n[app.macos]\nseed_hosts = [\"login.example.com\"]\n",
+        )
+        .unwrap();
         HostEnv::from_parts(
             t.join("home"),
             "demo".into(),
@@ -128,13 +198,13 @@ mod tests {
         );
         // The seeds of the profile list even before the file exists.
         assert_eq!(
-            rules(&env, "chatgpt-desktop", Some(RulesCmd::List)).unwrap(),
+            rules(&env, "sample-notes", Some(RulesCmd::List)).unwrap(),
             0
         );
         let add = |host: &str, deny: bool, yes: bool| {
             rules(
                 &env,
-                "chatgpt-desktop",
+                "sample-notes",
                 Some(RulesCmd::Add {
                     host: host.into(),
                     port: "443".into(),
@@ -149,25 +219,25 @@ mod tests {
         assert!(add("*", false, false).is_err(), "item 19");
         assert_eq!(add("telemetry.example.com", true, false).unwrap(), 0);
         assert_eq!(add("*", false, true).unwrap(), 0);
-        let loaded = Rules::load(&env, "chatgpt-desktop").unwrap();
+        let loaded = Rules::load(&env, "sample-notes").unwrap();
         assert_eq!(loaded.file.len(), 2);
         let id = loaded.file[0].id.clone();
-        assert_eq!(rules(&env, "chatgpt-desktop", None).unwrap(), 0);
+        assert_eq!(rules(&env, "sample-notes", None).unwrap(), 0);
         assert_eq!(
             rules(
                 &env,
-                "chatgpt-desktop",
+                "sample-notes",
                 Some(RulesCmd::Remove { id: id.clone() })
             )
             .unwrap(),
             0
         );
-        assert!(rules(&env, "chatgpt-desktop", Some(RulesCmd::Remove { id })).is_err());
-        assert_eq!(Rules::load(&env, "chatgpt-desktop").unwrap().file.len(), 1);
+        assert!(rules(&env, "sample-notes", Some(RulesCmd::Remove { id })).is_err());
+        assert_eq!(Rules::load(&env, "sample-notes").unwrap().file.len(), 1);
         // A bad port is one line.
         let e = rules(
             &env,
-            "chatgpt-desktop",
+            "sample-notes",
             Some(RulesCmd::Add {
                 host: "a.example".into(),
                 port: "x".into(),
@@ -181,5 +251,110 @@ mod tests {
         .unwrap_err()
         .to_string();
         assert!(e.contains("port \"x\""), "{e}");
+    }
+
+    #[test]
+    fn wildcard_shortcuts_add_and_remove() {
+        let t = tempfile::tempdir().unwrap();
+        let env = env(t.path());
+        let name = "sample-notes";
+        rules(
+            &env,
+            name,
+            Some(RulesCmd::Allow {
+                host: "*.example.com".into(),
+            }),
+        )
+        .unwrap();
+        let loaded = Rules::load(&env, name).unwrap();
+        assert_eq!(loaded.file[0].host, "*.example.com");
+        assert_eq!(loaded.file[0].verdict, Verdict::Allow);
+        rules(
+            &env,
+            name,
+            Some(RulesCmd::Remove {
+                id: "*.example.com".into(),
+            }),
+        )
+        .unwrap();
+        rules(
+            &env,
+            name,
+            Some(RulesCmd::Deny {
+                host: "*.example.com".into(),
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            Rules::load(&env, name).unwrap().file[0].verdict,
+            Verdict::Deny
+        );
+        assert!(rules(
+            &env,
+            name,
+            Some(RulesCmd::Allow {
+                host: "foo.*.example.com".into()
+            })
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn rule_changes_are_grant_lines_on_the_stream() {
+        use paddock::eventstream::schema::{Event, GrantSource, GrantWhat};
+        let t = tempfile::tempdir().unwrap();
+        let mut env = env(t.path());
+        env = HostEnv::from_parts(
+            env.home.clone(),
+            env.user.clone(),
+            env.uid,
+            env.gid,
+            env.vars
+                .clone()
+                .into_iter()
+                .chain([(
+                    "XDG_RUNTIME_DIR".to_string(),
+                    t.path().join("run").display().to_string(),
+                )])
+                .collect(),
+        );
+        let bus = paddock::eventstream::Bus::of(&env);
+        let f = paddock::eventstream::bus::Follower::bind(&bus, std::process::id()).unwrap();
+        let (tx, rx) = paddock::eventstream::bus::queue();
+        f.serve(tx).unwrap();
+        let cmd = RulesCmd::Add {
+            host: "api.example.com".into(),
+            port: "443".into(),
+            app: "*".into(),
+            team: None,
+            allow: true,
+            deny: false,
+            yes_all_hosts: false,
+        };
+        assert_eq!(rules(&env, "sample-notes", Some(cmd)).unwrap(), 0);
+        let id = Rules::load(&env, "sample-notes").unwrap().file[0]
+            .id
+            .clone();
+        assert_eq!(
+            rules(
+                &env,
+                "sample-notes",
+                Some(RulesCmd::Remove { id: id.clone() })
+            )
+            .unwrap(),
+            0
+        );
+        for action in ["add", "remove"] {
+            let line = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+            let l: paddock::eventstream::Line = serde_json::from_str(&line).unwrap();
+            let Event::Grant(g) = l.event else {
+                panic!("{line}")
+            };
+            assert_eq!(g.action, action);
+            assert_eq!((g.what, g.source), (GrantWhat::Rule, GrantSource::You));
+            assert_eq!(g.app, "sample-notes");
+            assert_eq!(g.id.as_deref(), Some(id.as_str()));
+            assert_eq!(g.detail, "allow api.example.com:443 always");
+        }
     }
 }

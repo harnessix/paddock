@@ -160,7 +160,7 @@ mod tests {
 
     fn t(host: &str) -> Triple {
         Triple {
-            app: "com.openai.chat".into(),
+            app: "com.example.notes".into(),
             host: host.into(),
             port: 443,
         }

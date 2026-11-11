@@ -4,18 +4,23 @@
 //!
 //! A press in the title bar of a forwarded window, away from its buttons,
 //! starts a drag of the host window after the mouse moves [`DRAG_SLOP`]
-//! points: the window server moves the host window at once, and the view
-//! keeps its offset from the guest window's last known frame, so the
-//! content moves with the frame. A press on an edge starts a host resize.
-//! A click without a move, a double click (the guest's zoom) and a press
-//! on a button go to the guest as before.
+//! points. A press on an edge starts a host resize. A click without a
+//! move, a double click (the guest's zoom) and a press on a button go to
+//! the guest as before.
 //!
-//! The guest follows with `window.move`: one in flight per window, plus
-//! the latest frame pending ([`Leads`]). Until the guest reports the frame
-//! that the host asked for, its reports move only the view, never the
-//! host window, so the host frame does not jump back. Each frame that the
-//! host asks for passes the screen gap, size and display rules of
-//! `crop.rs` first ([`rule`]).
+//! A drag moves the host window only: the guest window stays where it
+//! is, and the window's offset (`place.rs`) takes the move. No
+//! `window.move` goes to the guest, not even at the release, so the view
+//! never shows the guest desktop. At the release the host frame passes
+//! the screen gap and display rules of `crop.rs` ([`rule`]).
+//!
+//! A resize changes the guest window's size: it keeps its top left
+//! corner in the guest and gets the host size ([`resize_target`]). One
+//! `window.move` is in flight per window, plus the newest frame pending
+//! ([`Leads`]): a stale frame is never sent. The reply carries the frame
+//! after the move, so the view follows at the reply. Until the guest has
+//! the host's size, its reports move only the view, never the host
+//! window, and the host covers the part that the guest has not drawn.
 
 use super::crop::{self, Display, Rect, ScreenSet};
 use super::proto::{Frame, Level};
@@ -145,10 +150,10 @@ pub fn resized(start: Rect, edges: Edges, dx: f64, dy: f64) -> Rect {
     r
 }
 
-/// The frame that the guest may get for a host frame that the user made:
-/// a top-level window out of the gap between two screens, a window above
-/// `normal` within its size, and every window inside the guest display.
-/// The host window goes to this frame when the drag ends.
+/// The host frame (in guest points) that a host frame the user made may
+/// keep: a top-level window out of the gap between two screens, a window
+/// above `normal` within its size, and every window inside the guest
+/// display. The host window goes to this frame when the drag ends.
 pub fn rule(
     level: Level,
     child: bool,
@@ -163,6 +168,23 @@ pub fn rule(
     crop::clamp_into(f, display)
 }
 
+/// The guest frame of a host resize: the guest window keeps the top left
+/// corner of `base`, its frame now, and gets the size `w` by `h` of the
+/// host window, within the size its level allows and inside the guest
+/// display. When the display edge moves the corner, the offset of the
+/// window takes the difference.
+pub fn resize_target(
+    level: Level,
+    base: Frame,
+    w: f64,
+    h: f64,
+    main: Rect,
+    display: Display,
+) -> Frame {
+    let f = crop::fit_to_limit(level, Frame::new(base.x, base.y, w, h), main);
+    crop::clamp_into(f, display)
+}
+
 /// One led window.
 #[derive(Debug, Clone, PartialEq)]
 struct Lead {
@@ -172,12 +194,19 @@ struct Lead {
     in_flight: Option<Frame>,
     /// The newest frame not sent yet.
     pending: Option<Frame>,
+    /// The frames that a newer one replaced before they were sent.
+    dropped: u32,
     /// The user still holds the window.
     held: bool,
     /// When the host moved to `target`, for the latency line.
     moved_at: Instant,
     /// When the last reply came.
     answered_at: Option<Instant>,
+    /// A reply carried the guest's frame: the window events, which can
+    /// lag one poll behind it, no longer move the view.
+    replied: bool,
+    /// The guest's last frame is the target: nothing more to send.
+    reached: bool,
 }
 
 impl Lead {
@@ -189,13 +218,19 @@ impl Lead {
 /// What the host does with a guest frame of a window.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Follow {
-    /// No lead: the host window and the view follow, as before.
-    Window,
-    /// A lead runs: the view follows, the host frame stays.
+    /// No lead: the host window follows the guest at its offset.
+    Guest,
+    /// A lead runs: the view shows the frame, the host frame stays.
     View,
-    /// The guest reached the host's frame and the lead ended: the view
-    /// follows, the host frame stays. The time from the host move.
+    /// A lead runs and a reply was newer than this window event: nothing.
+    Stale,
+    /// The guest reached the host's frame and the lead ended. The time
+    /// from the host's last step.
     Reached(Duration),
+    /// The lead ended with the guest at another size (its minimum size,
+    /// a refusal): the host keeps its top left corner and takes the
+    /// guest's size.
+    Settle,
 }
 
 /// The led windows of the session.
@@ -215,25 +250,52 @@ impl Leads {
         self.map.get(&id).map(|l| l.target)
     }
 
-    /// The host window of `id` moved or resized to guest frame `frame`
-    /// (after [`rule`]). `held` while the user holds the window. Some
-    /// frame to send now in `window.move`; None when one is in flight,
-    /// then the frame waits as the latest pending one.
-    pub fn host_moved(&mut self, id: u32, frame: Frame, held: bool, now: Instant) -> Option<Frame> {
+    /// The frames of `id` that a newer frame replaced before they were
+    /// sent.
+    pub fn dropped(&self, id: u32) -> u32 {
+        self.map.get(&id).map_or(0, |l| l.dropped)
+    }
+
+    /// The host window of `id` resized to guest frame `frame` (after
+    /// [`resize_target`]). `held` while the user holds the edge. Some
+    /// frame to send now in `window.move`; None when one is in flight:
+    /// then the frame waits as the newest pending one, and an older
+    /// pending one is dropped.
+    pub fn host_resized(
+        &mut self,
+        id: u32,
+        frame: Frame,
+        held: bool,
+        now: Instant,
+    ) -> Option<Frame> {
         let lead = self.map.entry(id).or_insert(Lead {
             target: frame,
             in_flight: None,
             pending: None,
+            dropped: 0,
             held,
             moved_at: now,
             answered_at: None,
+            replied: false,
+            reached: false,
         });
         lead.held = held;
+        let same = lead.target.near(&frame, crop::EPS);
+        if !same {
+            lead.reached = false;
+        }
+        if lead.in_flight.is_none() && lead.pending.is_none() && same && lead.reached {
+            // The guest has this frame already: the release of a resize
+            // that it caught up with sends nothing.
+            return None;
+        }
         if lead.in_flight.is_some() {
             if !lead.target.near(&frame, crop::EPS) {
                 lead.target = frame;
                 lead.moved_at = now;
-                lead.pending = Some(frame);
+                if lead.pending.replace(frame).is_some() {
+                    lead.dropped += 1;
+                }
             }
             return None;
         }
@@ -244,17 +306,23 @@ impl Leads {
         Some(frame)
     }
 
-    /// The user let go of the window of `id`.
-    pub fn released(&mut self, id: u32) {
-        if let Some(l) = self.map.get_mut(&id) {
-            l.held = false;
+    /// The user let go of the window of `id`. Some time from the host's
+    /// last step when the guest has the frame already: the lead ends.
+    pub fn released(&mut self, id: u32, now: Instant) -> Option<Duration> {
+        let l = self.map.get_mut(&id)?;
+        l.held = false;
+        if l.reached && !l.busy() {
+            let since = now.saturating_duration_since(l.moved_at);
+            self.map.remove(&id);
+            return Some(since);
         }
+        None
     }
 
     /// The reply, an error or the timeout of the `window.move` in flight
     /// for `id`: Some pending frame to send now. A failed move counts as
-    /// answered: the guest's next report, or [`Leads::expired`], puts the
-    /// host window where the guest window is.
+    /// answered: the guest's next report, or [`Leads::expired`], settles
+    /// the host window at the guest's size.
     pub fn answered(&mut self, id: u32, now: Instant) -> Option<Frame> {
         let l = self.map.get_mut(&id)?;
         l.in_flight = l.pending.take();
@@ -262,13 +330,38 @@ impl Leads {
         l.in_flight
     }
 
+    /// The frame that the reply of a `window.move` of `id` carried, after
+    /// [`Leads::answered`]: the guest's own answer, so no grace.
+    pub fn reply_frame(&mut self, id: u32, frame: Frame, now: Instant) -> Follow {
+        let Some(l) = self.map.get_mut(&id) else {
+            return Follow::Guest;
+        };
+        l.replied = true;
+        l.reached = frame.near(&l.target, SAME);
+        if l.busy() {
+            return Follow::View;
+        }
+        let since = now.saturating_duration_since(l.moved_at);
+        let reached = frame.near(&l.target, SAME);
+        self.map.remove(&id);
+        if reached {
+            Follow::Reached(since)
+        } else {
+            Follow::Settle
+        }
+    }
+
     /// A guest frame of `id` arrived (`windows` event).
     pub fn guest_frame(&mut self, id: u32, frame: Frame, now: Instant) -> Follow {
         let Some(l) = self.map.get(&id) else {
-            return Follow::Window;
+            return Follow::Guest;
         };
         if l.busy() {
-            return Follow::View;
+            return if l.replied {
+                Follow::Stale
+            } else {
+                Follow::View
+            };
         }
         if frame.near(&l.target, SAME) {
             let since = now.saturating_duration_since(l.moved_at);
@@ -278,17 +371,20 @@ impl Leads {
         if l.answered_at
             .is_some_and(|t| now.saturating_duration_since(t) < GRACE)
         {
-            return Follow::View;
+            return if l.replied {
+                Follow::Stale
+            } else {
+                Follow::View
+            };
         }
-        // The guest put the window elsewhere (its minimum size, a
-        // refusal): the host follows the guest.
+        // The guest kept the window at another size: the host settles.
         self.map.remove(&id);
-        Follow::Window
+        Follow::Settle
     }
 
     /// The leads that ended without the guest at the host's frame: no
     /// move in flight, the user let go, and no matching report within
-    /// [`GRACE`] of the last reply. The host window of each goes back to
+    /// [`GRACE`] of the last reply. The host window of each settles at
     /// the guest's frame.
     pub fn expired(&mut self, now: Instant) -> Vec<u32> {
         let gone: Vec<u32> = self

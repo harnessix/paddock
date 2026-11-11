@@ -122,6 +122,7 @@ fn ops_refused_without_flag() {
         token: "t".into(),
         v: super::super::proto::VERSION,
         bench: false,
+        now_ms: None,
     })
     .unwrap();
     assert!(!t.contains("bench"), "{t}");

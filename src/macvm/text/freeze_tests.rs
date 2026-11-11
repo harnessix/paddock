@@ -68,8 +68,8 @@ fn thawed_line() {
 #[test]
 fn thaw_before_quit() {
     has(
-        &t::thaw_before_quit("chatgpt-desktop"),
-        &["chatgpt-desktop is frozen", "thaws it first"],
+        &t::thaw_before_quit("sample-notes"),
+        &["sample-notes is frozen", "thaws it first"],
     );
 }
 

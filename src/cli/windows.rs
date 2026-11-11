@@ -23,7 +23,7 @@ struct MacRow {
     pid: u32,
     /// The color of the frame: `sage` or `amber`.
     tone: &'static str,
-    /// The text of the badge, `paddock · chatgpt-desktop · ask · vm · 2h`.
+    /// The text of the badge, `paddock · sample-notes · ask · vm · 2h`.
     badge: String,
     /// The question id of an approval panel.
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -378,8 +378,8 @@ mod tests {
             question: "c-1".into(),
             window: 77,
             pid: std::process::id(),
-            sandbox: "macvm-chatgpt-desktop".into(),
-            harness: "chatgpt-desktop".into(),
+            sandbox: "macvm-sample-notes".into(),
+            harness: "sample-notes".into(),
         };
         let dead = paddock::mark::PanelRow {
             pid: 2_000_000_000,
@@ -391,9 +391,9 @@ mod tests {
         assert_eq!(
             rows[0],
             MacRow {
-                sandbox: "macvm-chatgpt-desktop".into(),
+                sandbox: "macvm-sample-notes".into(),
                 kind: "approval",
-                harness: "chatgpt-desktop".into(),
+                harness: "sample-notes".into(),
                 network: "ask".into(),
                 window: 77,
                 pid: std::process::id(),
@@ -447,15 +447,15 @@ mod tests {
 
     #[test]
     fn two_windows_of_a_guest_session_are_sage_with_vm() {
-        let mut r = run("macvm-chatgpt-desktop", "app", 812, None);
+        let mut r = run("macvm-sample-notes", "app", 812, None);
         r.backend = "macvm".into();
-        r.harness = "chatgpt-desktop".into();
+        r.harness = "sample-notes".into();
         r.network = "ask".into();
         r.started = state::now();
         let procs: ProcTable = [(812, 1)].into_iter().collect();
         let wins = vec![win(11, 812), win(12, 812)];
         let facts = paddock::mark::VmFacts {
-            display_name: "ChatGPT (paddock)".into(),
+            display_name: "Sample Notes (paddock)".into(),
             ..Default::default()
         };
         let rows = mac_rows(vec![r], &wins, &procs, &|runs| {
@@ -465,7 +465,7 @@ mod tests {
         for row in &rows {
             assert_eq!(row.tone, "sage");
             assert!(row.badge.contains(" · vm · "), "{}", row.badge);
-            assert!(row.badge.starts_with("paddock · chatgpt-desktop · ask"));
+            assert!(row.badge.starts_with("paddock · sample-notes · ask"));
         }
     }
 }

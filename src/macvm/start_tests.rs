@@ -5,12 +5,12 @@ use std::path::PathBuf;
 
 fn plan<'a>(start: Start, web: &'a Path, downloads: &'a Path) -> Plan<'a> {
     Plan {
-        app: "chatgpt-desktop",
-        golden: "15.2 (24C101)",
+        app: "sample-notes",
+        golden: "50.2 (99B102)",
         memory_mib: 4096,
         display: Display {
-            w: 3024,
-            h: 1964,
+            w: 1920,
+            h: 1080,
             scale: 2,
         },
         mixed_scale: false,
@@ -30,7 +30,7 @@ fn plan<'a>(start: Start, web: &'a Path, downloads: &'a Path) -> Plan<'a> {
 #[test]
 fn every_start_kind_has_its_lines_and_seconds() {
     let web = PathBuf::from("/Users/me/src/web");
-    let dl = PathBuf::from("/Users/me/Library/.../chatgpt-desktop/default/downloads");
+    let dl = PathBuf::from("/Users/me/Library/.../sample-notes/default/downloads");
     let cases = [
         (Start::Fresh, 60, "the first start of this profile"),
         (Start::Repair, 60, "the profile was rebuilt"),
@@ -49,9 +49,9 @@ fn every_start_kind_has_its_lines_and_seconds() {
         let joined = out.join("\n");
         for part in [
             "backend   macvm",
-            "15.2 (24C101)",
+            "50.2 (99B102)",
             "memory    4 GiB",
-            "display   3024 x 1964 points at 2x",
+            "display   1920 x 1080 points at 2x",
             "/Users/me/src/web (rw)",
             "downloads /Users/me/Library",
             "network   ask",
@@ -85,12 +85,12 @@ fn every_start_kind_has_its_lines_and_seconds() {
 
     // A start that also copies the app names the copy and its seconds.
     let mut p = plan(Start::Fresh, &web, &dl);
-    p.copy = Some(("ChatGPT", 20));
+    p.copy = Some(("Sample Notes", 20));
     let out = lines(&p);
     assert_eq!(out.len(), 9);
     let joined = out.join("\n");
     assert!(
-        joined.contains("copy      then the copy of ChatGPT into the guest, about 20 s"),
+        joined.contains("copy      then the copy of Sample Notes into the guest, about 20 s"),
         "{joined}"
     );
     assert!(joined.contains("once per version"), "{joined}");
@@ -107,7 +107,7 @@ fn every_start_kind_has_its_lines_and_seconds() {
     let joined = lines(&p).join("\n");
     assert!(joined.contains("shares    0 folders"), "{joined}");
     assert!(
-        joined.contains("paddock app run chatgpt-desktop ~/src/web"),
+        joined.contains("paddock app run sample-notes ~/src/web"),
         "{joined}"
     );
     assert!(joined.contains("every host is allowed"), "{joined}");
@@ -117,31 +117,31 @@ fn every_start_kind_has_its_lines_and_seconds() {
 #[test]
 fn copy_part_follows_needs_copy() {
     let t = tempfile::tempdir().unwrap();
-    let app = t.path().join("ChatGPT.app");
+    let app = t.path().join("Sample Notes.app");
     std::fs::create_dir_all(app.join("Contents")).unwrap();
     std::fs::write(
         app.join("Contents/Info.plist"),
-        "<plist><dict><key>CFBundleShortVersionString</key><string>1</string><key>CFBundleName</key><string>ChatGPT</string></dict></plist>",
+        "<plist><dict><key>CFBundleShortVersionString</key><string>1</string><key>CFBundleName</key><string>Sample Notes</string></dict></plist>",
     )
     .unwrap();
     let b = super::super::appcopy::read(&app).unwrap();
     assert_eq!(copy_part(&b, false), None);
     let (name, secs) = copy_part(&b, true).unwrap();
-    assert_eq!(name, "ChatGPT");
+    assert_eq!(name, "Sample Notes");
     assert_eq!(secs, b.copy_seconds());
 }
 
 #[test]
 fn predict_reads_the_profile_folder_only() {
     let t = tempfile::tempdir().unwrap();
-    let p = super::super::session::Profile::new(t.path().join("profiles/chatgpt/default"));
+    let p = super::super::session::Profile::new(t.path().join("profiles/sample-notes/default"));
     let display = Display {
         w: 2560,
         h: 1600,
         scale: 2,
     };
     // No folder yet.
-    assert_eq!(predict(&p, "15.2 (24C101)", display), Ok(Start::Fresh));
+    assert_eq!(predict(&p, "50.2 (99B102)", display), Ok(Start::Fresh));
 
     // The files of a profile that quit with a save.
     std::fs::create_dir_all(&p.dir).unwrap();
@@ -150,7 +150,7 @@ fn predict_reads_the_profile_folder_only() {
     }
     std::fs::write(p.state(), vec![0u8; 64]).unwrap();
     let now = super::super::session::Now {
-        golden: "15.2 (24C101)".into(),
+        golden: "50.2 (99B102)".into(),
         host_build: "25A1".into(),
         vz: "1".into(),
         protocol: super::super::proto::VERSION,
@@ -163,45 +163,45 @@ fn predict_reads_the_profile_folder_only() {
     stamp.state_len = Some(64);
     stamp.clean = true;
     stamp.write(&p.stamp()).unwrap();
-    assert_eq!(predict(&p, "15.2 (24C101)", display), Ok(Start::Warm));
+    assert_eq!(predict(&p, "50.2 (99B102)", display), Ok(Start::Warm));
 
     // A new golden, another display, and a state that does not match.
     assert_eq!(
-        predict(&p, "15.3 (24D70)", display),
+        predict(&p, "50.3 (99C103)", display),
         Ok(Start::Stale(Reason::GoldenChanged))
     );
     let other = Display {
-        w: 3024,
-        h: 1964,
+        w: 1920,
+        h: 1080,
         scale: 2,
     };
     assert_eq!(
-        predict(&p, "15.2 (24C101)", other),
+        predict(&p, "50.2 (99B102)", other),
         Ok(Start::Stale(Reason::DisplayChanged))
     );
     let mut dirty = stamp.clone();
     dirty.clean = false;
     dirty.write(&p.stamp()).unwrap();
     assert_eq!(
-        predict(&p, "15.2 (24C101)", display),
+        predict(&p, "50.2 (99B102)", display),
         Ok(Start::Stale(Reason::StateDamaged))
     );
     stamp.write(&p.stamp()).unwrap();
 
     // No saved state: a cold boot. A partial anywhere: a repair.
     std::fs::remove_file(p.state()).unwrap();
-    assert_eq!(predict(&p, "15.2 (24C101)", display), Ok(Start::Cold));
+    assert_eq!(predict(&p, "50.2 (99B102)", display), Ok(Start::Cold));
     std::fs::write(p.dir.join("system.img.partial"), b"half").unwrap();
-    assert_eq!(predict(&p, "15.2 (24C101)", display), Ok(Start::Repair));
+    assert_eq!(predict(&p, "50.2 (99B102)", display), Ok(Start::Repair));
     std::fs::remove_file(p.dir.join("system.img.partial")).unwrap();
 
     // A stamp that paddock cannot read, next to the disks: a repair.
     std::fs::write(p.stamp(), b"{").unwrap();
-    assert_eq!(predict(&p, "15.2 (24C101)", display), Ok(Start::Repair));
+    assert_eq!(predict(&p, "50.2 (99B102)", display), Ok(Start::Repair));
     // A stamp of another schema: the whole profile is foreign.
     std::fs::write(p.stamp(), b"{\"schema\":99}").unwrap();
     assert_eq!(
-        predict(&p, "15.2 (24C101)", display),
+        predict(&p, "50.2 (99B102)", display),
         Ok(Start::Stale(Reason::Unreadable))
     );
 }

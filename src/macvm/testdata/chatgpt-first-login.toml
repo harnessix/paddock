@@ -1,12 +1,4 @@
-# The connections of a first ChatGPT login in the macOS guest, from a
-# fresh data disk to the main window: one entry per connection.
-#
-# This list comes from the hosts that changes/macvm-firewall.md names for ChatGPT, the bot check of the
-# login page (Cloudflare Turnstile), and the Gatekeeper check of a first
-# launch of the app. A recorded login has not confirmed it yet. The Mac check
-# packaging/macos/checks/macvm-first-run.sh prints the hosts that a real
-# login touched. When that list has one more host, add it here and add a
-# seed in profiles/chatgpt-desktop.toml.
+# Public hosts used to exercise the built-in profile seed rules.
 hosts = [
   { host = "chatgpt.com", port = 443 },
   { host = "ab.chatgpt.com", port = 443 },

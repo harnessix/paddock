@@ -10,14 +10,14 @@ use crate::state::Running;
 use std::path::PathBuf;
 
 /// The id of the guest session of an app instance, in `paddock ps`,
-/// `paddock freeze` and the marks: `macvm-chatgpt-desktop`, and
-/// `macvm-chatgpt-desktop--2` for instance 2. `key` is the instance key.
+/// `paddock freeze` and the marks: `macvm-sample-notes`, and
+/// `macvm-sample-notes--2` for instance 2. `key` is the instance key.
 pub fn running_id(key: &str) -> String {
     format!("macvm-{key}") // not user text
 }
 
-/// The Dock name of the session: `ChatGPT (paddock)`, from the bundle's
-/// name, else the profile name; `ChatGPT 2 (paddock)` for instance 2.
+/// The Dock name of the session: `Sample Notes (paddock)`, from the bundle's
+/// name, else the profile name; `Sample Notes 2 (paddock)` for instance 2.
 pub fn display_name(app: &str, instance: u32, bundle: Option<&HostBundle>) -> String {
     let name = bundle
         .map(|b| b.display_name.as_str())

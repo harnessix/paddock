@@ -355,6 +355,9 @@ pub fn child_ended(
     if layout.is_none() {
         log::debug!("spec: {} is no Spec Kit project now", project.display());
     }
+    if res.is_ok() {
+        crate::gauge::check_appetite(env, project, &rec.feature);
+    }
     if let Err(e) = res {
         log::warn!(
             "spawn {}: cannot record the end of task {}: {e:#}",

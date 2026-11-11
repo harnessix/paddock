@@ -3,6 +3,9 @@
 //! Virtualization entitlement; `status`, `remove` and `rollback` work on
 //! the files.
 
+#[path = "macvm_setup.rs"]
+mod macvm_setup;
+
 use anyhow::{Context, Result};
 use clap::Subcommand;
 use paddock::env::HostEnv;
@@ -29,6 +32,16 @@ pub(crate) enum MacvmCmd {
         /// Download without asking.
         #[arg(long, short = 'y')]
         yes: bool,
+        /// The progress as JSON lines (`setup` lines of `paddock events`).
+        #[arg(long)]
+        json: bool,
+        /// Pause the download of the setup that runs.
+        #[arg(long, conflicts_with_all = ["resume", "ipsw"])]
+        pause_download: bool,
+        /// Continue a paused download, or start the setup where it stopped.
+        /// It asks nothing: the download was agreed to when it began.
+        #[arg(long)]
+        resume: bool,
     },
     /// Build a new golden next to the current one and swap them when it
     /// is sealed: the newest macOS this Mac runs, or --ipsw. The current
@@ -68,6 +81,9 @@ pub(crate) enum MacvmCmd {
         /// Remove without asking.
         #[arg(long, short = 'y')]
         yes: bool,
+        /// The result as JSON, with the freed bytes. Needs --yes.
+        #[arg(long, requires = "yes")]
+        json: bool,
     },
     /// Measure one case of the performance targets: warm, cold, first, quit,
     /// update, input, move, frames, idle, video or disk, in a session that
@@ -98,20 +114,31 @@ pub(crate) enum MacvmCmd {
 pub(crate) fn run(env: &HostEnv, cmd: MacvmCmd) -> Result<i32> {
     let layout = Layout::new(env);
     match cmd {
-        MacvmCmd::Setup { ipsw, yes } => setup_cmd(env, &layout, ipsw, yes),
+        MacvmCmd::Setup {
+            ipsw,
+            yes,
+            json,
+            pause_download,
+            resume,
+        } => macvm_setup::setup_cmd(
+            env,
+            &layout,
+            macvm_setup::SetupFlags {
+                ipsw,
+                yes,
+                json,
+                pause_download,
+                resume,
+            },
+        ),
         MacvmCmd::Update { ipsw, yes, force } => update_cmd(env, &layout, ipsw, yes, force),
         MacvmCmd::Rollback { yes } => rollback_cmd(env, &layout, yes),
         MacvmCmd::Status { json } => {
             let host = host_version();
             if json {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(&manage::status_json(
-                        &layout,
-                        host.as_deref(),
-                        &env.user
-                    ))?
-                );
+                let mut j = manage::status_json(&layout, host.as_deref(), &env.user);
+                macvm_setup::add_setup_status(&mut j, &layout);
+                println!("{}", serde_json::to_string_pretty(&j)?);
             } else {
                 for l in manage::status_lines(&layout, host.as_deref(), &env.user) {
                     println!("{l}");
@@ -119,7 +146,11 @@ pub(crate) fn run(env: &HostEnv, cmd: MacvmCmd) -> Result<i32> {
             }
             Ok(0)
         }
-        MacvmCmd::Remove { profiles, yes } => remove_cmd(env, &layout, profiles, yes),
+        MacvmCmd::Remove {
+            profiles,
+            yes,
+            json,
+        } => remove_cmd(env, &layout, profiles, yes, json),
         MacvmCmd::Bench {
             case,
             json,
@@ -279,33 +310,6 @@ fn sysctl(name: &str) -> Option<String> {
     (o.status.success() && !s.is_empty()).then_some(s)
 }
 
-fn setup_cmd(env: &HostEnv, layout: &Layout, ipsw: Option<PathBuf>, yes: bool) -> Result<i32> {
-    let opts = Opts {
-        ipsw: ipsw.clone(),
-        yes,
-        ..Default::default()
-    };
-    // The cheap refusals first: the sandbox, the keyring, the --ipsw path.
-    setup::preflight(env, &opts)?;
-    if !cfg!(target_os = "macos") {
-        println!("paddock macvm setup runs on macOS only: the macOS guest needs the Virtualization framework of a Mac with Apple silicon.");
-        return Ok(1);
-    }
-    let helper = paddock::vm::host::helper_path(env)?;
-    let mut cmd = std::process::Command::new(&helper);
-    cmd.arg("macvm-setup").arg("--dir").arg(&layout.root);
-    if let Some(p) = &ipsw {
-        cmd.arg("--ipsw").arg(std::path::absolute(p)?);
-    }
-    if yes {
-        cmd.arg("--yes");
-    }
-    let status = cmd
-        .status()
-        .with_context(|| format!("cannot start {}", helper.display()))?;
-    Ok(status.code().unwrap_or(1))
-}
-
 /// `paddock macvm update`: the build into `golden.new` in the helper, then
 /// the swap.
 fn update_cmd(
@@ -415,7 +419,32 @@ fn rollback_cmd(env: &HostEnv, layout: &Layout, yes: bool) -> Result<i32> {
     Ok(0)
 }
 
-fn remove_cmd(env: &HostEnv, layout: &Layout, profiles: bool, yes: bool) -> Result<i32> {
+fn remove_cmd(
+    env: &HostEnv,
+    layout: &Layout,
+    profiles: bool,
+    yes: bool,
+    json: bool,
+) -> Result<i32> {
+    if !json {
+        return remove_human(env, layout, profiles, yes);
+    }
+    match macvm_setup::remove_json(env, layout, profiles) {
+        Ok(j) => {
+            println!("{j}");
+            Ok(0)
+        }
+        Err(e) => {
+            println!(
+                "{}",
+                serde_json::json!({ "v": 1, "error": format!("{e:#}") })
+            );
+            Ok(1)
+        }
+    }
+}
+
+fn remove_human(env: &HostEnv, layout: &Layout, profiles: bool, yes: bool) -> Result<i32> {
     paddock::update::refuse_in_sandbox(env, "paddock macvm remove")?;
     manage::refuse_while_running(layout)?;
     let plan = RemovePlan::read(layout);
@@ -445,7 +474,9 @@ fn remove_cmd(env: &HostEnv, layout: &Layout, profiles: bool, yes: bool) -> Resu
     }
     let keyring = Keyring::open(env).ok();
     if plan.golden.is_some() {
+        let freed = macvm_setup::golden_bytes(layout);
         manage::remove_golden(layout, keyring.as_ref())?;
+        macvm_setup::publish_removed(env, freed);
         println!("Removed the golden.");
     }
     if profiles && !plan.profiles.is_empty() {
@@ -528,6 +559,9 @@ mod tests {
             MacvmCmd::Setup {
                 ipsw: Some(t.path().join("none.ipsw")),
                 yes: true,
+                json: false,
+                pause_download: false,
+                resume: false,
             },
         )
         .unwrap_err()
@@ -558,7 +592,8 @@ mod tests {
                 &env,
                 MacvmCmd::Remove {
                     profiles: false,
-                    yes: true
+                    yes: true,
+                    json: false,
                 }
             )
             .unwrap(),
@@ -626,7 +661,7 @@ mod tests {
             let mut m = paddock::macvm::golden::Manifest::new("15.3", "24D1", "0.9.0");
             m.version = v.into();
             m.build = "B".into();
-            m.sealed = Some("2026-11-01T10:00:00Z".into());
+            m.sealed = Some("2000-01-01T03:04:05Z".into());
             m.at(golden::State::Sealed);
             g.write_manifest(&m).unwrap();
         }

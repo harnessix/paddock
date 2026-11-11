@@ -1,3 +1,4 @@
+#![cfg(target_os = "linux")]
 //! Blocking reads end to end, in bubblewrap, with a fake harness: a read of
 //! `/dev/paddock/wait` returns at its time, and `paddock-host kv watch
 //! --timeout` and a waiting device read end with the "still waiting" exit
@@ -7,21 +8,6 @@ mod common;
 
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
-
-fn fuse_works() -> bool {
-    std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open("/dev/fuse")
-        .is_ok()
-        && ["fusermount3", "fusermount"].iter().any(|h| {
-            Command::new("sh")
-                .args(["-c", &format!("command -v {h}")])
-                .stdout(Stdio::null())
-                .status()
-                .is_ok_and(|s| s.success())
-        })
-}
 
 const SCRIPT: &str = r#"
 if [ ! -e /dev/paddock/wait ]; then echo NODEV; exit 0; fi
@@ -106,7 +92,7 @@ fn can_run() -> bool {
         eprintln!("skipped: bwrap cannot create a user namespace here");
         return false;
     }
-    if !fuse_works() {
+    if !common::fuse_mount_works() {
         eprintln!("skipped: no FUSE on this host");
         return false;
     }

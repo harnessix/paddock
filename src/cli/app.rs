@@ -1,7 +1,10 @@
+#[path = "app_add.rs"]
+mod app_add;
+#[path = "app_list.rs"]
+mod app_list;
 use anyhow::{bail, Result};
 use clap::Subcommand;
 use paddock::env::HostEnv;
-use paddock::profile::HarnessFactory;
 use paddock::spec::Network;
 use paddock::state;
 use std::path::PathBuf;
@@ -76,8 +79,17 @@ pub(crate) enum AppCmd {
     },
     /// Give a link (for example claude://...) to the running app sandbox, or start the app with it.
     Open { name: String, link: String },
+    /// Make an app bundle of this Mac an app profile of the macOS guest.
+    /// --dry-run --json is the precheck: the App Store, the space, the golden.
+    Add(app_add::AddArgs),
+    /// Remove an app profile of the macOS guest: its copy, its saved state
+    /// and its launcher; the data disk goes to the trash unless --delete-data.
+    Remove(app_add::RemoveArgs),
     /// List the app profiles, whether each is installed, and its folders.
-    List,
+    List {
+        #[arg(long)]
+        json: bool,
+    },
     /// Open the downloads folder of the app's macOS guest profile: every
     /// download of the app in the guest lands there.
     Files {
@@ -163,6 +175,8 @@ pub(crate) enum AppCmd {
         #[command(flatten)]
         inst: super::app_guest::Instance,
     },
+    #[command(flatten)]
+    Grants(super::grants::GrantsCmd),
     /// Print a log of a profile of the macOS guest: the connection log
     /// (default), the event log, the shim log, the guest agent log or the
     /// guest console.
@@ -385,6 +399,7 @@ pub(crate) fn app_cmd(env: &HostEnv, cmd: AppCmd) -> Result<i32> {
             super::app_guest::restore_cmd(env, &name, inst.n(), &which)
         }
         AppCmd::Backups { name, inst } => super::app_guest::backups_cmd(env, &name, inst.n()),
+        AppCmd::Grants(cmd) => super::grants::run(env, cmd),
         AppCmd::Rules { name, cmd } => super::rules::rules(env, &name, cmd),
         AppCmd::Log {
             name,
@@ -408,51 +423,9 @@ pub(crate) fn app_cmd(env: &HostEnv, cmd: AppCmd) -> Result<i32> {
             };
             paddock::macvm::logs::cmd(env, &name, which, follow)
         }
-        AppCmd::List => {
-            for line in paddock::macvm::host::list_lines(env) {
-                println!("{line}");
-            }
-            let f = HarnessFactory::new(env)?;
-            for name in f.names() {
-                let Some(p) = f.profile(&name) else { continue };
-                if p.app.is_none() {
-                    continue;
-                }
-                let found = match p.app.as_ref().and_then(|a| a.flatpak.clone()) {
-                    Some(id) => format!("flatpak {id}"),
-                    None => f
-                        .create(&name)
-                        .map(|h| h.exe.display().to_string())
-                        .unwrap_or_else(|_| "not installed".into()),
-                };
-                let launcher = if app::desktop_file(env, &name).exists() {
-                    "launcher entry"
-                } else {
-                    "no launcher entry"
-                };
-                let roots = app::roots(env, &name, &[])
-                    .map(|r| {
-                        r.iter()
-                            .map(|x| x.display().to_string())
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    })
-                    .unwrap_or_else(|_| "no folders".into());
-                println!(
-                    "{name:<16} {found}\n{:<16} {launcher}; folders: {roots}",
-                    ""
-                );
-                if app::unprotected_workspaces(env, &name).unwrap_or(false) {
-                    let what = if p.app.as_ref().is_some_and(|a| a.flatpak.is_some()) {
-                        "secret files in its folders are visible to it"
-                    } else {
-                        "has no effect: it applies only to flatpak apps"
-                    };
-                    println!("{:<16} warning: unprotected_workspaces is on: {what}", "");
-                }
-            }
-            Ok(0)
-        }
+        AppCmd::List { json } => app_list::list(env, json),
+        AppCmd::Add(a) => app_add::add(env, a),
+        AppCmd::Remove(a) => app_add::remove(env, a),
     }
 }
 

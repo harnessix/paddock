@@ -12,13 +12,23 @@ final class StateTests: XCTestCase {
             let decoder = PaddockJSON.decoder
             let ok: Bool
             switch name {
-            case let n where n.hasPrefix("status-") && !n.contains("chatgpt") && !n.contains("slack"):
+            case let n where n.hasPrefix("status-v1-"): ok = (try? LibraryDecode.macvmStatus(data)) != nil
+            case let n where n.hasPrefix("status-") && !n.contains("sample-notes") && !n.contains("sample-mail"):
                 ok = (try? decoder.decode(MacvmStatusJSON.self, from: data)) != nil
+            case let n where n.hasPrefix("profiles"): ok = (try? decoder.decode(ProfileListJSON.self, from: data)) != nil
+            case let n where n.hasPrefix("du"): ok = (try? decoder.decode(DuReportJSON.self, from: data)) != nil
+            case let n where n.hasPrefix("gc-"): ok = (try? decoder.decode(GcReportJSON.self, from: data)) != nil
+            case let n where n.hasPrefix("pause-"): ok = (try? decoder.decode(SetupControlJSON.self, from: data)) != nil
+            case let n where n.hasPrefix("remove-report"): ok = (try? decoder.decode(RemoveReportJSON.self, from: data)) != nil
+            case let n where n.hasPrefix("add-re"): ok = LibraryDecode.addReport(data) != nil
             case let n where n.hasPrefix("status-"): ok = (try? decoder.decode(AppStatusJSON.self, from: data)) != nil
             case let n where n.hasPrefix("apps"): ok = (try? decoder.decode(AppListJSON.self, from: data)) != nil
             case let n where n.hasPrefix("approvals"): ok = (try? decoder.decode(ApprovalsJSON.self, from: data)) != nil
             case let n where n.hasPrefix("doctor"): ok = (try? decoder.decode(DoctorJSON.self, from: data)) != nil
             case let n where n.hasPrefix("precheck"): ok = (try? decoder.decode(PrecheckJSON.self, from: data)) != nil
+            case let n where n.hasPrefix("rules-"): ok = (try? decoder.decode(NetRulesJSON.self, from: data)) != nil
+            case let n where n.hasPrefix("connections"): ok = (try? decoder.decode(ConnectionsJSON.self, from: data)) != nil
+            case let n where n.hasPrefix("clipboard-"): ok = (try? decoder.decode(ClipboardStateJSON.self, from: data)) != nil
             default: ok = (try? decoder.decode(ResultJSON.self, from: data)) != nil
             }
             XCTAssertTrue(ok, "\(name) does not decode")
@@ -145,8 +155,8 @@ final class StateTests: XCTestCase {
         for (line, want) in zip(lines, expected) {
             h.store.apply(PaddockEvent.decode(line: line)!)
             var now = h.clock.now()
-            if case .saved(let since?) = h.store.app(named: "ChatGPT")!.state { now = since.addingTimeInterval(5) }
-            let p = StatusPresentation.of(h.store.app(named: "ChatGPT")!.state, now: now)
+            if case .saved(let since?) = h.store.app(named: "Sample Notes")!.state { now = since.addingTimeInterval(5) }
+            let p = StatusPresentation.of(h.store.app(named: "Sample Notes")!.state, now: now)
             XCTAssertEqual(p.text.english, want.0)
             XCTAssertEqual(p.symbol, want.1)
             XCTAssertEqual(p.accessibilityLabel.english, want.2)
@@ -171,18 +181,18 @@ final class StateTests: XCTestCase {
         let rows: [(LauncherError, String?, String?, String?)] = [
             (.notInstalled, "paddock is not installed",
              "paddock for Mac needs the paddock command. Install it with Homebrew, then check again.", "Check Again"),
-            (.tooOld(have: "0.2.1", need: "0.3"), "Update paddock",
-             "This version of paddock for Mac needs paddock 0.3 or newer. You have 0.2.1.", "Copy Command"),
+            (.tooOld(have: "0.2.1", need: "0.2.2"), "Update paddock",
+             "This version of paddock for Mac needs paddock 0.2.2 or newer. You have 0.2.1.", "Copy Command"),
             (.tooNew(have: "1.0.0"), "Update paddock for Mac", nil, "Copy Command"),
-            (.twoRunning(app: "Slack", running: ["ChatGPT", "Notebook"]), "Two apps are already running",
-             "macOS allows two sandboxed apps at a time. Stop one to start Slack.", "Stop…"),
-            (.lowDiskAtStart(app: "ChatGPT", needBytes: 2_500_000_000, freeBytes: 1_100_000_000),
-             "Not enough free space to start ChatGPT", "Starting needs 2.5 GB, 1.1 GB is free.", "Manage Storage…"),
-            (.appChanged(app: "ChatGPT"), nil,
-             "ChatGPT was updated on this Mac. The next start copies the new version, about 1 min.", nil),
-            (.appCopyFailed(app: "ChatGPT", line: "copy failed: disk full"), "ChatGPT runs from the previous copy",
+            (.twoRunning(app: "Sample Mail", running: ["Sample Notes", "Notebook"]), "Two apps are already running",
+             "macOS allows two sandboxed apps at a time. Stop one to start Sample Mail.", "Stop…"),
+            (.lowDiskAtStart(app: "Sample Notes", needBytes: 2_500_000_000, freeBytes: 1_100_000_000),
+             "Not enough free space to start Sample Notes", "Starting needs 2.5 GB, 1.1 GB is free.", "Manage Storage…"),
+            (.appChanged(app: "Sample Notes"), nil,
+             "Sample Notes was updated on this Mac. The next start copies the new version, about 1 min.", nil),
+            (.appCopyFailed(app: "Sample Notes", line: "copy failed: disk full"), "Sample Notes runs from the previous copy",
              "copy failed: disk full", "Show Log"),
-            (.crashed(app: "ChatGPT", crashRow: "guest kernel panic"), "ChatGPT stopped unexpectedly",
+            (.crashed(app: "Sample Notes", crashRow: "guest kernel panic"), "Sample Notes stopped unexpectedly",
              "Its saved state was not written. The next start is cold.", "Start Again"),
             (.agentAway, nil,
              "paddock lost contact with the app's helper. Menus and clipboard pause until it is back.", nil),
@@ -204,18 +214,18 @@ final class StateTests: XCTestCase {
 
     func testStartRefusalsShowInPlace() async throws {
         let two = try await Harness("two-vms")
-        await two.store.startApp("ChatGPT")
-        XCTAssertEqual(two.store.appErrors["ChatGPT"], .twoRunning(app: "ChatGPT", running: ["ChatGPT", "Slack"]))
+        await two.store.startApp("Sample Notes")
+        XCTAssertEqual(two.store.appErrors["Sample Notes"], .twoRunning(app: "Sample Notes", running: ["Sample Notes", "Sample Mail"]))
         let low = try await Harness("low-disk-start")
-        await low.store.startApp("ChatGPT")
-        XCTAssertEqual(low.store.appErrors["ChatGPT"]?.body?.english, "Starting needs 2.5 GB, 1.1 GB is free.")
+        await low.store.startApp("Sample Notes")
+        XCTAssertEqual(low.store.appErrors["Sample Notes"]?.body?.english, "Starting needs 2.5 GB, 1.1 GB is free.")
     }
 
     func testCrashEventShowsStartAgain() async throws {
         let h = try await Harness("ready")
-        h.store.apply(.session(SessionEvent(app: "ChatGPT", state: "error", phase: nil, since: nil, windows: nil,
+        h.store.apply(.session(SessionEvent(app: "Sample Notes", state: "error", phase: nil, since: nil, windows: nil,
                                             reason: "stopped", blockCode: nil, crash: "guest kernel panic",
                                             connected: nil, nextStart: nil)))
-        XCTAssertEqual(h.store.appErrors["ChatGPT"]?.primary, .startAgain)
+        XCTAssertEqual(h.store.appErrors["Sample Notes"]?.primary, .startAgain)
     }
 }

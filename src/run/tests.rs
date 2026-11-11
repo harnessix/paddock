@@ -1,5 +1,22 @@
 //! Tests of run.rs.
 
+#[test]
+fn no_horse_handoff_preserves_child_pipes() {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new("cat")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    crate::horse::live::handoff(None, &mut child);
+    child.stdin.take().unwrap().write_all(b"hello\n").unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success());
+    assert_eq!(output.stdout, b"hello\n");
+}
+
 mod egress_addr_monitor_tests {
     use super::super::*;
 

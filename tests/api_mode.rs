@@ -83,6 +83,7 @@ fn explain_lists_the_allowed_hosts_and_their_sources() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
 fn a_bwrap_sandbox_in_api_mode_has_only_the_proxy() {
     let curl = Command::new("curl").arg("--version").output().is_ok();
     if !common::bwrap_works() || !curl {

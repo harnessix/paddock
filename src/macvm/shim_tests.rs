@@ -15,19 +15,19 @@ fn install(t: &Path) -> (PathBuf, PathBuf) {
 
 #[test]
 fn plist_and_sign_argv() {
-    let icon = PathBuf::from("/Applications/ChatGPT.app/Contents/Resources/app.icns");
-    let face = Face::session("chatgpt-desktop", "ChatGPT", Some(icon));
-    assert_eq!(face.display_name, "ChatGPT (paddock)");
-    assert_eq!(face.bundle_id, "dev.paddock.app.chatgpt-desktop");
+    let icon = PathBuf::from("/Applications/Sample Notes.app/Contents/Resources/app.icns");
+    let face = Face::session("sample-notes", "Sample Notes", Some(icon));
+    assert_eq!(face.display_name, "Sample Notes (paddock)");
+    assert_eq!(face.bundle_id, "dev.paddock.app.sample-notes");
     let xml = info_plist(&face, "0.2.1");
     for part in [
-        "<string>ChatGPT (paddock)</string>",
+        "<string>Sample Notes (paddock)</string>",
         "<key>CFBundleName</key>",
         "<key>CFBundleDisplayName</key>",
-        "<string>dev.paddock.app.chatgpt-desktop</string>",
+        "<string>dev.paddock.app.sample-notes</string>",
         "<key>CFBundleIconFile</key>",
         "<string>app.icns</string>",
-        "<string>chatgpt-desktop</string>",
+        "<string>sample-notes</string>",
         "<string>0.2.1</string>",
         "<key>LSUIElement</key>\n\t<false/>",
         "<key>CFBundlePackageType</key>\n\t<string>APPL</string>",
@@ -61,8 +61,8 @@ fn plist_and_sign_argv() {
     assert!(info_plist(&odd, "1").contains("<string>A &amp; B &lt;C&gt; (paddock)</string>"));
 
     // The sign argv: ad hoc, with the entitlements file of the bundle.
-    let app = Path::new("/d/ChatGPT.app");
-    let ent = Path::new("/d/ChatGPT.app/Contents/Resources/paddock-vm.entitlements");
+    let app = Path::new("/d/Sample Notes.app");
+    let ent = Path::new("/d/Sample Notes.app/Contents/Resources/paddock-vm.entitlements");
     let argv = sign_argv(app, ent);
     let at = argv.iter().position(|a| a == "--sign").unwrap();
     assert_eq!(argv[at + 1], "-", "an ad hoc signature is -s -");
@@ -86,11 +86,11 @@ fn make_no_partial() {
         signed.borrow_mut().push(argv.to_vec());
         Ok(())
     };
-    let face = Face::session("chatgpt-desktop", "ChatGPT", Some(icon));
+    let face = Face::session("sample-notes", "Sample Notes", Some(icon));
     let made = make(&dir, &face, &helper, "0.2.1", &sign).unwrap();
 
-    assert_eq!(made, dir.join("chatgpt-desktop.app"));
-    let exe = executable(&made, "chatgpt-desktop");
+    assert_eq!(made, dir.join("sample-notes.app"));
+    let exe = executable(&made, "sample-notes");
     assert!(exe.is_file(), "the bundle holds a copy of paddock-vm");
     assert_eq!(
         std::fs::read(&exe).unwrap(),
@@ -178,15 +178,15 @@ fn launcher_and_drop_target_carry_their_argv() {
     let t = tempfile::tempdir().unwrap();
     let (helper, dir) = install(t.path());
     let sign = |_: &[String]| Ok(());
-    let face = Face::launcher("chatgpt-desktop", "ChatGPT", None);
+    let face = Face::launcher("sample-notes", "Sample Notes", None);
     let made = make(&dir, &face, &helper, "0.2.1", &sign).unwrap();
-    let exe = executable(&made, "chatgpt-desktop");
+    let exe = executable(&made, "sample-notes");
     assert_eq!(
         argv_from_bundle(&exe, &[]),
         Some(vec![
             "install".to_string(),
             "--app".into(),
-            "chatgpt-desktop".into()
+            "sample-notes".into()
         ])
     );
     // The process serial number that older Finder passes is not an argv.
@@ -218,10 +218,7 @@ fn launcher_and_drop_target_carry_their_argv() {
 fn bundle_path_is_under_the_shims_folder() {
     let t = tempfile::tempdir().unwrap();
     let l = Layout::at(t.path().join("macvm"));
-    assert_eq!(
-        bundle(&l, "chatgpt-desktop"),
-        l.shims.join("chatgpt-desktop.app")
-    );
+    assert_eq!(bundle(&l, "sample-notes"), l.shims.join("sample-notes.app"));
     // A name with a separator cannot leave the folder.
     assert_eq!(bundle(&l, "../evil"), l.shims.join("_evil.app"));
     assert_eq!(bundle_id("a/b"), "dev.paddock.app.a_b");

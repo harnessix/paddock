@@ -1,7 +1,7 @@
 #sleep 2
-{"v": 1, "kind": "question", "op": "open", "id": "q3", "app": "ChatGPT", "host": "files.oaiusercontent.com", "port": 443, "process": "ChatGPT.app \u2192 helper (Renderer)", "opened": "2026-11-06T10:00:00Z"}
+{"v": 1, "kind": "question", "op": "open", "id": "q3", "app": "Sample Notes", "host": "files.files.example.com", "port": 443, "process": "Sample Notes.app \u2192 helper (Renderer)", "opened": "2026-11-06T10:00:00Z"}
 #sleep 10
 {"v": 1, "kind": "question", "op": "answered", "id": "q3", "answer": "allow-always", "source": "panel"}
 #sleep 2
-{"v": 1, "kind": "question", "op": "paused", "app": "ChatGPT", "count": 23}
+{"v": 1, "kind": "question", "op": "paused", "app": "Sample Notes", "count": 23}
 #hold

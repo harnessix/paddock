@@ -182,6 +182,7 @@ fn trust(
             append: false,
             codex_trust: None,
             no_pty: false,
+            chain: false,
         });
     }
     let refs: Vec<&HomeSetting> = values.iter().collect();

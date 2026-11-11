@@ -697,6 +697,7 @@ impl Session {
                         token: self.token.clone(),
                         v: proto::VERSION,
                         bench: false,
+                        now_ms: Some(crate::macvm::proto::now_ms()),
                     }) {
                         return Step::Failed(format!("{e:#}"));
                     }

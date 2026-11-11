@@ -167,8 +167,8 @@ pub fn disk(
     Ok(dev.into_super())
 }
 
-/// The virtiofs device with the automount tag and every share by name.
-pub fn shares(shares: &[ShareArg]) -> Result<Retained<VZDirectorySharingDeviceConfiguration>> {
+/// One directory share with every share by name.
+pub fn multiple_share(shares: &[ShareArg]) -> Result<Retained<VZMultipleDirectoryShare>> {
     let mut keys: Vec<Retained<NSString>> = Vec::new();
     let mut dirs: Vec<Retained<VZSharedDirectory>> = Vec::new();
     for s in shares {
@@ -189,9 +189,14 @@ pub fn shares(shares: &[ShareArg]) -> Result<Retained<VZDirectorySharingDeviceCo
     let key_refs: Vec<&NSString> = keys.iter().map(|k| &**k).collect();
     let dict: Retained<NSDictionary<NSString, VZSharedDirectory>> =
         NSDictionary::from_retained_objects(&key_refs, &dirs);
-    let share = unsafe {
+    Ok(unsafe {
         VZMultipleDirectoryShare::initWithDirectories(VZMultipleDirectoryShare::alloc(), &dict)
-    };
+    })
+}
+
+/// The virtiofs device with the automount tag and every share by name.
+pub fn shares(shares: &[ShareArg]) -> Result<Retained<VZDirectorySharingDeviceConfiguration>> {
+    let share = multiple_share(shares)?;
     let tag = unsafe { VZVirtioFileSystemDeviceConfiguration::macOSGuestAutomountTag() };
     let fs = unsafe {
         VZVirtioFileSystemDeviceConfiguration::initWithTag(
@@ -201,6 +206,20 @@ pub fn shares(shares: &[ShareArg]) -> Result<Retained<VZDirectorySharingDeviceCo
     };
     unsafe { fs.setShare(Some(&share.into_super())) };
     Ok(fs.into_super())
+}
+
+/// Put a new share set on the virtiofs device of a running VM
+/// (`VZVirtioFileSystemDevice.share` is settable while it runs). Only on
+/// the queue of the VM. The device of the session is its only directory
+/// sharing device.
+pub fn replace_shares(vm: &VZVirtualMachine, shares: &[ShareArg]) -> Result<()> {
+    let share = multiple_share(shares)?;
+    let device = unsafe { vm.directorySharingDevices() }
+        .firstObject()
+        .and_then(|d| d.downcast::<VZVirtioFileSystemDevice>().ok())
+        .ok_or_else(|| anyhow!(text::no_share_device()))?;
+    unsafe { device.setShare(Some(&share.into_super())) };
+    Ok(())
 }
 
 /// The serial console of the guest, appended to `logs/console.log`.
@@ -345,3 +364,7 @@ pub fn session_configuration(
 pub fn save_restore_supported(config: &VZVirtualMachineConfiguration) -> Result<(), String> {
     unsafe { config.validateSaveRestoreSupportWithError() }.map_err(|e| describe(&e))
 }
+
+#[cfg(test)]
+#[path = "grants_macos_tests.rs"]
+mod grants_macos_tests;

@@ -46,24 +46,13 @@ extension LauncherStore {
     }
 
     /// `Add`: adds the profile, installs the `(paddock).app` launcher,
-    /// selects the new row and shows the toast.
-    public func addApp(path: String, name: String, memoryGB: Int, network: NetworkMode) async -> Bool {
-        guard let service else { return false }
-        do {
-            let result = try await service.perform(PaddockArgs.add(path, name: name, memoryGB: memoryGB, network: network))
-            guard result.ok else {
-                lastError = .command(title: UIText("%@ was not added", name), line: result.error ?? result.message ?? "")
-                return false
-            }
-            try? await service.execute(PaddockArgs.install(name))
-            if let list = try? await service.listApps() { applyList(list) }
-            selection = .app(name)
-            detailTab = .overview
-            let launchpad = result.launchpadName ?? "\(name) (paddock)"
-            show(UIText("%@ added. It also appears in Launchpad as \"%@\".", name, launchpad))
-            return true
-        } catch {
-            lastError = .command(title: UIText("%@ was not added", name), line: LauncherStore.line(of: error))
+    /// selects the new row and shows the toast. paddock's `app add` has no
+    /// network flag: the profile's default mode applies.
+    public func addApp(path: String, name: String, memoryGB: Int) async -> Bool {
+        switch await add(path: path, name: name, memoryGB: memoryGB) {
+        case .added: return true
+        case .refused(let line):
+            lastError = .command(title: UIText("%@ was not added", name), line: line)
             return false
         }
     }
@@ -82,7 +71,7 @@ public struct RemovePresentation: Equatable, Sendable {
             title: UIText("Remove %@ from paddock?", app.name),
             body: UIText("This removes the sandbox copy of the app (%@), its saved state (%@) and the launcher in your Applications folder. Its data (%@) goes to the Trash, where you can get it back. The original app in /Applications stays.",
                          Format.gb(sizes.appCopy), Format.gb(sizes.savedState), Format.gb(sizes.data)),
-            blockedByRunning: app.state.isActive)
+            blockedByRunning: app.state.holdsSession)
     }
 }
 
@@ -113,9 +102,9 @@ public struct UninstallPlan: Equatable, Sendable {
     public func commands(apps: [String]) -> [[String]] {
         var list: [[String]] = []
         if removeApps {
-            for app in apps { list.append(PaddockArgs.remove(app, deleteData: removeData)) }
+            for app in apps { list.append(LibraryArgs.remove(app, deleteData: removeData)) }
         }
-        if removeGolden { list.append(PaddockArgs.macvmRemove) }
+        if removeGolden { list.append(LibraryArgs.macvmRemove) }
         return list
     }
 }
@@ -125,11 +114,15 @@ extension LauncherStore {
     public func uninstall(_ plan: UninstallPlan) async -> Int64 {
         guard let service else { return 0 }
         var freed: Int64 = 0
-        for app in activeApps { await stopApp(app.name) }
-        for args in plan.commands(apps: apps.map(\.name)) {
-            if let result = try? await service.perform(args), result.ok {
-                freed += result.freedBytes ?? 0
-            }
+        for app in apps where app.state.holdsSession { await stopApp(app.key) }
+        var names: [String] = []
+        for app in apps where !names.contains(app.instance.app) { names.append(app.instance.app) }
+        struct Freed: Decodable { var freed: Int64?; var freedBytes: Int64?; var ok: Bool?; var error: String? }
+        for args in plan.commands(apps: names) {
+            guard let out = try? await service.raw(args), out.status == 0,
+                  let result = try? PaddockJSON.decoder.decode(Freed.self, from: out.stdout),
+                  result.ok != false, result.error == nil else { continue }
+            freed += result.freed ?? result.freedBytes ?? 0
         }
         if plan.removeApps {
             apps = []
@@ -156,7 +149,7 @@ public enum QuitPlanner {
         var actions: [QuitAction] = []
         if building { actions.append(.pauseBuild) }
         if !keepRunning {
-            for app in apps where app.state.isActive { actions.append(.stop(app.name)) }
+            for app in apps where app.state.isActive { actions.append(.stop(app.key)) }
         }
         return actions
     }

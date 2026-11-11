@@ -198,18 +198,24 @@ fn seed(dir: &Path, repo: &Path, w: &Path) {
 /// build cache of the repository. Nothing for other runs, for a project
 /// that opts out, or on macOS (an app there runs under Seatbelt, which
 /// cannot mount a folder at another place).
-pub fn apply(
+pub fn apply_with(
     env: &HostEnv,
     repo: &Path,
     worktree: bool,
     setup: &crate::manifest::SetupCfg,
     spec: &mut SandboxSpec,
 ) -> Result<()> {
+    if !spec.project.join("Cargo.toml").is_file() {
+        return Ok(());
+    }
+    let settings = Settings::load(env).0;
+    if settings.lean_builds {
+        lean(spec);
+    }
     if cfg!(target_os = "macos")
         || !worktree
         || setup.shared_build_cache == Some(false)
-        || !spec.project.join("Cargo.toml").is_file()
-        || !Settings::load(env).0.build_cache
+        || !settings.build_cache
     {
         return Ok(());
     }
@@ -229,6 +235,45 @@ pub fn apply(
     spec.add_mount(Mount::bind(&w, &dst, true, ORIGIN));
     spec.set_env("CARGO_TARGET_DIR", dst.display().to_string(), ORIGIN);
     Ok(())
+}
+
+/// The variables of `[storage] lean_builds`. A debug build of a large
+/// crate writes gigabytes per run: the incremental folder is rewritten on
+/// every build, and full debug information is most of the size of each
+/// test binary. Line tables keep file and line numbers in backtraces.
+pub const LEAN_ENV: &[(&str, &str)] = &[
+    ("CARGO_INCREMENTAL", "0"),
+    ("CARGO_PROFILE_DEV_DEBUG", "line-tables-only"),
+    ("CARGO_PROFILE_TEST_DEBUG", "line-tables-only"),
+];
+
+fn lean(spec: &mut SandboxSpec) {
+    for (k, v) in LEAN_ENV {
+        if !spec.env.contains_key(*k) {
+            spec.set_env(k, v.to_string(), ORIGIN);
+        }
+    }
+}
+
+/// [`apply_with`] for the sandbox of `project`: a run in a worktree that paddock
+/// made shares the build cache of its repository like a `--worktree` run.
+pub fn apply(
+    env: &HostEnv,
+    project: &Path,
+    worktree: bool,
+    setup: &crate::manifest::SetupCfg,
+    spec: &mut SandboxSpec,
+) -> Result<()> {
+    let shared = worktree || in_paddock_worktree(env, project);
+    apply_with(env, &crate::speckit::repo_of(project), shared, setup, spec)
+}
+
+/// True when `project` is a worktree that paddock made: a run there shares
+/// the build cache of its repository like a `--worktree` run.
+pub fn in_paddock_worktree(env: &HostEnv, project: &Path) -> bool {
+    let root = env.paddock_data().join("worktrees");
+    let root = std::fs::canonicalize(&root).unwrap_or(root);
+    std::fs::canonicalize(project).is_ok_and(|p| p.starts_with(&root) && p != root)
 }
 
 /// The worker folder of a sandbox, from its mounts.

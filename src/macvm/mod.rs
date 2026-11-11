@@ -15,6 +15,7 @@
 //! in `run.rs`, `windows.rs`, `dock.rs`, `ax_host.rs` and the `vz_mac*`
 //! files, macOS only.
 
+pub mod apart;
 pub mod apfs;
 #[cfg(test)]
 pub(crate) mod apfs_fixture;
@@ -32,21 +33,27 @@ pub mod clipboard;
 pub mod configure;
 pub mod configure_quiet;
 pub mod connlog;
+pub mod cover;
 pub mod crop;
 pub mod data_disk;
 pub mod data_start;
 pub mod diskimage;
 #[cfg(target_os = "macos")]
 pub mod dock;
+pub mod download;
 pub mod drop;
 pub mod du;
 pub mod events;
+pub mod events_stream;
 pub mod failure;
 pub mod files_port;
 pub mod firewall;
 pub mod frames;
 pub mod gate;
 pub mod golden;
+pub mod grants;
+pub mod grants_cli;
+pub mod grants_live;
 pub mod guest_files;
 pub mod guided;
 pub mod guided_ui;
@@ -80,6 +87,7 @@ pub mod pair;
 #[cfg(target_os = "macos")]
 pub mod pasteboard;
 pub mod pause;
+pub mod place;
 pub mod proto;
 pub mod proto_files;
 pub mod proto_setup;
@@ -93,9 +101,11 @@ pub mod run;
 #[cfg(target_os = "macos")]
 mod run_agent;
 #[cfg(target_os = "macos")]
+mod run_apart;
+#[cfg(target_os = "macos")]
 mod run_app;
 #[cfg(target_os = "macos")]
-mod run_appkit;
+pub mod run_appkit;
 #[cfg(target_os = "macos")]
 mod run_ax;
 #[cfg(target_os = "macos")]
@@ -104,6 +114,8 @@ mod run_calls;
 mod run_failure;
 #[cfg(target_os = "macos")]
 mod run_files;
+#[cfg(target_os = "macos")]
+mod run_grants;
 #[cfg(target_os = "macos")]
 mod run_input;
 #[cfg(target_os = "macos")]
@@ -135,6 +147,7 @@ mod session_flow_tests;
 pub mod setup;
 pub mod setup_events;
 mod setup_offline;
+pub mod setup_progress;
 pub mod shares;
 pub mod shim;
 pub mod space;
@@ -146,6 +159,7 @@ pub mod tcc;
 pub mod text;
 #[cfg(target_os = "macos")]
 pub mod tis;
+pub mod trace;
 pub mod version;
 #[cfg(target_os = "macos")]
 pub mod vz_mac;
@@ -169,6 +183,10 @@ mod vz_mac_session;
 pub mod vz_mac_window;
 #[cfg(target_os = "macos")]
 pub mod windows;
+#[cfg(target_os = "macos")]
+mod windows_cover;
+#[cfg(target_os = "macos")]
+mod windows_delegate;
 #[cfg(target_os = "macos")]
 mod windows_lead;
 

@@ -321,7 +321,7 @@ fn mixed_scale_and_session_display() {
     assert_eq!(set.main_scale(), Some(2.0));
     // The union in pixels at the main scale.
     assert_eq!(
-        set.session_display(),
+        set.session_display(0.0),
         Some(session::Display {
             w: 7040,
             h: 2160,
@@ -330,7 +330,7 @@ fn mixed_scale_and_session_display() {
     );
     assert!(!above().mixed_scale());
     assert!(!one().mixed_scale());
-    assert_eq!(one().session_display(), None);
+    assert_eq!(one().session_display(0.0), None);
     // The sizes stay within what the display argument takes.
     let tiny = ScreenSet {
         screens: vec![Rect::new(0.0, 0.0, 100.0, 50.0)],
@@ -338,7 +338,7 @@ fn mixed_scale_and_session_display() {
         scales: vec![1.0],
     };
     assert_eq!(
-        tiny.session_display(),
+        tiny.session_display(0.0),
         Some(session::Display {
             w: 640,
             h: 480,
@@ -380,15 +380,67 @@ fn full_screen_shows_the_whole_display_from_the_top_left() {
 
 #[test]
 fn the_clip_takes_the_measured_radius_and_falls_back_to_the_version() {
-    assert_eq!(clip_radius(Some(16.0), 26, false), 16.0);
-    assert_eq!(clip_radius(Some(0.0), 26, false), 0.0);
-    assert_eq!(clip_radius(None, 26, false), corner_radius(26));
-    assert_eq!(clip_radius(None, 15, false), corner_radius(15));
+    assert_eq!(clip_radius(Some(16.0), 32.0, 26, false), 16.0);
+    assert_eq!(clip_radius(Some(0.0), 32.0, 26, false), 0.0);
+    // Not measured: the radius of the window's kind.
+    assert_eq!(clip_radius(None, 32.0, 27, false), PLAIN_RADIUS);
+    assert_eq!(clip_radius(None, 52.0, 27, false), TOOLBAR_RADIUS);
+    assert_eq!(clip_radius(None, 52.0, 15, false), corner_radius(15));
     // A report out of range or not a number: the fallback.
-    assert_eq!(clip_radius(Some(-1.0), 26, false), corner_radius(26));
-    assert_eq!(clip_radius(Some(400.0), 26, false), corner_radius(26));
-    assert_eq!(clip_radius(Some(f64::NAN), 26, false), corner_radius(26));
+    assert_eq!(clip_radius(Some(-1.0), 32.0, 26, false), PLAIN_RADIUS);
+    assert_eq!(clip_radius(Some(400.0), 32.0, 26, false), PLAIN_RADIUS);
+    assert_eq!(clip_radius(Some(f64::NAN), 32.0, 26, false), PLAIN_RADIUS);
     // Full screen: square corners, measured or not.
-    assert_eq!(clip_radius(Some(16.0), 26, true), 0.0);
-    assert_eq!(clip_radius(None, 15, true), 0.0);
+    assert_eq!(clip_radius(Some(16.0), 32.0, 26, true), 0.0);
+    assert_eq!(clip_radius(None, 32.0, 15, true), 0.0);
+}
+
+#[test]
+fn the_session_display_has_room_right_of_the_screens() {
+    // A 13-inch Mac: 1512x982 points at scale 2.
+    let air = ScreenSet {
+        screens: vec![Rect::new(0.0, 0.0, 1512.0, 982.0)],
+        main: 0,
+        scales: vec![2.0],
+    };
+    let d = |w, h| Some(session::Display { w, h, scale: 2 });
+    assert_eq!(air.session_display(0.0), d(3024, 1964));
+    // The default room doubles the width; the height stays.
+    assert_eq!(air.session_display(ROOM), d(6048, 1964));
+    assert_eq!(air.session_display(0.5), d(4536, 1964));
+    // Beyond the largest room, or not a number: the largest, the default.
+    assert_eq!(air.session_display(9.0), d(9072, 1964));
+    assert_eq!(air.session_display(f64::NAN), d(6048, 1964));
+    // Never wider than the display argument takes.
+    let wide = ScreenSet {
+        screens: vec![Rect::new(0.0, 0.0, 5120.0, 1440.0)],
+        main: 0,
+        scales: vec![2.0],
+    };
+    assert_eq!(wide.session_display(ROOM).map(|d| d.w), Some(16384));
+}
+
+#[test]
+fn the_screens_area_is_the_display_without_its_room() {
+    let wide = Display {
+        w: 2880.0,
+        h: 900.0,
+        scale: 2.0,
+    };
+    let area = screens_area(wide, &one());
+    assert_eq!((area.w, area.h, area.scale), (1440.0, 900.0, 2.0));
+    // A display narrower than the screens (PADDOCK_MACVM_DISPLAY) stays.
+    let small = Display {
+        w: 1000.0,
+        h: 700.0,
+        scale: 1.0,
+    };
+    assert_eq!(screens_area(small, &one()), small);
+    // Without screens the display stays.
+    let none = ScreenSet {
+        screens: Vec::new(),
+        main: 0,
+        scales: Vec::new(),
+    };
+    assert_eq!(screens_area(wide, &none), wide);
 }

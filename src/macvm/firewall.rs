@@ -8,9 +8,9 @@
 //! ```toml
 //! [[rule]]
 //! id = "rule-1a2b3c"
-//! app = "com.openai.chat"      # bundle id, or "*" for any process
-//! team = "2DC432GLL2"          # optional
-//! host = "*.openai.com"        # "*", "*.x.y", "x.y", or an IP
+//! app = "com.example.notes"      # bundle id, or "*" for any process
+//! team = "EXAMPLE123"          # optional
+//! host = "*.example.com"        # "*", "*.x.y", "x.y", or an IP
 //! port = 443                   # or "*"
 //! verdict = "allow"            # allow | deny
 //! scope = "always"             # always | session
@@ -163,6 +163,9 @@ pub struct Rule {
     pub scope: Scope,
     /// RFC 3339, UTC.
     pub made: String,
+    /// Unix time at which a temporary rule stops applying.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires: Option<u64>,
     /// `user`, `profile` or `approver`.
     pub by: String,
 }
@@ -315,14 +318,17 @@ pub fn specificity(rule: &Rule) -> Specificity {
 /// same specificity a user rule beats a seed of the profile, a session
 /// rule beats an always rule, and deny beats allow.
 pub fn winner<'r>(rules: &'r [Rule], conn: &Conn) -> Option<&'r Rule> {
-    rules.iter().filter(|r| matches(r, conn)).max_by_key(|r| {
-        (
-            specificity(r),
-            r.by != BY_PROFILE,
-            r.scope == Scope::Session,
-            r.verdict == Verdict::Deny,
-        )
-    })
+    rules
+        .iter()
+        .filter(|r| r.expires.is_none_or(|e| e > crate::state::now()) && matches(r, conn))
+        .max_by_key(|r| {
+            (
+                specificity(r),
+                r.by != BY_PROFILE,
+                r.scope == Scope::Session,
+                r.verdict == Verdict::Deny,
+            )
+        })
 }
 
 // ---- The decision ----------------------------------------------------------
@@ -451,6 +457,7 @@ pub fn new_rule(
         verdict,
         scope,
         made: crate::waiting::format_rfc3339(now),
+        expires: None,
         by: by.to_string(),
     }
 }
@@ -468,6 +475,7 @@ pub fn seed_rule(host: &str, made: u64) -> Rule {
         verdict: Verdict::Allow,
         scope: Scope::Always,
         made: crate::waiting::format_rfc3339(made),
+        expires: None,
         by: BY_PROFILE.into(),
     }
 }
@@ -478,24 +486,37 @@ pub fn seed_rule(host: &str, made: u64) -> Rule {
 pub fn rule_of_answer(answer: ConnectAnswer, conn: &Conn, by: &str, now: u64) -> Option<Rule> {
     let (verdict, scope) = match answer {
         ConnectAnswer::AllowOnce | ConnectAnswer::Deny => return None,
-        ConnectAnswer::AllowSession => (Verdict::Allow, Scope::Session),
+        ConnectAnswer::AllowSession | ConnectAnswer::AllowEverything => {
+            (Verdict::Allow, Scope::Session)
+        }
+        ConnectAnswer::AllowSite => (Verdict::Allow, Scope::Always),
         ConnectAnswer::AllowAlways => (Verdict::Allow, Scope::Always),
         ConnectAnswer::DenyAlways => (Verdict::Deny, Scope::Always),
     };
     // A helper's connection gets the rule of its app, so the next helper
     // of the same app is covered too.
     let app = conn.parent_app.unwrap_or(conn.app);
-    Some(new_rule(
-        app,
-        conn.team,
-        conn.host,
-        Port::Num(conn.port),
-        verdict,
-        scope,
-        by,
-        now,
-    ))
+    let site = site::registrable_site(conn.host);
+    let host = match answer {
+        ConnectAnswer::AllowSite => site.as_deref().unwrap_or(conn.host),
+        ConnectAnswer::AllowEverything => "*",
+        _ => conn.host,
+    };
+    let port = if answer == ConnectAnswer::AllowEverything
+        || (answer == ConnectAnswer::AllowSite && site.is_some())
+    {
+        Port::Any
+    } else {
+        Port::Num(conn.port)
+    };
+    let mut rule = new_rule(app, conn.team, host, port, verdict, scope, by, now);
+    if answer == ConnectAnswer::AllowEverything {
+        rule.expires = Some(now.saturating_add(600));
+    }
+    Some(rule)
 }
+
+pub mod site;
 
 // ---- The rules of a profile ------------------------------------------------
 
@@ -683,7 +704,7 @@ pub fn seed_hosts(profile: Option<&crate::profile::Profile>) -> Vec<String> {
 
 /// The line of a rule for `paddock app rules NAME list`.
 pub fn rule_line(r: &Rule) -> String {
-    text::rule_line(
+    let mut line = text::rule_line(
         &r.id,
         r.verdict.word(),
         &r.app,
@@ -692,7 +713,13 @@ pub fn rule_line(r: &Rule) -> String {
         r.scope.word(),
         &r.by,
         &r.made,
-    )
+    );
+    if let Some(expires) = r.expires {
+        line.push_str(&text::rule_time_left(
+            expires.saturating_sub(crate::state::now()),
+        ));
+    }
+    line
 }
 
 /// The rules file, when there is one, for the report and the reset.

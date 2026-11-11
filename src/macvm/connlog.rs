@@ -212,7 +212,7 @@ mod tests {
     use super::*;
 
     fn entry(t: u64, host: &str, verdict: &str, rule: &str) -> Entry {
-        Entry::new(t, "com.openai.chat", Some("T1"), host, 443, verdict, rule)
+        Entry::new(t, "com.example.notes", Some("T1"), host, 443, verdict, rule)
     }
 
     #[test]
@@ -223,18 +223,18 @@ mod tests {
         // bytes added; a deny is its own line; after a minute a new line.
         record_at(
             &path,
-            entry(100, "chatgpt.com", ALLOW, "seed-1").closed(10, 20, 3),
+            entry(100, "notes.example.com", ALLOW, "seed-1").closed(10, 20, 3),
         )
         .unwrap();
         record_at(
             &path,
-            entry(130, "chatgpt.com", ALLOW, "seed-1").closed(1, 2, 1),
+            entry(130, "notes.example.com", ALLOW, "seed-1").closed(1, 2, 1),
         )
         .unwrap();
         record_at(&path, entry(131, "t.example", DENY, "timeout")).unwrap();
         record_at(
             &path,
-            entry(170, "chatgpt.com", ALLOW, "seed-1").closed(5, 5, 5),
+            entry(170, "notes.example.com", ALLOW, "seed-1").closed(5, 5, 5),
         )
         .unwrap();
         record_at(&path, entry(171, "t.example", ASK, "ask")).unwrap();
@@ -263,11 +263,11 @@ mod tests {
         assert_eq!((c.allowed, c.denied), (3, 1));
         assert_eq!(c.other, vec![("ask".to_string(), 1)]);
         assert_eq!(c.last.as_deref(), Some("t.example:443"));
-        assert_eq!(c.hosts, ["chatgpt.com", "t.example"]);
+        assert_eq!(c.hosts, ["notes.example.com", "t.example"]);
         // The rendered lines.
         let shown = render_lines(&std::fs::read(&path).unwrap());
         assert!(
-            shown[0].contains("chatgpt.com:443")
+            shown[0].contains("notes.example.com:443")
                 && shown[0].contains("x2")
                 && shown[0].contains("22 B down"),
             "{}",

@@ -26,6 +26,7 @@ impl Ceiling {
         Self {
             parent: s.id.clone(),
             parent_harness: s.harness.clone(),
+            horse: built.horse,
             chain,
             depth,
             repo: built.home_key.clone(),

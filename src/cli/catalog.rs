@@ -67,8 +67,28 @@ pub(crate) fn mcp(env: &HostEnv, harness: String, path: Option<PathBuf>) -> Resu
     if list.is_empty() {
         println!("No MCP servers found in the {harness} configuration.");
     }
-    for s in list {
-        let status = match assess(env, &s, &m, &project) {
+    let supported = matches!(p.name.as_str(), "codex" | "gemini");
+    let decisions = paddock::mcp::diet::decide(&list, &m.mcp, cfg!(target_os = "linux"), false);
+    for (s, decision) in list.into_iter().zip(decisions) {
+        let status = if supported {
+            match decision {
+                paddock::mcp::diet::Decision::Disabled(reason) => Some(format!("off: {reason}")),
+                paddock::mcp::diet::Decision::UnsupportedLazy => Some(
+                    "off: lazy startup is not supported by paddock for this harness".to_string(),
+                ),
+                _ => None,
+            }
+        } else if m.mcp.servers.get(&s.name).is_some_and(|p| {
+            matches!(
+                p.start,
+                paddock::manifest::McpStart::Never | paddock::manifest::McpStart::Lazy
+            )
+        }) {
+            Some("run refused: start policy is not supported for this harness".to_string())
+        } else {
+            None
+        };
+        let status = status.unwrap_or_else(|| match assess(env, &s, &m, &project) {
                     Status::Ready { port: Some(p), .. } => format!("ready (host port {p})"),
                     Status::Ready { mounts, .. } if mounts.is_empty() => "ready".to_string(),
                     Status::Ready { mounts, .. } => format!(
@@ -84,7 +104,7 @@ pub(crate) fn mcp(env: &HostEnv, harness: String, path: Option<PathBuf>) -> Resu
                     ),
                     Status::NeedsPort(port) => format!("off: needs host port {port}. Add it to [network] host_ports"),
                     Status::NotFound(c) => format!("off: command {c} is not installed on the host"),
-                };
+                });
         let from = if s.trusted { "" } else { " (project file)" };
         println!(
             "{:<20} {status}\n{:<20} from {}{from}",

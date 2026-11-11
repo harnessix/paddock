@@ -41,14 +41,12 @@ pub const FULL_DISK: &str = "kTCCServiceSystemPolicyAllFiles";
 /// The Photos library: the copy of `~/Pictures` asks for it on its own.
 /// A service of the user, in the user's database ([`USER_DB`]).
 pub const PHOTOS: &str = "kTCCServicePhotos";
-/// Screen Recording: the agent captures the image of each guest window
-/// once (`CGWindowListCreateImage`) and measures its corner radius from
-/// the alpha of the corners, so the host clip matches the window. Without
-/// it the capture shows no window and the host uses the radius of the
-/// guest's macOS version.
+/// Screen Recording, which the agent never gets: a capture of a window
+/// makes macOS ask the user in the guest again and again. The host uses
+/// the corner radius of the guest's macOS version instead.
 pub const SCREEN_CAPTURE: &str = "kTCCServiceScreenCapture";
 /// The services that the agent gets in the system database, in order.
-pub const SERVICES: &[&str] = &[ACCESSIBILITY, FULL_DISK, SCREEN_CAPTURE];
+pub const SERVICES: &[&str] = &[ACCESSIBILITY, FULL_DISK];
 /// The services that the agent gets in the user's database.
 pub const USER_SERVICES: &[&str] = &[PHOTOS];
 /// The database of the guest's user on the Data volume.

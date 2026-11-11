@@ -72,11 +72,11 @@ fn suspend_reason_start() {
 #[test]
 fn suspended_for() {
     has(
-        &t::suspended_for("chatgpt 2", "chatgpt --instance 2", "notes"),
+        &t::suspended_for("sample-notes 2", "sample-notes --instance 2", "notes"),
         &[
-            "chatgpt 2",
+            "sample-notes 2",
             "notes",
-            "paddock app run chatgpt --instance 2",
+            "paddock app run sample-notes --instance 2",
             "Dock",
         ],
     );
@@ -85,8 +85,8 @@ fn suspended_for() {
 #[test]
 fn suspend_timeout() {
     has(
-        &t::suspend_timeout("chatgpt", "chatgpt", Duration::from_secs(30)),
-        &["chatgpt", "30 s", "paddock app status chatgpt"],
+        &t::suspend_timeout("sample-notes", "sample-notes", Duration::from_secs(30)),
+        &["sample-notes", "30 s", "paddock app status sample-notes"],
     );
 }
 
@@ -102,8 +102,8 @@ fn suspend_refused_all() {
 #[test]
 fn suspended_line() {
     has(
-        &t::suspended_line("chatgpt", "chatgpt"),
-        &["suspended", "Dock", "paddock app run chatgpt"],
+        &t::suspended_line("sample-notes", "sample-notes"),
+        &["suspended", "Dock", "paddock app run sample-notes"],
     );
 }
 
@@ -114,7 +114,10 @@ fn list_suspended() {
 
 #[test]
 fn dock_resume() {
-    has(&t::dock_resume("ChatGPT"), &["Resume ChatGPT", "suspended"]);
+    has(
+        &t::dock_resume("Sample Notes"),
+        &["Resume Sample Notes", "suspended"],
+    );
 }
 
 #[test]
@@ -140,8 +143,8 @@ fn resume_event() {
 #[test]
 fn handover_timeout() {
     has(
-        &t::handover_timeout("chatgpt", "chatgpt", 7),
-        &["pid 7", "paddock app stop chatgpt"],
+        &t::handover_timeout("sample-notes", "sample-notes", 7),
+        &["pid 7", "paddock app stop sample-notes"],
     );
 }
 

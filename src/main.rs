@@ -6,6 +6,13 @@ mod cli;
 use cli::{Cli, Cmd};
 
 fn main() {
+    // The exec wrapper of tack's protect = "uid" (tack/wrap.rs): a link to
+    // this binary in the wrapper folder. Before anything else, so the
+    // program's arguments are not read as paddock's.
+    #[cfg(target_os = "linux")]
+    if let Some(code) = paddock::tack::wrap::intercept() {
+        std::process::exit(code);
+    }
     // The start of a sandbox in a scope of its own (freeze.rs): stop, let
     // paddock move this process into the scope, then become the sandbox.
     // Before anything else, so the environment and the arguments pass as
@@ -17,6 +24,11 @@ fn main() {
         && argv.len() > 2
     {
         std::process::exit(paddock::freeze::scope_exec(&argv[2..]));
+    }
+    // A sandbox start from a shell with no_new_privs starts again without
+    // it (cleanstart.rs); a nested user namespace fails with the flag.
+    if let Some(code) = paddock::cleanstart::again(&argv[1..]) {
+        std::process::exit(code);
     }
     match real_main() {
         Ok(code) => std::process::exit(code),
@@ -60,12 +72,27 @@ fn real_main() -> Result<i32> {
     {
         return cli::run::relay(listen, socket, forward, ready_file.as_deref());
     }
+    // tackd: root, started by the service manager, before HostEnv::detect.
+    if let Cmd::Tack {
+        cmd: cli::tack::TackCmd::Serve,
+    } = &cli.cmd
+    {
+        return paddock::tack::daemon::main(&paddock::tack::service::Paths::system());
+    }
+    // An ACL grant that tackd runs as the user, with an empty environment.
+    if let Cmd::Tack {
+        cmd: cli::tack::TackCmd::AclGrant,
+    } = &cli.cmd
+    {
+        return cli::tack::acl_grant();
+    }
     // In the guest: before HostEnv::detect, as root without a home.
     let cmd = match cli.cmd {
         Cmd::VmAgent(a) => return cli::vm_run::vm_agent(a),
         other => other,
     };
     let env = HostEnv::detect()?;
+    paddock::eventstream::init(&env);
     paddock::privfs::secure_roots(&env);
     // A harness start: bring the menu and the shims up to date in the
     // background when harnesses or paddock changed.
@@ -82,6 +109,8 @@ fn real_main() -> Result<i32> {
         | Cmd::Inbound
         | Cmd::Portal
         | Cmd::DetachRun { .. } => unreachable!(),
+        Cmd::Train(args) => cli::train::run(&env, args),
+        Cmd::Exclave { cmd } => cli::exclave::run(&env, cmd),
         Cmd::SpawnChild { job } => cli::run::spawn_child(&env, job),
         Cmd::Vm { cmd } => cli::vm::run(&env, cmd),
         Cmd::Macvm { cmd } => cli::macvm::run(&env, cmd),
@@ -89,9 +118,12 @@ fn real_main() -> Result<i32> {
         Cmd::VmAttach { job } => cli::vm_run::vm_attach(&env, job),
         Cmd::VmServe { project } => cli::vm_run::vm_serve(&env, project),
         Cmd::Mark => paddock::mark::main(&env),
+        Cmd::Events(a) => cli::events::run(&env, a),
         Cmd::Approvals { json, cmd } => cli::approver::approvals(&env, json, cmd),
         Cmd::Worktree { cmd } => cli::worktree::run(&env, cmd),
         Cmd::Spec { cmd } => cli::spec::run(&env, cmd),
+        Cmd::Gauge(a) => cli::gauge::run(&env, a),
+        Cmd::Turnout { cmd } => cli::turnout::run(&env, cmd),
         Cmd::Loft { cmd } => cli::loft::run(&env, cmd),
         Cmd::Horse { cmd } => cli::horse::run(&env, cmd),
         Cmd::Log { json, lines } => cli::approver::log(&env, json, lines),
@@ -135,7 +167,7 @@ fn real_main() -> Result<i32> {
             cli::status::freeze(&env, paddock::ids::resolve(&env, &id)?, tree, reason)
         }
         Cmd::Thaw { id, tree } => cli::status::thaw(&env, paddock::ids::resolve(&env, &id)?, tree),
-        Cmd::Ps { json } => cli::status::ps(&env, json),
+        Cmd::Ps { json, mem } => cli::status::ps(&env, json, mem),
         Cmd::Files { id, json } => cli::storage::files_cmd(
             &env,
             id.as_deref()
@@ -151,6 +183,7 @@ fn real_main() -> Result<i32> {
             force,
         } => cli::storage::undo(&env, session, list, yes, force),
         Cmd::Kv { cmd } => cli::kv::run(&env, cmd),
+        Cmd::Mail { cmd } => cli::mail::run(&env, cmd),
         Cmd::Du { json } => cli::storage::du_cmd(&env, json),
         Cmd::Gc {
             yes,
@@ -211,16 +244,16 @@ fn real_main() -> Result<i32> {
         Cmd::Timer { cmd } => cli::timer::run(&env, cmd),
         Cmd::Logins { cmd } => cli::logins::run(&env, cmd),
         Cmd::Credentials { cmd } => cli::credentials::run(&env, cmd),
+        Cmd::Tack { cmd } => cli::tack::run(&env, cmd),
         Cmd::Boundary { id, json, follow } => {
             cli::status::boundary(&env, paddock::ids::resolve(&env, &id)?, json, follow)
         }
         Cmd::Stop { id } => cli::storage::stop(&env, &paddock::ids::resolve(&env, &id)?),
-        Cmd::Wait { id, timeout } => {
-            cli::status::wait(&env, paddock::ids::resolve(&env, &id)?, timeout)
-        }
+        Cmd::Wait(args) => cli::wait::run(&env, args.ids, args.any, args.status, args.timeout),
         Cmd::View { id, write } => {
             cli::status::view(&env, paddock::ids::resolve(&env, &id)?, write)
         }
+        Cmd::Doctor { json: true, .. } => cli::doctor_json::run(&env),
         Cmd::Doctor {
             escape,
             device,
@@ -235,6 +268,7 @@ fn real_main() -> Result<i32> {
             report,
             output,
             no_hosts,
+            json: false,
         } => cli::setup::doctor(
             &env, escape, device, backend, network, gui, window, app, bus, env_mode, online,
             report, output, no_hosts,

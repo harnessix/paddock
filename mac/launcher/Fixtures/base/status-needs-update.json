@@ -3,7 +3,7 @@
   "golden": {
     "state": "needs_update",
     "version": "15.1",
-    "built": "2026-11-03T10:00:00Z",
+    "built": "2000-01-02T03:04:05Z",
     "size_bytes": 25300000000,
     "dir": "/Users/demo/Library/Application Support/paddock/macvm",
     "host_version": "15.2",

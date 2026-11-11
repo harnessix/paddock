@@ -44,7 +44,7 @@ const COPY_BYTES_PER_SEC: u64 = 25 << 20;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostBundle {
     pub path: PathBuf,
-    /// `ChatGPT` of `/Applications/ChatGPT.app`: the name of the copy in
+    /// `Sample Notes` of `/Applications/Sample Notes.app`: the name of the copy in
     /// the guest and of the shim bundle.
     pub name: String,
     /// `CFBundleName`, else the file name without the extension.

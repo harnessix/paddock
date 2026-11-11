@@ -5,7 +5,7 @@ use super::super::tests::{has, GIB};
 use super::super::ResetTier;
 use std::path::Path;
 
-const P: &str = "/d/profiles.noindex/chatgpt-desktop/default";
+const P: &str = "/d/profiles.noindex/sample-notes/default";
 
 #[test]
 fn data_locked() {
@@ -13,28 +13,25 @@ fn data_locked() {
     has(
         &s,
         &[
-            "chatgpt-desktop",
+            "sample-notes",
             "formatted",
             "system disk is gone",
             "Nothing was changed",
-            "paddock app restore chatgpt-desktop /d/b/pre-reset-x",
+            "paddock app restore sample-notes /d/b/pre-reset-x",
         ],
     );
     let s = t::data_locked(Path::new(P), None);
-    has(
-        &s,
-        &["no backup", "paddock app reset chatgpt-desktop --data"],
-    );
+    has(&s, &["no backup", "paddock app reset sample-notes --data"]);
 }
 
 #[test]
 fn golden_newer() {
     has(
-        &t::golden_newer("chatgpt-desktop", "15.2 (24C101)", "15.3 (24D5)"),
+        &t::golden_newer("sample-notes", "15.2 (24C101)", "15.3 (24D5)"),
         &[
             "runs macOS 15.2 (24C101)",
             "golden is macOS 15.3 (24D5)",
-            "paddock app reset chatgpt-desktop --data",
+            "paddock app reset sample-notes --data",
             "backup",
         ],
     );
@@ -243,15 +240,18 @@ fn sleep_line() {
 #[test]
 fn relaunch_stopped() {
     has(
-        &t::relaunch_stopped("ChatGPT", Some(Path::new("/p/logs/ChatGPT-1.ips"))),
+        &t::relaunch_stopped(
+            "Sample Notes",
+            Some(Path::new("/p/logs/Sample Notes-1.ips")),
+        ),
         &[
-            "ChatGPT exited three times",
+            "Sample Notes exited three times",
             "does not open it again",
-            "/p/logs/ChatGPT-1.ips",
+            "/p/logs/Sample Notes-1.ips",
         ],
     );
     has(
-        &t::relaunch_stopped("ChatGPT", None),
+        &t::relaunch_stopped("Sample Notes", None),
         &["no crash report", "DiagnosticReports"],
     );
 }

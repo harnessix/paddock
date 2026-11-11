@@ -221,6 +221,13 @@ pub fn marked_runs(list: Vec<Running>) -> Vec<Running> {
         .collect()
 }
 
+/// Whether the windows of a run get a frame. On macOS no window gets
+/// one: a frame window that follows its window by polling lags behind
+/// every move. A run keeps its badge, its menu entry and its questions.
+pub fn framed(r: &Running) -> bool {
+    !cfg!(target_os = "macos") && !is_vm(r)
+}
+
 /// What tells the windows of one marked run.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Target {

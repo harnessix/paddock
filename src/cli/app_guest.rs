@@ -37,7 +37,7 @@ fn guest_profile(
 
 /// Ask on the terminal. Without a terminal, print the command with
 /// `--yes` and answer no.
-fn ask_yes(yes: bool, question: &str, again: &str) -> Result<bool> {
+pub(super) fn ask_yes(yes: bool, question: &str, again: &str) -> Result<bool> {
     use std::io::{IsTerminal, Write};
     if yes {
         return Ok(true);

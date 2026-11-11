@@ -7,11 +7,33 @@ description = "Google Antigravity CLI"
 # Entries that come from documentation, not from a test. paddock doctor lists them.
 unverified = [
   "compaction: agy writes transcript.jsonl again with fewer lines when it compacts, with a CHECKPOINT step for the summary",
+  "horse.pty: the input row \"> \", the busy text and the Esc interrupt key of the agy 1.4.12 TUI are not from a recorded screen. A wrong pattern only holds entries back: the Stop hook must also report a fully idle turn",
+  "horse hooks: the hook input of PreInvocation and Stop (conversationId, fullyIdle, parentConversationId), from the agy hooks documentation; stream-json events with conversation_id, from the headless documentation",
 ]
 
 [locate]
 mise = "agy"
 commands = ["agy", "antigravity"]
+
+# Screen recorded with agy 1.4.12. Trust only the folder shown in the
+# workspace line; a different or hidden path stays for the person.
+[[screens.rule]]
+kind = "folder_trust"
+version = "1.4.12"
+id = "agy-folder-trust"
+name = "agy folder trust"
+always = true
+send = ["enter"]
+answer = "> Yes, I trust this folder"
+note = "trusted the run's project folder"
+rows = [
+  "Accessing workspace: {folder}",
+  "Do you trust the contents of this project?",
+  "Antigravity CLI requires permission to read, edit, and execute files here.",
+  "> Yes, I trust this folder",
+  "No, exit",
+  "↑/↓ Navigate · enter Confirm",
+]
 
 [launch]
 # Logs in through a browser and a localhost callback.
@@ -240,3 +262,20 @@ files = [".gemini/config/hooks.json"]
 into = ".gemini/config/hooks.json"
 path = []
 style = "named"
+
+# Horse mode in the TUI (src/horse/live/pty.rs). paddock types a queued
+# entry into the TUI only when the Stop hook of paddock reported a fully
+# idle turn, no newer user step is in the transcript log, the input row
+# below is empty, no row shows a busy text, and the screen did not change
+# for quiet_ms. An urgent entry first gets the interrupt key. An agy
+# version other than this one gets no pty delivery: its entries stay
+# queued.
+[horse.pty]
+version = "1.4.12"
+prompt = ">"
+empty_input = true
+busy = ["esc to cancel", "esc to interrupt", "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+quiet_ms = 1500
+interrupt_key = "escape"
+submit_key = "enter"
+bracketed_paste = true
