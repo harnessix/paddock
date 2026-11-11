@@ -100,7 +100,7 @@ fn old_headings_and_words_are_preserved() {
     };
     let actual = counts(headings(&all));
     let expected = counts(
-        include_str!("../src/help/old-headings.txt")
+        include_str!("fixtures/readme/old-headings.txt")
             .lines()
             .collect(),
     );
@@ -108,7 +108,7 @@ fn old_headings_and_words_are_preserved() {
         assert_eq!(actual.get(&heading), Some(&count), "{heading}");
     }
     let actual = words(&all);
-    for line in include_str!("../src/help/old-words.txt").lines() {
+    for line in include_str!("fixtures/readme/old-words.txt").lines() {
         let (count, word) = line.split_once(' ').unwrap();
         let count: usize = count.parse().unwrap();
         assert!(
@@ -118,20 +118,22 @@ fn old_headings_and_words_are_preserved() {
         );
     }
 }
+/// paddock with temporary folders only, never the user's own.
+fn paddock(temp: &Path) -> Command {
+    let mut c = Command::new(env!("CARGO_BIN_EXE_paddock"));
+    c.env("HOME", temp)
+        .env("XDG_CONFIG_HOME", temp.join("config"))
+        .env("XDG_CACHE_HOME", temp.join("cache"))
+        .env("XDG_DATA_HOME", temp.join("data"))
+        .env("XDG_STATE_HOME", temp.join("state"))
+        .env("XDG_RUNTIME_DIR", temp.join("run"));
+    c
+}
+
 #[test]
 fn topic_help_and_command_help() {
     let temp = tempfile::tempdir().unwrap();
-    let run = |args: &[&str]| {
-        Command::new(env!("CARGO_BIN_EXE_paddock"))
-            .args(args)
-            .env("HOME", temp.path())
-            .env("XDG_CONFIG_HOME", temp.path().join("config"))
-            .env("XDG_CACHE_HOME", temp.path().join("cache"))
-            .env("XDG_DATA_HOME", temp.path().join("data"))
-            .env("XDG_STATE_HOME", temp.path().join("state"))
-            .output()
-            .unwrap()
-    };
+    let run = |args: &[&str]| paddock(temp.path()).args(args).output().unwrap();
     let list = run(&["help"]);
     assert!(list.status.success());
     let list = String::from_utf8(list.stdout).unwrap();
@@ -243,7 +245,8 @@ fn closed_stdout_is_quiet_for_help_paths() {
         &["--help"][..],
         &["run", "--help"][..],
     ] {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_paddock"))
+        let temp = tempfile::tempdir().unwrap();
+        let mut child = paddock(temp.path())
             .args(args)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

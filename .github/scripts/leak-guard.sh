@@ -33,7 +33,7 @@ fi
 
 # The only documents this repository publishes. Anything else under docs/
 # (except images in docs/assets/), and any other text document, fails.
-public_docs='^(README\.md|mac/launcher/README\.md|CHANGELOG\.md|CONTRIBUTING\.md|SECURITY\.md|\.github/pull_request_template\.md|changes/[^/]+\.md|skills/[^/]+/SKILL\.md|skills/[^/]+/references/[^/]+\.md|docs/assets/[^/]+\.(png|gif|svg|jpg|jpeg|webp))$'
+public_docs='^(README\.md|mac/launcher/README\.md|CHANGELOG\.md|CONTRIBUTING\.md|SECURITY\.md|\.github/pull_request_template\.md|changes/[^/]+\.md|skills/[^/]+/SKILL\.md|skills/[^/]+/references/[^/]+\.md|src/help/[^/]+\.md|tests/fixtures/readme/[^/]+\.txt|docs/assets/[^/]+\.(png|gif|svg|jpg|jpeg|webp))$'
 docs=$(git ls-files | grep -iE '\.(md|markdown|txt|rst|adoc|org)$|^docs/' | grep -vE "$public_docs" || true)
 if [ -n "$docs" ]; then
   echo "leak guard: these documents must not be published (only code and the user docs):"; echo "$docs"; status=1
