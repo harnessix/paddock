@@ -39,10 +39,9 @@ pub enum Feature {
     UpdateBinary,
     /// `paddock setup` runs the package manager after a yes.
     PackageInstall,
-    /// The devices of `/dev/paddock` (FUSE).
+    /// The devices of `/dev/paddock` as files (FUSE). macOS gets them
+    /// over a socket instead (Seatbelt).
     Devices,
-    /// The systemd units of the gateway executor.
-    GatewayUnits,
 }
 
 /// Every feature, for the doctor's list of what macOS refuses.
@@ -53,7 +52,6 @@ pub const FEATURES: &[Feature] = &[
     Feature::UpdateBinary,
     Feature::PackageInstall,
     Feature::Devices,
-    Feature::GatewayUnits,
 ];
 
 /// The one line that refuses `f` on `os`, or None when `f` runs there.
@@ -75,10 +73,7 @@ pub fn refusal(os: Os, f: Feature) -> Option<&'static str> {
         Feature::PackageInstall => {
             "paddock setup does not install packages on macOS: run the commands yourself"
         }
-        Feature::Devices => "the devices of /dev/paddock need FUSE: they are Linux only",
-        Feature::GatewayUnits => {
-            "paddock gateway install writes systemd units: it is Linux only. The gateway executor starts when a request needs it"
-        }
+        Feature::Devices => "the devices are not files in /dev/paddock on macOS (that needs FUSE): Seatbelt runs reach them with paddock-host device, and the VM does not get them yet",
     })
 }
 
@@ -205,7 +200,7 @@ pub const MAC_DEPS: &[MacDep] = &[
     },
 ];
 
-/// The macOS release that the maintainer tests paddock on.
+/// The macOS release that paddock is tested on.
 pub const TESTED_MACOS: u32 = 27;
 
 /// What `paddock doctor` reads from the Mac itself.
@@ -337,6 +332,11 @@ pub fn mac_doctor_deps(env: &HostEnv, probe: &MacProbe) -> bool {
     }
     println!("\nVM backend:");
     for l in crate::vm::doctor_lines(env) {
+        println!("{l}");
+    }
+    println!();
+    let view = crate::doctor::macvm::View::read(env, probe.version.as_deref());
+    for l in crate::doctor::macvm::lines(&view) {
         println!("{l}");
     }
     sys_ok && req.is_empty()

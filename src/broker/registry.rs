@@ -39,6 +39,7 @@ impl Host for BrokerHost<'_> {
             session_allowed: false,
             started_by: b.ctx.chain.clone(),
             choices: Vec::new(),
+            connect: None,
         };
         let verdict = b
             .approver

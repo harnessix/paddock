@@ -1,0 +1,31 @@
+# argument prefix<TAB>answer files in ../base, in turn; the last one repeats
+--version	version-022.out
+app --help	app-help.out
+approvals --json	approvals-empty.json
+doctor --json	doctor-ok.json
+events --follow --json	events-v1.jsonl
+app status sample-notes --json	status-sample-notes.json
+app status sample-mail --json	status-sample-mail.json
+app status	status-sample-notes.json
+app log	log-sample-notes.out
+app run	empty.out
+app stop	empty.out
+app install	empty.out
+app remove sample-mail --yes	remove-report.json
+app remove sample-mail --delete-data	remove-report-deleted.json
+app remove	remove-report.json
+du --json	du-none.json
+gc --json	gc-dry.json
+gc --homes	gc-dry-logins.json
+gc --yes	gc-yes.json
+macvm status --json	status-v1-sealed.json
+macvm setup --json	setup-v1.jsonl
+macvm setup --pause-download	pause-requested.json
+macvm setup --resume	pause-requested.json
+macvm remove --yes	macvm-remove.json
+macvm update	empty.out
+app add /Applications/Notebook.app --dry-run	add-review-ok.json
+app add /Applications/Sample Tasks.app --dry-run	add-review-app-store.json
+app add /Applications/Sample Notes.app --dry-run	add-review-existing.json
+app add /Applications/Notebook.app --name	add-report-ok.json
+app list --json	profiles-one.json

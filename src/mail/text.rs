@@ -54,7 +54,7 @@ pub fn one_line(m: &Message, run: &str) -> String {
         .collect::<Vec<_>>()
         .join(" ⏎ ")
         .replace('\t', " ");
-    if flat.chars().count() <= LINE_TEXT {
+    if m.kind == Kind::Status || flat.chars().count() <= LINE_TEXT {
         return flat;
     }
     let cut: String = flat.chars().take(LINE_TEXT).collect();
@@ -186,6 +186,13 @@ mod tests {
         m.seq = 3;
         let l = watch_line(&m, "claude-app-1a2b3c");
         assert!(l.contains("paddock mail show 1a2b3c 3"), "{l}");
+    }
+
+    #[test]
+    fn status_lines_keep_the_full_text() {
+        let text = format!("done: {} end", "a".repeat(LINE_TEXT + 10));
+        let m = Message::new("agent", Kind::Status, &text);
+        assert!(watch_line(&m, "fake-p-123456").ends_with(&text));
     }
 
     #[test]

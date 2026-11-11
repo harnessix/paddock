@@ -1,0 +1,21 @@
+{
+  "v": 1,
+  "questions": [
+    {
+      "id": "q1",
+      "app": "Sample Notes",
+      "host": "api.example.com",
+      "port": 443,
+      "process": "Sample Notes.app → helper (Renderer)",
+      "opened": "2026-11-06T09:59:00Z"
+    },
+    {
+      "id": "q2",
+      "app": "Sample Notes",
+      "host": "cdn.static.example.com",
+      "port": 443,
+      "process": "Sample Notes.app",
+      "opened": "2026-11-06T09:59:30Z"
+    }
+  ]
+}

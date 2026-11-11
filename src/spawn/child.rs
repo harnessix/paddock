@@ -69,6 +69,7 @@ fn run_child(env: &HostEnv, job: &Job, prompt: Vec<u8>, result: &mut ChildResult
         // harness's own variables pass.
         inherit_env: Some(false),
         auth: Some(c.auth.clone()),
+        devices: job.devices.clone(),
         worktree: !trainer,
         child: Some(ChildPlan {
             id: job.sandbox_id.clone(),
@@ -170,6 +171,14 @@ fn run_child(env: &HostEnv, job: &Job, prompt: Vec<u8>, result: &mut ChildResult
             })
             .unwrap_or_default();
         result.stat = tail(&stat, MAX_STAT).0;
+        if commits == 0 && uncommitted == Some(0) {
+            if let Err(e) = crate::worktree::reclaim_if_empty(env, w) {
+                log::warn!(
+                    "cannot remove the empty worktree {}: {e:#}",
+                    w.path.display()
+                );
+            }
+        }
     }
     let o = outcome?;
     result.exit_code = Some(o.code);

@@ -29,6 +29,7 @@ fn host_reports_peer_error_and_only_falls_back_for_transport_failure() {
             .env("XDG_DATA_HOME", temp.path().join("data"))
             .env("XDG_STATE_HOME", temp.path().join("state"))
             .env("XDG_CACHE_HOME", temp.path().join("cache"))
+            .env("XDG_RUNTIME_DIR", temp.path().join("run"))
             .args(["exclave", "run", "--on", "fake"]);
         if gpu {
             command.arg("--gpu");

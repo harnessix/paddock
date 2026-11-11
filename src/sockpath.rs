@@ -1,7 +1,7 @@
 //! Unix socket paths that fit in `sun_path`.
 //!
 //! Linux keeps paddock's sockets under the run directory. macOS allows 104
-//! bytes and `$TMPDIR` is long, so those sockets live in
+//! bytes, so short run directories hold their own sockets. Longer paths use
 //! `/tmp/paddock-<uid>/<run>`, with mode 0700. `<run>` is a short hash of the
 //! run directory, so two paddock homes (for example a test and the real one)
 //! never share a socket. A path that is still too long is an error here,
@@ -12,21 +12,35 @@ use anyhow::Context;
 use anyhow::{bail, Result};
 use std::path::{Path, PathBuf};
 
+/// The limit of [`check`] on macOS, where `sun_path` has 104 bytes.
+pub const MACOS_MAX: usize = 103;
+/// The limit of [`check`] on Linux, where `sun_path` has 108 bytes.
+pub const LINUX_MAX: usize = 107;
+/// The room that [`short_dir`] keeps for the file name of a socket:
+/// `/credentials.sock` and every other name of paddock fits.
+pub const NAME_ROOM: usize = 24;
+
 /// The longest path `UnixListener::bind` accepts, in bytes.
 /// The standard library rejects a path whose length is at least `sun_path`.
 pub fn max_len() -> usize {
     if cfg!(target_os = "macos") {
-        103
+        MACOS_MAX
     } else {
-        107
+        LINUX_MAX
     }
+}
+
+/// True when `path` fits in a socket address of a system whose limit is
+/// `max` ([`MACOS_MAX`], [`LINUX_MAX`]).
+pub fn fits(path: &Path, max: usize) -> bool {
+    path.as_os_str().len() < max
 }
 
 /// Error when `path` does not fit in a Unix socket address on this system.
 pub fn check(path: &Path) -> Result<()> {
     let n = path.as_os_str().len();
     let max = max_len();
-    if n >= max {
+    if !fits(path, max) {
         bail!(
             "unix socket path is {n} bytes, longer than the {max} byte limit on this system: {}",
             path.display()
@@ -40,11 +54,17 @@ pub fn check(path: &Path) -> Result<()> {
 pub fn socket_dir(run: &Path, uid: u32, id: &str) -> PathBuf {
     #[cfg(target_os = "macos")]
     {
-        let base = run_base(run, uid);
-        if id.is_empty() {
-            base
+        let direct = if id.is_empty() {
+            run.to_path_buf()
         } else {
-            base.join(component(uid, id))
+            run.join(id)
+        };
+        let safe =
+            id.is_empty() || (!id.contains('/') && !id.contains('\0') && id != "." && id != "..");
+        if safe && direct.as_os_str().len() + NAME_ROOM < MACOS_MAX {
+            direct
+        } else {
+            short_dir(&top(uid), run, id, MACOS_MAX)
         }
     }
     #[cfg(not(target_os = "macos"))]
@@ -89,7 +109,11 @@ pub fn host_socket(run: &Path, uid: u32, id: &str, name: &str) -> Result<PathBuf
     #[cfg(target_os = "macos")]
     {
         // Each level from /tmp/paddock-<uid> down is private.
-        let top = PathBuf::from(format!("/tmp/paddock-{uid}"));
+        let top = if dir.starts_with(run) {
+            run.to_path_buf()
+        } else {
+            top(uid)
+        };
         private_dir(&dir)?;
         for d in dir.ancestors().skip(1) {
             if !d.starts_with(&top) {
@@ -103,27 +127,44 @@ pub fn host_socket(run: &Path, uid: u32, id: &str, name: &str) -> Result<PathBuf
     Ok(path)
 }
 
-/// `/tmp/paddock-<uid>/<hash of run>`. The hash is stable across builds.
+/// `/tmp/paddock-<uid>`: the top of the short socket folders on macOS.
 #[cfg(target_os = "macos")]
-fn run_base(run: &Path, uid: u32) -> PathBuf {
-    use sha2::{Digest, Sha256};
-    use std::os::unix::ffi::OsStrExt;
-    let h = Sha256::digest(run.as_os_str().as_bytes());
-    let tag: String = h[..4].iter().map(|b| format!("{b:02x}")).collect();
-    PathBuf::from(format!("/tmp/paddock-{uid}")).join(tag)
+fn top(uid: u32) -> PathBuf {
+    PathBuf::from(format!("/tmp/paddock-{uid}"))
 }
 
-#[cfg(target_os = "macos")]
-fn component(uid: u32, id: &str) -> String {
-    let sample = format!("/tmp/paddock-{uid}/00000000/{id}/ssh-agent.sock");
-    if sample.len() < max_len() && !id.contains('/') && !id.contains('\0') {
-        return id.to_string();
+/// The short socket folder of run `id` under `top`: `top/<hash of run>`,
+/// then `id`, or a hash of `id` when a socket under `id` would not fit
+/// in `max` bytes with [`NAME_ROOM`] for its name. The hashes are stable
+/// across builds. An empty id is the shared folder. This is the layout of
+/// macOS, kept platform-neutral so that the Linux tests prove the rule.
+pub fn short_dir(top: &Path, run: &Path, id: &str, max: usize) -> PathBuf {
+    let base = top.join(hex8(run.as_os_str().as_encoded_bytes()));
+    if id.is_empty() {
+        return base;
     }
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut h = DefaultHasher::new();
-    id.hash(&mut h);
-    format!("{:016x}", h.finish())
+    let plain = base.join(id);
+    let safe = !id.contains('/') && !id.contains('\0') && id != "." && id != "..";
+    if safe && plain.as_os_str().len() + NAME_ROOM < max {
+        return plain;
+    }
+    base.join(hex16(id.as_bytes()))
+}
+
+fn hex8(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes)[..4]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+fn hex16(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes)[..8]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 #[cfg(target_os = "macos")]
@@ -150,3 +191,7 @@ pub fn remove_run_sockets(run: &Path, uid: u32, id: &str) {
         let _ = (run, uid, id);
     }
 }
+
+#[cfg(test)]
+#[path = "sockpath_tests.rs"]
+mod tests;

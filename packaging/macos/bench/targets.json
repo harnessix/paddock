@@ -1,0 +1,16 @@
+{
+  "_doc": "The targets of the performance bench of the macOS guest. One source for packaging/macos/bench.sh (through paddock macvm bench) and for the Linux test bench::baseline_meets_targets. Every number is an upper bound; samples is the least number of samples a measure needs. frames is the gap between two distinct frames in ms: 17 ms is 60 fps, and no frame older than 50 ms. idle.ram is the configured memory of the VM, 4 GiB: the memory balloon hung the guest in an early test on a Mac, so the guest keeps its memory. disk is the profile without the app copy.",
+  "warm": { "unit": "s", "p50": 6, "p95": 10, "samples": 5 },
+  "cold": { "unit": "s", "p95": 45, "samples": 5 },
+  "first": { "unit": "s", "p95": 120, "samples": 5 },
+  "quit": { "unit": "s", "p95": 10, "samples": 5 },
+  "update": { "unit": "s", "p95": 5, "samples": 5 },
+  "input": { "unit": "ms", "p95": 40, "samples": 200 },
+  "move": { "unit": "ms", "p95": 8, "samples": 20 },
+  "frames": { "unit": "ms", "p50": 17, "p95": 50, "samples": 150 },
+  "idle.cpu": { "unit": "pct", "mean": 3, "samples": 60 },
+  "idle.ram": { "unit": "gib", "p95": 4, "samples": 60 },
+  "idle.load": { "unit": "load", "mean": 1, "samples": 12 },
+  "video": { "unit": "pct", "mean": 60, "samples": 60 },
+  "disk": { "unit": "gib", "p95": 6, "samples": 1 }
+}

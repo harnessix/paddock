@@ -57,6 +57,10 @@ pub struct Options {
     /// `--profile default`: the harness runs on a private snapshot of its
     /// host data (shadow.rs). Only the command line sets it.
     pub profile_default: bool,
+    /// `--device NAME` (repeatable): the devices of the user configuration
+    /// that this run gets, whatever their `grant` says. A spawned child
+    /// gets them from its parent, within the parent's ceiling.
+    pub devices: Vec<String>,
 }
 
 /// A worktree that paddock created for one run.
@@ -259,6 +263,8 @@ pub struct Built {
     pub parent: Option<String>,
     /// For a spawned sandbox: the devices of its parent. It gets no other.
     pub device_ceiling: Option<Vec<String>>,
+    /// `--device NAME` of the run or the spawn (Options::devices).
+    pub devices: Vec<String>,
     /// The run shares session history with the host (`paddock wrap` starts).
     pub shared_history: bool,
     /// Serve the echo device for `paddock doctor --escape`.
@@ -375,6 +381,7 @@ pub fn build_with(env: &HostEnv, opts: &Options, harness: Harness) -> Result<Bui
             loaded.merged
         }
     };
+    crate::devices::check_requested(env, &opts.devices)?;
     let profile = harness.profile.clone();
     // The settings and the sandbox home belong to the repository; the agent
     // works in the worktree.
@@ -426,8 +433,8 @@ pub fn build_with(env: &HostEnv, opts: &Options, harness: Harness) -> Result<Bui
         })?),
         None => None,
     };
-    // `--profile default`: the home is an overlay on a private snapshot,
-    // and its upper folder is where paddock puts the credential files.
+    // `--profile default`: the home is an overlay on a private snapshot, or
+    // a clone (macOS). Its upper folder or the clone gets the credentials.
     let shadow = if opts.profile_default {
         if opts.transparent.is_some() || opts.child.is_some() || profile.app.is_some() {
             bail!("--profile default is only for `paddock run` and `paddock shell`");
@@ -443,7 +450,7 @@ pub fn build_with(env: &HostEnv, opts: &Options, harness: Harness) -> Result<Bui
         None
     };
     let home_src = match &shadow {
-        Some(p) => p.upper.clone(),
+        Some(p) => p.home.clone(),
         None => {
             let h = state::sandbox_home(env, &profile.name, &auth, &home_key)?;
             // For `paddock du` and `paddock gc`. The sandbox can rewrite it,
@@ -480,13 +487,9 @@ pub fn build_with(env: &HostEnv, opts: &Options, harness: Harness) -> Result<Bui
     spec.identity = crate::identity::for_login(env, &profile.name, &auth)?;
 
     if let Some(p) = &shadow {
-        spec.add_mount(Mount::overlay(
-            &p.lower,
-            &p.upper,
-            &p.work,
-            &env.home,
-            "profile default: a private snapshot of the data roots",
-        ));
+        if let Some(m) = p.overlay_mount(&env.home) {
+            spec.add_mount(m);
+        }
         spec.notices.push(format!(
             "profile default: the home holds a private snapshot of {}. Nothing that the run changes goes back to the host",
             p.roots.iter().map(|r| format!("~/{r}")).collect::<Vec<_>>().join(", ")
@@ -772,15 +775,9 @@ pub fn build_with(env: &HostEnv, opts: &Options, harness: Harness) -> Result<Bui
             }
         }
         spec.allow_domains = spec.allow_origins.keys().cloned().collect();
-        if spec.network == Network::Api {
-            let (_, bad) = crate::proxy::allow::Allowlist::parse(&spec.allow_domains);
-            if !bad.is_empty() {
-                spec.warnings.push(format!(
-                    "network mode api ignores these entries: {} (use host names, not IP addresses)",
-                    bad.join(", ")
-                ));
-            }
-        }
+        let macos = cfg!(target_os = "macos");
+        let ignored = crate::backend::ignored_entries(spec.network, &spec.allow_domains, macos);
+        spec.warnings.extend(ignored);
     }
 
     // Last, so no host or project variable replaces them.
@@ -975,6 +972,7 @@ pub fn build_with(env: &HostEnv, opts: &Options, harness: Harness) -> Result<Bui
         approver: None,
         parent: None,
         device_ceiling: None,
+        devices: opts.devices.clone(),
         test_devices: false,
         shared_history,
         view: true,

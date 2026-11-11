@@ -44,7 +44,7 @@ mod egress_addr_monitor_tests {
         let found = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let monitor = EgressAddrMonitor::start(env, info, found.clone());
         let start = std::time::Instant::now();
-        monitor.finish();
+        drop(monitor);
         assert!(start.elapsed() < std::time::Duration::from_secs(1));
     }
 }

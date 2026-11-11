@@ -38,6 +38,7 @@ fn paddock(root: &Path, args: &[&str]) -> Output {
         .env("XDG_DATA_HOME", root.join("data"))
         .env("XDG_STATE_HOME", root.join("state"))
         .env("XDG_CACHE_HOME", root.join("cache"))
+        .env("XDG_RUNTIME_DIR", root.join("run"))
         .env_remove("DBUS_SESSION_BUS_ADDRESS")
         .output()
         .unwrap()

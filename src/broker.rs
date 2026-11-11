@@ -12,7 +12,7 @@ use crate::env::HostEnv;
 use crate::state;
 use anyhow::{bail, Context as _, Result};
 use std::io::{BufRead, BufReader, Read, Write};
-use std::os::unix::net::{UnixListener, UnixStream};
+use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -32,14 +32,17 @@ mod policy;
 mod prepare;
 mod protocol;
 mod registry;
+mod serve;
+pub use serve::serve;
 mod spawn;
 mod spec;
 
 pub use approval::{
-    answer, answer_reply, answer_with_note, approval_note, approval_ui_active, approval_ui_file,
-    approvals_dir, ask_choice, clean_note, clean_text, denied_message, pending, write_pending,
-    Answer, Approver, DenyAll, HostApprover, Pending, Verdict, ASK_CAPABILITY, BUDGET_CAPABILITY,
-    MAX_NOTE, MAX_REPLY, TIMEOUT_CAPABILITY,
+    answer, answer_connect, answer_connect_cli, answer_reply, answer_reply_cli, answer_with_note,
+    answer_with_note_cli, approval_note, approval_ui_active, approval_ui_file, approvals_dir,
+    ask_choice, clean_note, clean_text, denied_message, pending, write_pending, Answer, Approver,
+    Connect, ConnectAnswer, DenyAll, HostApprover, Pending, Verdict, ASK_CAPABILITY,
+    BUDGET_CAPABILITY, CONNECT_CAPABILITY, MAX_NOTE, MAX_REPLY, TIMEOUT_CAPABILITY,
 };
 pub use audit::{audit_detail, audit_file, audit_line};
 pub use capture::{run_capture, run_capture_input};
@@ -80,7 +83,7 @@ pub const CAPABILITIES: &[(&str, &str)] = &[
     ),
     (
         "borrow",
-        "copy a host folder into /run/paddock/borrow to change it, and keep the original as it is",
+        "copy a host folder into the borrow folder (/run/paddock/borrow, or PADDOCK_BORROW_DIR on macOS) to change it, and keep the original as it is",
     ),
     (
         "return",
@@ -101,6 +104,10 @@ pub const CAPABILITIES: &[(&str, &str)] = &[
     (
         "spawn",
         "start another harness in its own sandbox and worktree with one task, and get its results",
+    ),
+    (
+        "connect",
+        "allow or deny one connection of a desktop app in paddock's macOS guest, by app, host and port (network mode ask)",
     ),
 ];
 
@@ -144,9 +151,11 @@ pub struct Broker {
     pub kv: std::sync::OnceLock<Arc<crate::kv::Service>>,
     pub horse: std::sync::OnceLock<crate::horse::device::Access>,
     /// Capabilities that the backend of this run cannot give, with the
-    /// reason. They are off, never asked (a Seatbelt run has no borrow).
+    /// reason. They are off, never asked.
     pub refused: Vec<(&'static str, &'static str)>,
     exclave_jobs: crate::exclave::jobs::Jobs,
+    /// Where the sandbox sees its borrow folder (`borrow::in_sandbox`).
+    pub borrow_dir: PathBuf,
     grants: Mutex<Vec<String>>,
     /// "Deny for this session": the keys of the request and the user's note.
     denials: Mutex<Vec<(String, Option<String>)>>,
@@ -173,6 +182,7 @@ impl Broker {
             horse: std::sync::OnceLock::new(),
             refused: Vec::new(),
             exclave_jobs: Default::default(),
+            borrow_dir: crate::borrow::MOUNT.into(),
             grants: Mutex::new(Vec::new()),
             denials: Mutex::new(Vec::new()),
         }
@@ -521,7 +531,7 @@ impl Broker {
                 }
             }
         } else {
-            match prepare::prepare(&self.env, &self.ctx, req) {
+            match prepare::prepare(&self.env, &self.ctx, req, &self.borrow_dir) {
                 Ok(p) => p,
                 Err(e) => return invalid(e),
             }
@@ -581,6 +591,7 @@ impl Broker {
                 session_allowed: prep.session_allowed,
                 choices: Vec::new(),
                 started_by: self.ctx.chain.clone(),
+                connect: None,
             };
             let verdict =
                 self.approver
@@ -726,7 +737,7 @@ impl Broker {
 
     /// Fetch, borrow, return and the other work this process runs itself.
     fn respond_local(&self, req: &Request, work: &prepare::Work) -> Response {
-        match prepare::perform(&self.env, &self.ctx, req, work) {
+        match prepare::perform(&self.env, &self.ctx, req, work, &self.borrow_dir) {
             Ok(result) => Response::done(result),
             Err(e) => Response::new(Status::Failed, format!("{e:#}")),
         }
@@ -772,28 +783,6 @@ pub fn read_prompt(project: &Path, raw: &str) -> Result<Vec<u8>> {
         bail!("the prompt file {raw} is empty");
     }
     Ok(bytes)
-}
-
-/// Serve requests on `socket` until the process exits.
-pub fn serve(socket: &Path, broker: Arc<Broker>) -> Result<()> {
-    let _ = std::fs::remove_file(socket);
-    if let Some(d) = socket.parent() {
-        crate::privfs::dir(d)?;
-    }
-    let listener = UnixListener::bind(socket)
-        .with_context(|| format!("cannot listen on {}", socket.display()))?;
-    log::debug!("serving host requests for sandbox {}", broker.ctx.id);
-    std::thread::spawn(move || {
-        for conn in listener.incoming().flatten() {
-            let b = broker.clone();
-            std::thread::spawn(move || {
-                if let Err(e) = b.serve_conn(conn) {
-                    log::debug!("connection failed: {e:#}");
-                }
-            });
-        }
-    });
-    Ok(())
 }
 
 #[cfg(test)]

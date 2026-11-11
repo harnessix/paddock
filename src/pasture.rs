@@ -19,6 +19,9 @@
 //!
 //! `[pastures.NAME.rations]` gives a member a ration: a timer named
 //! `ration` that the user owns, set when the member starts (timer.rs).
+//!
+//! `devices = ["NAME"]` grants the devices of `[devices.NAME]` tables to
+//! every member (devices/grant.rs).
 
 pub mod bridge;
 pub mod mounts;
@@ -46,6 +49,8 @@ pub struct Pasture {
     pub rations: BTreeMap<String, Ration>,
     /// Whether the pasture can have a workbench (workbench.rs).
     pub workbench: bool,
+    /// Devices of the user configuration that every member gets.
+    pub devices: Vec<String>,
 }
 
 /// What a member can graze: the budgets of its `ration` timer.
@@ -74,6 +79,8 @@ struct RawPasture {
     rations: BTreeMap<String, RawRation>,
     #[serde(default)]
     workbench: bool,
+    #[serde(default)]
+    devices: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -169,6 +176,10 @@ pub fn parse(text: &str) -> Result<BTreeMap<String, Pasture>> {
                 workbench::NAME
             );
         }
+        for d in &p.devices {
+            crate::devices::config::check_name(d)
+                .with_context(|| format!("[pastures.{name}] devices"))?;
+        }
         let mut rations = BTreeMap::new();
         for (member, r) in p.rations {
             let ration = ration_of(name, &member, &p.members, r)?;
@@ -181,6 +192,7 @@ pub fn parse(text: &str) -> Result<BTreeMap<String, Pasture>> {
                 bridge: p.bridge,
                 rations,
                 workbench: p.workbench,
+                devices: p.devices,
             },
         );
     }

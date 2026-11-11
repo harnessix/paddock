@@ -1,0 +1,32 @@
+{
+  "v": 1,
+  "ok": true,
+  "applies": "live",
+  "rule": {
+    "id": "rule-f1e2d3",
+    "host": "files.example.com",
+    "port": 443,
+    "answer": "allow",
+    "verdict": "allow",
+    "scope": "always",
+    "added": "2026-11-06T10:00:00Z",
+    "made": "2026-11-06T10:00:00Z",
+    "by": "user",
+    "source": "you",
+    "count": 0,
+    "seeded": false
+  },
+  "rules": [
+    {
+      "id": "rule-f1e2d3",
+      "host": "files.example.com",
+      "port": 443,
+      "verdict": "allow",
+      "scope": "always",
+      "made": "2026-11-06T10:00:00Z",
+      "by": "user",
+      "source": "you",
+      "count": 0
+    }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "chip": "intel",
+  "chip_name": "Intel Core i7",
+  "macos": "15.1",
+  "macos_ok": true,
+  "free_bytes": 184000000000,
+  "need_bytes": 40000000000,
+  "memory_bytes": 17179869184,
+  "vm_entitlement": true,
+  "slots": []
+}

@@ -357,7 +357,7 @@ pub fn spent_of(env: &crate::env::HostEnv, sandbox: &str) -> Vec<Spent> {
         .unwrap_or_default()
 }
 
-/// The text of `paddock devices ledger`: the sums by sandbox and device,
+/// The text of `paddock device ledger`: the sums by sandbox and device,
 /// since `since` seconds ago, for one project or all.
 pub fn report(
     env: &crate::env::HostEnv,
@@ -409,7 +409,7 @@ pub fn report(
     Ok(out)
 }
 
-/// Raise the budget of a run on a device by `add` (`paddock devices
+/// Raise the budget of a run on a device by `add` (`paddock device
 /// budget`). `id` is the root sandbox or a child in the ledger. Returns the
 /// root and the new budget.
 pub fn raise(env: &crate::env::HostEnv, id: &str, device: &str, add: u64) -> Result<(String, u64)> {

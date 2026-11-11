@@ -20,10 +20,32 @@ icon = "chatgpt"
 schemes = ["codex"]
 
 # On macOS the ChatGPT app uses Apple's App Sandbox, which cannot run inside
-# Seatbelt. paddock refuses it there: Apple already confines it.
+# Seatbelt, so `--backend seatbelt` refuses it: Apple already confines it.
+# The macOS guest route runs it unchanged, under Apple's own sandbox inside
+# the guest, and that route is the default on macOS.
+# An App Store copy of the app carries Contents/_MASReceipt. The guest has
+# no Apple ID, so `paddock app run` refuses such a bundle with one line and
+# says to install the vendor's download into /Applications instead.
 [app.macos]
 bundles = ["/Applications/ChatGPT.app"]
 app_sandbox = true
+# The hosts of a plain login, which the firewall of paddock's macOS guest
+# allows with by = "profile", so the first run asks nothing. "*.x.y" is
+# every name under x.y, not x.y itself. The test
+# macvm::text first_login_hosts_are_seeded checks them against the hosts
+# of a first login. The last two are Apple's Gatekeeper check.
+seed_hosts = [
+  "chatgpt.com",
+  "*.chatgpt.com",
+  "auth.openai.com",
+  "*.openai.com",
+  "*.oaistatic.com",
+  "*.oaiusercontent.com",
+  # The bot check of the login page (Cloudflare Turnstile).
+  "challenges.cloudflare.com",
+  "api.apple-cloudkit.com",
+  "ocsp2.apple.com",
+]
 
 # OpenAI documents no telemetry setting for the desktop app.
 # https://help.openai.com/en/articles/7730893-data-controls-faq

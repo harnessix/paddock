@@ -152,10 +152,18 @@ pub fn allow(p: &mut Policy, file: &Path, user_cache: Option<&Path>) {
         Access::ReadWrite,
         "the keychain of this login (in paddock's login store)",
     );
-    p.services.push((
-        SECURITY_SERVER.into(),
-        "securityd: the keys of the unlocked keychain of this login. The keychain files of the user stay denied".into(),
-    ));
+    securityd(
+        p,
+        user_cache,
+        "securityd: the keys of the unlocked keychain of this login. The keychain files of the user stay denied",
+    );
+}
+
+/// securityd and the files that the Security framework reads, without a
+/// keychain folder: the caller decides which keychain files are readable.
+/// The system keychains stay denied.
+pub fn securityd(p: &mut Policy, user_cache: Option<&Path>, why: &str) {
+    p.services.push((SECURITY_SERVER.into(), why.into()));
     p.add(
         MDS,
         Access::ReadOnly,
@@ -175,18 +183,12 @@ pub fn allow(p: &mut Policy, file: &Path, user_cache: Option<&Path>) {
     );
 }
 
-/// The user's cache folder (`DARWIN_USER_CACHE_DIR`).
+/// A folder of the user from `confstr` (`_CS_DARWIN_USER_*_DIR`).
 #[cfg(target_os = "macos")]
-pub fn user_cache() -> Option<PathBuf> {
+fn user_dir(name: libc::c_int) -> Option<PathBuf> {
     let mut buf = vec![0u8; 1024];
     // SAFETY: confstr writes at most buf.len() bytes, NUL included.
-    let n = unsafe {
-        libc::confstr(
-            libc::_CS_DARWIN_USER_CACHE_DIR,
-            buf.as_mut_ptr().cast(),
-            buf.len(),
-        )
-    };
+    let n = unsafe { libc::confstr(name, buf.as_mut_ptr().cast(), buf.len()) };
     if n == 0 || n > buf.len() {
         return None;
     }
@@ -194,8 +196,26 @@ pub fn user_cache() -> Option<PathBuf> {
     String::from_utf8(buf).ok().map(PathBuf::from)
 }
 
+/// The user's cache folder (`DARWIN_USER_CACHE_DIR`).
+#[cfg(target_os = "macos")]
+pub fn user_cache() -> Option<PathBuf> {
+    user_dir(libc::_CS_DARWIN_USER_CACHE_DIR)
+}
+
+/// The user's temporary folder (`DARWIN_USER_TEMP_DIR`): per user, mode
+/// 0700, and emptied at each start of the Mac.
+#[cfg(target_os = "macos")]
+pub fn user_temp() -> Option<PathBuf> {
+    user_dir(libc::_CS_DARWIN_USER_TEMP_DIR)
+}
+
 #[cfg(not(target_os = "macos"))]
 pub fn user_cache() -> Option<PathBuf> {
+    None
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn user_temp() -> Option<PathBuf> {
     None
 }
 

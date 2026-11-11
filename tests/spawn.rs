@@ -43,6 +43,7 @@ fn world(parent_script: &str) -> World {
     // Not in /tmp: the sandbox has its own /tmp.
     let tmp = common::tempdir();
     let root = tmp.path().to_path_buf();
+    std::fs::create_dir_all(root.join("home")).unwrap();
     let cfg = root.join("cfg/paddock");
     std::fs::create_dir_all(cfg.join("harness.d")).unwrap();
     std::fs::create_dir_all(root.join("run")).unwrap();
@@ -134,7 +135,8 @@ fn world(parent_script: &str) -> World {
 
 fn paddock(w: &World) -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_paddock"));
-    c.env("XDG_CONFIG_HOME", w.root.join("cfg"))
+    c.env("HOME", w.root.join("home"))
+        .env("XDG_CONFIG_HOME", w.root.join("cfg"))
         .env("XDG_DATA_HOME", w.root.join("data"))
         .env("XDG_STATE_HOME", w.root.join("state"))
         .env("XDG_CACHE_HOME", w.root.join("cache"))

@@ -1,0 +1,2 @@
+- Fix: Start device sandboxes in a private home that remains available when the host home is under a replaced temporary directory.
+- Fix: Clean up device state left by an interrupted write after its writer and supervisor exit.

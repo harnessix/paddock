@@ -185,12 +185,13 @@ fn a_fresh_run_session_exposes_an_encrypted_binding_in_the_device() {
         session: rh.session.clone(),
     };
     let ctx = DeviceCtx {
-        env,
+        env: env.clone(),
         sandbox: "test".into(),
         harness: "dsh".into(),
         project: tmp.path().into(),
         started_by: vec![],
         approver: Arc::new(crate::broker::HostApprover),
+        instances: crate::devices::sandbox::Instances::new(env.clone()),
     };
     let fs = DeviceFs::new("test", vec![]).with_horse(Some(setup), ctx);
     let (mut k, _session) = serve(fs);
@@ -212,5 +213,73 @@ fn a_fresh_run_session_exposes_an_encrypted_binding_in_the_device() {
             "lookup of s-000000000000 in horse/self/sessions/s-000000000000/binding: errno 2"
                 .into()
         )
+    );
+}
+
+#[test]
+fn a_horse_run_without_the_device_mount_says_why() {
+    use crate::horse::{self as hs, run};
+    let tmp = tempfile::tempdir().unwrap();
+    let env = HostEnv::from_parts(
+        tmp.path().join("home"),
+        "demo".into(),
+        unsafe { libc::getuid() },
+        unsafe { libc::getgid() },
+        Default::default(),
+    );
+    let cfg = env.paddock_config();
+    std::fs::create_dir_all(&cfg).unwrap();
+    std::fs::write(cfg.join("config.toml"), "[devices]\nmount = false\n").unwrap();
+    let store = hs::Store::open(&tmp.path().join("store")).unwrap();
+    let rh = run::begin(&store, hs::dsh::HARNESS, hs::dsh::VERSION, None, None).unwrap();
+    let access = crate::horse::device::Access {
+        store,
+        horse: rh.horse,
+        session: rh.session,
+    };
+    let spec = || {
+        crate::spec::SandboxSpec::new(
+            "sb-1".into(),
+            "dsh",
+            std::path::Path::new("/home/demo/app"),
+            env.home.join("sb"),
+            &env.home,
+            1000,
+            1000,
+            "demo",
+        )
+    };
+    let secrets = || crate::credentials::secret::SecretFiles::new(None, None);
+    // Without horse mode an off mount stays quiet.
+    let mut plain = spec();
+    assert!(start(
+        &env,
+        &mut plain,
+        "bwrap",
+        false,
+        &GrantCtx::none(),
+        &[],
+        None,
+        secrets(),
+        None
+    )
+    .is_none());
+    assert!(plain.notices.is_empty(), "{:?}", plain.notices);
+    let mut horse = spec();
+    let devices = start(
+        &env,
+        &mut horse,
+        "bwrap",
+        false,
+        &GrantCtx::none(),
+        &[],
+        None,
+        secrets(),
+        Some(access),
+    );
+    assert!(devices.is_none());
+    assert_eq!(
+        horse.notices,
+        [format!("{HORSE_OFF}: [devices] mount is false")]
     );
 }

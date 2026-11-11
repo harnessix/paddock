@@ -1,0 +1,55 @@
+# argument prefix<TAB>answer files in ../base, in turn; the last one repeats
+--version	version.out
+macvm status --json	status-ready.json
+doctor --json	doctor-ok.json
+app list --json	apps-agent-away.json
+approvals --json	approvals-empty.json
+app status Sample Notes --json	status-sample-notes.json
+app status Sample Mail --json	status-sample-mail.json
+app log Sample Notes --events --tail	log-sample-notes.out
+app log	log-sample-notes.out
+events --follow --json	idle.jsonl
+app run	ok.json
+app stop	ok.json
+app open	ok.json
+approvals answer	ok.json
+approvals paused	ok.json
+app add	precheck-ok.json
+app add /Applications/Notebook.app --name	add-ok.json
+app install	ok.json
+app remove	remove-ok.json
+app clear-state	ok.json
+app network	ok.json
+app clipboard	ok.json
+app device	ok.json
+app share Sample Notes add	share-add-live.json
+app share Sample Notes add /Users/demo/Library	share-add-library.json
+app share Sample Notes add /Users/demo/Code/site --json	share-add-env.json
+app share Sample Notes add /Users/demo/Code/site --unprotected	share-add-env-ok.json
+app share Sample Notes mode	share-mode.json
+app share Sample Notes remove	ok.json
+app share Sample Notes downloads	ok.json
+app rules Sample Notes add	rule-add.json
+app rules Sample Notes add * 	rule-every-host.json
+app rules Sample Notes remove	ok.json
+app rules Sample Notes list	rules-list.json
+app rules Sample Notes add example.org	rule-add-site.json
+app rules Sample Notes add telemetry.example.net	rule-allow-telemetry.json
+app rules Sample Notes add example.net	rule-allow-site-telemetry.json
+app rules Sample Notes add 10.0.0.1	rule-refused.json
+app rules Sample Notes change	rule-change.json
+app rules Sample Mail list	rules-empty.json
+app connections Sample Notes	connections.json
+app connections	connections-empty.json
+app clipboard Sample Notes --json	clipboard-state.json
+app clipboard Sample Mail --json	clipboard-stopped.json
+app share Sample Notes keep	ok.json
+macvm latest --json	latest-newer.json
+macvm remove --json	macvm-remove.json
+macvm setup --json	setup-steps.jsonl
+macvm setup --pause-download	ok.json
+macvm setup --show-window	ok.json
+macvm clean	ok.json
+doctor --report	version.out
+macvm remove --yes	macvm-remove.json
+macvm setup --resume	ok.json

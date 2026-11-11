@@ -1,0 +1,14 @@
+# Public hosts used to exercise the built-in profile seed rules.
+hosts = [
+  { host = "chatgpt.com", port = 443 },
+  { host = "ab.chatgpt.com", port = 443 },
+  { host = "ws.chatgpt.com", port = 443 },
+  { host = "auth.openai.com", port = 443 },
+  { host = "api.openai.com", port = 443 },
+  { host = "cdn.oaistatic.com", port = 443 },
+  { host = "auth-cdn.oaistatic.com", port = 443 },
+  { host = "files.oaiusercontent.com", port = 443 },
+  { host = "challenges.cloudflare.com", port = 443 },
+  { host = "api.apple-cloudkit.com", port = 443 },
+  { host = "ocsp2.apple.com", port = 443 },
+]

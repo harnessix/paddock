@@ -113,6 +113,19 @@ impl Broker {
             Some(true) => Some(self.hitch_parent(&harness).map_err(invalid)?),
             _ => None,
         };
+        let devices: Vec<String> = req
+            .args
+            .get("devices")
+            .and_then(|v| v.as_array())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|x| x.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        sp.ceiling
+            .check_devices(&devices)
+            .map_err(|e| invalid(format!("{e:#}")))?;
         // `--task`: paddock writes the prompt from the Spec Kit files.
         let (prompt, task, chosen) = match arg_str(req, "task") {
             Some(want) => {
@@ -153,6 +166,7 @@ impl Broker {
              Login: {} (the {harness} login of this computer; this sandbox never sees it)\n\
              Branch: a new worktree of {} from {}\n\
              Limits: network {}, backend {}, no display, {} (enforced by {}), at most {} at a time\n\
+             Devices: {}\n\
              Results go to {}/{INBOX}{}.\n\n\
              Task ({chars} characters{}):\n{shown}",
             role.describe(),
@@ -173,6 +187,11 @@ impl Broker {
                 "paddock"
             },
             sp.cfg.max_running,
+            if devices.is_empty() {
+                "none by --device (the devices that every sandbox gets stay)".to_string()
+            } else {
+                devices.join(", ")
+            },
             self.ctx.project.display(),
             if hitch.is_some() {
                 ", and the child is hitched: it joins the horse of this run as a new session, and its result is appended to this session"
@@ -209,6 +228,7 @@ impl Broker {
                     from_head,
                     hitch,
                     pick: chosen.pick,
+                    devices,
                 },
                 task,
             },

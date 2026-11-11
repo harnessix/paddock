@@ -2,7 +2,9 @@
 //! (`paddock-host borrow` and `paddock-host return`).
 //!
 //! At the start, paddock mounts an empty folder of its own at
-//! `/run/paddock/borrow` in the sandbox. A borrow copies a host folder into
+//! `/run/paddock/borrow` in the sandbox. Seatbelt cannot mount, so a
+//! Seatbelt run on macOS sees the same host folder at its own path, which
+//! `PADDOCK_BORROW_DIR` names (`in_sandbox`). A borrow copies a host folder into
 //! it, with reflinks where the file system has them, and records the state
 //! of the original in a manifest that only the host can write. The agent
 //! changes the copy. A return compares the copy with the manifest and
@@ -26,6 +28,9 @@ use std::path::{Component, Path, PathBuf};
 
 /// Where the borrow folder appears inside the sandbox.
 pub const MOUNT: &str = "/run/paddock/borrow";
+/// The variable that names the borrow folder in a sandbox that cannot
+/// mount it at `MOUNT` (Seatbelt on macOS).
+pub const ENV: &str = "PADDOCK_BORROW_DIR";
 /// The default of `[borrow] max`: the most bytes a borrow copies without
 /// reflinks, and the most changed bytes a return takes.
 pub const DEFAULT_MAX: u64 = 1 << 30;
@@ -41,7 +46,27 @@ pub fn root(env: &HostEnv) -> PathBuf {
     env.paddock_data().join("borrow")
 }
 
-/// The borrow folder of one sandbox, mounted read-write at `MOUNT`.
+/// Where the sandbox finds its borrow folder: the value of
+/// `PADDOCK_BORROW_DIR` when it is an absolute path (a Seatbelt run, which
+/// sees the host folder at its own path), else `MOUNT`.
+pub fn in_sandbox(var: Option<&OsStr>) -> PathBuf {
+    match var.map(Path::new) {
+        Some(p) if p.is_absolute() => p.to_path_buf(),
+        _ => PathBuf::from(MOUNT),
+    }
+}
+
+/// The path of a borrowed copy in the sandbox, from the result of a borrow
+/// and the value of `PADDOCK_BORROW_DIR` there.
+pub fn copy_path(result: &serde_json::Value, var: Option<&OsStr>) -> PathBuf {
+    match result["name"].as_str().filter(|n| valid_name(n)) {
+        Some(n) => in_sandbox(var).join(n),
+        None => PathBuf::from(result["path"].as_str().unwrap_or_default()),
+    }
+}
+
+/// The borrow folder of one sandbox, mounted read-write at `MOUNT`, or
+/// allowed read-write at its own path for a Seatbelt run.
 pub fn dir(env: &HostEnv, id: &str) -> PathBuf {
     root(env).join(id)
 }
@@ -207,67 +232,6 @@ fn utf8(name: &OsStr, rel: &str) -> Result<String> {
             join_rel(rel, &name.to_string_lossy())
         )
     })
-}
-
-fn hash_reader(mut r: impl Read) -> Result<String> {
-    use sha2::{Digest, Sha256};
-    let mut h = Sha256::new();
-    let mut buf = vec![0u8; 64 * 1024];
-    loop {
-        let n = r.read(&mut buf)?;
-        if n == 0 {
-            break;
-        }
-        h.update(&buf[..n]);
-    }
-    Ok(crate::manifest::hex(&h.finalize()))
-}
-
-/// The entries of a host folder that only the host writes. Symlinks are
-/// recorded, never followed. FIFOs, sockets and devices are left out.
-pub fn scan(root: &Path) -> Result<BTreeMap<String, Entry>> {
-    let mut out = BTreeMap::new();
-    scan_at(root, "", 0, &mut out)?;
-    Ok(out)
-}
-
-fn scan_at(dir: &Path, rel: &str, depth: usize, out: &mut BTreeMap<String, Entry>) -> Result<()> {
-    if depth > MAX_DEPTH {
-        bail!("{} is too deep", dir.display());
-    }
-    let mut names = std::fs::read_dir(dir)
-        .with_context(|| format!("cannot read {}", dir.display()))?
-        .map(|e| e.map(|e| e.file_name()))
-        .collect::<std::io::Result<Vec<_>>>()?;
-    names.sort();
-    for n in names {
-        let r = join_rel(rel, &utf8(&n, rel)?);
-        let p = dir.join(&n);
-        let m = std::fs::symlink_metadata(&p)?;
-        let t = m.file_type();
-        let e = if t.is_symlink() {
-            Entry::symlink(std::fs::read_link(&p)?)
-        } else if t.is_dir() {
-            Entry::dir()
-        } else if t.is_file() {
-            let mut e = Entry::file(&m);
-            if e.size <= HASH_MAX {
-                e.hash = Some(hash_reader(std::fs::File::open(&p)?)?);
-            }
-            e
-        } else {
-            continue;
-        };
-        let is_dir = e.kind == Kind::Dir;
-        out.insert(r.clone(), e);
-        if out.len() > MAX_ENTRIES {
-            bail!("the folder has more than {MAX_ENTRIES} entries");
-        }
-        if is_dir {
-            scan_at(&p, &r, depth + 1, out)?;
-        }
-    }
-    Ok(())
 }
 
 /// What differs between two states: added, changed, deleted names.
@@ -481,15 +445,20 @@ pub fn plan_borrow(
     Ok(BorrowPlan { src, real, bytes })
 }
 
+#[cfg(target_os = "linux")]
 const FICLONE: libc::c_ulong = 0x4004_9409;
 
 /// Copy a file, with a reflink when the file system can. True: reflinked.
+/// FICLONE is a Linux ioctl; macOS copies the bytes.
 fn clone_file(from: &std::fs::File, to: &std::fs::File) -> Result<bool> {
-    use std::os::fd::AsRawFd;
-    // SAFETY: FICLONE takes the source fd as its argument.
-    let r = unsafe { libc::ioctl(to.as_raw_fd(), FICLONE as _, from.as_raw_fd()) };
-    if r == 0 {
-        return Ok(true);
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::fd::AsRawFd;
+        // SAFETY: FICLONE takes the source fd as its argument.
+        let r = unsafe { libc::ioctl(to.as_raw_fd(), FICLONE as _, from.as_raw_fd()) };
+        if r == 0 {
+            return Ok(true);
+        }
     }
     let mut from = from;
     let mut to = to;
@@ -564,10 +533,16 @@ fn nonce() -> String {
 }
 
 /// Copy the opened folder into the borrow folder of sandbox `id` and write
-/// its manifest. Returns the name of the copy.
-pub fn borrow(env: &HostEnv, id: &str, p: &BorrowPlan, max: u64) -> Result<serde_json::Value> {
-    let src = p.src.proc_path()?;
-    let entries = scan(&src)?;
+/// its manifest. Returns the name of the copy and its path in the sandbox,
+/// below `seen` (`in_sandbox`).
+pub fn borrow(
+    env: &HostEnv,
+    id: &str,
+    p: &BorrowPlan,
+    max: u64,
+    seen: &Path,
+) -> Result<serde_json::Value> {
+    let entries = scan_open(&p.src)?;
     let m = meta(env, id);
     crate::privfs::dir(&m)?;
     let stage = m.join(format!("stage-{}", nonce()));
@@ -584,9 +559,10 @@ pub fn borrow(env: &HostEnv, id: &str, p: &BorrowPlan, max: u64) -> Result<serde
         }
     };
     std::fs::set_permissions(&stage, std::fs::Permissions::from_mode(0o755))?;
-    let bdir = dir(env, id);
-    crate::privfs::dir(&bdir)?;
-    let target = crate::safefs::Root::open(&bdir)?.dir(Path::new(""), false)?;
+    // Opened from the root down: a Seatbelt run can write next to its
+    // copies, and a link in place of its folder must lead nowhere.
+    crate::privfs::dir(&root(env))?;
+    let target = crate::safefs::Root::open(&root(env))?.dir(Path::new(id), true)?;
     let want = crate::broker::safe_name(&p.real.to_string_lossy(), "borrowed");
     let mut name = None;
     for i in 0..1000 {
@@ -629,7 +605,7 @@ pub fn borrow(env: &HostEnv, id: &str, p: &BorrowPlan, max: u64) -> Result<serde
     )?;
     Ok(serde_json::json!({
         "name": name,
-        "path": format!("{MOUNT}/{name}"),
+        "path": seen.join(&name),
         "original": p.real,
         "files": files,
         "bytes": p.bytes,
@@ -826,7 +802,7 @@ pub fn plan_return(env: &HostEnv, id: &str, name: &str, max: u64) -> Result<Retu
     check_original(&manifest)?;
     let copy_dir = crate::safefs::Root::open(&dir(env, id))?
         .dir(Path::new(name), false)
-        .with_context(|| format!("the copy {MOUNT}/{name} is gone"))?;
+        .with_context(|| format!("the copy {name} is gone"))?;
     let snap = meta(env, id).join(format!("snap-{}", nonce()));
     std::fs::create_dir(&snap)?;
     let mut s = Snap {
@@ -929,12 +905,12 @@ pub fn plan_return(env: &HostEnv, id: &str, name: &str, max: u64) -> Result<Retu
 }
 
 impl ReturnPlan {
-    /// The card text.
-    pub fn detail(&self) -> String {
+    /// The card text. `seen`: the borrow folder in the sandbox.
+    pub fn detail(&self, seen: &Path) -> String {
         let c = &self.changes;
         let mut t = format!(
-            "Write the changes of the borrowed copy {MOUNT}/{} back to the host folder {}: {}.",
-            self.name,
+            "Write the changes of the borrowed copy {} back to the host folder {}: {}.",
+            seen.join(&self.name).display(),
             self.manifest.original.display(),
             c.counts()
         );
@@ -1132,6 +1108,12 @@ pub fn du_line(env: &HostEnv) -> Option<String> {
         root(env).display()
     ))
 }
+
+mod scan;
+use scan::hash_reader;
+#[cfg(test)]
+use scan::scan_by_path;
+pub use scan::{scan, scan_open};
 
 #[cfg(test)]
 mod tests;

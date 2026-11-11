@@ -583,6 +583,7 @@ pub fn approver_ask(
             expires: now + wait.as_secs(),
             session_allowed: false,
             started_by: Vec::new(),
+            connect: None,
             choices: Vec::new(),
         };
         approver.ask(&env, &p, wait).map(|a| !a.denies())

@@ -1,0 +1,195 @@
+{
+  "v": 1,
+  "apps": [
+    {
+      "name": "App 1",
+      "bundle_path": "/Applications/App 1.app",
+      "state": "stopped",
+      "next_start": "Warm, about 10 s",
+      "memory_bytes": 6442450944,
+      "host_memory_bytes": 17179869184,
+      "sizes": {
+        "app_copy": 1200000000,
+        "data": 3400000000,
+        "saved_state": 2000000000
+      },
+      "network": "ask",
+      "open_questions": 0,
+      "rule_count": 14,
+      "golden": "macOS 15.1 (sealed)",
+      "app_changed": false,
+      "agent_connected": true
+    },
+    {
+      "name": "App 2",
+      "bundle_path": "/Applications/App 2.app",
+      "state": "stopped",
+      "next_start": "Warm, about 10 s",
+      "memory_bytes": 6442450944,
+      "host_memory_bytes": 17179869184,
+      "sizes": {
+        "app_copy": 1200000000,
+        "data": 3400000000,
+        "saved_state": 2000000000
+      },
+      "network": "ask",
+      "open_questions": 0,
+      "rule_count": 14,
+      "golden": "macOS 15.1 (sealed)",
+      "app_changed": false,
+      "agent_connected": true
+    },
+    {
+      "name": "App 3",
+      "bundle_path": "/Applications/App 3.app",
+      "state": "stopped",
+      "next_start": "Warm, about 10 s",
+      "memory_bytes": 6442450944,
+      "host_memory_bytes": 17179869184,
+      "sizes": {
+        "app_copy": 1200000000,
+        "data": 3400000000,
+        "saved_state": 2000000000
+      },
+      "network": "ask",
+      "open_questions": 0,
+      "rule_count": 14,
+      "golden": "macOS 15.1 (sealed)",
+      "app_changed": false,
+      "agent_connected": true
+    },
+    {
+      "name": "App 4",
+      "bundle_path": "/Applications/App 4.app",
+      "state": "stopped",
+      "next_start": "Warm, about 10 s",
+      "memory_bytes": 6442450944,
+      "host_memory_bytes": 17179869184,
+      "sizes": {
+        "app_copy": 1200000000,
+        "data": 3400000000,
+        "saved_state": 2000000000
+      },
+      "network": "ask",
+      "open_questions": 0,
+      "rule_count": 14,
+      "golden": "macOS 15.1 (sealed)",
+      "app_changed": false,
+      "agent_connected": true
+    },
+    {
+      "name": "App 5",
+      "bundle_path": "/Applications/App 5.app",
+      "state": "stopped",
+      "next_start": "Warm, about 10 s",
+      "memory_bytes": 6442450944,
+      "host_memory_bytes": 17179869184,
+      "sizes": {
+        "app_copy": 1200000000,
+        "data": 3400000000,
+        "saved_state": 2000000000
+      },
+      "network": "ask",
+      "open_questions": 0,
+      "rule_count": 14,
+      "golden": "macOS 15.1 (sealed)",
+      "app_changed": false,
+      "agent_connected": true
+    },
+    {
+      "name": "App 6",
+      "bundle_path": "/Applications/App 6.app",
+      "state": "stopped",
+      "next_start": "Warm, about 10 s",
+      "memory_bytes": 6442450944,
+      "host_memory_bytes": 17179869184,
+      "sizes": {
+        "app_copy": 1200000000,
+        "data": 3400000000,
+        "saved_state": 2000000000
+      },
+      "network": "ask",
+      "open_questions": 0,
+      "rule_count": 14,
+      "golden": "macOS 15.1 (sealed)",
+      "app_changed": false,
+      "agent_connected": true
+    },
+    {
+      "name": "App 7",
+      "bundle_path": "/Applications/App 7.app",
+      "state": "stopped",
+      "next_start": "Warm, about 10 s",
+      "memory_bytes": 6442450944,
+      "host_memory_bytes": 17179869184,
+      "sizes": {
+        "app_copy": 1200000000,
+        "data": 3400000000,
+        "saved_state": 2000000000
+      },
+      "network": "ask",
+      "open_questions": 0,
+      "rule_count": 14,
+      "golden": "macOS 15.1 (sealed)",
+      "app_changed": false,
+      "agent_connected": true
+    },
+    {
+      "name": "App 8",
+      "bundle_path": "/Applications/App 8.app",
+      "state": "stopped",
+      "next_start": "Warm, about 10 s",
+      "memory_bytes": 6442450944,
+      "host_memory_bytes": 17179869184,
+      "sizes": {
+        "app_copy": 1200000000,
+        "data": 3400000000,
+        "saved_state": 2000000000
+      },
+      "network": "ask",
+      "open_questions": 0,
+      "rule_count": 14,
+      "golden": "macOS 15.1 (sealed)",
+      "app_changed": false,
+      "agent_connected": true
+    },
+    {
+      "name": "App 9",
+      "bundle_path": "/Applications/App 9.app",
+      "state": "stopped",
+      "next_start": "Warm, about 10 s",
+      "memory_bytes": 6442450944,
+      "host_memory_bytes": 17179869184,
+      "sizes": {
+        "app_copy": 1200000000,
+        "data": 3400000000,
+        "saved_state": 2000000000
+      },
+      "network": "ask",
+      "open_questions": 0,
+      "rule_count": 14,
+      "golden": "macOS 15.1 (sealed)",
+      "app_changed": false,
+      "agent_connected": true
+    },
+    {
+      "name": "App 10",
+      "bundle_path": "/Applications/App 10.app",
+      "state": "stopped",
+      "next_start": "Warm, about 10 s",
+      "memory_bytes": 6442450944,
+      "host_memory_bytes": 17179869184,
+      "sizes": {
+        "app_copy": 1200000000,
+        "data": 3400000000,
+        "saved_state": 2000000000
+      },
+      "network": "ask",
+      "open_questions": 0,
+      "rule_count": 14,
+      "golden": "macOS 15.1 (sealed)",
+      "app_changed": false,
+      "agent_connected": true
+    }
+  ]
+}

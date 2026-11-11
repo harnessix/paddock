@@ -7,12 +7,7 @@ fn a_request_that_ends_while_the_clock_is_read_is_no_quiet_time() {
 use super::*;
 
 #[test]
-fn the_units_name_the_same_socket_as_paddock() {
-    let s = socket_unit();
-    assert!(s.contains("ListenStream=%t/paddock/gatewayd.sock"));
-    assert!(s.contains("SocketMode=0600"));
-    let svc = service_unit(Path::new("/home/demo/.local/bin/paddock"));
-    assert!(svc.contains("ExecStart=/home/demo/.local/bin/paddock gatewayd"));
+fn the_socket_is_in_the_runtime_folder_or_the_state_folder() {
     let env = HostEnv::from_parts(
         "/home/demo".into(),
         "u".into(),
@@ -22,13 +17,43 @@ fn the_units_name_the_same_socket_as_paddock() {
     );
     let got = socket_path(&env);
     if cfg!(target_os = "macos") {
-        // /tmp/paddock-1000/<hash of the run folder>/gatewayd.sock
-        assert!(got.starts_with("/tmp/paddock-1000/"), "{}", got.display());
-        assert!(got.ends_with("gatewayd.sock"), "{}", got.display());
-        assert_eq!(got.components().count(), 5, "{}", got.display());
+        // The same path for launchd and for an executor of paddock.
+        assert_eq!(
+            got,
+            PathBuf::from("/home/demo/.local/state/paddock/gatewayd.sock")
+        );
     } else {
         assert_eq!(got, PathBuf::from("/run/user/1000/paddock/gatewayd.sock"));
     }
+}
+
+#[test]
+fn the_macos_socket_fits_for_a_long_home() {
+    // A home of 60 characters.
+    let home = format!("/Users/{}", "a".repeat(53));
+    assert_eq!(home.len(), 60);
+    let env = HostEnv::from_parts(home.into(), "u".into(), 501, 20, Default::default());
+    let p = state_socket(&env);
+    assert!(p.as_os_str().len() < 103, "{}", p.display());
+    assert!(crate::sockpath::check(&p).is_ok());
+}
+
+/// Without launchd, the executor binds the state socket itself.
+#[test]
+#[cfg(target_os = "macos")]
+fn without_launchd_the_executor_binds_the_state_socket() {
+    let t = tempfile::Builder::new()
+        .prefix("pd")
+        .tempdir_in("/tmp")
+        .unwrap();
+    let env = HostEnv::from_parts(t.path().into(), "u".into(), 501, 20, Default::default());
+    let l = listener(&env).unwrap().expect("a listener");
+    assert_eq!(
+        l.local_addr().unwrap().as_pathname(),
+        Some(state_socket(&env).as_path())
+    );
+    // A second executor finds the first one and does not start.
+    assert!(listener(&env).unwrap().is_none());
 }
 
 #[test]
@@ -264,17 +289,6 @@ fn the_executor_runs_only_gh_by_an_absolute_path() {
 }
 
 #[test]
-fn remove_leaves_units_that_paddock_did_not_write() {
-    let t = tempfile::tempdir().unwrap();
-    let env = HostEnv::from_parts(t.path().join("home"), "u".into(), 1, 1, Default::default());
-    let dir = unit_dir(&env);
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join(SOCKET_UNIT), "[Socket]\nmine\n").unwrap();
-    assert!(remove(&env).unwrap().is_empty());
-    assert!(dir.join(SOCKET_UNIT).exists());
-}
-
-#[test]
 fn only_web_links_reach_open_on_macos() {
     assert!(web_link("https://claude.ai/oauth/authorize?x=1"));
     assert!(web_link("http://localhost:1455/auth/callback"));
@@ -288,4 +302,24 @@ fn only_web_links_reach_open_on_macos() {
     ] {
         assert!(!web_link(bad), "{bad}");
     }
+}
+
+/// A forge tool outside the system folders stays runnable under Seatbelt:
+/// its folder is read-only in the view. Linux adds nothing.
+#[test]
+fn the_folder_of_a_forge_tool_is_readable_on_macos_only() {
+    let t = tempfile::tempdir().unwrap();
+    let gh = t.path().join("gh");
+    std::fs::write(&gh, "").unwrap();
+    let got = crate::broker::forge::exec_ro_paths(&gh.display().to_string());
+    if cfg!(target_os = "macos") {
+        assert_eq!(got, vec![t.path().to_path_buf()]);
+    } else {
+        assert!(got.is_empty());
+    }
+    assert!(
+        crate::broker::forge::exec_ro_paths("/gh").is_empty(),
+        "never the root"
+    );
+    assert!(crate::broker::forge::exec_ro_paths("/no/such/folder/gh").is_empty());
 }

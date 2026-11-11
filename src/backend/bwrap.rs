@@ -63,7 +63,7 @@ impl Backend for Bwrap {
 
     fn check(&self, env: &HostEnv, spec: &SandboxSpec) -> Result<()> {
         if spec.network == Network::Allowlist {
-            bail!("network mode 'allowlist' needs the srt backend");
+            bail!(super::ALLOWLIST_BACKENDS);
         }
         let Some(ver) = bwrap_version(env) else {
             bail!("bubblewrap (bwrap) is not installed")
@@ -188,18 +188,24 @@ impl Backend for Bwrap {
             ]);
         }
 
-        // The sandbox home, then everything else in parent-before-child order.
-        // In shadow mode the home is the overlay among the mounts.
-        if !spec
-            .mounts
-            .iter()
-            .any(|m| m.dst == spec.home && m.kind == MountKind::Overlay)
-        {
-            a.extend(["--bind".into(), p(&spec.home_src), p(&spec.home)]);
-        }
+        // Bind home after mounts that cover it, and before mounts within it.
+        // An ancestor such as /tmp would otherwise hide the bound home.
         let trees = mounts::system_trees();
         let ordered = spec.ordered_mounts();
-        for m in &ordered {
+        let home_overlay = ordered
+            .iter()
+            .any(|m| m.dst == spec.home && m.kind == MountKind::Overlay);
+        let home_after = (!home_overlay)
+            .then(|| {
+                ordered
+                    .iter()
+                    .rposition(|m| m.dst != spec.home && spec.home.starts_with(&m.dst))
+            })
+            .flatten();
+        if !home_overlay && home_after.is_none() {
+            a.extend(["--bind".into(), p(&spec.home_src), p(&spec.home)]);
+        }
+        for (i, m) in ordered.iter().enumerate() {
             match m.kind {
                 MountKind::Ro | MountKind::Rw => {
                     if let Some((src, dst)) = mounts::bind(m, &trees, &ordered) {
@@ -211,7 +217,12 @@ impl Backend for Bwrap {
                         a.extend([flag.into(), p(&src), p(&dst)]);
                     }
                 }
-                MountKind::Tmpfs => a.extend(["--tmpfs".into(), p(&m.dst)]),
+                MountKind::Tmpfs => {
+                    if let Some(size) = m.size {
+                        a.extend(["--size".into(), size.to_string()]);
+                    }
+                    a.extend(["--tmpfs".into(), p(&m.dst)]);
+                }
                 MountKind::Overlay => a.extend(overlay_args(m)),
                 MountKind::MaskFile => a.extend(["--ro-bind".into(), p(&empty_f), p(&m.dst)]),
                 MountKind::MaskDir => {
@@ -222,6 +233,9 @@ impl Backend for Bwrap {
                         p(&m.dst),
                     ]);
                 }
+            }
+            if home_after == Some(i) {
+                a.extend(["--bind".into(), p(&spec.home_src), p(&spec.home)]);
             }
         }
         for t in &spec.host_tools {

@@ -1,0 +1,15 @@
+Run a desktop app in a sandbox
+
+Usage: paddock app <COMMAND>
+
+Commands:
+  run        Run an app profile
+  install    Add a launcher entry
+  uninstall  Remove a launcher entry
+  open       Open a link in a running app
+  list       List the apps
+  stop       Stop a session
+  status     Show a session
+  add        Add an app bundle as a profile
+  remove     Remove an app profile
+  help       Print this message or the help of the given subcommand(s)

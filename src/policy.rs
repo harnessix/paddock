@@ -2,7 +2,7 @@
 //! breaks an invariant and names the source of the offending entry.
 
 use crate::env::HostEnv;
-use crate::spec::SandboxSpec;
+use crate::spec::{MountKind, SandboxSpec};
 use anyhow::{bail, Result};
 use std::path::{Path, PathBuf};
 
@@ -311,6 +311,35 @@ fn overlaps(a: &Path, b: &Path) -> bool {
     a.starts_with(b) || b.starts_with(a)
 }
 
+/// The mounts of a device sandbox (devices/sandbox/spec.rs) that the rules
+/// below let pass. The user named them in the user configuration on the
+/// host, never in a project file.
+///
+/// - The instance folder under `<run>/devices/`: the socket of the
+///   supervisor lives there, as the kv socket of an agent sandbox lives in
+///   its run folder.
+/// - `home = "read-only"` or `"full"` of the profile: the home itself.
+/// - A read-only regular file of `ro` under a protected home path, such as
+///   a known hosts file in `~/.ssh`. A folder there stays refused.
+fn device_mount_passes(env: &HostEnv, m: &crate::spec::Mount) -> bool {
+    let Some(src) = &m.src else { return false };
+    if m.origin == crate::devices::sandbox::spec::INSTANCE_ORIGIN {
+        return src.starts_with(env.paddock_run().join("devices"));
+    }
+    let profile = m.origin.starts_with("[devices.") && m.origin.contains(".sandbox] ");
+    if !profile {
+        return false;
+    }
+    if m.origin.ends_with(".sandbox] home") {
+        return *src == env.home && m.dst == env.home;
+    }
+    if m.origin.ends_with(".sandbox] ro") && m.kind == MountKind::Ro {
+        return std::fs::symlink_metadata(src).is_ok_and(|md| md.is_file())
+            && src.parent().is_some_and(|p| p != Path::new("/"));
+    }
+    false
+}
+
 pub fn enforce(env: &HostEnv, spec: &SandboxSpec) -> Result<()> {
     let denied = denied_paths(env);
     let homes = homes(env);
@@ -319,6 +348,12 @@ pub fn enforce(env: &HostEnv, spec: &SandboxSpec) -> Result<()> {
 
     for m in &spec.mounts {
         let Some(src) = &m.src else { continue };
+        if src == Path::new("/") {
+            bail!("policy: refusing to mount / (from {})", m.origin);
+        }
+        if device_mount_passes(env, m) {
+            continue;
+        }
         let real = std::fs::canonicalize(src).unwrap_or_else(|_| src.clone());
         for cand in [src, &real] {
             if cand == Path::new("/") {

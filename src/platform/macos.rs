@@ -150,3 +150,55 @@ pub fn peer_gone(fd: i32) -> bool {
 pub unsafe fn be_idle_io() {
     let _ = setiopolicy_np(IOPOL_TYPE_DISK, IOPOL_SCOPE_THREAD, IOPOL_THROTTLE);
 }
+
+/// The child processes of `pid` (`proc_listchildpids`).
+pub fn children_of(pid: u32) -> Vec<u32> {
+    let mut cap: usize = 1024;
+    loop {
+        let mut buf: Vec<libc::pid_t> = vec![0; cap];
+        let bytes = (cap * std::mem::size_of::<libc::pid_t>()) as libc::c_int;
+        // SAFETY: the buffer holds `bytes` bytes, and the call writes at
+        // most that many.
+        let n =
+            unsafe { libc::proc_listchildpids(pid as libc::pid_t, buf.as_mut_ptr().cast(), bytes) };
+        if n < 0 {
+            return Vec::new();
+        }
+        // Some macOS releases return the number of pids, others the number
+        // of bytes. Read the larger count: the rest of the buffer is zeros,
+        // which the filter drops.
+        let n = (n as usize).min(cap);
+        if n == cap && cap < 1 << 20 {
+            cap *= 4;
+            continue;
+        }
+        return buf[..n]
+            .iter()
+            .filter(|&&p| p > 0)
+            .map(|&p| p as u32)
+            .collect();
+    }
+}
+
+/// The BSD information of `pid` (`proc_pidinfo`, `PROC_PIDTBSDINFO`).
+pub fn bsd_info(pid: u32) -> Option<libc::proc_bsdinfo> {
+    // SAFETY: proc_bsdinfo is plain data; zeros are a valid value.
+    let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+    let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
+    // SAFETY: the buffer is one proc_bsdinfo of `size` bytes.
+    let n = unsafe {
+        libc::proc_pidinfo(
+            pid as libc::c_int,
+            libc::PROC_PIDTBSDINFO,
+            0,
+            (&mut info as *mut libc::proc_bsdinfo).cast(),
+            size,
+        )
+    };
+    (n == size).then_some(info)
+}
+
+/// The parent process of `pid`.
+pub fn parent_of(pid: u32) -> Option<u32> {
+    bsd_info(pid).map(|i| i.pbi_ppid)
+}

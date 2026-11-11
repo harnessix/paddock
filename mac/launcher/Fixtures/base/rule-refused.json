@@ -1,0 +1,5 @@
+{
+  "v": 1,
+  "ok": false,
+  "refused": "paddock refuses a rule for 10.0.0.1: the guest may not reach this Mac's local network."
+}

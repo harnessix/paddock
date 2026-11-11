@@ -30,3 +30,19 @@ pub unsafe fn be_idle_io() {
     // IOPRIO_WHO_PROCESS, this process, class IDLE.
     libc::syscall(libc::SYS_ioprio_set, 1, 0, 3 << 13);
 }
+
+/// The child processes of `pid`, from the parent pid in `/proc/*/stat`.
+pub fn children_of(pid: u32) -> Vec<u32> {
+    let Ok(dir) = std::fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    dir.flatten()
+        .filter_map(|e| e.file_name().to_str()?.parse::<u32>().ok())
+        .filter(|&p| crate::state::parent_pid(p) == Some(pid))
+        .collect()
+}
+
+/// The parent process of `pid`.
+pub fn parent_of(pid: u32) -> Option<u32> {
+    crate::state::parent_pid(pid)
+}

@@ -190,6 +190,7 @@ pub fn serve(
         api: Some(crate::proxy::allow::ApiPolicy {
             list,
             refusals: None,
+            allowlist: false,
         }),
         ..Default::default()
     };

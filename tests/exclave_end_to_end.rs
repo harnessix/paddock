@@ -58,7 +58,7 @@ fn fake_peer_streams_output_and_returns_exit_code() {
     std::fs::write(peer.join("config/paddock/config.toml"), format!("[exclave.serve]\nallow_shared_disk = true\nro_paths = ['{}']\n[exclave.serve.env]\nPIP_INDEX_URL = 'https://mirror.example/simple'\nUV_INDEX_URL = 'https://mirror.example/simple'\n", tools.display())).unwrap();
     let script = temp.path().join("transport.sh");
     let binary = env!("CARGO_BIN_EXE_paddock");
-    std::fs::write(&script, format!("#!/bin/sh\nexport HOME='{0}' XDG_CONFIG_HOME='{0}/config' XDG_DATA_HOME='{0}/data' XDG_STATE_HOME='{0}/state' XDG_CACHE_HOME='{0}/cache'\nexec '{1}' exclave serve\n", peer.display(), binary)).unwrap();
+    std::fs::write(&script, format!("#!/bin/sh\nexport HOME='{0}' XDG_CONFIG_HOME='{0}/config' XDG_DATA_HOME='{0}/data' XDG_STATE_HOME='{0}/state' XDG_CACHE_HOME='{0}/cache' XDG_RUNTIME_DIR='{0}/run'\nexec '{1}' exclave serve\n", peer.display(), binary)).unwrap();
     let canary = "EXCLAVE_TEST_TRANSPORT_CANARY";
     std::fs::write(
         config.join("config.toml"),
@@ -76,7 +76,8 @@ fn fake_peer_streams_output_and_returns_exit_code() {
             .env("XDG_CONFIG_HOME", temp.path().join("config"))
             .env("XDG_DATA_HOME", temp.path().join("data"))
             .env("XDG_STATE_HOME", temp.path().join("state"))
-            .env("XDG_CACHE_HOME", temp.path().join("cache"));
+            .env("XDG_CACHE_HOME", temp.path().join("cache"))
+            .env("XDG_RUNTIME_DIR", temp.path().join("run"));
         c.args([
             "exclave",
             "run",
@@ -99,6 +100,7 @@ fn fake_peer_streams_output_and_returns_exit_code() {
         .env("XDG_DATA_HOME", temp.path().join("data"))
         .env("XDG_STATE_HOME", temp.path().join("state"))
         .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .env("XDG_RUNTIME_DIR", temp.path().join("run"))
         .args([
             "exclave",
             "run",
@@ -190,6 +192,7 @@ fn fake_peer_streams_output_and_returns_exit_code() {
         ("XDG_DATA_HOME", "data"),
         ("XDG_STATE_HOME", "state"),
         ("XDG_CACHE_HOME", "cache"),
+        ("XDG_RUNTIME_DIR", "run"),
     ] {
         vars.insert(key.to_string(), temp.path().join(dir).display().to_string());
     }
@@ -227,6 +230,7 @@ fn fake_peer_streams_output_and_returns_exit_code() {
         .env("XDG_DATA_HOME", temp.path().join("data"))
         .env("XDG_STATE_HOME", temp.path().join("state"))
         .env("XDG_CACHE_HOME", temp.path().join("cache"))
+        .env("XDG_RUNTIME_DIR", temp.path().join("run"))
         .env("PADDOCK_HOST_SOCKET", &socket)
         .env("PADDOCK_DEVICES", temp.path().join("no-devices"))
         .args([
@@ -284,6 +288,7 @@ fn fake_peer_streams_output_and_returns_exit_code() {
             .env("XDG_DATA_HOME", temp.path().join("data"))
             .env("XDG_STATE_HOME", temp.path().join("state"))
             .env("XDG_CACHE_HOME", temp.path().join("cache"))
+            .env("XDG_RUNTIME_DIR", temp.path().join("run"))
             .args([
                 "exclave",
                 "run",

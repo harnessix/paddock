@@ -286,7 +286,7 @@ fn the_pass_runs_once_an_hour_records_its_status_and_waits_for_the_lock() {
 
 /// The lock, once free. A process that another test thread forks in the
 /// moment holds a copy of the lock until it execs.
-fn lock_soon(path: &Path) -> std::fs::File {
+fn lock_soon(path: &Path) -> PassLock {
     for _ in 0..100 {
         if let Some(f) = try_lock(path) {
             return f;
@@ -354,6 +354,11 @@ fn a_new_worktree_waits_for_the_grace_time() {
 
 #[test]
 fn a_worktree_that_another_process_leases_is_left_alone() {
+    if crate::storage::package_cache::isolated_test(
+        "storage::auto::tests::a_worktree_that_another_process_leases_is_left_alone",
+    ) {
+        return;
+    }
     use crate::storage::merged::tests::git;
     let (_t, env) = setup();
     let repo = repo(&env);
@@ -373,9 +378,10 @@ fn a_worktree_that_another_process_leases_is_left_alone() {
         .args([
             "-MFcntl=:flock",
             "-e",
-            "open(my $f, '<', $ARGV[0]) or die; flock($f, LOCK_SH) or die; sleep 30",
+            "open(my $f, '<', $ARGV[0]) or die; flock($f, LOCK_SH) or die; scalar <STDIN>",
         ])
         .arg(&lease)
+        .stdin(std::process::Stdio::piped())
         .spawn()
         .unwrap();
     // The lease of this process is dropped by hand, as at its exit.

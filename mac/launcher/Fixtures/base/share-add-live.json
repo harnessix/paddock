@@ -1,0 +1,12 @@
+{
+  "v": 1,
+  "ok": true,
+  "applies": "live",
+  "share": {
+    "path": "/Users/demo/Pictures/Shots",
+    "mode": "ro",
+    "open_handles": 0,
+    "guest_path": "/Volumes/My Shared Files/Shots",
+    "applies": "live"
+  }
+}

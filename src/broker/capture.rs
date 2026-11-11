@@ -86,6 +86,14 @@ pub fn run_capture_input(
             break s.code().unwrap_or(-1);
         }
         if start.elapsed() > timeout {
+            // A command in its own process group (the Seatbelt command of
+            // the executor): stop every process of it.
+            let pid = child.id() as libc::pid_t;
+            // SAFETY: plain system calls on the child's pid. The child has
+            // not been reaped, so its pid is not reused.
+            if unsafe { libc::getpgid(pid) } == pid {
+                unsafe { libc::killpg(pid, libc::SIGKILL) };
+            }
             let _ = child.kill();
             let _ = child.wait();
             bail!(

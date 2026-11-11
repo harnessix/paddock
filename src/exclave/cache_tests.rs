@@ -137,6 +137,26 @@ fn volume_full_respects_unbounded_inode_counts() {
 
 #[test]
 fn cap_evicts_oldest_idle_cache_and_preserves_leases() {
+    // Other tests fork, temporarily inheriting flock descriptors. Run this
+    // lease-reacquisition check alone so those children cannot hold its lock.
+    const CHILD: &str = "PADDOCK_TEST_EXCLAVE_CACHE_ISOLATED";
+    const NAME: &str = "exclave::cache::tests::cap_evicts_oldest_idle_cache_and_preserves_leases";
+    if std::env::var_os(CHILD).is_none() {
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", NAME, "--nocapture"])
+            .env(CHILD, "1")
+            .env("RUST_TEST_THREADS", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success()
+                && String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
     let temp = tempfile::tempdir().unwrap();
     let root = temp.path();
     fs::set_permissions(root, fs::Permissions::from_mode(0o700)).unwrap();

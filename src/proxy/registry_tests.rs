@@ -35,6 +35,7 @@ fn registry_http_policy_only_forwards_exact_listed_sources() {
         api: Some(allow::ApiPolicy {
             list: api_list,
             refusals: None,
+            allowlist: false,
         }),
         registry_http: Some(registry),
         ..Default::default()
@@ -86,8 +87,8 @@ fn registry_policy_requires_exact_names_and_explicit_ports() {
         allow_lan: true,
         ..Default::default()
     };
-    assert!(check_target(&cfg, "192.168.1.1", 80).is_err());
-    assert!(check_target(&cfg, "127.0.0.1", 80).is_err());
+    assert!(check_target(&cfg, "192.168.1.1", 80, None).is_err());
+    assert!(check_target(&cfg, "127.0.0.1", 80, None).is_err());
 }
 
 #[test]
@@ -103,17 +104,18 @@ fn private_registry_exception_is_exact_and_keeps_loopback_blocked() {
         ..Default::default()
     };
     let private_addr = ["192.168.1.10:443".parse().unwrap()];
-    assert!(target::check_resolved(&cfg, "mirror.example", 443, &private_addr, &[]).is_ok());
-    assert!(target::check_resolved(&cfg, "mirror.example", 80, &private_addr, &[]).is_err());
-    assert!(target::check_resolved(&cfg, "other.example", 443, &private_addr, &[]).is_err());
+    assert!(target::check_resolved(&cfg, "mirror.example", 443, &private_addr, &[], None).is_ok());
+    assert!(target::check_resolved(&cfg, "mirror.example", 80, &private_addr, &[], None).is_err());
+    assert!(target::check_resolved(&cfg, "other.example", 443, &private_addr, &[], None).is_err());
     assert!(target::check_resolved(
         &cfg,
         "mirror.example",
         443,
         &private_addr,
-        &["192.168.1.10".parse().unwrap()]
+        &["192.168.1.10".parse().unwrap()],
+        None
     )
     .is_err());
-    assert!(check_target(&cfg, "127.0.0.1", 443).is_err());
-    assert!(check_target(&cfg, "192.168.1.1", 443).is_err());
+    assert!(check_target(&cfg, "127.0.0.1", 443, None).is_err());
+    assert!(check_target(&cfg, "192.168.1.1", 443, None).is_err());
 }

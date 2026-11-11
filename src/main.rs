@@ -42,6 +42,8 @@ fn main() {
 fn real_main() -> Result<i32> {
     // Exit quietly when stdout is closed, for example by `| head`.
     unsafe { libc::signal(libc::SIGPIPE, libc::SIG_DFL) };
+    // macOS starts with 256 open files; the device servers need more.
+    paddock::platform::nofile::raise();
     let cli = Cli::parse();
     paddock::logging::init(i32::from(cli.verbose) - i32::from(cli.quiet));
     if let Cmd::Inbound = &cli.cmd {
@@ -56,6 +58,10 @@ fn real_main() -> Result<i32> {
     // Before HostEnv::detect: the pane takes the caller's environment.
     if let Cmd::DetachRun { job } = &cli.cmd {
         return cli::run::detach_run(job);
+    }
+    // In a device sandbox there is no home and no runtime folder.
+    if let Cmd::DeviceServe(a) = &cli.cmd {
+        return cli::device_serve::run(a);
     }
     if let Cmd::Relay {
         listen,
@@ -86,6 +92,7 @@ fn real_main() -> Result<i32> {
         other => other,
     };
     let env = HostEnv::detect()?;
+    paddock::eventstream::init(&env);
     paddock::privfs::secure_roots(&env);
     // A harness start: bring the menu and the shims up to date in the
     // background when harnesses or paddock changed.
@@ -97,6 +104,7 @@ fn real_main() -> Result<i32> {
     }
     match cmd {
         Cmd::Relay { .. }
+        | Cmd::DeviceServe(_)
         | Cmd::Host { .. }
         | Cmd::Inbound
         | Cmd::Portal
@@ -105,10 +113,12 @@ fn real_main() -> Result<i32> {
         Cmd::Exclave { cmd } => cli::exclave::run(&env, cmd),
         Cmd::SpawnChild { job } => cli::run::spawn_child(&env, job),
         Cmd::Vm { cmd } => cli::vm::run(&env, cmd),
+        Cmd::Macvm { cmd } => cli::macvm::run(&env, cmd),
         Cmd::VmAgent(_) => unreachable!(),
         Cmd::VmAttach { job } => cli::vm_run::vm_attach(&env, job),
         Cmd::VmServe { project } => cli::vm_run::vm_serve(&env, project),
         Cmd::Mark => paddock::mark::main(&env),
+        Cmd::Events(a) => cli::events::run(&env, a),
         Cmd::Approvals { json, cmd } => cli::approver::approvals(&env, json, cmd),
         Cmd::Worktree { cmd } => cli::worktree::run(&env, cmd),
         Cmd::Spec { cmd } => cli::spec::run(&env, cmd),
@@ -132,6 +142,18 @@ fn real_main() -> Result<i32> {
         Cmd::Tools { cmd } => cli::tools::run(&env, cmd),
         Cmd::Gateway { cmd } => cli::gateway::run(&env, cmd),
         Cmd::Gatewayd { idle } => cli::gateway::gatewayd(&env, idle),
+        Cmd::Deviced {
+            name,
+            socket,
+            owner,
+            unit,
+        } => paddock::devices::shared::deviced::main(
+            &env,
+            &name,
+            socket,
+            owner.as_deref(),
+            unit.as_deref(),
+        ),
         Cmd::Refresh { background } => cli::shims::refresh(&env, background),
         Cmd::OmarchyUsageUpdate { args } => cli::shims::omarchy_usage_update(&env, args),
         Cmd::Wrap { command } => cli::run::wrap(env, command),
@@ -218,7 +240,7 @@ fn real_main() -> Result<i32> {
             json,
         } => cli::forage::run(&env, agents, refresh, json),
         Cmd::Monitor { cmd } => cli::monitor::run(&env, cmd),
-        Cmd::Devices { cmd } => cli::devices::run(&env, cmd),
+        Cmd::Device { cmd } => cli::device::run(&env, cmd),
         Cmd::Timer { cmd } => cli::timer::run(&env, cmd),
         Cmd::Logins { cmd } => cli::logins::run(&env, cmd),
         Cmd::Credentials { cmd } => cli::credentials::run(&env, cmd),
@@ -227,14 +249,14 @@ fn real_main() -> Result<i32> {
             cli::status::boundary(&env, paddock::ids::resolve(&env, &id)?, json, follow)
         }
         Cmd::Stop { id } => cli::storage::stop(&env, &paddock::ids::resolve(&env, &id)?),
-        Cmd::Wait { id, timeout } => {
-            cli::status::wait(&env, paddock::ids::resolve(&env, &id)?, timeout)
-        }
+        Cmd::Wait(args) => cli::wait::run(&env, args.ids, args.any, args.status, args.timeout),
         Cmd::View { id, write } => {
             cli::status::view(&env, paddock::ids::resolve(&env, &id)?, write)
         }
+        Cmd::Doctor { json: true, .. } => cli::doctor_json::run(&env),
         Cmd::Doctor {
             escape,
+            device,
             backend,
             network,
             gui,
@@ -245,8 +267,11 @@ fn real_main() -> Result<i32> {
             env: env_mode,
             report,
             output,
+            no_hosts,
+            json: false,
         } => cli::setup::doctor(
-            &env, escape, backend, network, gui, window, app, bus, env_mode, online, report, output,
+            &env, escape, device, backend, network, gui, window, app, bus, env_mode, online,
+            report, output, no_hosts,
         ),
         Cmd::Setup {
             yes,

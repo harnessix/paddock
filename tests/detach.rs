@@ -51,6 +51,7 @@ impl World {
     fn with(detach: bool, extra: &str) -> Self {
         let tmp = common::tempdir();
         let root = tmp.path().to_path_buf();
+        std::fs::create_dir_all(root.join("home")).unwrap();
         let cfg = root.join("cfg/paddock/harness.d");
         std::fs::create_dir_all(&cfg).unwrap();
         std::fs::create_dir_all(root.join("project")).unwrap();
@@ -76,7 +77,8 @@ impl World {
 
     fn paddock(&self) -> Command {
         let mut c = Command::new(env!("CARGO_BIN_EXE_paddock"));
-        c.env("XDG_CONFIG_HOME", self.root.join("cfg"))
+        c.env("HOME", self.root.join("home"))
+            .env("XDG_CONFIG_HOME", self.root.join("cfg"))
             .env("XDG_DATA_HOME", self.root.join("data"))
             .env("XDG_STATE_HOME", self.root.join("state"))
             .env("XDG_CACHE_HOME", self.root.join("cache"))
@@ -328,7 +330,7 @@ fn done_ends_the_run_and_wait_reports_it() {
     let id = w.detach("ok");
     let (code, out) = w.wait(&id, "60s");
     assert_eq!(code, Some(0), "{out}");
-    assert_eq!(out.trim(), "ok: all good");
+    assert_eq!(out.trim(), format!("{id}: ok: all good"));
     let r = w.result();
     assert!(r.contains("tty yes"), "{r}");
     assert!(r.contains("readable"), "{r}");
@@ -354,7 +356,7 @@ fn done_ends_the_run_and_wait_reports_it() {
     let id = w.detach("failed");
     let (code, out) = w.wait(&id, "60s");
     assert_eq!(code, Some(1), "{out}");
-    assert_eq!(out.trim(), "failed: it broke");
+    assert_eq!(out.trim(), format!("{id}: failed: it broke"));
 }
 
 #[test]
@@ -444,7 +446,94 @@ fn stop_and_wait_take_a_short_id_of_records() {
     std::fs::write(records.join(format!("{ended}.json")), rec.to_string()).unwrap();
     let (code, out) = w.wait("5e4d3c", "5s");
     assert_eq!(code, Some(0), "{out}");
-    assert_eq!(out.trim(), "ok: all good");
+    assert_eq!(out.trim(), format!("{ended}: ok: all good"));
+}
+
+#[test]
+fn wait_reports_a_dead_detached_process_without_a_mailbox() {
+    let w = World::new(true);
+    let id = "fake-project-9a8b7c";
+    let records = w.root.join("state/paddock/detach");
+    std::fs::create_dir_all(&records).unwrap();
+    let rec = serde_json::json!({
+        "id": id, "harness": "fake", "project": w.root.join("project"),
+        "started": 1, "pid": 2147483647,
+    });
+    std::fs::write(records.join(format!("{id}.json")), rec.to_string()).unwrap();
+    let (code, out) = w.wait(id, "5s");
+    assert_eq!(code, Some(2), "{out}");
+    assert!(out.contains("ended without a final status"), "{out}");
+}
+
+#[test]
+fn wait_reports_a_stopped_run_as_failed() {
+    let w = World::new(true);
+    let id = "fake-project-9a8b7d";
+    let records = w.root.join("state/paddock/detach");
+    std::fs::create_dir_all(&records).unwrap();
+    let rec = serde_json::json!({
+        "id": id, "harness": "fake", "project": w.root.join("project"),
+        "started": 1, "ended": 2, "stopped": false,
+    });
+    std::fs::write(records.join(format!("{id}.json")), rec.to_string()).unwrap();
+    std::fs::write(records.join(format!("{id}.stop")), "stopped\n").unwrap();
+    let (code, out) = w.wait(id, "5s");
+    assert_eq!(code, Some(1), "{out}");
+    assert!(out.contains("stopped before a final result"), "{out}");
+}
+
+#[test]
+fn wait_uses_the_stopped_record_after_its_marker_is_removed() {
+    let w = World::new(true);
+    let id = "fake-project-9a8b7e";
+    let records = w.root.join("state/paddock/detach");
+    std::fs::create_dir_all(&records).unwrap();
+    let rec = serde_json::json!({
+        "id": id, "harness": "fake", "project": w.root.join("project"),
+        "started": 1, "ended": 2, "stopped": true,
+    });
+    std::fs::write(records.join(format!("{id}.json")), rec.to_string()).unwrap();
+    let (code, out) = w.wait(id, "5s");
+    assert_eq!(code, Some(1), "{out}");
+    assert_eq!(out.trim(), format!("{id}: stopped before a final result"));
+}
+
+#[test]
+fn wait_keeps_detached_final_results_after_a_stop() {
+    let w = World::new(true);
+    let id = "fake-project-9a8b7f";
+    let records = w.root.join("state/paddock/detach");
+    std::fs::create_dir_all(&records).unwrap();
+    std::fs::write(records.join(format!("{id}.stop")), "stopped\n").unwrap();
+    for (status, expected) in [("ok", 0), ("failed", 1), ("idle", 1)] {
+        for stopped in [false, true] {
+            let rec = serde_json::json!({
+                "id": id, "harness": "fake", "project": w.root.join("project"),
+                "started": 1, "ended": 2, "stopped": stopped,
+                "done": {"status": status, "text": "full result", "at": 2},
+            });
+            std::fs::write(records.join(format!("{id}.json")), rec.to_string()).unwrap();
+            let (code, out) = w.wait(id, "5s");
+            assert_eq!(code, Some(expected), "{out}");
+            assert_eq!(out.trim(), format!("{id}: {status}: full result"));
+        }
+    }
+}
+
+#[test]
+fn wait_does_not_finish_a_live_run_just_because_stop_was_requested() {
+    let w = World::new(true);
+    let id = "fake-project-9a8b80";
+    let records = w.root.join("state/paddock/detach");
+    std::fs::create_dir_all(&records).unwrap();
+    let rec = serde_json::json!({
+        "id": id, "harness": "fake", "project": w.root.join("project"),
+        "started": 1, "pid": std::process::id(), "stopped": true,
+    });
+    std::fs::write(records.join(format!("{id}.json")), rec.to_string()).unwrap();
+    std::fs::write(records.join(format!("{id}.stop")), "stopped\n").unwrap();
+    let (code, out) = w.wait(id, "1s");
+    assert_eq!(code, Some(124), "{out}");
 }
 
 #[test]
@@ -481,7 +570,7 @@ fn a_write_client_keeps_the_run_open_after_done() {
     let _ = client.wait();
     let (code, out) = w.wait(&id, "60s");
     assert_eq!(code, Some(0), "{out}");
-    assert_eq!(out.trim(), "ok: late but fine");
+    assert_eq!(out.trim(), format!("{id}: ok: late but fine"));
 }
 
 #[test]
@@ -499,8 +588,9 @@ fn a_quiet_pane_becomes_idle_and_then_ends() {
     let (code, out) = w.wait(&id, "40s");
     assert_eq!(code, Some(1), "{out}");
     assert!(
-        out.trim()
-            .starts_with("idle: ended after 10 seconds without output\nlast screen:\n"),
+        out.trim().starts_with(&format!(
+            "{id}: idle: ended after 10 seconds without output ⏎ last screen: ⏎ "
+        )),
         "{out}"
     );
     assert!(out.contains("idle-line"), "{out}");
@@ -571,7 +661,7 @@ fn a_write_client_keeps_an_idle_run_and_hears_about_it() {
     assert_eq!(code, Some(1), "{out}");
     assert!(
         out.trim()
-            .starts_with("idle: ended after 6 seconds without output"),
+            .starts_with(&format!("{id}: idle: ended after 6 seconds without output")),
         "{out}"
     );
 }
@@ -638,7 +728,7 @@ fn a_detached_run_answers_a_known_start_screen_and_records_it() {
         String::from_utf8_lossy(&out.stderr),
     );
     assert_eq!(out.status.code(), Some(0), "{stdout}\n{stderr}");
-    assert_eq!(stdout.trim(), "ok: continued after 3");
+    assert_eq!(stdout.trim(), format!("{id}: ok: continued after 3"));
     assert!(
         stderr.contains("paddock: answered Codex hooks review: continued without trusting 1 hook"),
         "{stderr}"

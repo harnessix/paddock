@@ -6,7 +6,8 @@
 //! app gets the private sandbox home as `HOME` and `CFFIXED_USER_HOME`, so
 //! `NSHomeDirectory` and Application Support move there too. Seatbelt only
 //! allows or denies network, so the profile allows localhost and the app
-//! reaches the internet through paddock's host proxy (proxy.rs).
+//! reaches the internet through paddock's host proxy (proxy.rs). Network
+//! mode `host` allows the whole network of the Mac instead.
 //!
 //! Electron apps start their own Chromium sandbox, which cannot nest inside
 //! Seatbelt: they get `--no-sandbox`. They also get their own data folder
@@ -24,9 +25,14 @@ use anyhow::{bail, Context as _, Result};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+/// The device sandbox (`run = "sandbox"` devices) under Seatbelt.
+pub mod device;
 /// Terminal runs (`paddock run`) under Seatbelt.
 pub mod keychain;
+mod plist;
 pub mod run;
+
+pub use plist::{app_sandboxed, plist_bool, plist_string, plist_xml, APP_SANDBOX_KEY};
 
 /// The backend name in the run record and in `paddock ps`.
 pub const NAME: &str = "seatbelt";
@@ -93,97 +99,6 @@ pub fn is_electron(bundle: &Path) -> bool {
     bundle
         .join("Contents/Frameworks/Electron Framework.framework")
         .is_dir()
-}
-
-/// A property list as XML text. A binary plist is converted with `plutil`
-/// on macOS; elsewhere it gives None.
-pub fn plist_xml(bytes: &[u8]) -> Option<String> {
-    if bytes.starts_with(b"bplist") {
-        return binary_plist_xml(bytes);
-    }
-    let s = String::from_utf8_lossy(bytes);
-    // codesign puts a blob header before the XML.
-    let start = s.find("<?xml").or_else(|| s.find("<plist"))?;
-    Some(s[start..].to_string())
-}
-
-#[cfg(target_os = "macos")]
-fn binary_plist_xml(bytes: &[u8]) -> Option<String> {
-    use std::io::Write as _;
-    let mut c = std::process::Command::new("/usr/bin/plutil")
-        .args(["-convert", "xml1", "-o", "-", "-"])
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .ok()?;
-    c.stdin.take()?.write_all(bytes).ok()?;
-    let out = c.wait_with_output().ok()?;
-    out.status
-        .success()
-        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
-}
-
-#[cfg(not(target_os = "macos"))]
-fn binary_plist_xml(_bytes: &[u8]) -> Option<String> {
-    None
-}
-
-/// The text right after `<key>KEY</key>`, with spaces trimmed.
-fn after_key<'a>(xml: &'a str, key: &str) -> Option<&'a str> {
-    let tag = format!("<key>{}</key>", xml_escape(key));
-    let i = xml.find(&tag)?;
-    Some(xml[i + tag.len()..].trim_start())
-}
-
-/// A boolean value of a top-level key.
-pub fn plist_bool(xml: &str, key: &str) -> Option<bool> {
-    let rest = after_key(xml, key)?;
-    let compact: String = rest
-        .chars()
-        .take(64)
-        .filter(|c| !c.is_whitespace())
-        .collect();
-    // codesign prints either <true/> or <true></true>, depending on the tool.
-    if compact.starts_with("<true/>") || compact.starts_with("<true></true>") {
-        Some(true)
-    } else if compact.starts_with("<false/>") || compact.starts_with("<false></false>") {
-        Some(false)
-    } else {
-        None
-    }
-}
-
-/// A string value of a top-level key.
-pub fn plist_string(xml: &str, key: &str) -> Option<String> {
-    let rest = after_key(xml, key)?.strip_prefix("<string>")?;
-    let end = rest.find("</string>")?;
-    Some(xml_unescape(&rest[..end]))
-}
-
-fn xml_escape(s: &str) -> String {
-    s.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-}
-
-fn xml_unescape(s: &str) -> String {
-    s.replace("&lt;", "<")
-        .replace("&gt;", ">")
-        .replace("&quot;", "\"")
-        .replace("&apos;", "'")
-        .replace("&amp;", "&")
-}
-
-/// The entitlement of Apple's App Sandbox.
-pub const APP_SANDBOX_KEY: &str = "com.apple.security.app-sandbox";
-
-/// Whether entitlements (the XML that `codesign -d --entitlements :-` prints)
-/// turn on the App Sandbox.
-pub fn app_sandboxed(entitlements: &str) -> bool {
-    plist_xml(entitlements.as_bytes())
-        .and_then(|x| plist_bool(&x, APP_SANDBOX_KEY))
-        .unwrap_or(false)
 }
 
 /// The entitlements of a signed binary, from its code signature.
@@ -382,11 +297,15 @@ pub fn app_env(
     vars.insert("CFFIXED_USER_HOME".into(), home);
     vars.insert("TMPDIR".into(), tmp.display().to_string());
     vars.insert("PATH".into(), "/usr/bin:/bin:/usr/sbin:/sbin".into());
-    for k in PROXY_KEYS {
-        vars.remove(*k);
+    // Network mode host keeps the host proxy variables, as on Linux. The
+    // other modes use paddock's proxy or none.
+    if spec.network != Network::Host {
+        for k in PROXY_KEYS {
+            vars.remove(*k);
+        }
+        vars.remove("NO_PROXY");
+        vars.remove("no_proxy");
     }
-    vars.remove("NO_PROXY");
-    vars.remove("no_proxy");
     if let Some(port) = proxy {
         let url = format!("http://127.0.0.1:{port}");
         for k in PROXY_KEYS {
@@ -405,22 +324,34 @@ pub fn net_for(mode: Network) -> Result<Net> {
     match mode {
         Network::None => Ok(Net::None),
         Network::Egress | Network::Api => Ok(Net::Localhost),
-        Network::Host => bail!(
-            "network mode 'host' is not there yet on macOS: use egress (default), api or none"
-        ),
-        Network::Allowlist => bail!(
-            "network mode 'allowlist' needs the srt backend, which app mode on macOS does not use: use api with --allow instead"
-        ),
+        Network::Host => Ok(Net::Host),
+        // In mode allowlist, paddock's proxy enforces the list, as in api.
+        Network::Allowlist => Ok(Net::Localhost),
     }
 }
 
+/// The notice of `[apps.NAME] login_ports` on macOS. There is no network
+/// namespace: the app listens on the localhost of the Mac, where the
+/// browser reaches it, so paddock opens nothing for it.
+pub fn login_ports_notice(name: &str) -> String {
+    format!(
+        "[apps.{name}] login_ports: on macOS {name} listens on the localhost of this Mac, where the browser reaches it, so paddock has nothing to open"
+    )
+}
+
+/// Whether `[apps.NAME] login_ports` is on.
+pub fn login_ports(user: Option<&crate::manifest::AppCfg>) -> bool {
+    user.is_some_and(|a| a.login_ports)
+}
+
 /// Settings of the Linux app mode that macOS does not have yet. paddock
-/// refuses them instead of running without them.
+/// refuses them instead of running without them. `login_ports` needs
+/// nothing on macOS ([`login_ports_notice`]), and the devices come over a
+/// socket ([`app_devices`]).
 pub fn refuse_linux_only(
     name: &str,
     backend: Option<&str>,
     user: Option<&crate::manifest::AppCfg>,
-    devices: &[String],
 ) -> Result<()> {
     if let Some(b) = backend.filter(|b| *b != NAME) {
         bail!("app mode on macOS runs with Seatbelt only: the {b} backend is Linux only");
@@ -431,17 +362,46 @@ pub fn refuse_linux_only(
                 "[apps.{name}] bus is a Linux setting: the private D-Bus and the filtered host bus are not there yet on macOS. Remove it to run {name} on macOS"
             );
         }
-        if a.login_ports {
-            bail!("[apps.{name}] login_ports is not there yet on macOS");
-        }
-    }
-    if !devices.is_empty() {
-        bail!(
-            "the devices of /dev/paddock ({}) are not there yet on macOS. Turn them off for this start ([devices] enabled = [])",
-            devices.join(", ")
-        );
     }
     Ok(())
+}
+
+/// The `paddock-host` wrapper of an app run: paddock itself, by its full
+/// path, because the app's PATH does not hold it.
+pub fn host_wrapper(paddock: &Path) -> String {
+    let q = paddock.display().to_string().replace('\'', "'\\''");
+    format!("#!/bin/sh\nexec '{q}' host \"$@\"\n")
+}
+
+/// The devices of an app run, when `devices::start` gave it a socket: the
+/// profile lets the app connect to the socket and read the run folder (the
+/// secret FIFOs and the `paddock-host` wrapper), `paddock` itself is
+/// readable, and the variables name the socket and the folder. The run
+/// folder goes last on PATH.
+pub fn app_devices(
+    spec: &SandboxSpec,
+    run_dir: &Path,
+    paddock: &Path,
+    p: &mut Policy,
+    vars: &mut BTreeMap<String, String>,
+) {
+    let Some(sock) = &spec.device_socket else {
+        return;
+    };
+    p.add_file(
+        real(sock),
+        Access::Connect,
+        "the devices of /dev/paddock (socket)",
+    );
+    p.add(
+        real(run_dir),
+        Access::ReadOnly,
+        "the run folder: paddock-host and the secret files",
+    );
+    p.add_file(real(paddock), Access::ReadOnly, "paddock-host (paddock)");
+    super::host_path_env(spec, vars);
+    let path = vars.get("PATH").cloned().unwrap_or_default();
+    vars.insert("PATH".into(), format!("{path}:{}", run_dir.display()));
 }
 
 /// The command: the bundle binary, its macOS arguments, the Electron flags,
@@ -519,15 +479,7 @@ pub fn run_app(env: &HostEnv, o: &crate::app::AppOptions) -> Result<i32> {
         bail!(app_sandbox_message(&o.name));
     }
     let user = Manifest::load(env, &env.home.join(".paddock-no-project"))?.merged;
-    let devices = crate::devices::DevicesCfg::load(env)
-        .map(|c| crate::devices::enabled_names(&c, false, None))
-        .unwrap_or_default();
-    refuse_linux_only(
-        &o.name,
-        o.backend.as_deref(),
-        user.apps.get(&o.name),
-        &devices,
-    )?;
+    refuse_linux_only(&o.name, o.backend.as_deref(), user.apps.get(&o.name))?;
 
     let bundle = find_bundle(env, &o.name, &mac)?;
     let exe = bundle_exe(&bundle)?;
@@ -562,8 +514,21 @@ pub fn run_app(env: &HostEnv, o: &crate::app::AppOptions) -> Result<i32> {
         app_bus: Some(crate::manifest::AppBus::Private),
         ..Default::default()
     };
-    let built = build::build_with(env, &opts, harness)?;
+    let mut built = build::build_with(env, &opts, harness)?;
     crate::policy::enforce(env, &built.spec)?;
+    // The devices over a socket; an app gets no secret files.
+    let grants = crate::devices::GrantCtx::for_run(env, &built);
+    let devices = crate::devices::start(
+        env,
+        &mut built.spec,
+        NAME,
+        false,
+        &grants,
+        &[],
+        None,
+        crate::credentials::secret::SecretFiles::new(None, None),
+        None,
+    );
     let spec = &built.spec;
     let net = net_for(spec.network)?;
 
@@ -610,13 +575,8 @@ pub fn run_app(env: &HostEnv, o: &crate::app::AppOptions) -> Result<i32> {
         cfg.allow_lan = spec.lan;
         cfg.boundary = Some(crate::boundary::proxy_sink(env, &spec.id));
         cfg.egress = crate::monitor::egress::sink(env, &spec.id, &spec.harness, &spec.project);
-        if spec.network == Network::Api {
-            let (list, _) = crate::proxy::allow::Allowlist::parse(&spec.allow_domains);
-            cfg.api = Some(crate::proxy::allow::ApiPolicy {
-                list,
-                refusals: None,
-            });
-        }
+        // Modes api and allowlist: only the hosts of the list.
+        cfg.api = super::listed_policy(spec, Some(super::api_refusals(env, spec)));
         for w in cfg.cleartext_warnings() {
             log::warn!("{w}");
         }
@@ -626,9 +586,9 @@ pub fn run_app(env: &HostEnv, o: &crate::app::AppOptions) -> Result<i32> {
         None
     };
 
-    let (pol, notes) = policy(spec, &bundle, &tmp, net)?;
-    let sb = run_dir.join("seatbelt.sb");
-    crate::privfs::write(&sb, crate::seatbelt::render(&pol)?)?;
+    let (mut pol, notes) = policy(spec, &bundle, &tmp, net)?;
+    let login_ports = login_ports(user.apps.get(&o.name));
+    pol.login_ports = login_ports;
 
     let mut open = vec![spec.project.clone()];
     open.extend(roots[1..].iter().cloned());
@@ -644,7 +604,21 @@ pub fn run_app(env: &HostEnv, o: &crate::app::AppOptions) -> Result<i32> {
         electron.then(|| electron_args(&ud, proxy)),
         &args,
     );
-    let vars = app_env(env, spec, &tmp, proxy);
+    let mut vars = app_env(env, spec, &tmp, proxy);
+    if spec.device_socket.is_some() {
+        let me = std::env::current_exe()
+            .and_then(std::fs::canonicalize)
+            .context("cannot find the paddock executable")?;
+        let wrapper = run_dir.join("paddock-host");
+        crate::privfs::write(&wrapper, host_wrapper(&me))?;
+        std::fs::set_permissions(
+            &wrapper,
+            std::os::unix::fs::PermissionsExt::from_mode(0o700),
+        )?;
+        app_devices(spec, &run_dir, &me, &mut pol, &mut vars);
+    }
+    let sb = run_dir.join("seatbelt.sb");
+    crate::privfs::write(&sb, crate::seatbelt::render(&pol)?)?;
     for w in crate::privacy::write_settings(&spec.home_src, &spec.home_settings)? {
         log::warn!("{w}");
     }
@@ -655,6 +629,12 @@ pub fn run_app(env: &HostEnv, o: &crate::app::AppOptions) -> Result<i32> {
         spec.project.display(),
         format!("{:?}", spec.network).to_lowercase()
     );
+    if spec.network == Network::Host {
+        log::warn!("{}", run::HOST_WARNING);
+    }
+    if login_ports {
+        eprintln!("paddock: {}", login_ports_notice(&o.name));
+    }
     eprintln!("paddock: the real home is denied, not absent: names stay visible");
     for n in notes.iter().chain(&spec.notices) {
         eprintln!("paddock: {n}");
@@ -686,6 +666,7 @@ pub fn run_app(env: &HostEnv, o: &crate::app::AppOptions) -> Result<i32> {
     }
     crate::mark::spawn(env);
     let status = child.wait()?;
+    drop(devices);
     let _ = std::fs::remove_dir_all(&run_dir);
     crate::sockpath::remove_run_sockets(&env.paddock_run(), env.uid, &spec.id);
     let _ = std::fs::remove_dir_all(&tmp);
@@ -699,7 +680,7 @@ pub fn run_app(env: &HostEnv, o: &crate::app::AppOptions) -> Result<i32> {
 #[path = "seatbelt_tests.rs"]
 mod tests;
 
-/// Tests that run `sandbox-exec`. The maintainer runs them on a Mac.
+/// Tests that run `sandbox-exec`. They run only on macOS.
 #[cfg(all(test, target_os = "macos"))]
 #[path = "seatbelt_macos_tests.rs"]
 mod macos_tests;

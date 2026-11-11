@@ -15,7 +15,9 @@ fn bwrap_offline_escape_probe_passes() {
     // Never the user's own folders: a run of a build with them could change
     // the user's paddock state.
     let tmp = common::tempdir();
+    std::fs::create_dir_all(tmp.path().join("home")).unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_paddock"))
+        .env("HOME", tmp.path().join("home"))
         .env("XDG_CONFIG_HOME", tmp.path().join("cfg"))
         .env("XDG_DATA_HOME", tmp.path().join("data"))
         .env("XDG_STATE_HOME", tmp.path().join("state"))

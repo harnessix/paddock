@@ -45,6 +45,8 @@ impl Device for In {
     }
     fn info(&self) -> Info {
         Info {
+            shape: "builtin",
+            stream: false,
             request: format!(
                 "nothing (cat /dev/paddock/mail/in), or JSON {{\"timeout\": SECONDS}}. The read waits for mail from the starter of this run at most timeout seconds (default {}, at most {}), then fails with ETIME (still waiting): read again",
                 waiting::DEFAULT_READ_TIMEOUT,
@@ -108,6 +110,8 @@ impl Device for Out {
     }
     fn info(&self) -> Info {
         Info {
+            shape: "builtin",
+            stream: false,
             request: format!(
                 "one message to the starter of this run: plain text (a say), or JSON {{\"kind\": \"say|ask|status\", \"text\": TEXT, \"refs\": [PATHS], \"reply_to\": SEQ}}. A status is working, blocked: REASON or done: SUMMARY. At most {} bytes of text: put longer text in a file in .paddock/ and name it in refs. echo TEXT > /dev/paddock/mail/out sends at close",
                 super::MAX_TEXT

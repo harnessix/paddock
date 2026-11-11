@@ -19,6 +19,7 @@
 mod mail_acceptance;
 mod mail_watch;
 mod screen_idle;
+mod stop;
 
 use crate::env::HostEnv;
 use anyhow::{bail, Context, Result};
@@ -29,6 +30,8 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 mod stuck;
+use stop::stop_file;
+pub use stop::{mark_stopped, was_stopped};
 pub use stuck::{add_note, idle_done_text, Detector, Event, Stuck, STUCK_AFTER};
 
 /// The `done` text keeps at most this many bytes.
@@ -249,24 +252,6 @@ impl Record {
 /// A sandbox is a detached run.
 pub fn is_detached(env: &HostEnv, id: &str) -> bool {
     crate::view::valid_id(id) && record_file(env, id).is_file()
-}
-
-fn stop_file(env: &HostEnv, id: &str) -> PathBuf {
-    records_dir(env).join(format!("{id}.stop"))
-}
-
-/// `paddock stop` asked this run to end. The marker is a separate file so a
-/// later write of the run record cannot drop it.
-pub fn mark_stopped(env: &HostEnv, id: &str) -> Result<()> {
-    if !crate::view::valid_id(id) {
-        bail!("{id} is not a sandbox id");
-    }
-    crate::privfs::dir(&records_dir(env))?;
-    crate::privfs::write(&stop_file(env, id), b"stopped\n")?;
-    if Record::load(env, id).is_some() {
-        let _ = Record::update(env, id, |r| r.stopped = true);
-    }
-    Ok(())
 }
 
 /// The end of a run that had a view log and was not detached. A detached
@@ -731,7 +716,7 @@ fn alive(pid: u32) -> bool {
 }
 
 /// The run ended, by its record, its process or its missing pane.
-fn ended(env: &HostEnv, id: &str, rec: Option<&Record>, now: u64) -> bool {
+pub fn ended(env: &HostEnv, id: &str, rec: Option<&Record>, now: u64) -> bool {
     let running = crate::state::Running::list(env).iter().any(|r| r.id == id);
     match rec {
         None => !running,

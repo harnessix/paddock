@@ -1,25 +1,34 @@
+mod run_args;
 use clap::{Args, Parser, Subcommand};
-use paddock::spec::{GuiMode, Network};
+use paddock::spec::Network;
+pub(crate) use run_args::{RunArgs, RunArgsCli};
 use std::path::PathBuf;
 
 pub(crate) mod app;
+pub(crate) mod app_guest;
 pub(crate) mod approver;
 pub(crate) mod auth;
 pub(crate) mod catalog;
 pub(crate) mod credentials;
-pub(crate) mod devices;
+pub(crate) mod device;
+pub(crate) mod device_serve;
+pub(crate) mod doctor_json;
 pub(crate) mod env;
+pub(crate) mod events;
 pub(crate) mod exclave;
 pub(crate) mod forage;
 pub(crate) mod gateway;
 pub(crate) mod gauge;
+pub(crate) mod grants;
 pub(crate) mod horse;
 pub(crate) mod kv;
 pub(crate) mod loft;
 pub(crate) mod logins;
+pub(crate) mod macvm;
 pub(crate) mod mail;
 pub(crate) mod monitor;
 pub(crate) mod pasture;
+pub(crate) mod rules;
 pub(crate) mod run;
 pub(crate) mod setup;
 pub(crate) mod shims;
@@ -35,6 +44,7 @@ pub(crate) mod turnout;
 pub(crate) mod update;
 pub(crate) mod vm;
 pub(crate) mod vm_run;
+pub(crate) mod wait;
 pub(crate) mod windows;
 pub(crate) mod worktree;
 
@@ -113,15 +123,17 @@ pub(crate) enum Cmd {
         cmd: shims::LaunchersCmd,
     },
     /// List the protected windows: app sandbox windows, window mode displays
-    /// and the terminal windows of runs (Hyprland). --mark gives them
-    /// paddock's border, sage or amber by network level.
+    /// and the terminal windows of runs (Hyprland, and macOS without window
+    /// mode). --mark gives them paddock's border, sage or amber by network
+    /// level (on macOS: starts the marker).
     Windows {
         #[arg(long)]
         json: bool,
         #[arg(long)]
         mark: bool,
-        /// Focus this protected window (an address from --json).
-        #[arg(long, value_name = "ADDRESS")]
+        /// Focus this protected window (an address from --json). Not on
+        /// macOS, where the shield menu in the menu bar does it.
+        #[arg(long, value_name = "ADDRESS", hide = cfg!(target_os = "macos"))]
         focus: Option<String>,
     },
     /// Focus the terminal window, or the display window with --display, of a running sandbox (Hyprland).
@@ -160,15 +172,8 @@ pub(crate) enum Cmd {
         /// A sandbox id from `paddock ps`, or its short form such as 1a2b3c.
         id: String,
     },
-    /// Wait until a sandbox ends. Prints what `paddock-host done` said.
-    /// Exit code 0 for ok, 1 for failed or no `done`, 124 for a timeout.
-    Wait {
-        /// A sandbox id from `paddock ps`, or its short form such as 1a2b3c.
-        id: String,
-        /// The longest wait, for example 90s, 30m or 2h.
-        #[arg(long, value_name = "DURATION")]
-        timeout: Option<String>,
-    },
+    /// Wait for runs to end, or for a done/blocked status with --status.
+    Wait(wait::WaitArgs),
     /// Open a live view of a sandbox that runs without a terminal, in a new
     /// terminal window. Read-only unless --write.
     View {
@@ -296,6 +301,11 @@ pub(crate) enum Cmd {
     Doctor {
         #[arg(long)]
         escape: bool,
+        /// With --escape: probe the device sandbox of this [devices.NAME]
+        /// table instead of an agent sandbox. The probe runs as the device
+        /// program, with the profile of the table.
+        #[arg(long, requires = "escape", value_name = "NAME")]
+        device: Option<String>,
         #[arg(long, default_value = "auto")]
         backend: String,
         #[arg(long, default_value = "none")]
@@ -327,6 +337,13 @@ pub(crate) enum Cmd {
         /// With --report: write the report to this file instead of stdout.
         #[arg(long, requires = "report")]
         output: Option<PathBuf>,
+        /// With --report: replace every host name of the macOS guest's
+        /// firewall rules and connection logs with host-N.
+        #[arg(long, requires = "report")]
+        no_hosts: bool,
+        /// The prerequisites of app mode on macOS as JSON, for the launcher.
+        #[arg(long, conflicts_with_all = ["escape", "report", "device", "backend"])]
+        json: bool,
     },
     /// First-run setup: packages, shell commands, launchers, the bar widget,
     /// the default backend and app folders. Each step says what it changes
@@ -395,6 +412,9 @@ pub(crate) enum Cmd {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
+    /// Follow the live state of app mode (sessions, questions, grants, the
+    /// golden build, free space) as line-delimited JSON with --json.
+    Events(events::EventsArgs),
     /// List or answer requests that sandboxes sent to the host.
     #[command(after_help = approver::APPROVALS_HELP)]
     Approvals {
@@ -445,16 +465,17 @@ pub(crate) enum Cmd {
         #[command(subcommand)]
         cmd: credentials::CredentialsCmd,
     },
-    /// Secrets in environment variables that only allowlisted programs
-    /// receive ([tack] of the user configuration). Never a value.
+    /// Secrets in environment variables for allowlisted programs.
     Tack {
         #[command(subcommand)]
         cmd: tack::TackCmd,
     },
-    /// The ledger and the budgets of paid devices.
-    Devices {
+    /// The devices of /dev/paddock: list, show, add one, the example
+    /// script, the budgets and the ledger of paid devices.
+    #[command(alias = "devices")]
+    Device {
         #[command(subcommand)]
-        cmd: devices::DevicesCmd,
+        cmd: device::DeviceCmd,
     },
     /// The mailbox of a run: send messages to its agent and watch what it
     /// sends back, with paddock's events (ended, gone, idle, card waiting).
@@ -600,6 +621,29 @@ pub(crate) enum Cmd {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         args: Vec<String>,
     },
+    /// The shared instance of a device (`scope = "shared"`): one per user,
+    /// started by the first broker that needs it or by socket activation.
+    #[command(hide = true)]
+    Deviced {
+        /// The device name: [devices.NAME] of the user configuration.
+        name: String,
+        /// The socket to serve on (default: the shared socket of the
+        /// device). systemd and launchd pass the socket themselves.
+        #[arg(long)]
+        socket: Option<PathBuf>,
+        /// The sandbox that owns the instance on a host without a user
+        /// manager: the instance ends with that run.
+        #[arg(long, value_name = "ID")]
+        owner: Option<String>,
+        /// The systemd unit that runs the instance, for the state file.
+        #[arg(long, value_name = "UNIT")]
+        unit: Option<String>,
+    },
+    /// The supervisor of a device program behind a Unix socket (HTTP/1.1):
+    /// forks an exec program per request, or proxies to a serve program.
+    /// The broker starts this in a device sandbox or on the host.
+    #[command(hide = true, name = "device-serve")]
+    DeviceServe(device_serve::DeviceServeArgs),
     /// Inside a container sandbox: pass connections to the host proxy socket.
     #[command(hide = true)]
     Relay {
@@ -616,6 +660,12 @@ pub(crate) enum Cmd {
     Vm {
         #[command(subcommand)]
         cmd: vm::VmCmd,
+    },
+    /// The macOS guest of app mode: the golden image that `paddock app
+    /// run` clones per app (macOS, Apple silicon).
+    Macvm {
+        #[command(subcommand)]
+        cmd: macvm::MacvmCmd,
     },
     /// In the guest of the VM backend: the agent that starts the runs. The
     /// init of the guest starts it.
@@ -672,92 +722,27 @@ pub(crate) struct KvAsRequired {
     as_: String,
 }
 
-#[derive(Args, Clone, serde::Serialize, serde::Deserialize)]
-pub(crate) struct RunArgs {
-    /// Harness name, for example claude or codex. Defaults to default_harness in paddock.toml.
-    harness: Option<String>,
-    /// Project directory. Defaults to the current directory, widened to its git root.
-    path: Option<PathBuf>,
-    /// auto, bwrap, docker, podman, srt, seatbelt or vm (macOS).
-    #[arg(long, short)]
-    backend: Option<String>,
-    /// none, api, egress or host. api: only the model API hosts of the
-    /// profile and the domains of --allow, over HTTPS through the paddock proxy.
-    #[arg(long, short)]
-    network: Option<Network>,
-    /// off, headless, window or host.
-    #[arg(long)]
-    gui: Option<GuiMode>,
-    /// Bind GPU render nodes.
-    #[arg(long)]
-    gpu: bool,
-    /// inherit (default) passes the host environment; clean passes only the allowlist.
-    #[arg(long, value_parser = ["inherit", "clean"])]
-    env: Option<String>,
-    /// shared (default) reuses your login; isolated or isolated:NAME uses a separate one.
-    #[arg(long)]
-    auth: Option<String>,
-    /// A domain the sandbox can reach in network modes api and allowlist
-    /// (repeatable). HOST, HOST:PORT, or *.DOMAIN for its subdomains.
-    #[arg(long)]
-    allow: Vec<String>,
-    /// Work in a new git worktree on its own branch, and review the diff afterwards.
-    #[arg(long)]
-    worktree: bool,
-    /// Join this pasture of the project: [pastures.NAME] of the user
-    /// configuration. Its members share the pasture scope of paddock kv.
-    /// Without it, the sandbox shares paddock kv with no other.
-    #[arg(long, value_name = "NAME")]
-    pasture: Option<String>,
-    /// default: start the harness with a private snapshot of its own host
-    /// data (conversations, settings, plugins) in the sandbox home. The
-    /// run changes only the snapshot, and paddock removes it at the end.
-    /// bwrap only.
-    #[arg(long, value_name = "PROFILE", value_parser = ["default"])]
-    profile: Option<String>,
-    /// Start the harness without its auto-approval flags.
-    #[arg(long)]
-    no_yolo: bool,
-    /// Approve the project's paddock.toml without asking.
-    #[arg(long, short = 'y')]
-    yes: bool,
-    /// Start the run in the background, in a session of paddock's own tmux
-    /// server: the harness runs its interactive interface with the task as
-    /// its first prompt. `paddock view 1a2b3c --write` takes over, `paddock
-    /// wait 1a2b3c` waits for the end. Needs --prompt-file or --prompt.
-    #[arg(long)]
-    #[serde(skip)]
-    detach: bool,
-    /// With --detach: the file with the task.
-    #[arg(
-        long,
-        value_name = "FILE",
-        requires = "detach",
-        conflicts_with = "prompt"
-    )]
-    #[serde(skip)]
-    prompt_file: Option<PathBuf>,
-    /// With --detach: the task as text.
-    #[arg(long, value_name = "TEXT", requires = "detach")]
-    #[serde(skip)]
-    prompt: Option<String>,
-    /// Record this run in a new horse (dsh, Claude, or Codex).
-    /// Also enabled by `[horse] enabled`.
-    #[arg(long)]
-    #[serde(default)]
-    horse: bool,
-    /// Continue the horse ID in horse mode: dsh resumes its newest session.
-    #[arg(long, value_name = "ID")]
-    #[serde(default)]
-    horse_id: Option<String>,
-    /// Arguments for the harness, after `--`.
-    #[arg(last = true)]
-    args: Vec<String>,
-}
+#[cfg(test)]
+mod doctor_json_conflict_tests {
+    use super::Cli;
+    use clap::Parser;
 
-#[derive(Parser)]
-#[command(name = "paddock")]
-pub(crate) struct RunArgsCli {
-    #[command(flatten)]
-    run: RunArgs,
+    #[test]
+    fn json_rejects_explicit_backend_and_device() {
+        // The complete command tree needs the same stack as the main thread.
+        std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                for args in [
+                    vec!["paddock", "doctor", "--json", "--backend", "auto"],
+                    vec!["paddock", "doctor", "--json", "--device", "x"],
+                ] {
+                    assert!(Cli::try_parse_from(args).is_err());
+                }
+                assert!(Cli::try_parse_from(["paddock", "doctor", "--json"]).is_ok());
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
 }

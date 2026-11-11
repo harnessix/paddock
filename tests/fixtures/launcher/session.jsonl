@@ -1,0 +1,9 @@
+{"v":1,"t":"2026-11-06T12:00:00Z","kind":"session","app":"sample-notes","home":"default","state":"starting","phase":"cloning","text":"cold: the golden changed"}
+{"v":1,"t":"2026-11-06T12:00:04Z","kind":"session","app":"sample-notes","home":"default","state":"starting","phase":"booting","text":"the VM runs"}
+{"v":1,"t":"2026-11-06T12:00:12Z","kind":"session","app":"sample-notes","home":"default","state":"starting","phase":"copying app","text":"copy Sample Notes 1.2.3"}
+{"v":1,"t":"2026-11-06T12:00:20Z","kind":"session","app":"sample-notes","home":"default","state":"starting","phase":"opening","text":"app.launch sent"}
+{"v":1,"t":"2026-11-06T12:00:22Z","kind":"session","app":"sample-notes","home":"default","state":"running","text":"opened"}
+{"v":1,"t":"2026-11-06T12:30:00Z","kind":"session","app":"sample-notes","home":"default","state":"stopping","phase":"quitting","text":"quit asked"}
+{"v":1,"t":"2026-11-06T12:30:05Z","kind":"session","app":"sample-notes","home":"default","state":"stopping","phase":"saving","text":"saved 2.0 GiB"}
+{"v":1,"t":"2026-11-06T12:30:09Z","kind":"session","app":"sample-notes","home":"default","state":"stopped","text":"quit with save"}
+{"v":1,"t":"2026-11-06T13:00:00Z","kind":"session","app":"sample-mail","home":"default","state":"error","text":"session ended without a save"}

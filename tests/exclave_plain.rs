@@ -59,6 +59,7 @@ send({{"type":"exit","code":0}})
             .env("XDG_DATA_HOME", temp.path().join("data"))
             .env("XDG_STATE_HOME", temp.path().join("state"))
             .env("XDG_CACHE_HOME", temp.path().join("cache"))
+            .env("XDG_RUNTIME_DIR", temp.path().join("run"))
             .args(["exclave", "run"]);
         if root {
             command.arg("--root").arg(&project);

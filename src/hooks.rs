@@ -94,6 +94,8 @@ pub enum Style {
 pub struct Cfg {
     pub programs: Vec<String>,
     pub ignore: Vec<String>,
+    /// Host command and arguments to start after a run ends.
+    pub run_end: Vec<String>,
 }
 
 impl Cfg {

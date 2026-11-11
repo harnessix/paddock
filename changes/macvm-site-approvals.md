@@ -1,0 +1,1 @@
+- Changed: macOS guest network questions can allow a site and its subdomains, or allow all hosts for ten minutes during sign-in.

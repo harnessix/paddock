@@ -1,0 +1,1 @@
+- Fixed: `paddock update` no longer fails with "Text file busy" when another thread of paddock starts a process while the new binary is written. It tries the new binary again for up to five seconds.

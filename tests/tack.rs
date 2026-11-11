@@ -255,7 +255,9 @@ fn the_configuration_refuses_a_shell_on_the_allowlist() {
 #[cfg(target_os = "linux")]
 #[test]
 fn doctor_has_a_tack_block() {
-    let w = World::new("ok");
+    let mut w = World::new("ok");
+    w.bare = true;
+    std::os::unix::fs::symlink("/bin/cat", w.root.join("bin/cat")).unwrap();
     w.config(
         "[tack.secrets.GH_TOKEN]\n[[tack.secrets.GH_TOKEN.allow]]\nprogram = \"/no/such/gh\"\n",
     );

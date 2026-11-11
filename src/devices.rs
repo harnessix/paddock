@@ -15,6 +15,11 @@
 //! request. `/dev/paddock/.catalog` is read-only and describes each device:
 //! its request format, its limits and whether it is on.
 //!
+//! A device with `stream` in its catalog entry answers as it goes: a read
+//! returns bytes as the program writes them (`Device::call_stream`, the
+//! `Streaming` phase of fuse.rs, the chunks of socket.rs), and a failure
+//! after the first byte fails the next read with EIO.
+//!
 //! Waiting devices (`wait`, `ask`, see blocking.rs) block until an event:
 //! a time, or the user's answer. Each read waits at most the `timeout` of
 //! its request; when that passes first, the read fails with ETIME ("still
@@ -30,46 +35,70 @@
 //! read returns the value. Each open counts as one use, and after
 //! `paddock credentials revoke` the file fails with EACCES.
 //!
+//! On macOS, Seatbelt cannot show a FUSE mount and macOS has no FUSE
+//! without a kernel extension. There the same devices come over a Unix
+//! socket per sandbox (`PADDOCK_DEVICES_SOCKET`, devices/socket.rs), with
+//! `paddock-host device` as the client, and each secret file is a FIFO in
+//! `$PADDOCK_DEVICES/secret/` (credentials/secret_fifo.rs).
+//!
 //! Devices are off unless `[devices]` in the user configuration turns them
 //! on. The project `paddock.toml` cannot do this, because the agent can edit
 //! that file. Requests and responses never go into logs or process
 //! arguments; the log keeps the device name, the sizes and the outcome.
 
-use crate::credentials::secret::SecretFiles;
 use crate::env::HostEnv;
-use crate::spec::SandboxSpec;
 use anyhow::{bail, Context, Result};
 use serde::Serialize;
-use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 pub mod blocking;
-pub mod command;
-#[cfg(any(target_os = "linux", test))]
+pub mod config;
+pub mod doctor;
+pub mod escape;
+pub mod examples;
+#[cfg(target_os = "linux")]
 mod folders;
+pub mod forward;
+pub mod grant;
+pub mod host;
+pub mod http;
 pub mod ledger;
+pub mod outproc;
+mod profile;
+pub mod program;
+mod reader;
+mod render;
+pub mod sandbox;
+mod serve;
+pub mod shared;
+pub mod socket;
 mod stale;
+pub mod supervise;
 pub mod user;
-pub use stale::clear_stale;
+
+pub use config::DeviceDef;
+pub use grant::{GrantCtx, GrantHit};
+pub use program::{Collect, Sink};
+
+pub use serve::{
+    backend_support, clear_stale, doctor_lines, doctor_lines_on, fuse_available, hook_control,
+    late, mount_dir, report, socket_dir, start, Devices, SOCKET_NAME,
+};
 
 #[cfg(target_os = "linux")]
 mod fuse;
 #[cfg(target_os = "linux")]
-mod fuse_mount;
+use fuse::lazy_unmount;
 #[cfg(target_os = "linux")]
-pub use fuse::DeviceFs;
-#[cfg(target_os = "linux")]
-use fuse_mount::lazy_unmount;
-#[cfg(target_os = "linux")]
-pub use fuse_mount::{mount, Mounted};
+pub use fuse::{mount, DeviceFs, Mounted};
+#[cfg(not(target_os = "linux"))]
+use fuse_stub::lazy_unmount;
 
 #[cfg(not(target_os = "linux"))]
 mod fuse_stub;
-#[cfg(not(target_os = "linux"))]
-use fuse_stub::lazy_unmount;
 #[cfg(not(target_os = "linux"))]
 pub use fuse_stub::{mount, DeviceFs, Mounted};
 
@@ -101,6 +130,27 @@ pub struct Info {
     /// The format of the response bytes.
     pub response: String,
     pub limits: Limits,
+    /// `builtin`, `exec`, `serve` or `http`.
+    pub shape: &'static str,
+    /// Whether a read returns bytes as the program writes them.
+    pub stream: bool,
+}
+
+impl Info {
+    /// The entry of a built-in device: no stream, shape `builtin`.
+    pub fn builtin(
+        request: impl Into<String>,
+        response: impl Into<String>,
+        limits: Limits,
+    ) -> Self {
+        Self {
+            request: request.into(),
+            response: response.into(),
+            limits,
+            shape: "builtin",
+            stream: false,
+        }
+    }
 }
 
 /// Why a request failed. The reader gets the errno.
@@ -121,6 +171,14 @@ pub enum DevError {
     Denied,
     /// The budget of a paid device is used (EDQUOT).
     BudgetUsed,
+    /// The device has `concurrency` requests at work and a full queue
+    /// (EBUSY).
+    Busy,
+    /// The request is larger than the device limit (EFBIG).
+    RequestTooLarge,
+    /// The deadline of the device passed on another paddock (ETIMEDOUT):
+    /// a remote device (forward.rs) that did not answer in its time.
+    TimedOut,
 }
 
 impl DevError {
@@ -133,7 +191,79 @@ impl DevError {
             DevError::Waiting => crate::waiting::ERRNO_STILL_WAITING,
             DevError::Denied => libc::EACCES,
             DevError::BudgetUsed => libc::EDQUOT,
+            DevError::Busy => libc::EBUSY,
+            DevError::RequestTooLarge => libc::EFBIG,
+            DevError::TimedOut => libc::ETIMEDOUT,
         }
+    }
+
+    /// The error of an errno that another paddock answered (socket.rs):
+    /// the same mapping backwards, `Failed` for every errno without one.
+    pub fn from_errno(errno: i32) -> Self {
+        if errno == crate::waiting::ERRNO_STILL_WAITING {
+            return DevError::Waiting;
+        }
+        match errno {
+            libc::EINVAL => DevError::Invalid,
+            libc::EMSGSIZE => DevError::TooLarge,
+            libc::ECANCELED => DevError::Cancelled,
+            libc::EACCES => DevError::Denied,
+            libc::EDQUOT => DevError::BudgetUsed,
+            libc::EBUSY => DevError::Busy,
+            libc::EFBIG => DevError::RequestTooLarge,
+            libc::ETIMEDOUT => DevError::TimedOut,
+            _ => DevError::Failed,
+        }
+    }
+}
+
+/// The caller as another paddock described it (`run = "remote"`,
+/// forward.rs): text for the card and the audit line, never an identity.
+/// The identity of a remote request is its transport (the ssh peer or
+/// the socket), which `Call::sandbox` names as `remote:PEER`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RemoteCaller {
+    /// The sandbox id on the forwarding side.
+    pub sandbox: String,
+    /// The forwarding machine, as it names itself.
+    pub host: String,
+    /// The sandboxes above the caller there, root first.
+    pub chain: Vec<String>,
+}
+
+/// The longest text a remote caller field keeps.
+const REMOTE_TEXT: usize = 128;
+
+impl RemoteCaller {
+    /// Text as another paddock sent it: cleaned for a terminal, cut to
+    /// `REMOTE_TEXT` characters.
+    pub fn new(sandbox: &str, host: &str, chain: &[String]) -> Self {
+        let clean = |s: &str| {
+            crate::broker::clean_text(s)
+                .chars()
+                .filter(|c| *c != '\n')
+                .take(REMOTE_TEXT)
+                .collect::<String>()
+        };
+        Self {
+            sandbox: clean(sandbox),
+            host: clean(host),
+            chain: chain.iter().take(16).map(|c| clean(c)).collect(),
+        }
+    }
+
+    /// One phrase for the card: "sandbox ID on HOST".
+    pub fn text(&self) -> String {
+        let mut s = match (self.sandbox.is_empty(), self.host.is_empty()) {
+            (false, false) => format!("sandbox {} on {}", self.sandbox, self.host),
+            (false, true) => format!("sandbox {}", self.sandbox),
+            (true, false) => format!("a sandbox on {}", self.host),
+            (true, true) => "an unnamed sandbox".into(),
+        };
+        if !self.chain.is_empty() {
+            s.push_str(&format!(", started by {}", self.chain.join(" > ")));
+        }
+        s
     }
 }
 
@@ -141,9 +271,14 @@ impl DevError {
 /// client still waits.
 pub struct Call {
     /// The sandbox id. It comes from the mount, never from the request.
+    /// For a request of another paddock it is `remote:PEER`, from the
+    /// transport.
     pub sandbox: String,
     pub deadline: Instant,
     cancel: Arc<AtomicBool>,
+    /// What the forwarding paddock said about its caller: text for the
+    /// card and the audit, set by the remote server of socket.rs only.
+    pub remote: Option<RemoteCaller>,
 }
 
 impl Call {
@@ -153,6 +288,17 @@ impl Call {
             sandbox: sandbox.to_string(),
             deadline: Instant::now() + deadline,
             cancel: Arc::new(AtomicBool::new(false)),
+            remote: None,
+        }
+    }
+
+    /// A call whose cancel flag the test holds.
+    pub fn with_cancel(sandbox: &str, deadline: Duration, cancel: Arc<AtomicBool>) -> Self {
+        Self {
+            sandbox: sandbox.to_string(),
+            deadline: Instant::now() + deadline,
+            cancel,
+            remote: None,
         }
     }
 
@@ -168,6 +314,22 @@ pub trait Device: Send + Sync {
     fn name(&self) -> &str;
     fn info(&self) -> Info;
     fn call(&self, call: &Call, request: &[u8]) -> Result<Vec<u8>, DevError>;
+    /// The response as it comes: each piece goes to `sink` when the
+    /// device has it. A device with `stream` in its `Info` serves reads
+    /// through this. The default answers whole, so a device that collects
+    /// its response changes nothing. An error after the first piece means
+    /// bytes, then the errno: the reader gets what came, and the next read
+    /// fails.
+    fn call_stream(
+        &self,
+        call: &Call,
+        request: &[u8],
+        sink: &mut dyn Sink,
+    ) -> Result<(), DevError> {
+        let out = self.call(call, request)?;
+        sink.push(&out);
+        Ok(())
+    }
     /// "on", or "off" for the file of a user device that is not turned on.
     fn state(&self) -> &'static str {
         "on"
@@ -193,6 +355,8 @@ impl Device for Echo {
     }
     fn info(&self) -> Info {
         Info {
+            shape: "builtin",
+            stream: false,
             request: "any bytes".into(),
             response: "the same bytes".into(),
             limits: Limits {
@@ -219,6 +383,9 @@ pub struct DeviceCtx {
     pub started_by: Vec<String>,
     /// Who answers the approval card of a user device.
     pub approver: Arc<dyn crate::broker::Approver>,
+    /// The device instances of this sandbox (sandbox.rs): one per device
+    /// with `run = "sandbox"`, ended with the sandbox.
+    pub instances: Arc<sandbox::Instances>,
 }
 
 /// A built-in device, ready to serve.
@@ -251,8 +418,8 @@ pub struct DevicesCfg {
     pub mount: bool,
     /// Devices that the user turned on.
     pub enabled: Vec<String>,
-    /// `[devices.NAME]` tables: http and command devices, on or off.
-    pub user: Vec<user::UserDev>,
+    /// `[devices.NAME]` tables, on or off (config.rs).
+    pub user: Vec<DeviceDef>,
 }
 
 impl Default for DevicesCfg {
@@ -271,10 +438,16 @@ impl DevicesCfg {
         let Ok(text) = std::fs::read_to_string(&file) else {
             return Ok(Self::default());
         };
-        Self::parse(&text).with_context(|| format!("[devices] in {} is invalid", file.display()))
+        Self::parse_with(&text, config::ParseEnv::host(&env.home))
+            .with_context(|| format!("[devices] in {} is invalid", file.display()))
     }
 
+    /// Parse without a host: `~` in a path stays as written.
     pub fn parse(text: &str) -> Result<Self> {
+        Self::parse_with(text, config::ParseEnv::default())
+    }
+
+    pub fn parse_with(text: &str, penv: config::ParseEnv<'_>) -> Result<Self> {
         let v: toml::Value = crate::manifest::user_config_doc(text)?;
         let mut cfg = Self::default();
         let Some(t) = v.get("devices") else {
@@ -283,12 +456,17 @@ impl DevicesCfg {
         let t = t.as_table().context("[devices] must be a table")?;
         for (k, v) in t {
             if let Some(table) = v.as_table() {
-                let d = user::UserDev::parse(k, table)?;
+                let d = DeviceDef::parse_with(k, table, penv)?;
                 if d.enabled {
                     cfg.enabled.push(k.clone());
                 }
                 cfg.user.push(d);
                 continue;
+            }
+            if k == "use" {
+                bail!(
+                    "[devices] use = [...] belongs in the paddock.toml of a project, not in the user configuration. In the user configuration, grant a device with grant = [...] in its [devices.NAME] table"
+                );
             }
             let on = v.as_bool().with_context(|| {
                 format!("[devices] {k} must be true or false, or a [devices.{k}] table")
@@ -318,6 +496,14 @@ pub fn catalog(on: &[Arc<dyn Device>]) -> Vec<u8> {
 
 /// The catalog, with the secret files of the sandbox by name.
 pub fn catalog_with(on: &[Arc<dyn Device>], secrets: &[String]) -> Vec<u8> {
+    catalog_on(cfg!(target_os = "macos"), on, secrets)
+}
+
+/// The protocol of the device socket, for the catalog on macOS.
+const SOCKET_PROTOCOL: &str = "There is no /dev/paddock on macOS: the devices come over a socket, and `paddock-host device NAME [REQUEST | -]` sends one request and prints the response. The exit codes: 75 still waiting (the timeout of the request passed before the event of a waiting device such as wait or ask: run the same command again), 3 the user declined, 4 the device is off or unknown, 5 the device did not answer in its time limit, 8 the device rejected the request, 10 the request or response is too large, 11 the budget of a paid device is used (the user raises it on the host). An http or command device of the user asks the user once per sandbox at its first request; an off one answers with a disabled status. A device with stream: true answers as it goes: `paddock-host device` prints what it got, and a failure after the first byte makes it exit with 7 after what it printed (75 when the device says still waiting). A stream is read once, in order.";
+
+/// `catalog_with` for macOS (`socket`: no file per device) or Linux.
+pub fn catalog_on(socket: bool, on: &[Arc<dyn Device>], secrets: &[String]) -> Vec<u8> {
     let mut devices = Vec::new();
     let mut names: Vec<&str> = on.iter().map(|d| d.name()).collect();
     for b in BUILTIN {
@@ -337,6 +523,11 @@ pub fn catalog_with(on: &[Arc<dyn Device>], secrets: &[String]) -> Vec<u8> {
         let mut entry = serde_json::json!({
             "name": name,
             "state": state,
+            "shape": info.shape,
+            "run": "builtin",
+            "stream": info.stream,
+            "grant": "builtin",
+            "instance": "none",
             "request": info.request,
             "response": info.response,
             "limits": info.limits,
@@ -346,7 +537,10 @@ pub fn catalog_with(on: &[Arc<dyn Device>], secrets: &[String]) -> Vec<u8> {
                 entry[k] = v;
             }
         }
-        if served.is_some() {
+        if served.is_some() && socket {
+            // Not "command": a command device names its program there.
+            entry["invoke"] = format!("paddock-host device {name}").into();
+        } else if served.is_some() {
             entry["path"] = format!("{MOUNT_IN_SANDBOX}/{name}").into();
         }
         if state != "on" && entry.get("how_to_enable").is_none() {
@@ -357,9 +551,10 @@ pub fn catalog_with(on: &[Arc<dyn Device>], secrets: &[String]) -> Vec<u8> {
         }
         devices.push(entry);
     }
+    let file_protocol = "Open a device read-write, write the whole request, then read the response until end of file. One open is one request. The first read sends the request and blocks until the response is ready. Closing the file early cancels the request. A read fails with ETIMEDOUT after the deadline, EFBIG means the request is too large, EINVAL that the device rejected it. A waiting device (wait, ask) fails a read with ETIME (still waiting) when the timeout of the request passes before the event: send the same request again. EACCES means that the user declined. EDQUOT means that the budget of a paid device is used: the user raises it on the host. An http or command device of the user asks the user once per sandbox at its first request; an off one answers with a disabled status. `paddock-host device NAME` does all of this and exits with 75 for still waiting. A device with stream: true answers as it goes: read in order to the end of file. A failure after the first byte fails the read with EIO. paddock-host device prints what it got and exits with 7. A stream is read once, in order: a read at an earlier offset fails with ESPIPE. Without stream the response comes whole, and a failure is one errno before any byte.";
     let mut doc = serde_json::json!({
-        "version": 1,
-        "protocol": "Open a device read-write, write the whole request, then read the response until end of file. One open is one request. The first read sends the request and blocks until the response is ready. Closing the file early cancels the request. A read fails with ETIMEDOUT after the deadline, EFBIG means the request is too large, EINVAL that the device rejected it. A waiting device (wait, ask) fails a read with ETIME (still waiting) when the timeout of the request passes before the event: send the same request again. EACCES means that the user declined. EDQUOT means that the budget of a paid device is used: the user raises it on the host. An http or command device of the user asks the user once per sandbox at its first request; an off one answers with a disabled status. `paddock-host device NAME` does all of this and exits with 75 for still waiting.",
+        "version": 2,
+        "protocol": if socket { SOCKET_PROTOCOL } else { file_protocol },
         "devices": devices,
     });
     if !secrets.is_empty() {
@@ -368,112 +563,35 @@ pub fn catalog_with(on: &[Arc<dyn Device>], secrets: &[String]) -> Vec<u8> {
             .map(|n| {
                 serde_json::json!({
                     "name": n,
-                    "path": crate::credentials::secret_path(n),
+                    "path": crate::credentials::secret::fifo::path_on(socket, n),
                 })
             })
             .collect::<Vec<_>>()
             .into();
-        doc["secrets_how"] = "Each file holds the value of a credential that the user gave this sandbox. Read it with a plain read, no request: cat FILE. Each open counts as one use. Use it in one command only, for example GH_TOKEN=$(cat /dev/paddock/secret/GH_TOKEN) gh pr list, or give the path to a tool that reads a token file. Do not copy the value into files or logs. EACCES means that the user revoked it.".into();
+        let example = crate::credentials::secret::fifo::path_on(socket, "GH_TOKEN");
+        let revoked = if socket {
+            "After a revoke the file is gone (ENOENT). `paddock-host device secret/NAME` prints the value too."
+        } else {
+            "EACCES means that the user revoked it."
+        };
+        doc["secrets_how"] = format!("Each file holds the value of a credential that the user gave this sandbox. Read it with a plain read, no request: cat FILE. Each open counts as one use. Use it in one command only, for example GH_TOKEN=$(cat \"{example}\") gh pr list, or give the path to a tool that reads a token file. Do not copy the value into files or logs. {revoked}").into();
     }
     let mut out = serde_json::to_vec_pretty(&doc).unwrap_or_default();
     out.push(b'\n');
     out
 }
 
-/// Whether this host can mount a user FUSE file system: `/dev/fuse` opens
-/// and `fusermount3` (or `fusermount`) exists.
-#[cfg(target_os = "linux")]
-pub fn fuse_available(env: &HostEnv) -> Result<PathBuf, String> {
-    let helper = env
-        .which("fusermount3")
-        .or_else(|| env.which("fusermount"))
-        .ok_or("fusermount3 is not installed (package fuse3)")?;
-    std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open("/dev/fuse")
-        .map_err(|e| format!("cannot open /dev/fuse: {e}"))?;
-    Ok(helper)
-}
-
-#[cfg(not(target_os = "linux"))]
-pub fn fuse_available(_env: &HostEnv) -> Result<PathBuf, String> {
-    Err(crate::platform::unavailable("the FUSE device mount").to_string())
-}
-
-/// Whether a backend can show a host FUSE mount inside its sandbox.
-///
-/// A FUSE mount answers only the user who mounted it, not even root. bwrap
-/// and srt run as the user, so they bind the mount itself. The container
-/// runtimes set up mounts as root or as a mapped root, which the mount
-/// refuses. For them paddock binds the empty folder with slave propagation
-/// and mounts the file system on it after the container started; the mount
-/// then appears inside the container. That needs a run folder on a shared
-/// mount, the systemd default.
-pub fn backend_support(env: &HostEnv, backend: &str) -> Result<(), String> {
-    match backend {
-        "bwrap" | "srt" => Ok(()),
-        "docker" | "podman" => {
-            let run = env.paddock_run();
-            if shared_mount(&run) {
-                Ok(())
-            } else {
-                Err(format!(
-                    "{} is not on a shared mount, so a later mount does not reach the container",
-                    run.display()
-                ))
-            }
-        }
-        other => Err(format!("the {other} backend has no device support")),
-    }
-}
-
-/// Where the device file system of a sandbox is mounted on the host. srt
-/// binds the run folder of the sandbox read-only over everything in it, so
-/// for srt the mount is outside that folder.
-pub fn mount_dir(env: &HostEnv, backend: &str, id: &str) -> PathBuf {
-    if backend == "srt" {
-        env.paddock_run().join("devices").join(id)
-    } else {
-        env.paddock_run().join(id).join("dev")
-    }
-}
-
-/// Container backends mount the devices after the start.
-pub fn late(backend: &str) -> bool {
-    matches!(backend, "docker" | "podman")
-}
-
-/// True when the mount that holds `path` has shared propagation.
-fn shared_mount(path: &Path) -> bool {
-    let Ok(info) = std::fs::read_to_string("/proc/self/mountinfo") else {
-        return false;
-    };
-    let mut best: Option<(usize, bool)> = None;
-    for line in info.lines() {
-        let f: Vec<&str> = line.split(' ').collect();
-        let Some(mp) = f.get(4) else { continue };
-        let mp = Path::new(mp);
-        if !path.starts_with(mp) {
-            continue;
-        }
-        let len = mp.as_os_str().len();
-        let shared = f[6..]
-            .iter()
-            .take_while(|x| **x != "-")
-            .any(|x| x.starts_with("shared:"));
-        if best.is_none_or(|(l, _)| len >= l) {
-            best = Some((len, shared));
-        }
-    }
-    best.is_some_and(|(_, s)| s)
-}
-
 /// The names of the devices to serve: the user's choice, plus `echo` when
-/// `test` is set (`paddock doctor --escape` tests the round trip). With a
-/// `ceiling` (the devices of the parent of a spawned sandbox), only names
-/// that are in it.
-pub fn enabled_names(cfg: &DevicesCfg, test: bool, ceiling: Option<&[String]>) -> Vec<String> {
+/// `test` is set (`paddock doctor --escape` tests the device mount with
+/// it). A user device needs a grant that covers `ctx` (grant.rs); a
+/// spawned sandbox gets at most the devices of its parent (the ceiling
+/// of `ctx`).
+pub fn enabled_names(cfg: &DevicesCfg, test: bool, ctx: &GrantCtx) -> Vec<String> {
+    grants(cfg, test, ctx).into_iter().map(|(n, _)| n).collect()
+}
+
+/// `enabled_names` with the grant that gave each device.
+pub fn grants(cfg: &DevicesCfg, test: bool, ctx: &GrantCtx) -> Vec<(String, GrantHit)> {
     if !cfg.mount {
         return Vec::new();
     }
@@ -481,262 +599,98 @@ pub fn enabled_names(cfg: &DevicesCfg, test: bool, ceiling: Option<&[String]>) -
     if test && !names.iter().any(|n| n == "echo") {
         names.push("echo".into());
     }
-    names.retain(|n| {
-        (builtin_info(n).is_some() || cfg.user.iter().any(|u| u.name == *n))
-            && ceiling.is_none_or(|c| c.contains(n))
-    });
+    // A built-in device is for the sandboxes of this host: a remote caller
+    // (forward.rs) gets only tables with a `remote:` grant.
+    let within = |n: &str| {
+        ctx.remote.is_none()
+            && ctx
+                .ceiling
+                .as_ref()
+                .is_none_or(|c| c.iter().any(|x| x == n))
+    };
     names
+        .into_iter()
+        .filter_map(|n| match cfg.user.iter().find(|u| u.name == n) {
+            Some(u) => grant::visible(u, ctx).map(|h| (n.clone(), h)),
+            None if builtin_info(&n).is_some() && within(&n) => Some((n, GrantHit::NoKey)),
+            None => None,
+        })
+        .collect()
 }
 
 /// The devices to serve. See `enabled_names`.
 pub fn enabled(
     cfg: &DevicesCfg,
     test: bool,
-    ceiling: Option<&[String]>,
+    grants_ctx: &GrantCtx,
     ctx: &DeviceCtx,
 ) -> Vec<Arc<dyn Device>> {
-    let names = enabled_names(cfg, test, ceiling);
-    names
-        .iter()
-        .filter_map(|n| match cfg.user.iter().find(|u| u.name == *n) {
-            Some(u) => Some(u.build(ctx, true)),
-            None => builtin(n, ctx),
+    grants(cfg, test, grants_ctx)
+        .into_iter()
+        .filter_map(|(n, hit)| match cfg.user.iter().find(|u| u.name == n) {
+            Some(u) => Some(u.build(ctx, Ok(hit))),
+            None => builtin(&n, ctx),
         })
         .collect()
 }
 
 /// The files of user devices that this sandbox does not get: they answer
-/// with a disabled status.
+/// with a disabled status that names what to turn on or grant.
 pub fn disabled(
     cfg: &DevicesCfg,
     served: &[Arc<dyn Device>],
+    grants_ctx: &GrantCtx,
     ctx: &DeviceCtx,
 ) -> Vec<Arc<dyn Device>> {
     cfg.user
         .iter()
         .filter(|u| !served.iter().any(|d| d.name() == u.name))
-        .map(|u| u.build(ctx, false))
+        .map(|u| {
+            let why = grant::status(u, grants_ctx)
+                .err()
+                .unwrap_or(grant::Why::Off);
+            u.build(ctx, Err(why))
+        })
         .collect()
 }
 
 /// The devices that a sandbox gets at its start, by name, for the ceiling
 /// of its children. A configuration error gives none, the same as `start`.
-pub fn names_for(env: &HostEnv, test: bool, ceiling: Option<&[String]>) -> Vec<String> {
+pub fn names_for(env: &HostEnv, test: bool, ctx: &GrantCtx) -> Vec<String> {
     match DevicesCfg::load(env) {
-        Ok(c) => enabled_names(&c, test, ceiling),
+        Ok(c) => enabled_names(&c, test, ctx),
         Err(_) => Vec::new(),
     }
 }
 
-/// The devices of one sandbox. Dropping it unmounts them.
-pub struct Devices {
-    pub dir: PathBuf,
-    mounted: Arc<Mutex<Option<Mounted>>>,
-    late: Option<(DeviceFs, String)>,
-    stop: Arc<AtomicBool>,
-    waiter: Option<std::thread::JoinHandle<()>>,
-}
-
-impl Devices {
-    /// For container backends: wait until the container `paddock-<id>`
-    /// runs, then mount. The container waits a few seconds for the
-    /// catalog before the harness starts.
-    pub fn after_start(&mut self, env: &HostEnv, backend: &str, id: &str) {
-        let Some((fs, _)) = self.late.take() else {
-            return;
-        };
-        let Some(cli) = env.which(backend) else {
-            return;
-        };
-        let (dir, mounted, stop) = (self.dir.clone(), self.mounted.clone(), self.stop.clone());
-        let name = format!("paddock-{id}");
-        self.waiter = Some(std::thread::spawn(move || {
-            let start = Instant::now();
-            while !stop.load(Ordering::SeqCst) && start.elapsed() < Duration::from_secs(120) {
-                let running = std::process::Command::new(&cli)
-                    .args(["inspect", "-f", "{{.State.Running}}", &name])
-                    .stdin(std::process::Stdio::null())
-                    .stderr(std::process::Stdio::null())
-                    .output()
-                    .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).trim() == "true");
-                if running {
-                    match mount(&dir, fs) {
-                        Ok(m) => *mounted.lock().unwrap() = Some(m),
-                        Err(e) => log::warn!("cannot mount the devices: {e:#}"),
-                    }
-                    return;
-                }
-                std::thread::sleep(Duration::from_millis(100));
-            }
-        }));
+/// `--device NAME` of `paddock run`: the name must be a user device that
+/// is on. The error names the fix.
+pub fn check_requested(env: &HostEnv, names: &[String]) -> Result<()> {
+    if names.is_empty() {
+        return Ok(());
     }
-}
-
-impl Drop for Devices {
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::SeqCst);
-        if let Some(w) = self.waiter.take() {
-            let _ = w.join();
+    let cfg = DevicesCfg::load(env)?;
+    let file = env.paddock_config().join("config.toml");
+    for n in names {
+        if BUILTIN.contains(&n.as_str()) {
+            bail!(
+                "--device {n}: {n} is a built-in device; the user turns it on with [devices] {n} = true in {}",
+                file.display()
+            );
         }
-        if let Some(m) = self.mounted.lock().unwrap().take() {
-            m.unmount();
-        }
-        let _ = std::fs::remove_dir(&self.dir);
-        stale::release(&self.dir);
-    }
-}
-
-/// At sandbox start: mount the devices of this sandbox in its run folder and
-/// record the folder in the spec, for the backend. Container backends get
-/// the empty folder now and the mount after the start (`after_start`). A
-/// problem is a notice, not an error: the sandbox starts without devices.
-/// `ceiling` holds the devices of the parent, for a spawned sandbox, and
-/// `started_by` the sandboxes above it. `secrets` holds the secret files.
-#[allow(clippy::too_many_arguments)]
-pub fn start(
-    env: &HostEnv,
-    spec: &mut SandboxSpec,
-    backend: &str,
-    test: bool,
-    ceiling: Option<&[String]>,
-    started_by: &[String],
-    gateway: Option<crate::gateway::Handler>,
-    secrets: Arc<SecretFiles>,
-    horse_setup: Option<crate::horse::device::Access>,
-) -> Option<Devices> {
-    let cfg = match DevicesCfg::load(env) {
-        Ok(c) => c,
-        Err(e) => {
-            spec.notices.push(format!("devices are off: {e:#}"));
-            return None;
-        }
-    };
-    // A run in horse mode needs the mount for /dev/paddock/horse: each
-    // reason that it is off is a notice.
-    let horse = horse_setup.is_some();
-    if !cfg.mount {
-        if horse {
-            spec.notices
-                .push(format!("{HORSE_OFF}: [devices] mount is false"));
-        }
-        return None;
-    }
-    let ctx = DeviceCtx {
-        env: env.clone(),
-        sandbox: spec.id.clone(),
-        harness: spec.harness.clone(),
-        project: spec.project.clone(),
-        started_by: started_by.to_vec(),
-        approver: Arc::new(crate::broker::HostApprover),
-    };
-    let mut devices = enabled(&cfg, test, ceiling, &ctx);
-    // Without an enabled device the mount is only a catalog, so a missing
-    // FUSE is not worth a notice at each start. The gateway and the files
-    // of off devices do not count: without the mount, paddock-host uses
-    // the host socket.
-    let quiet = devices.is_empty() && !horse;
-    // The mailbox carries no capability.
-    devices.extend(crate::mail::device::devices(env, &spec.id));
-    let off = disabled(&cfg, &devices, &ctx);
-    devices.extend(off);
-    if let Some(h) = gateway {
-        devices.push(Arc::new(crate::gateway::GwDevice::new(&spec.id, h)));
-    }
-    let tell = |spec: &mut SandboxSpec, why: String| {
-        if quiet {
-            log::debug!("no /dev/paddock: {why}");
-        } else if horse {
-            spec.notices.push(format!("{HORSE_OFF}: {why}"));
-        } else {
-            spec.notices
-                .push(format!("devices are off in this sandbox: {why}"));
-        }
-    };
-    if let Err(why) = fuse_available(env) {
-        tell(spec, why);
-        return None;
-    }
-    clear_stale(env);
-    if let Err(why) = backend_support(env, backend) {
-        tell(spec, why);
-        return None;
-    }
-    let dir = mount_dir(env, backend, &spec.id);
-    // Before the mount: a sibling that starts now keeps its hands off it.
-    if let Err(e) = stale::claim(&dir) {
-        tell(spec, format!("cannot mark {}: {e}", dir.display()));
-        return None;
-    }
-    let fs = DeviceFs::with_secrets(&spec.id, devices, secrets).with_horse(horse_setup, ctx);
-    let mut out = Devices {
-        dir: dir.clone(),
-        mounted: Arc::new(Mutex::new(None)),
-        late: None,
-        stop: Arc::new(AtomicBool::new(false)),
-        waiter: None,
-    };
-    if late(backend) {
-        if let Err(e) = crate::privfs::dir(&dir) {
-            tell(spec, format!("cannot create {}: {e}", dir.display()));
-            return None;
-        }
-        out.late = Some((fs, backend.to_string()));
-    } else {
-        match mount(&dir, fs) {
-            Ok(m) => *out.mounted.lock().unwrap() = Some(m),
-            Err(e) => {
-                tell(spec, format!("{e:#}"));
-                return None;
-            }
+        match cfg.user.iter().find(|u| u.name == *n) {
+            None => bail!(
+                "--device {n}: there is no [devices.{n}] table in {}. `paddock device ls` lists the devices",
+                file.display()
+            ),
+            Some(u) if !u.enabled => bail!(
+                "--device {n}: [devices.{n}] is off; set enabled = true in {}",
+                file.display()
+            ),
+            Some(_) => {}
         }
     }
-    spec.devices = Some(dir);
-    Some(out)
-}
-
-/// For `paddock doctor`: one line per backend.
-pub fn report(env: &HostEnv) -> BTreeMap<&'static str, Result<(), String>> {
-    let mut out = BTreeMap::new();
-    let fuse = fuse_available(env).map(|_| ());
-    for b in ["bwrap", "podman", "docker", "srt"] {
-        out.insert(b, fuse.clone().and_then(|_| backend_support(env, b)));
-    }
-    out
-}
-
-/// The lines of `paddock doctor` about devices.
-pub fn doctor_lines(env: &HostEnv) -> Vec<String> {
-    let mut v = Vec::new();
-    match fuse_available(env) {
-        Ok(helper) => v.push(format!(
-            "  ok       FUSE: {} and /dev/fuse",
-            helper.display()
-        )),
-        Err(e) => v.push(format!(
-            "  no       FUSE: {e}. Sandboxes start without /dev/paddock"
-        )),
-    }
-    for (b, r) in report(env) {
-        match r {
-            Ok(()) if b == "srt" => v.push(format!(
-                "  ok       devices on {b}: at the path in $PADDOCK_DEVICES, not /dev/paddock"
-            )),
-            Ok(()) if late(b) => v.push(format!(
-                "  ok       devices on {b}: /dev/paddock, mounted after the container starts"
-            )),
-            Ok(()) => v.push(format!("  ok       devices on {b}: /dev/paddock")),
-            Err(e) => v.push(format!("  no       devices on {b}: {e}")),
-        }
-    }
-    match DevicesCfg::load(env) {
-        Ok(c) if !c.mount => v.push("  off      /dev/paddock: [devices] mount = false".into()),
-        Ok(c) if c.enabled.is_empty() => v.push(
-            "  off      no device is on; turn one on with [devices] NAME = true in the user configuration".into(),
-        ),
-        Ok(c) => v.push(format!("  on       devices: {}", c.enabled.join(", "))),
-        Err(e) => v.push(format!("  error    {e:#}")),
-    }
-    v
+    Ok(())
 }
 
 #[cfg(all(test, target_os = "linux"))]
@@ -744,4 +698,4 @@ mod horse_ctl_tests;
 #[cfg(all(test, target_os = "linux"))]
 mod horse_run_tests;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

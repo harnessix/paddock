@@ -39,7 +39,7 @@ pub(crate) enum MailCmd {
     /// Print the agent's messages and paddock's events of a run, one line
     /// each, as they come. It ends after the end of the run (exit 0). Each
     /// line is printed once per reader: a new watch goes on where the last
-    /// one stopped.
+    /// one stopped. An incomplete end with an unknown outcome exits 2.
     Watch {
         /// A sandbox id or its short form. Or --mine.
         #[arg(required_unless_present = "mine", conflicts_with = "mine")]
@@ -239,6 +239,15 @@ impl Watch {
         self.end.is_some_and(|e| Instant::now() >= e)
     }
 
+    fn uncertain(id: &str, state: &mail::EndState) {
+        let text = if matches!(state, mail::EndState::Conflict) {
+            "conflicting end evidence"
+        } else {
+            "incomplete end event"
+        };
+        eprintln!("paddock: {id} has {text}; outcome unknown");
+    }
+
     /// One run, until its end event.
     fn one(&self, env: &HostEnv, id: &str) -> Result<i32> {
         let mut after = self.after(env, id);
@@ -250,7 +259,21 @@ impl Watch {
             }
             let wait_end =
                 (Instant::now() + GONE_EVERY).min(self.end.unwrap_or(Instant::now() + GONE_EVERY));
+            let mut pending_end = false;
             for m in mail::wait(env, id, Dir::Up, after, wait_end, &|| false).unwrap_or_default() {
+                if m.is_end() {
+                    match mail::inspect_end(env, id) {
+                        mail::EndState::Complete(e) if *e == m => {}
+                        mail::EndState::Pending => {
+                            pending_end = true;
+                            break;
+                        }
+                        state => {
+                            Self::uncertain(id, &state);
+                            return Ok(2);
+                        }
+                    }
+                }
                 if !self.emit(env, id, &m) {
                     return Ok(0);
                 }
@@ -259,12 +282,22 @@ impl Watch {
                     return Ok(0);
                 }
             }
-            if mail::end(env, id).is_some_and(|e| e.seq <= after) {
-                eprintln!("paddock: {id} ended; its mailbox has nothing new");
-                return Ok(0);
+            match mail::inspect_end(env, id) {
+                mail::EndState::Complete(e) if e.seq <= after => {
+                    eprintln!("paddock: {id} ended; its mailbox has nothing new");
+                    return Ok(0);
+                }
+                state @ (mail::EndState::Incomplete | mail::EndState::Conflict) => {
+                    Self::uncertain(id, &state);
+                    return Ok(2);
+                }
+                _ => {}
             }
             if self.timed_out() {
                 return Ok(EXIT_TIMEOUT);
+            }
+            if pending_end {
+                std::thread::sleep(Duration::from_millis(100));
             }
         }
     }
@@ -273,6 +306,7 @@ impl Watch {
     fn mine(&self, env: &HostEnv) -> Result<i32> {
         let me = mail::caller_key();
         let mut places: std::collections::BTreeMap<String, u64> = Default::default();
+        let mut reported = std::collections::BTreeSet::new();
         loop {
             for id in mail::list(env) {
                 let ours =
@@ -283,15 +317,36 @@ impl Watch {
                 let after = *places
                     .entry(id.clone())
                     .or_insert_with(|| self.after(env, &id));
-                if mail::end(env, &id).is_some_and(|e| e.seq <= after) {
+                if matches!(mail::inspect_end(env, &id), mail::EndState::Complete(e) if e.seq <= after)
+                {
                     continue;
                 }
                 events::check_gone(env, &id);
                 for m in mail::read_after(env, &id, Dir::Up, after) {
+                    if m.is_end() {
+                        match mail::inspect_end(env, &id) {
+                            mail::EndState::Complete(e) if *e == m => {}
+                            mail::EndState::Pending => break,
+                            state => {
+                                if reported.insert(id.clone()) {
+                                    Self::uncertain(&id, &state);
+                                }
+                                break;
+                            }
+                        }
+                    }
                     if !self.emit(env, &id, &m) {
                         return Ok(0);
                     }
                     places.insert(id.clone(), m.seq);
+                }
+                let state = mail::inspect_end(env, &id);
+                if matches!(
+                    &state,
+                    mail::EndState::Incomplete | mail::EndState::Conflict
+                ) && reported.insert(id.clone())
+                {
+                    Self::uncertain(&id, &state);
                 }
             }
             if self.timed_out() {
@@ -305,14 +360,15 @@ impl Watch {
 /// The state of a run, for `ls`.
 fn state(env: &HostEnv, id: &str) -> String {
     events::check_gone(env, id);
-    match mail::end(env, id) {
-        Some(e) if e.event.as_deref() == Some("gone") => "gone".into(),
-        Some(e) => match e.code {
+    match mail::inspect_end(env, id) {
+        mail::EndState::Complete(e) if e.event.as_deref() == Some("gone") => "gone".into(),
+        mail::EndState::Complete(e) => match e.code {
             Some(c) => format!("ended ({c})"),
             None => "ended".into(),
         },
-        None if mail::run_info(env, id).is_some() => "running".into(),
-        None => "starting".into(),
+        mail::EndState::Incomplete | mail::EndState::Conflict => "unknown".into(),
+        _ if mail::run_info(env, id).is_some() => "running".into(),
+        _ => "starting".into(),
     }
 }
 

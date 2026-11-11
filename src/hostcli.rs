@@ -5,6 +5,7 @@
 use crate::broker::{Request, Response, Status, PROTOCOL};
 use std::collections::BTreeMap;
 
+pub mod borrow;
 pub mod compacted;
 pub(crate) mod credential;
 pub mod device;
@@ -213,24 +214,7 @@ Protected paths (~/.ssh, ~/.gnupg, cloud credentials, browser profiles and the
 other paths that paddock never mounts) are refused even if the user would
 allow them."#
         }
-        "borrow" | "return" => {
-            r#"paddock-host borrow and return: change a host folder outside the project.
-
-  paddock-host borrow HOST_FOLDER   copy the folder to /run/paddock/borrow/NAME
-  paddock-host return NAME          write the changes of the copy back
-
-HOST_FOLDER must be absolute, and its last part is no symlink. borrow prints
-the path of the copy. Change the copy as you like. The original does not
-change. return shows the user every added, changed and deleted file, and
-writes them back on approval. It refuses when the original changed after the
-borrow: borrow it again and redo the changes. A return never writes git
-config, hooks or pointer files, gives new files no execute bit, and refuses
-symlinks that point outside the folder. After a return the copy is gone.
-Copies that are not returned are deleted when the sandbox ends.
-Protected paths (~/.ssh, cloud credentials, browser profiles and the others
-that fetch refuses) and folders that hold one are refused. Without reflinks
-the limit is [borrow] max of the user configuration (default 1G)."#
-        }
+        "borrow" | "return" => borrow::HELP,
         "clipboard-read" | "clipboard" => {
             r#"paddock-host clipboard: read or set the host clipboard.
 
@@ -810,6 +794,7 @@ fn print_human(req: &Request, resp: &Response) {
             _ => print_child(r),
         },
         "done" => println!("paddock-host: done {}", r["message"].as_str().unwrap_or("")),
+        "borrow" => println!("{}", borrow::copy_path(r).display()),
         _ => {
             if let Some(p) = r["path"].as_str() {
                 println!("{p}");

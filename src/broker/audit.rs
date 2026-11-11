@@ -183,12 +183,14 @@ pub(in crate::broker) fn boundary_rule(decision: &str, resp: &Response) -> Optio
     Some(format!("{decision}: {msg}"))
 }
 
-/// Append one line to the audit log.
+/// Append one line to the audit log. One `write` per line, so lines of
+/// concurrent requests never interleave.
 pub fn audit_line(env: &HostEnv, line: &serde_json::Value) {
     let f = audit_file(env);
     match crate::privfs::append(&f) {
         Ok(mut file) => {
-            if let Err(e) = writeln!(file, "{line}") {
+            let text = format!("{line}\n");
+            if let Err(e) = file.write_all(text.as_bytes()) {
                 log::warn!("cannot write the audit log {}: {e}", f.display());
             }
         }

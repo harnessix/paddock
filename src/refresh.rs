@@ -106,7 +106,10 @@ pub fn spawn_if_changed(env: &HostEnv) {
             Ok(())
         });
     }
-    let _ = cmd.spawn();
+    // The parent may run for a whole session: never leave a zombie.
+    if let Ok(child) = cmd.spawn() {
+        crate::reap::in_background(child);
+    }
 }
 
 /// Lines for `paddock doctor`: harnesses that the menu or the shims miss.

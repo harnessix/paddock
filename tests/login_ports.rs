@@ -31,6 +31,16 @@ fn start(cfg: &std::path::Path, ws: &std::path::Path, login_ports: bool, port: u
         format!("[apps.porttest]\nlogin_ports = {login_ports}\n"),
     )
     .unwrap();
+    let root = cfg.parent().unwrap();
+    let runtime = root.join("run");
+    std::fs::create_dir_all(&runtime).unwrap();
+    std::fs::create_dir_all(root.join("home")).unwrap();
+    let display = std::path::PathBuf::from(std::env::var_os("WAYLAND_DISPLAY").unwrap());
+    let display = if display.is_absolute() {
+        display
+    } else {
+        std::path::PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR").unwrap()).join(display)
+    };
     Command::new(env!("CARGO_BIN_EXE_paddock"))
         .args([
             "app",
@@ -43,8 +53,11 @@ fn start(cfg: &std::path::Path, ws: &std::path::Path, login_ports: bool, port: u
         ])
         .arg(ws)
         .env("XDG_CONFIG_HOME", cfg)
-        // Never the user's own folders. The runtime folder stays: the app
-        // needs the Wayland session.
+        // Use the real compositor socket by absolute path, while paddock's
+        // runtime, home and storage remain in the test folder.
+        .env("WAYLAND_DISPLAY", display)
+        .env("HOME", root.join("home"))
+        .env("XDG_RUNTIME_DIR", runtime)
         .env("XDG_DATA_HOME", cfg.join("../data"))
         .env("XDG_STATE_HOME", cfg.join("../state"))
         .env("XDG_CACHE_HOME", cfg.join("../cache"))

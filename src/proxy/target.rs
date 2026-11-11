@@ -14,7 +14,7 @@ pub(super) fn resolve_target(host: &str, port: u16) -> std::io::Result<Vec<Socke
 
 /// The host and port of a CONNECT target `host:port`. The port must be
 /// written out; `Url::port` alone hides port 80 as the default of http.
-pub(super) fn connect_target(target: &str) -> Option<(String, u16)> {
+pub(crate) fn connect_target(target: &str) -> Option<(String, u16)> {
     let (_, port) = target.rsplit_once(':')?;
     port.parse::<u16>().ok()?;
     let parsed = url::Url::parse(&format!("http://{target}")).ok()?;
@@ -39,6 +39,7 @@ pub(super) fn check_resolved(
     port: u16,
     resolved: &[std::net::SocketAddr],
     local: &[IpAddr],
+    id: Option<&super::Identity>,
 ) -> anyhow::Result<()> {
     for a in resolved {
         let ip = super::canonical(a.ip());
@@ -47,11 +48,16 @@ pub(super) fn check_resolved(
             #[cfg(not(test))]
             let allowed = allowed && registry_loopback_allowed(cfg, host, port);
             if !allowed {
-                cfg.refused(host, port, "host loopback port not in [network] host_ports");
+                cfg.refused(
+                    host,
+                    port,
+                    "host loopback port not in [network] host_ports",
+                    id,
+                );
                 anyhow::bail!("refused: {host}:{port} is a host loopback port that is not allowed");
             }
         } else if ip.is_unspecified() || local.contains(&ip) {
-            cfg.refused(host, port, "an address of this host");
+            cfg.refused(host, port, "an address of this host", id);
             anyhow::bail!("refused: {host}:{port} is an address of this host");
         } else if (!cfg.allow_lan || cfg.registry_http.is_some())
             && super::is_lan(&ip)
@@ -60,7 +66,7 @@ pub(super) fn check_resolved(
                 .as_ref()
                 .is_some_and(|p| p.check(host, port).is_ok())
         {
-            cfg.refused(host, port, "private network ([network] lan = false)");
+            cfg.refused(host, port, "private network ([network] lan = false)", id);
             anyhow::bail!("refused: {host}:{port} is on a private network; set [network] lan = true to allow it");
         }
     }

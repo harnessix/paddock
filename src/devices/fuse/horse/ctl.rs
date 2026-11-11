@@ -48,6 +48,7 @@ impl Host for FuseHost<'_> {
             session_allowed: false,
             started_by: ctx.started_by.clone(),
             choices: Vec::new(),
+            connect: None,
         };
         let verdict = ctx
             .approver

@@ -260,7 +260,7 @@ impl Backend for Srt {
 
     fn check(&self, env: &HostEnv, spec: &SandboxSpec) -> Result<()> {
         if spec.shadow.is_some() {
-            bail!("--profile default runs only on the bwrap backend: it needs an overlay at the sandbox home");
+            bail!("--profile default runs only on the bwrap backend on Linux and the Seatbelt backend on macOS: it needs a private snapshot at the sandbox home");
         }
         let Some(exe) = srt_exe(env) else {
             bail!("srt is not installed. Install it with: mise use -g npm:@anthropic-ai/sandbox-runtime")

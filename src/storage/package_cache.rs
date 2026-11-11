@@ -254,7 +254,7 @@ impl Drop for RunCache {
 
 /// Isolate tests that reacquire a lease from forks in other test threads.
 #[cfg(test)]
-pub(super) fn isolated_test(name: &str) -> bool {
+pub(crate) fn isolated_test(name: &str) -> bool {
     const CHILD: &str = "PADDOCK_TEST_CACHE_ISOLATED";
     if std::env::var(CHILD).ok().as_deref() == Some(name) {
         return false;

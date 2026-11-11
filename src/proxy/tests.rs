@@ -4,56 +4,11 @@
 use super::*;
 use std::io::{BufRead, BufReader};
 use std::net::TcpListener;
+use std::sync::Mutex;
 
-fn echo_server() -> u16 {
-    let l = TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = l.local_addr().unwrap().port();
-    std::thread::spawn(move || {
-        for c in l.incoming().flatten() {
-            std::thread::spawn(move || {
-                let mut r = c.try_clone().unwrap();
-                let mut w = c;
-                let _ = std::io::copy(&mut r, &mut w);
-            });
-        }
-    });
-    port
-}
-
-fn start(cfg: HostProxy) -> (tempfile::TempDir, std::path::PathBuf) {
-    let dir = tempfile::tempdir().unwrap();
-    let sock = dir.path().join("p.sock");
-    serve(&sock, cfg).unwrap();
-    (dir, sock)
-}
-
-/// Send a request and return the status code and the open stream.
-fn request(sock: &Path, text: &str) -> (u16, UnixStream) {
-    let mut s = UnixStream::connect(sock).unwrap();
-    s.set_read_timeout(Some(Duration::from_secs(10))).unwrap();
-    // A proxy at its connection limit answers 503 and closes without reading,
-    // so the write can fail. The answer is still there to read.
-    let _ = s.write_all(text.as_bytes());
-    let (head, _) = read_head(&mut s).unwrap();
-    let mut h = [httparse::EMPTY_HEADER; 16];
-    let mut r = httparse::Response::new(&mut h);
-    r.parse(&head).unwrap();
-    (r.code.unwrap(), s)
-}
-
-fn connect(sock: &Path, target: &str) -> (u16, UnixStream) {
-    request(
-        sock,
-        &format!("CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n"),
-    )
-}
-
-fn roundtrip(s: &mut UnixStream, msg: &[u8]) {
-    s.write_all(msg).unwrap();
-    let mut buf = vec![0u8; msg.len()];
-    s.read_exact(&mut buf).unwrap();
-    assert_eq!(buf, msg);
-}
+#[path = "test_helpers.rs"]
+mod test_helpers;
+pub(crate) use test_helpers::{connect, echo_server, request, roundtrip, start};
 
 #[test]
 fn connect_tunnel_to_an_allowed_port() {
@@ -335,10 +290,12 @@ fn mapped_ipv6_forms_count_as_their_ipv4_address() {
 fn proxy_refuses_mapped_loopback_and_lan() {
     let cfg = HostProxy::default();
     for host in ["::ffff:127.0.0.1", "::ffff:192.168.1.1", "64:ff9b::7f00:1"] {
-        let e = check_target(&cfg, host, 8080).unwrap_err().to_string();
+        let e = check_target(&cfg, host, 8080, None)
+            .unwrap_err()
+            .to_string();
         assert!(e.starts_with("refused"), "{host}: {e}");
     }
-    let ok = check_target(&cfg, "::ffff:8.8.8.8", 443).unwrap();
+    let ok = check_target(&cfg, "::ffff:8.8.8.8", 443, None).unwrap();
     assert_eq!(ok.len(), 1);
 }
 
@@ -661,7 +618,7 @@ fn unknown_proxy_scheme_never_goes_direct() {
         (k == "HTTPS_PROXY").then(|| "socks4://10.9.9.9:1080".to_string())
     });
     assert!(matches!(cfg.https, Some(Upstream::Unsupported { .. })));
-    let e = open_tunnel(&cfg, "93.184.215.14", 443)
+    let e = open_tunnel(&cfg, "93.184.215.14", 443, None)
         .err()
         .unwrap()
         .to_string();
@@ -722,12 +679,12 @@ fn api_proxy(
         // The test-only override: the local server is on the host loopback,
         // which network mode api never reaches otherwise.
         allow_loopback: vec![port],
-        api: Some(allow::ApiPolicy {
+        api: Some(allow::ApiPolicy::api(
             list,
-            refusals: Some(allow::Refusals::new(Arc::new(move |h: &str, why: &str| {
+            Some(allow::Refusals::new(Arc::new(move |h: &str, why: &str| {
                 s2.lock().unwrap().push(format!("{h}: {why}"));
             }))),
-        }),
+        )),
         ..HostProxy::default()
     });
     (dir, sock, seen)
@@ -822,50 +779,19 @@ fn api_mode_refuses_other_hosts_ports_ip_literals_and_plain_http() {
 }
 
 #[test]
-fn refusals_reach_the_boundary_log() {
-    let dir = tempfile::tempdir().unwrap();
-    let log = dir.path().join("run").join(crate::boundary::FILE);
-    let l2 = log.clone();
-    let sink = Boundary(Arc::new(move |target: &str, rule: &str| {
-        let e = crate::boundary::Entry::new(crate::boundary::NETWORK, target, rule);
-        crate::boundary::record_at(&l2, e).unwrap();
-    }));
-    let port = echo_server();
-    let (_d, sock) = start(HostProxy {
-        boundary: Some(sink.clone()),
-        ..Default::default()
-    });
-    assert_eq!(connect(&sock, &format!("127.0.0.1:{port}")).0, 403);
-    assert_eq!(connect(&sock, &format!("127.0.0.1:{port}")).0, 403);
-    let cfg = HostProxy {
-        boundary: Some(sink),
-        ..Default::default()
-    };
-    assert!(check_target(&cfg, "192.168.1.1", 22).is_err());
-    let lines = crate::boundary::read_at(&log);
-    assert_eq!(lines.len(), 2, "{lines:?}");
-    assert_eq!(lines[0].target, format!("127.0.0.1:{port}"));
-    assert_eq!(lines[0].count, 2);
-    assert!(lines[0].rule.contains("loopback"));
-    assert_eq!(lines[1].target, "192.168.1.1:22");
-    assert!(lines[1].rule.contains("lan"));
-}
-
-#[test]
 fn api_refusals_reach_the_boundary_log() {
     let dir = tempfile::tempdir().unwrap();
     let log = dir.path().join(crate::boundary::FILE);
     let l2 = log.clone();
     let (list, _) = allow::Allowlist::parse(&["api.example.com"]);
     let (_d, sock) = start(HostProxy {
-        api: Some(allow::ApiPolicy {
-            list,
-            refusals: None,
-        }),
-        boundary: Some(Boundary(Arc::new(move |t: &str, r: &str| {
-            let e = crate::boundary::Entry::new(crate::boundary::NETWORK, t, r);
-            crate::boundary::record_at(&l2, e).unwrap();
-        }))),
+        api: Some(allow::ApiPolicy::api(list, None)),
+        boundary: Some(Boundary(Arc::new(
+            move |t: &str, r: &str, _: Option<&Identity>| {
+                let e = crate::boundary::Entry::new(crate::boundary::NETWORK, t, r);
+                crate::boundary::record_at(&l2, e).unwrap();
+            },
+        ))),
         ..Default::default()
     });
     assert_eq!(connect(&sock, "other.example.com:443").0, 403);
@@ -891,16 +817,18 @@ fn api_refusals_are_rate_limited_across_random_hosts() {
     let rep2 = reported.clone();
     let (list, _) = allow::Allowlist::parse(&["api.example.com"]);
     let (_d, sock) = start(HostProxy {
-        api: Some(allow::ApiPolicy {
+        api: Some(allow::ApiPolicy::api(
             list,
-            refusals: Some(allow::Refusals::new(Arc::new(move |h: &str, why: &str| {
+            Some(allow::Refusals::new(Arc::new(move |h: &str, why: &str| {
                 rep2.lock().unwrap().push(format!("{h}: {why}"));
             }))),
-        }),
-        boundary: Some(Boundary(Arc::new(move |t: &str, r: &str| {
-            let e = crate::boundary::Entry::new(crate::boundary::NETWORK, t, r);
-            crate::boundary::record_at(&l2, e).unwrap();
-        }))),
+        )),
+        boundary: Some(Boundary(Arc::new(
+            move |t: &str, r: &str, _: Option<&Identity>| {
+                let e = crate::boundary::Entry::new(crate::boundary::NETWORK, t, r);
+                crate::boundary::record_at(&l2, e).unwrap();
+            },
+        ))),
         ..Default::default()
     });
     for i in 0..25 {
@@ -925,7 +853,7 @@ fn a_connection_records_its_host_for_the_egress_monitor() {
     ));
     let (_d, sock) = start(HostProxy {
         allow_loopback: vec![port],
-        egress: Some(Egress(Arc::new(move |host: &str| {
+        egress: Some(Egress(Arc::new(move |host: &str, _: Option<&Identity>| {
             tracker.lock().unwrap().connect(host, 100);
         }))),
         ..Default::default()

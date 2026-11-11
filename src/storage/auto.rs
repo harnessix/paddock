@@ -157,7 +157,19 @@ impl Containers for NoContainers {
 }
 
 /// An flock that is free, or None while another process holds it.
-fn try_lock(path: &Path) -> Option<std::fs::File> {
+/// The lock of a pass. It unlocks before the file closes: a child that
+/// another thread forks holds the open file until it execs, so the close
+/// alone kept the lock for that moment.
+pub(crate) struct PassLock(std::fs::File);
+
+impl Drop for PassLock {
+    fn drop(&mut self) {
+        // SAFETY: flock on a file descriptor that this lock owns.
+        unsafe { libc::flock(self.0.as_raw_fd(), libc::LOCK_UN) };
+    }
+}
+
+fn try_lock(path: &Path) -> Option<PassLock> {
     crate::privfs::dir(path.parent()?).ok()?;
     let f = std::fs::OpenOptions::new()
         .create(true)
@@ -166,7 +178,8 @@ fn try_lock(path: &Path) -> Option<std::fs::File> {
         .open(path)
         .ok()?;
     // SAFETY: flock on a file descriptor that this function owns.
-    (unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0).then_some(f)
+    (unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0)
+        .then_some(PassLock(f))
 }
 
 /// Run the pass. `force` ignores the rate limit (the hard floor, and

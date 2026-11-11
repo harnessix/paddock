@@ -420,10 +420,7 @@ pub fn start_proxy(env: &HostEnv, sock: &Path) -> Result<()> {
         eprintln!("paddock: the usage box refused a connection to {host} ({why})");
     }));
     let mut cfg = crate::proxy::HostProxy::from_vars(|k| env.var(k).map(str::to_string));
-    cfg.api = Some(ApiPolicy {
-        list,
-        refusals: Some(refusals),
-    });
+    cfg.api = Some(ApiPolicy::api(list, Some(refusals)));
     crate::proxy::serve(sock, cfg)
 }
 

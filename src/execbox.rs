@@ -18,7 +18,11 @@
 //!
 //! With a systemd user instance, the command runs in a transient unit
 //! (`systemd-run --user`) with these properties. Without one, bwrap gives
-//! the same view. A project `paddock.toml` cannot set `[exec]`.
+//! the same view. On macOS, `sandbox-exec` runs it with a Seatbelt profile
+//! of the same view (execbox/seatbelt.rs). A project `paddock.toml` cannot
+//! set `[exec]`.
+
+pub mod seatbelt;
 
 use crate::env::HostEnv;
 use anyhow::{bail, Context as _, Result};
@@ -41,7 +45,8 @@ pub const BASE_ENV: &[&str] = &[
     "LOGNAME",
 ];
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
 pub enum Home {
     Hidden,
     ReadOnly,
@@ -64,6 +69,10 @@ pub struct ExecCfg {
     /// where `systemd-run --user` would start a command outside every
     /// limit. Not part of `[exec]`.
     pub hide: Vec<PathBuf>,
+    /// macOS: the command reaches the login keychain of the user through
+    /// securityd, for gh and git credential helpers (`git-push`, `forge`).
+    /// Not part of `[exec]`.
+    pub keychain: bool,
 }
 
 /// The user's runtime folders on this host: `/run/user` and
@@ -89,6 +98,7 @@ impl Default for ExecCfg {
             env: Vec::new(),
             remember_allowed: false,
             hide: session_dirs(),
+            keychain: false,
         }
     }
 }
@@ -186,11 +196,28 @@ pub enum Isolation {
     Systemd,
     /// bwrap, where there is no systemd user instance.
     Bwrap,
+    /// `sandbox-exec` with a Seatbelt profile, on macOS.
+    Seatbelt,
     /// No isolation: only for the unit tests of the broker.
     None,
 }
 
+/// The program that runs a command under Seatbelt.
+pub const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
+
 /// The isolation that this host can give.
+#[cfg(target_os = "macos")]
+pub fn detect(env: &HostEnv) -> Result<Isolation> {
+    let _ = env;
+    if Path::new(SANDBOX_EXEC).is_file() {
+        Ok(Isolation::Seatbelt)
+    } else {
+        bail!("exec needs {SANDBOX_EXEC} to run a command in isolation")
+    }
+}
+
+/// The isolation that this host can give.
+#[cfg(not(target_os = "macos"))]
 pub fn detect(env: &HostEnv) -> Result<Isolation> {
     let systemd = env.which("systemd-run").is_some()
         && Command::new("systemctl")
@@ -232,6 +259,7 @@ pub fn detect(env: &HostEnv) -> Result<Isolation> {
 /// command without ProtectHome=, PrivateTmp= or TemporaryFileSystem=: it
 /// sees the whole home. The probe hides a folder with a mark in it, and
 /// the unit must not see the mark.
+#[cfg(target_os = "linux")]
 fn systemd_isolates(env: &HostEnv, systemd_run: &Path) -> bool {
     let dir = env
         .paddock_cache()
@@ -251,6 +279,7 @@ fn systemd_isolates(env: &HostEnv, systemd_run: &Path) -> bool {
     ok
 }
 
+#[cfg(target_os = "linux")]
 fn probe_args(dir: &Path, mark: &Path) -> Vec<String> {
     let mut a: Vec<String> = ["--user", "--pipe", "--wait", "--collect", "--quiet", "-p"]
         .map(String::from)
@@ -263,6 +292,7 @@ fn probe_args(dir: &Path, mark: &Path) -> Vec<String> {
 
 /// bwrap can start a sandbox with a user namespace. It cannot inside a
 /// sandbox that allows no nested namespace. paddock probes each bwrap once.
+#[cfg(not(target_os = "macos"))]
 fn bwrap_starts(bwrap: &Path) -> bool {
     static SEEN: std::sync::Mutex<BTreeMap<PathBuf, bool>> = std::sync::Mutex::new(BTreeMap::new());
     let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
@@ -284,25 +314,192 @@ fn bwrap_starts(bwrap: &Path) -> bool {
     })
 }
 
-/// The command that runs `argv` in `project` with `cfg`, isolated.
+/// An isolated command, with the files that paddock made for it (the
+/// Seatbelt profile, the empty home and `TMPDIR`). They are removed when
+/// this is dropped, after the command.
+pub struct Prepared {
+    pub cmd: Command,
+    scratch: Vec<PathBuf>,
+}
+
+impl std::ops::Deref for Prepared {
+    type Target = Command;
+    fn deref(&self) -> &Command {
+        &self.cmd
+    }
+}
+
+impl std::ops::DerefMut for Prepared {
+    fn deref_mut(&mut self) -> &mut Command {
+        &mut self.cmd
+    }
+}
+
+impl Drop for Prepared {
+    fn drop(&mut self) {
+        for p in &self.scratch {
+            remove_scratch(p);
+        }
+    }
+}
+
+/// Remove a file or a folder of a command. `remove_dir_all` does not follow
+/// a link that the command made inside its folder.
+fn remove_scratch(p: &Path) {
+    match std::fs::symlink_metadata(p) {
+        Ok(m) if m.is_dir() => {
+            let _ = std::fs::remove_dir_all(p);
+        }
+        Ok(_) => {
+            let _ = std::fs::remove_file(p);
+        }
+        Err(_) => {}
+    }
+}
+
+/// The command that runs `argv` in `project` with `cfg`, isolated. `run`
+/// is the executor's run folder, where Seatbelt's files of the command go.
 #[allow(clippy::too_many_arguments)]
 pub fn command(
     how: Isolation,
     cfg: &ExecCfg,
+    run: &Path,
     home: &Path,
     project: &Path,
     argv: &[String],
     env: &BTreeMap<String, String>,
     timeout: u64,
     unit: &str,
-) -> Command {
-    command_in(how, cfg, home, project, project, argv, env, timeout, unit)
+) -> Result<Prepared> {
+    command_in(
+        how, cfg, run, home, project, project, argv, env, timeout, unit,
+    )
 }
 
 /// Like `command`, with another working folder than the project: the
 /// project stays writable, and `cwd` must be visible in the view of `cfg`.
 #[allow(clippy::too_many_arguments)]
 pub fn command_in(
+    how: Isolation,
+    cfg: &ExecCfg,
+    run: &Path,
+    home: &Path,
+    project: &Path,
+    cwd: &Path,
+    argv: &[String],
+    env: &BTreeMap<String, String>,
+    timeout: u64,
+    unit: &str,
+) -> Result<Prepared> {
+    let cmd = match how {
+        Isolation::Seatbelt => {
+            return seatbelt_command(cfg, run, home, project, cwd, argv, env, unit)
+        }
+        _ => plain_command(how, cfg, home, project, cwd, argv, env, timeout, unit),
+    };
+    Ok(Prepared {
+        cmd,
+        scratch: Vec::new(),
+    })
+}
+
+/// The shell line that goes to the working folder and runs the command:
+/// `sh -c LINE paddock CWD ARGV...`.
+pub const SEATBELT_SHELL: &str = r#"cd "$1" && shift && exec "$@""#;
+
+/// The Seatbelt command: the profile in `<run>/exec/<unit>.sb` (mode 0600),
+/// the empty home and `TMPDIR` in `<run>/exec/<unit>/`.
+#[allow(clippy::too_many_arguments)]
+fn seatbelt_command(
+    cfg: &ExecCfg,
+    run: &Path,
+    home: &Path,
+    project: &Path,
+    cwd: &Path,
+    argv: &[String],
+    env: &BTreeMap<String, String>,
+    unit: &str,
+) -> Result<Prepared> {
+    use std::os::unix::process::CommandExt;
+    if unit.is_empty() || unit.contains('/') || unit.starts_with('.') {
+        bail!("{unit:?} is not a name for a command's files");
+    }
+    let real = crate::backend::seatbelt::real;
+    let base = run.join("exec");
+    crate::privfs::dir(&base).with_context(|| format!("cannot create {}", base.display()))?;
+    let dir = base.join(unit);
+    let file = base.join(format!("{unit}.sb"));
+    // A stale folder of an executor that was killed.
+    remove_scratch(&dir);
+    remove_scratch(&file);
+    let mut p = Prepared {
+        cmd: Command::new(SANDBOX_EXEC),
+        scratch: vec![dir.clone(), file.clone()],
+    };
+    for d in ["home", "tmp"] {
+        crate::privfs::dir(&dir.join(d))
+            .with_context(|| format!("cannot create {}", dir.join(d).display()))?;
+    }
+    let real_list = |v: &[PathBuf]| v.iter().map(|d| real(d)).collect::<Vec<_>>();
+    let cfg = ExecCfg {
+        paths: real_list(&cfg.paths),
+        ro_paths: real_list(&cfg.ro_paths),
+        hide: real_list(&cfg.hide),
+        ..cfg.clone()
+    };
+    let view = seatbelt::View {
+        home: real(home),
+        project: real(project),
+        empty_home: real(&dir.join("home")),
+        tmp: real(&dir.join("tmp")),
+        user_cache: crate::backend::seatbelt::keychain::user_cache(),
+        sockets: seatbelt::AGENT_SOCKETS
+            .iter()
+            .filter_map(|k| env.get(*k))
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute())
+            .map(|p| real(&p))
+            .collect(),
+    };
+    let profile = crate::seatbelt::render(&seatbelt::policy(&cfg, &view))?;
+    crate::privfs::write(&file, profile)
+        .with_context(|| format!("cannot write {}", file.display()))?;
+    let mut vars = env.clone();
+    vars.insert("HOME".into(), view.home_var(&cfg).display().to_string());
+    vars.insert("TMPDIR".into(), format!("{}/", view.tmp.display()));
+    vars.entry("PATH".into())
+        .or_insert_with(|| "/usr/bin:/bin:/usr/sbin:/sbin".into());
+    // The shell starts in a folder that its profile can read: in the
+    // folder of the executor, `getcwd` fails with EPERM at shell-init and
+    // again at `cd`. PWD names the folder as the caller named it, so that
+    // `pwd` prints /tmp/x and not /private/tmp/x.
+    vars.insert("PWD".into(), cwd.display().to_string());
+    p.cmd
+        .current_dir(start_dir(cwd, &view.tmp))
+        .arg("-f")
+        .arg(&file)
+        .args(["/bin/sh", "-c", SEATBELT_SHELL, "paddock"])
+        .arg(cwd)
+        .args(argv)
+        .env_clear()
+        .envs(vars)
+        // Its own process group, so a timeout stops every process of it.
+        .process_group(0);
+    Ok(p)
+}
+
+/// Where the Seatbelt command starts: the working folder when it is one,
+/// else `fallback` (its own TMPDIR), where `cd` then says what is wrong.
+pub fn start_dir(cwd: &Path, fallback: &Path) -> PathBuf {
+    if cwd.is_dir() {
+        cwd.to_path_buf()
+    } else {
+        fallback.to_path_buf()
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn plain_command(
     how: Isolation,
     cfg: &ExecCfg,
     home: &Path,
@@ -320,6 +517,7 @@ pub fn command_in(
             c.args(&argv[1..]).current_dir(cwd).env_clear().envs(env);
             c
         }
+        Isolation::Seatbelt => unreachable!("command_in builds the Seatbelt command"),
         Isolation::Systemd => {
             let mut c = Command::new("systemd-run");
             c.args(["--user", "--pipe", "--wait", "--collect", "--quiet"])
@@ -439,324 +637,27 @@ fn unit_path(p: &Path) -> String {
 }
 
 /// systemd's own exit codes when a unit cannot start (for example 218 for
-/// capabilities or 226 for a namespace), as text for the agent.
+/// capabilities or 226 for a namespace), and `sandbox-exec`'s exit 65 for a
+/// profile that it cannot apply, as text for the agent.
 pub fn setup_failure(how: Isolation, code: i32, stderr: &str) -> Option<String> {
-    (how == Isolation::Systemd && (200..=245).contains(&code) && stderr.trim().is_empty()).then(
-        || {
-            format!(
-                "the isolated unit could not start (systemd exit code {code}); see journalctl --user"
-            )
-        },
-    )
+    match how {
+        Isolation::Systemd => {
+            ((200..=245).contains(&code) && stderr.trim().is_empty()).then(|| {
+                format!(
+                    "the isolated unit could not start (systemd exit code {code}); see journalctl --user"
+                )
+            })
+        }
+        Isolation::Seatbelt => {
+            let first = stderr.trim_start().lines().next().unwrap_or("");
+            (code == 65 && first.starts_with("sandbox-exec:")).then(|| {
+                format!("the Seatbelt sandbox of the command could not start: {first}")
+            })
+        }
+        _ => None,
+    }
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A host whose PATH holds only `bwrap`, a script with this body.
-    fn fake_bwrap(dir: &Path, body: &str) -> HostEnv {
-        use std::os::unix::fs::PermissionsExt;
-        let bin = dir.join("bin");
-        std::fs::create_dir_all(&bin).unwrap();
-        let f = bin.join("bwrap");
-        std::fs::write(&f, format!("#!/bin/sh\n{body}\n")).unwrap();
-        std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let vars = [("PATH".to_string(), bin.display().to_string())].into();
-        HostEnv::from_parts(dir.join("home"), "demo".into(), 1, 1, vars)
-    }
-
-    #[test]
-    fn a_user_manager_that_ignores_the_mount_settings_does_not_isolate() {
-        let dir = tempfile::tempdir().unwrap();
-        let env = fake_bwrap(dir.path(), "exit 0");
-        let bin = dir.path().join("bin");
-        // Runs the command as it is, like a user manager without a mount
-        // namespace: the command sees the mark.
-        let plain = bin.join("systemd-run-plain");
-        let body = "#!/bin/sh\nwhile [ \"$1\" != -- ]; do shift; done\nshift\nexec \"$@\"\n";
-        std::fs::write(&plain, body).unwrap();
-        // Hides the folder of the TemporaryFileSystem= setting, as a unit
-        // with its mount namespace does.
-        let hides = bin.join("systemd-run-hides");
-        std::fs::write(
-            &hides,
-            "#!/bin/sh\ncase \"$*\" in *TemporaryFileSystem=*) exit 0 ;; esac\nexit 1\n",
-        )
-        .unwrap();
-        for f in [&plain, &hides] {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(f, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
-        assert!(!systemd_isolates(&env, &plain));
-        assert!(systemd_isolates(&env, &hides));
-        // The probe folder does not stay.
-        assert!(!env
-            .paddock_cache()
-            .join(format!("exec-probe-{}", std::process::id()))
-            .exists());
-    }
-
-    #[test]
-    fn a_bwrap_that_cannot_start_gives_no_isolation() {
-        let dir = tempfile::tempdir().unwrap();
-        let e = detect(&fake_bwrap(dir.path(), "exit 1")).unwrap_err();
-        let m = format!("{e:#}");
-        assert!(m.contains("run a command in isolation"), "{m}");
-        assert!(m.contains("cannot start a sandbox"), "{m}");
-        let ok = tempfile::tempdir().unwrap();
-        assert_eq!(
-            detect(&fake_bwrap(ok.path(), "exit 0")).unwrap(),
-            Isolation::Bwrap
-        );
-        // No bwrap at all: the same message, without the probe.
-        let none = HostEnv::from_parts("/nowhere".into(), "demo".into(), 1, 1, Default::default());
-        let m = format!("{:#}", detect(&none).unwrap_err());
-        assert!(
-            m.contains("run a command in isolation") && !m.contains("cannot start"),
-            "{m}"
-        );
-    }
-
-    fn env() -> HostEnv {
-        HostEnv::from_parts("/home/demo".into(), "demo".into(), 1, 1, Default::default())
-    }
-
-    #[test]
-    fn the_default_hides_home_and_keeps_the_network() {
-        assert_eq!(ExecCfg::parse(&env(), "").unwrap(), ExecCfg::default());
-        let c = ExecCfg::parse(
-            &env(),
-            "[exec]\nhome = \"read-only\"\nnetwork = false\npaths = [\"~/src/other\"]\nro_paths = [\"/srv/data\"]\nenv = [\"GOPATH\"]\n",
-        )
-        .unwrap();
-        assert_eq!(c.home, Home::ReadOnly);
-        assert!(!c.network);
-        assert_eq!(c.paths, [PathBuf::from("/home/demo/src/other")]);
-        assert_eq!(c.ro_paths, [PathBuf::from("/srv/data")]);
-        assert_eq!(c.env, ["GOPATH"]);
-        for bad in [
-            "[exec]\nhome = \"open\"\n",
-            "[exec]\npaths = [\"~\"]\n",
-            "[exec]\nro_paths = [\"/\"]\n",
-            "[exec]\nenv = [\"A=B\"]\n",
-            "[exec]\nshell = true\n",
-        ] {
-            assert!(ExecCfg::parse(&env(), bad).is_err(), "{bad}");
-        }
-    }
-
-    #[test]
-    fn only_a_few_host_variables_pass() {
-        let host: BTreeMap<String, String> = [
-            ("PATH", "/usr/bin"),
-            ("GITHUB_TOKEN", "secret"),
-            ("GOPATH", "/go"),
-            ("LANG", "C.UTF-8"),
-        ]
-        .iter()
-        .map(|(k, v)| (k.to_string(), v.to_string()))
-        .collect();
-        let mut c = ExecCfg::default();
-        let got = c.pass_env(&host);
-        assert_eq!(got.keys().collect::<Vec<_>>(), ["LANG", "PATH"]);
-        c.env = vec!["GOPATH".into()];
-        assert!(c.pass_env(&host).contains_key("GOPATH"));
-        assert!(!c.pass_env(&host).contains_key("GITHUB_TOKEN"));
-    }
-
-    #[test]
-    fn the_systemd_unit_has_the_hardening() {
-        let c = command(
-            Isolation::Systemd,
-            &ExecCfg::default(),
-            Path::new("/home/demo"),
-            Path::new("/home/demo/proj"),
-            &["make".into(), "test".into()],
-            &BTreeMap::new(),
-            60,
-            "paddock-exec-x",
-        );
-        let args: Vec<String> = c
-            .get_args()
-            .map(|a| a.to_string_lossy().into_owned())
-            .collect();
-        for want in [
-            "ProtectHome=tmpfs",
-            "ProtectSystem=strict",
-            "NoNewPrivileges=yes",
-            "RestrictNamespaces=yes",
-            "BindPaths=/home/demo/proj",
-            "WorkingDirectory=/home/demo/proj",
-            "RuntimeMaxSec=65",
-        ] {
-            assert!(args.iter().any(|a| a == want), "{want} missing: {args:?}");
-        }
-        assert_eq!(&args[args.len() - 3..], ["--", "make", "test"]);
-    }
-
-    fn args_of(c: &Command) -> Vec<String> {
-        c.get_args()
-            .map(|a| a.to_string_lossy().into_owned())
-            .collect()
-    }
-
-    #[test]
-    fn a_token_stays_off_the_systemd_run_command_line() {
-        let env: BTreeMap<String, String> =
-            [("GH_TOKEN".to_string(), "ghp_secret".to_string())].into();
-        let c = command(
-            Isolation::Systemd,
-            &ExecCfg::default(),
-            Path::new("/home/demo"),
-            Path::new("/home/demo/proj"),
-            &["gh".into()],
-            &env,
-            60,
-            "paddock-exec-x",
-        );
-        let a = args_of(&c);
-        assert!(a.iter().all(|a| !a.contains("ghp_secret")), "{a:?}");
-        assert!(a.iter().any(|a| a == "--setenv=GH_TOKEN"), "{a:?}");
-        assert!(c
-            .get_envs()
-            .any(|(k, v)| k == "GH_TOKEN" && v == Some("ghp_secret".as_ref())));
-    }
-
-    #[test]
-    fn a_path_with_a_space_stays_one_path_for_systemd() {
-        let cfg = ExecCfg {
-            home: Home::Full,
-            paths: vec![PathBuf::from("/srv/a:b")],
-            ..ExecCfg::default()
-        };
-        let a = args_of(&command(
-            Isolation::Systemd,
-            &cfg,
-            Path::new("/home/demo/my home"),
-            Path::new("/home/demo/my home/My Project"),
-            &["make".into()],
-            &BTreeMap::new(),
-            60,
-            "paddock-exec-x",
-        ));
-        for want in [
-            r"BindPaths=/home/demo/my\ home/My\ Project",
-            r"ReadWritePaths=/home/demo/my\ home",
-            r"BindPaths=/srv/a\:b",
-            "WorkingDirectory=/home/demo/my home/My Project",
-        ] {
-            assert!(a.iter().any(|a| a == want), "{want} missing: {a:?}");
-        }
-    }
-
-    #[test]
-    fn the_user_session_is_out_of_reach() {
-        let cfg = ExecCfg {
-            hide: vec![PathBuf::from("/run/user")],
-            ..ExecCfg::default()
-        };
-        let run = |how| {
-            args_of(&command(
-                how,
-                &cfg,
-                Path::new("/home/demo"),
-                Path::new("/run/user/1000/paddock/proj"),
-                &["make".into()],
-                &BTreeMap::new(),
-                60,
-                "paddock-exec-x",
-            ))
-        };
-        let a = run(Isolation::Systemd);
-        assert!(
-            a.iter().any(|a| a == "TemporaryFileSystem=/run/user"),
-            "{a:?}"
-        );
-        let a = run(Isolation::Bwrap);
-        assert!(a.iter().any(|a| a == "--disable-userns"), "{a:?}");
-        let tmpfs = a.windows(2).position(|w| w == ["--tmpfs", "/run/user"]);
-        let bind = a.iter().position(|a| a == "/run/user/1000/paddock/proj");
-        assert!(
-            tmpfs.is_some() && tmpfs < bind,
-            "the project must be bound over the hidden folder: {a:?}"
-        );
-        // A user whose runtime folder exists hides it by default.
-        if Path::new("/run/user").is_dir() {
-            assert!(ExecCfg::default()
-                .hide
-                .contains(&PathBuf::from("/run/user")));
-        }
-    }
-
-    /// The real systemd unit, where this host has a systemd user instance:
-    /// what the command can see and change. Opt in:
-    /// `cargo test --lib execbox -- --ignored`.
-    #[test]
-    #[ignore]
-    fn the_systemd_unit_isolates_the_command() {
-        let host = HostEnv::detect().unwrap();
-        if detect(&host).ok() != Some(Isolation::Systemd) {
-            eprintln!("skipped: no systemd user instance");
-            return;
-        }
-        let t = tempfile::Builder::new()
-            .prefix("paddock-execbox-")
-            .tempdir_in(host.home.join(".cache"))
-            .unwrap();
-        let project = t.path().join("project");
-        std::fs::create_dir_all(&project).unwrap();
-        std::fs::write(t.path().join("outside.txt"), "private").unwrap();
-        let script = format!(
-            "test -e '{}' && echo OUTSIDE_VISIBLE || echo OUTSIDE_HIDDEN; \
-             touch /usr/paddock-x 2>/dev/null && echo USR_WRITABLE || echo USR_RO; \
-             touch made && echo PROJECT_RW; unshare -U true 2>/dev/null && echo NS_OK || echo NS_BLOCKED; \
-             echo TOKEN=${{PADDOCK_TEST_TOKEN:-none}}",
-            t.path().join("outside.txt").display()
-        );
-        let mut env = BTreeMap::new();
-        env.insert("PATH".to_string(), std::env::var("PATH").unwrap());
-        let mut cmd = command(
-            Isolation::Systemd,
-            &ExecCfg::default(),
-            &host.home,
-            &project,
-            &["sh".into(), "-c".into(), script],
-            &env,
-            30,
-            "paddock-exec-test",
-        );
-        let out = cmd.output().unwrap();
-        let text = String::from_utf8_lossy(&out.stdout);
-        assert!(out.status.success(), "{out:?}");
-        for want in [
-            "OUTSIDE_HIDDEN",
-            "USR_RO",
-            "PROJECT_RW",
-            "NS_BLOCKED",
-            "TOKEN=none",
-        ] {
-            assert!(text.contains(want), "{want} missing:\n{text}");
-        }
-        let cfg = ExecCfg {
-            network: false,
-            ..ExecCfg::default()
-        };
-        let mut cmd = command(
-            Isolation::Systemd,
-            &cfg,
-            &host.home,
-            &project,
-            &[
-                "sh".into(),
-                "-c".into(),
-                "tail -n +3 /proc/net/dev | cut -d: -f1 | tr -d ' '".into(),
-            ],
-            &env,
-            30,
-            "paddock-exec-test-net",
-        );
-        let out = cmd.output().unwrap();
-        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "lo");
-    }
-}
+#[path = "execbox_tests.rs"]
+mod tests;

@@ -1,0 +1,2 @@
+{"v":1,"t":"2026-11-06T10:00:00Z","kind":"setup","step":"fetch","paused":false,"stopped":false}
+{"v":1,"t":"2026-11-06T11:00:00Z","kind":"setup","step":"install","paused":false,"failed":"Needs 40.0 GiB on the volume of /Users/demo/Library/Application Support/paddock/macvm, 12.1 GiB free.","stopped":false}

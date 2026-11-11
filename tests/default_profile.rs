@@ -1,7 +1,8 @@
-//! `paddock run --profile default` on bwrap with a fake harness: the home
-//! is an overlay on a private snapshot of the harness's data roots. The
-//! harness sees its host data, its writes stay in the run, the host files
-//! never change, and the run folder is gone at the end. A temp home only.
+//! `paddock run --profile default` with a fake harness, on bwrap (Linux)
+//! and Seatbelt (macOS): the home is an overlay on a private snapshot of the
+//! harness's data roots, or a clone of them on macOS. The harness sees its
+//! host data, its writes stay in the run, the host files never change, and
+//! the run folder is gone at the end. A temp home only.
 
 mod common;
 
@@ -41,6 +42,7 @@ fn cmd(root: &Path) -> Command {
         .env("XDG_RUNTIME_DIR", root.join("run"))
         .env("PADDOCK_NO_PROMOTE", "1")
         .env("PADDOCK_NO_DEDUPE", "1")
+        .env_remove("TMUX")
         .env_remove("DBUS_SESSION_BUS_ADDRESS");
     for v in paddock::proxy::PROXY_VARS {
         c.env_remove(v);
@@ -48,25 +50,53 @@ fn cmd(root: &Path) -> Command {
     c
 }
 
-#[cfg(target_os = "linux")]
 const SCRIPT: &str = r#"
 cat "$HOME/.fake/conv.jsonl" > seen-conv
 cat "$HOME/.fake/auth.json" > seen-auth
 ls -A "$HOME" > seen-home
-echo turn2 >> "$HOME/.fake/conv.jsonl"
-echo new > "$HOME/.fake/new.txt"
+printf "turn2\n" >> "$HOME/.fake/conv.jsonl"
+printf "new\n" > "$HOME/.fake/new.txt"
 rm "$HOME/.fake/old.txt"
 "#;
 
+/// A one-shot run on macOS starts a tmux server for `paddock view`, with
+/// its socket outside the test folder: stop it.
+#[cfg(target_os = "macos")]
+struct StopTmux(std::path::PathBuf);
+
+#[cfg(target_os = "macos")]
+impl Drop for StopTmux {
+    fn drop(&mut self) {
+        let uid = unsafe { libc::getuid() };
+        let sock =
+            paddock::sockpath::socket_dir(&self.0.join("run/paddock"), uid, "").join("view.sock");
+        if sock.exists() {
+            let _ = Command::new("tmux")
+                .arg("-S")
+                .arg(&sock)
+                .arg("kill-server")
+                .stderr(std::process::Stdio::null())
+                .status();
+        }
+    }
+}
+
 #[test]
-#[cfg(target_os = "linux")]
 fn a_shadow_run_sees_the_host_data_and_changes_only_its_snapshot() {
     let tmp = common::tempdir();
-    let root = tmp.path();
-    if !common::bwrap_works() || !overlay_works(root) {
-        eprintln!("skipped: bwrap cannot start with an overlay here");
-        return;
-    }
+    // On macOS the temp folder is behind the /var symlink.
+    let root_buf = std::fs::canonicalize(tmp.path()).unwrap();
+    let root = root_buf.as_path();
+    #[cfg(target_os = "macos")]
+    let (backend, _tmux) = ("seatbelt", StopTmux(root_buf.clone()));
+    #[cfg(not(target_os = "macos"))]
+    let backend = {
+        if !common::bwrap_works() || !overlay_works(root) {
+            eprintln!("skipped: bwrap cannot start with an overlay here");
+            return;
+        }
+        "bwrap"
+    };
     let home = root.join("home");
     for d in [
         "cfg/paddock/harness.d",
@@ -109,13 +139,14 @@ fn a_shadow_run_sees_the_host_data_and_changes_only_its_snapshot() {
             "--profile",
             "default",
             "--backend",
-            "bwrap",
+            backend,
             "--network",
             "none",
             "-y",
         ])
         .arg(&project)
         .current_dir(&project)
+        .stdin(std::process::Stdio::null())
         .output()
         .unwrap();
     let err = String::from_utf8_lossy(&out.stderr);

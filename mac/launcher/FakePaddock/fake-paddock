@@ -1,0 +1,119 @@
+#!/bin/bash
+# A fake paddock for the launcher tests. It replays recorded outputs.
+#
+# Environment:
+#   PADDOCK_FAKE_SCENARIO  a folder of mac/launcher/Fixtures with a map.tsv
+#   PADDOCK_FAKE_STATE     a scratch folder for this test run
+#
+# map.tsv maps an argument prefix to one or more answer files in ../base,
+# separated by commas. The longest prefix that the call starts with wins.
+# Several files are given in turn; the last one repeats. A file name may end
+# with ":N" to exit with status N. A file that ends in .err goes to stderr,
+# as paddock prints its errors.
+#
+# An answer file that ends in .jsonl is a stream: each line is printed, a
+# line "#sleep N" waits N seconds, "#hold" keeps the stream open until the
+# test ends it. While it streams, the fake also prints every line that the
+# test appends to $PADDOCK_FAKE_STATE/inject.jsonl.
+#
+# The test ends the event stream by creating $PADDOCK_FAKE_STATE/kill-events.
+# While that file exists, a new event stream exits at once.
+#
+# Every call is logged to $PADDOCK_FAKE_STATE/calls.log as
+# "<epoch seconds> <arguments>", for the call-count checks.
+set -u
+
+scenario=${PADDOCK_FAKE_SCENARIO:?PADDOCK_FAKE_SCENARIO is not set}
+state=${PADDOCK_FAKE_STATE:-/tmp/paddock-fake}
+mkdir -p "$state"
+line="$*"
+printf '%s %s\n' "$(date +%s)" "$line" >>"$state/calls.log"
+
+map="$scenario/map.tsv"
+best=""
+answer=""
+while IFS="$(printf '\t')" read -r prefix files; do
+  case "$prefix" in '' | \#*) continue ;; esac
+  case "$line" in
+    "$prefix"*)
+      if [ ${#prefix} -gt ${#best} ]; then
+        best=$prefix
+        answer=$files
+      fi
+      ;;
+  esac
+done <"$map"
+
+if [ -z "$answer" ]; then
+  printf 'fake paddock: no fixture for: %s\n' "$line" >&2
+  exit 64
+fi
+
+# Pick the answer for this call: the Nth file for the Nth call.
+key=$(printf '%s' "$best" | tr -c 'A-Za-z0-9' '_')
+count_file="$state/count.$key"
+count=0
+[ -f "$count_file" ] && count=$(cat "$count_file")
+count=$((count + 1))
+printf '%s\n' "$count" >"$count_file"
+IFS=',' read -r -a list <<<"$answer"
+index=$((count - 1))
+[ "$index" -ge "${#list[@]}" ] && index=$((${#list[@]} - 1))
+pick=${list[$index]}
+status=0
+case "$pick" in
+  *:*) status=${pick##*:}; pick=${pick%:*} ;;
+esac
+file="$scenario/../base/$pick"
+
+stream() {
+  if [ -f "$state/kill-events" ] && [ "$best" = "events --follow --json" ]; then
+    exit 1
+  fi
+  seen=0
+  [ -f "$state/inject.jsonl" ] && seen=$(wc -l <"$state/inject.jsonl" | tr -d ' ')
+  inject() {
+    [ -f "$state/inject.jsonl" ] || return 0
+    total=$(wc -l <"$state/inject.jsonl" | tr -d ' ')
+    if [ "$total" -gt "$seen" ]; then
+      tail -n $((total - seen)) "$state/inject.jsonl"
+      seen=$total
+    fi
+  }
+  alive() {
+    if [ "$best" = "events --follow --json" ] && [ -f "$state/kill-events" ]; then
+      exit 1
+    fi
+  }
+  while IFS= read -r row || [ -n "$row" ]; do
+    case "$row" in
+      '#sleep '*)
+        n=${row#\#sleep }
+        i=0
+        while [ "$i" -lt "$((n * 4))" ]; do
+          sleep 0.25
+          alive
+          inject
+          i=$((i + 1))
+        done
+        ;;
+      '#hold')
+        while :; do
+          sleep 0.25
+          alive
+          inject
+        done
+        ;;
+      *) printf '%s\n' "$row" ;;
+    esac
+    alive
+    inject
+  done <"$file"
+}
+
+case "$file" in
+  *.jsonl) stream ;;
+  *.err) cat "$file" >&2 ;;
+  *) cat "$file" ;;
+esac
+exit "$status"

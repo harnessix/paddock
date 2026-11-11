@@ -336,17 +336,7 @@ impl Filesystem for DeviceFs {
             return reply.error(Errno::EBUSY);
         }
         let fh = self.inner.next_fh.fetch_add(1, Ordering::SeqCst);
-        h.insert(
-            fh,
-            Handle {
-                kind,
-                request: Vec::new(),
-                phase: Phase::Collect,
-                waiting: Vec::new(),
-                cursor: 0,
-                cancel: Arc::new(AtomicBool::new(false)),
-            },
-        );
+        h.insert(fh, Handle::new(kind));
         // Direct I/O: every read and write reaches paddock, whatever size
         // the file shows.
         reply.opened(
@@ -452,7 +442,7 @@ impl Filesystem for DeviceFs {
             }
             Kind::Device(i) => *i,
         };
-        match &handle.phase {
+        match &mut handle.phase {
             Phase::Done(Ok(data)) => {
                 let data = data.clone();
                 let r = take(&mut handle.cursor, &data, size);
@@ -466,17 +456,45 @@ impl Filesystem for DeviceFs {
                 }
                 handle.waiting.push((reply, size, req.pid()));
             }
+            Phase::Streaming(s) => {
+                // The kernel offset counts the request bytes. A read below
+                // the dropped front cannot be served: a stream is read once.
+                let pos = (offset as usize).saturating_sub(handle.sent);
+                if pos < s.base() {
+                    return reply.error(Errno::ESPIPE);
+                }
+                match s.next(&mut handle.cursor, size) {
+                    Next::Data(d) => {
+                        drop(h);
+                        self.inner.space.notify_all();
+                        reply.data(&d)
+                    }
+                    Next::Error(e) => reply.error(e),
+                    Next::Wait => {
+                        if handle.waiting.len() >= 4 {
+                            return reply.error(Errno::EBUSY);
+                        }
+                        handle.waiting.push((reply, size, req.pid()));
+                    }
+                }
+            }
             Phase::Collect => {
                 if self.inner.running.load(Ordering::SeqCst) >= MAX_RUNNING as u64 {
                     return reply.error(Errno::EBUSY);
                 }
-                handle.phase = Phase::Running;
+                let dev = self.inner.devices[i].clone();
+                let info = dev.info();
+                handle.phase = if info.stream {
+                    Phase::Streaming(Stream::new(info.limits.max_response))
+                } else {
+                    Phase::Running
+                };
                 handle.waiting.push((reply, size, req.pid()));
                 let request = std::mem::take(&mut handle.request);
+                handle.sent = request.len();
                 let cancel = handle.cancel.clone();
-                let dev = self.inner.devices[i].clone();
                 drop(h);
-                self.dispatch(fh, dev, request, cancel);
+                self.dispatch(fh, dev, request, cancel, info.stream);
             }
         }
     }
@@ -511,6 +529,7 @@ impl Filesystem for DeviceFs {
         drop(h);
         let call = Call {
             sandbox: self.inner.sandbox.clone(),
+            remote: None,
             deadline: Instant::now() + Duration::from_secs(dev.info().limits.deadline_seconds),
             cancel: Arc::new(AtomicBool::new(false)),
         };
@@ -550,6 +569,8 @@ impl Filesystem for DeviceFs {
         let removed = self.inner.handles.lock().unwrap().remove(&u64::from(fh));
         if let Some(handle) = removed {
             handle.cancel.store(true, Ordering::SeqCst);
+            // A streaming device that waits for room sees the cancel now.
+            self.inner.space.notify_all();
             for (r, _, _) in handle.waiting {
                 r.error(Errno::ECANCELED);
             }

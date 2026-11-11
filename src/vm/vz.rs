@@ -401,18 +401,18 @@ fn socket_device(vm: &VZVirtualMachine) -> Option<Retained<VZVirtioSocketDevice>
     first.downcast::<VZVirtioSocketDevice>().ok()
 }
 
-fn url(path: &Path) -> Result<Retained<NSURL>> {
+pub(crate) fn url(path: &Path) -> Result<Retained<NSURL>> {
     let text = path
         .to_str()
         .ok_or_else(|| anyhow!("the path {} is not UTF-8", path.display()))?;
     Ok(NSURL::fileURLWithPath(&NSString::from_str(text)))
 }
 
-fn describe(e: &NSError) -> String {
+pub(crate) fn describe(e: &NSError) -> String {
     e.localizedDescription().to_string()
 }
 
-fn error_text(err: *mut NSError) -> Result<(), String> {
+pub(crate) fn error_text(err: *mut NSError) -> Result<(), String> {
     match unsafe { err.as_ref() } {
         None => Ok(()),
         Some(e) => Err(describe(e)),
@@ -420,7 +420,7 @@ fn error_text(err: *mut NSError) -> Result<(), String> {
 }
 
 /// A copy of a file descriptor that the framework owns.
-fn dup_fd(fd: libc::c_int) -> std::io::Result<OwnedFd> {
+pub(crate) fn dup_fd(fd: libc::c_int) -> std::io::Result<OwnedFd> {
     let new = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 0) };
     if new < 0 {
         return Err(std::io::Error::last_os_error());

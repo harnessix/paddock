@@ -411,6 +411,7 @@ fn an_approval_card_is_a_card_waiting_line() {
         session_allowed: true,
         started_by: vec![],
         choices: vec![],
+        connect: None,
     };
     paddock::broker::write_pending(&w.env, &p).unwrap();
     let (code, out, _) = w.run(&["mail", "watch", RUN, "--timeout", "1s"], None);
@@ -467,4 +468,189 @@ fn writes_to_another_box_and_long_messages_are_refused() {
         1,
         "only the start event"
     );
+}
+
+#[test]
+fn watch_delivers_each_event_without_waiting_for_another() {
+    let w = World::new();
+    w.mailbox(std::process::id(), false);
+    let (mut child, rx) = w.watch(&[RUN, "--timeout", "10s"]);
+    assert!(rx
+        .recv_timeout(Duration::from_secs(3))
+        .unwrap()
+        .contains("started"));
+    let long = format!("done: {} tail", "x".repeat(3000));
+    mail::append(
+        &w.env,
+        RUN,
+        Dir::Up,
+        Message::new("agent", mail::Kind::Status, &long),
+    )
+    .unwrap();
+    let line = rx
+        .recv_timeout(Duration::from_secs(3))
+        .expect("status must arrive on its own");
+    assert!(line.ends_with(&long));
+    events::ended(&w.env, RUN, Some(0)).unwrap();
+    assert!(rx
+        .recv_timeout(Duration::from_secs(3))
+        .unwrap()
+        .contains("event ended"));
+    assert!(child.wait().unwrap().success());
+}
+
+#[test]
+fn wait_handles_multiple_runs_status_end_and_timeout() {
+    let w = World::new();
+    w.mailbox(std::process::id(), false);
+    let other = "fake-proj-d4e5f6";
+    mail::create(&w.env, other, &Starter::host()).unwrap();
+    let long = format!("done: {} final", "x".repeat(3000));
+    mail::append(
+        &w.env,
+        RUN,
+        Dir::Up,
+        Message::new("agent", mail::Kind::Status, &long),
+    )
+    .unwrap();
+    let (code, out, _) = w.run(&["wait", "--any", "--status", "a1b2", other], None);
+    assert_eq!(code, 0);
+    assert!(out.contains(&long), "{out}");
+    assert!(!out.contains(other));
+    let (code, _, _) = w.run(
+        &["wait", "--all", "--status", RUN, other, "--timeout", "1s"],
+        None,
+    );
+    assert_eq!(code, 124);
+    mail::append(
+        &w.env,
+        other,
+        Dir::Up,
+        Message::new("agent", mail::Kind::Status, "blocked: needs input"),
+    )
+    .unwrap();
+    let (code, out, _) = w.run(&["wait", "--status", RUN, other], None);
+    assert_eq!(code, 1);
+    assert!(out.contains("blocked: needs input"));
+    let (code, _, _) = w.run(&["wait", RUN, "--timeout", "1s"], None);
+    assert_eq!(code, 124, "status alone does not end a normal wait");
+    events::ended(&w.env, RUN, Some(0)).unwrap();
+    let (code, out, _) = w.run(&["wait", RUN], None);
+    assert_eq!(code, 0);
+    assert!(out.contains(&long));
+    let (code, _, _) = w.run(&["wait", "missing"], None);
+    assert_eq!(code, 2);
+}
+
+#[test]
+fn wait_reports_a_stopped_mailbox_without_a_run_record() {
+    let w = World::new();
+    w.mailbox(std::process::id(), false);
+    paddock::detach::mark_stopped(&w.env, RUN).unwrap();
+    mail::append(
+        &w.env,
+        RUN,
+        Dir::Up,
+        Message::new("agent", mail::Kind::Status, "working"),
+    )
+    .unwrap();
+    events::ended(&w.env, RUN, Some(0)).unwrap();
+    let (code, out, err) = w.run(&["wait", RUN], None);
+    assert_eq!(code, 1, "{out}\n{err}");
+    assert_eq!(out.trim(), format!("{RUN}: stopped before a final result"));
+}
+
+#[test]
+fn wait_keeps_mailbox_status_after_a_stop() {
+    for (status, recorded, expected) in [
+        ("done: full result", paddock::detach::Status::Failed, 0),
+        ("blocked: needs input", paddock::detach::Status::Ok, 1),
+    ] {
+        let w = World::new();
+        w.mailbox(std::process::id(), false);
+        let record = paddock::detach::Record {
+            id: RUN.into(),
+            pid: Some(std::process::id()),
+            done: Some(paddock::detach::Done {
+                status: recorded,
+                text: "older detached result".into(),
+                at: 1,
+            }),
+            ..Default::default()
+        };
+        record.save(&w.env).unwrap();
+        paddock::detach::mark_stopped(&w.env, RUN).unwrap();
+        mail::append(
+            &w.env,
+            RUN,
+            Dir::Up,
+            Message::new("agent", mail::Kind::Status, status),
+        )
+        .unwrap();
+
+        let (code, out, err) = w.run(&["wait", "--status", RUN], None);
+        assert_eq!(code, expected, "{out}\n{err}");
+        assert_eq!(out.trim(), format!("{RUN}: {status}"));
+        let (code, _, _) = w.run(&["wait", RUN, "--timeout", "1s"], None);
+        assert_eq!(code, 124, "normal wait still waits for the run to end");
+        events::ended(&w.env, RUN, Some(1)).unwrap();
+        let (code, out, err) = w.run(&["wait", RUN], None);
+        assert_eq!(code, expected, "{out}\n{err}");
+        assert_eq!(out.trim(), format!("{RUN}: {status}"));
+    }
+}
+
+#[test]
+fn wait_uses_the_exit_code_when_there_is_no_final_status_or_stop() {
+    for (exit, expected, text) in [
+        (Some(0), 0, "exit code 0"),
+        (Some(3), 1, "exit code 3"),
+        (None, 2, "no exit code"),
+    ] {
+        let w = World::new();
+        w.mailbox(std::process::id(), false);
+        events::ended(&w.env, RUN, exit).unwrap();
+        let (code, out, err) = w.run(&["wait", RUN], None);
+        assert_eq!(code, expected, "{out}\n{err}");
+        assert!(out.contains(text), "{out}");
+    }
+}
+
+#[test]
+fn run_end_hook_receives_id_and_full_status_once() {
+    let w = World::new();
+    w.mailbox(std::process::id(), false);
+    let config = w.root.join("cfg/paddock");
+    std::fs::create_dir_all(&config).unwrap();
+    let output = w.root.join("hook-output");
+    let script = w.root.join("hook.sh");
+    std::fs::write(
+        &script,
+        format!(
+            "printf '%s\\n%s\\n' \"$PADDOCK_RUN_ID\" \"$PADDOCK_RUN_STATUS\" >> '{}'\n",
+            output.display()
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        config.join("config.toml"),
+        format!("[hooks]\nrun_end = ['sh', '{}']\n", script.display()),
+    )
+    .unwrap();
+    let status = format!("done: {}", "x".repeat(3000));
+    mail::append(
+        &w.env,
+        RUN,
+        Dir::Up,
+        Message::new("agent", mail::Kind::Status, &status),
+    )
+    .unwrap();
+    events::ended(&w.env, RUN, Some(0)).unwrap();
+    assert!(events::ended(&w.env, RUN, Some(0)).is_none());
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while !output.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    let text = std::fs::read_to_string(output).unwrap();
+    assert_eq!(text, format!("{RUN}\n{status}\n"));
 }

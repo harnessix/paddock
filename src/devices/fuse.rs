@@ -10,10 +10,19 @@ use fuser::{
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
+mod handle;
 mod horse;
+mod mount;
+mod stream;
+pub use handle::KEEP;
+use handle::{Handle, Kind, Next, Phase, Stream};
+use mount::fatal_pending;
+pub(super) use mount::lazy_unmount;
+pub use mount::{mount, Mounted};
+use stream::StreamSink;
 
 /// Open device files at the same time, per sandbox.
 const MAX_OPEN: usize = 64;
@@ -28,38 +37,7 @@ const FIRST_DEVICE_INO: u64 = 16;
 const FIRST_SECRET_INO: u64 = 1 << 20;
 const TTL: Duration = Duration::from_secs(1);
 
-enum Phase {
-    /// The client writes the request.
-    Collect,
-    /// The device works on it.
-    Running,
-    Done(Result<Arc<Vec<u8>>, Errno>),
-}
-
-enum Kind {
-    Catalog,
-    Device(usize),
-    /// A secret file: its name and the value, held while the file is open.
-    Secret(String, Arc<crate::credentials::secret::Secret>),
-    /// A file of the horse tree: its path, its bytes and whether it is
-    /// open for writing.
-    Horse(String, Vec<u8>, bool),
-}
-
-struct Handle {
-    kind: Kind,
-    request: Vec<u8>,
-    phase: Phase,
-    /// Reads that wait for the response: the reply, its size and the
-    /// thread that reads (a host thread id; FUSE translates it).
-    waiting: Vec<(ReplyData, u32, u32)>,
-    /// How much of the response the client has read. The kernel offset
-    /// counts the request bytes too, so the response keeps its own.
-    cursor: usize,
-    cancel: Arc<AtomicBool>,
-}
-
-struct Inner {
+pub(super) struct Inner {
     sandbox: String,
     uid: u32,
     gid: u32,
@@ -71,6 +49,9 @@ struct Inner {
     /// A name keeps its inode after a revoke.
     secret_inos: Mutex<Vec<String>>,
     handles: Mutex<HashMap<u64, Handle>>,
+    /// Wakes a streaming device that waits for the reader to catch up.
+    /// One for every handle: a spurious wake costs one check.
+    space: Condvar,
     next_fh: AtomicU64,
     running: AtomicU64,
     started: SystemTime,
@@ -119,6 +100,7 @@ impl DeviceFs {
                 horse: None,
                 secret_inos: Mutex::new(Vec::new()),
                 handles: Mutex::new(HashMap::new()),
+                space: Condvar::new(),
                 next_fh: AtomicU64::new(1),
                 running: AtomicU64::new(0),
                 started: SystemTime::now(),
@@ -271,8 +253,16 @@ impl DeviceFs {
         !handle.waiting.is_empty() && handle.waiting.iter().all(|w| fatal_pending(w.2))
     }
 
-    /// Run the request of `fh` on its own thread, under the deadline.
-    fn dispatch(&self, fh: u64, dev: Arc<dyn Device>, request: Vec<u8>, cancel: Arc<AtomicBool>) {
+    /// Run the request of `fh` on its own thread, under the deadline. A
+    /// streaming device (`stream`) writes to the handle as it goes.
+    fn dispatch(
+        &self,
+        fh: u64,
+        dev: Arc<dyn Device>,
+        request: Vec<u8>,
+        cancel: Arc<AtomicBool>,
+        stream: bool,
+    ) {
         let inner = self.inner.clone();
         let info = dev.info();
         let deadline = Instant::now() + Duration::from_secs(info.limits.deadline_seconds);
@@ -283,12 +273,24 @@ impl DeviceFs {
                 sandbox: inner.sandbox.clone(),
                 deadline,
                 cancel: cancel.clone(),
+                remote: None,
             };
             let (tx, rx) = std::sync::mpsc::channel();
             let worker_dev = dev.clone();
             let req_len = request.len();
+            let mut sink = StreamSink {
+                inner: inner.clone(),
+                fh,
+                cancel: cancel.clone(),
+            };
             std::thread::spawn(move || {
-                let r = worker_dev.call(&call, &request);
+                let r = if stream {
+                    worker_dev
+                        .call_stream(&call, &request, &mut sink)
+                        .map(|()| Vec::new())
+                } else {
+                    worker_dev.call(&call, &request)
+                };
                 let _ = tx.send(r);
             });
             // Wait for the device, the deadline, a close, or the end of every
@@ -315,13 +317,21 @@ impl DeviceFs {
                 }
             };
             inner.running.fetch_sub(1, Ordering::SeqCst);
+            // The device that waits for room wakes and sees the end.
+            inner.space.notify_all();
+            let bytes = if stream {
+                Self::finish_stream(&inner, fh, result.as_ref().map(|_| ()).map_err(|e| *e))
+            } else {
+                result.as_ref().map(|d| d.len()).unwrap_or(0)
+            };
             // Sizes and the outcome only: never the request or the response.
             let outcome = match &result {
-                Ok(d) => format!("{} bytes back", d.len()),
+                Ok(_) if stream => format!("{bytes} bytes streamed"),
+                Ok(_) => format!("{bytes} bytes back"),
                 Err(e) if cancel.load(Ordering::SeqCst) && *e != Errno::ETIMEDOUT => {
-                    "cancelled".into()
+                    format!("cancelled after {bytes} bytes")
                 }
-                Err(e) => format!("error {}", i32::from(*e)),
+                Err(e) => format!("error {} after {bytes} bytes", i32::from(*e)),
             };
             log::info!(
                 "sandbox {}: device {}: request of {req_len} bytes, {outcome}, {} ms",
@@ -329,23 +339,19 @@ impl DeviceFs {
                 dev.name(),
                 start.elapsed().as_millis()
             );
-            Self::finish(&inner, fh, result);
+            if !stream {
+                Self::finish(&inner, fh, result);
+            }
         });
+    }
+
+    /// The running requests of this sandbox.
+    #[cfg(test)]
+    pub(crate) fn running(&self) -> u64 {
+        self.inner.running.load(Ordering::SeqCst)
     }
 }
 
-/// Whether the thread `tid` has a fatal signal pending. The kernel marks
-/// every fatal signal as SIGKILL in the pending set of each thread.
-fn fatal_pending(tid: u32) -> bool {
-    let Ok(text) = std::fs::read_to_string(format!("/proc/{tid}/status")) else {
-        // Gone already.
-        return true;
-    };
-    text.lines()
-        .filter_map(|l| {
-            l.strip_prefix("SigPnd:")
-                .or_else(|| l.strip_prefix("ShdPnd:"))
-        })
-        .filter_map(|v| u64::from_str_radix(v.trim(), 16).ok())
-        .any(|bits| bits & (1 << (libc::SIGKILL - 1)) != 0)
-}
+#[cfg(test)]
+#[path = "fuse_tests.rs"]
+mod tests;

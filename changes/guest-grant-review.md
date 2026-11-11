@@ -1,0 +1,3 @@
+- Fix: Restore guest shares after a timed-out change and reject protected folders in live and saved grants.
+- Fix: Recheck open connections when network mode changes and keep firewall rule recording responsive.
+- Fix: Refresh open file counts before removing a guest share and sync saved grants to disk.

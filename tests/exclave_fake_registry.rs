@@ -143,7 +143,7 @@ with zipfile.ZipFile(sys.argv[1], 'w', zipfile.ZIP_DEFLATED) as z:
     )
     .unwrap();
     let script = root.join("transport.sh");
-    std::fs::write(&script, format!("#!/bin/sh\nexport HOME='{0}' XDG_CONFIG_HOME='{0}/config' XDG_DATA_HOME='{0}/data' XDG_STATE_HOME='{0}/state' XDG_CACHE_HOME='{0}/cache'\nexec '{1}' exclave serve\n", peer.display(), env!("CARGO_BIN_EXE_paddock"))).unwrap();
+    std::fs::write(&script, format!("#!/bin/sh\nexport HOME='{0}' XDG_CONFIG_HOME='{0}/config' XDG_DATA_HOME='{0}/data' XDG_STATE_HOME='{0}/state' XDG_CACHE_HOME='{0}/cache' XDG_RUNTIME_DIR='{0}/run'\nexec '{1}' exclave serve\n", peer.display(), env!("CARGO_BIN_EXE_paddock"))).unwrap();
     let config = root.join("config/paddock");
     std::fs::create_dir_all(&config).unwrap();
     std::fs::write(
@@ -162,6 +162,7 @@ with zipfile.ZipFile(sys.argv[1], 'w', zipfile.ZIP_DEFLATED) as z:
             .env("XDG_DATA_HOME", root.join("data"))
             .env("XDG_STATE_HOME", root.join("state"))
             .env("XDG_CACHE_HOME", root.join("cache"))
+            .env("XDG_RUNTIME_DIR", root.join("run"))
             .args([
                 "exclave",
                 "run",

@@ -1,0 +1,1 @@
+- New: `paddock-host borrow` and `return` work in Seatbelt runs on macOS. The run gets its own borrow folder on the host, allowed read-write in the profile and named by `PADDOCK_BORROW_DIR`, in place of the mount at `/run/paddock/borrow`. The sandbox cannot remove or replace the folder itself. paddock removes it when the run ends, as on Linux.

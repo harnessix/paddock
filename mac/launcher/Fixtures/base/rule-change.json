@@ -1,0 +1,10 @@
+{
+  "v": 1,
+  "ok": true,
+  "applies": "live",
+  "removed": ["session-7c7c7c"],
+  "rules": [
+    {"id": "rule-8d8d8d", "host": "tracker.example.net", "port": 443, "verdict": "deny", "scope": "always",
+     "made": "2026-11-06T10:00:00Z", "by": "user", "source": "you", "count": 0}
+  ]
+}

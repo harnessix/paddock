@@ -150,6 +150,60 @@ fn one_end_event_only() {
 }
 
 #[test]
+fn recovery_does_not_overtake_a_live_end_writer_holding_the_mailbox_lock() {
+    let (_t, env) = env();
+    made(&env);
+    let pid = std::process::id();
+    set_run_info(
+        &env,
+        &RunInfo {
+            id: RUN.into(),
+            harness: "fake".into(),
+            project: env.home.join("project"),
+            pid,
+            pid_start: events::proc_start(pid),
+            started: 1,
+            detached: false,
+            delivery: None,
+            horse_session: None,
+        },
+    )
+    .unwrap();
+    let d = dir(&env, RUN).unwrap();
+    let guard = lock(&d).unwrap();
+    let mut pending = Message::event("ended", "complete");
+    pending.code = Some(0);
+    crate::privfs::write_atomic(&d.join("end"), serde_json::to_vec(&pending).unwrap()).unwrap();
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let reader_env = env.clone();
+    let reader = std::thread::spawn(move || {
+        started_tx.send(()).unwrap();
+        done_tx.send(inspect_end(&reader_env, RUN)).unwrap();
+    });
+    started_rx.recv().unwrap();
+    assert_eq!(
+        done_rx.recv_timeout(Duration::from_secs(3)).unwrap(),
+        EndState::Pending
+    );
+    let written = append_locked(&env, RUN, &d, Dir::Up, pending).unwrap();
+    crate::privfs::write_atomic(&d.join("end"), serde_json::to_vec(&written).unwrap()).unwrap();
+    drop(guard);
+    reader.join().unwrap();
+    assert_eq!(
+        inspect_end(&env, RUN),
+        EndState::Complete(Box::new(written))
+    );
+    assert_eq!(
+        read(&env, RUN, Dir::Up)
+            .iter()
+            .filter(|m| m.is_end())
+            .count(),
+        1
+    );
+}
+
+#[test]
 fn a_dead_process_is_gone_once_and_a_live_one_is_not() {
     let (_t, env) = env();
     made(&env);

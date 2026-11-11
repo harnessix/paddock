@@ -24,10 +24,9 @@
 //! - The prompt never goes into the arguments of a process. It reaches the
 //!   harness on stdin or as a file of that run in the child's sandbox home.
 use crate::broker::Mode;
-use crate::build::Built;
 use crate::env::HostEnv;
 use crate::manifest::Manifest;
-use crate::spec::{GuiMode, MountKind, Network};
+use crate::spec::Network;
 use crate::state;
 use anyhow::{bail, Context as _, Result};
 use serde::{Deserialize, Serialize};
@@ -39,6 +38,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 pub use units::{format_bytes, format_cpus, parse_bytes, parse_cpus, parse_duration};
 
+mod ceiling;
 mod cfg;
 mod child;
 pub mod model;
@@ -283,132 +283,8 @@ pub struct Ceiling {
     pub devices: Vec<String>,
 }
 
-fn from_env_or_manifest(origin: &str) -> bool {
+pub(super) fn from_env_or_manifest(origin: &str) -> bool {
     origin == "host env (inherited)" || origin.starts_with("manifest")
-}
-
-impl Ceiling {
-    pub fn of(built: &Built, backend: &str, modes: &BTreeMap<String, Mode>) -> Self {
-        let s = &built.spec;
-        let (chain, depth) = match &built.spawn {
-            Some(c) => (c.chain.clone(), c.depth),
-            None => (Vec::new(), 0),
-        };
-        let mut chain = chain;
-        chain.push(s.id.clone());
-        let mut m = built.manifest.clone();
-        // A child has no display and publishes no ports.
-        m.gui = Default::default();
-        m.network.publish.clear();
-        m.apps.clear();
-        m.default_harness = None;
-        Self {
-            parent: s.id.clone(),
-            parent_harness: s.harness.clone(),
-            horse: built.horse,
-            chain,
-            depth,
-            repo: built.home_key.clone(),
-            head_from: s.project.clone(),
-            backend: backend.to_string(),
-            network: s.network,
-            lan: s.lan,
-            inherit_env: built.inherit_env,
-            env_names: s
-                .env
-                .iter()
-                .filter(|(_, v)| from_env_or_manifest(&v.origin))
-                .map(|(k, _)| k.clone())
-                .collect(),
-            allow_domains: s.allow_domains.iter().cloned().collect(),
-            host_ports: s.host_ports.iter().map(|(p, _)| *p).collect(),
-            mounts: s
-                .mounts
-                .iter()
-                .filter(|m| m.origin.starts_with("manifest"))
-                .filter_map(|m| m.src.clone().map(|p| (p, m.kind == MountKind::Rw)))
-                .collect(),
-            manifest: m,
-            modes: modes.clone(),
-            auth: built.auth.to_string(),
-            devices: Vec::new(),
-        }
-    }
-
-    /// The root of the spawn tree: the sandbox that the user started.
-    pub fn root(&self) -> &str {
-        self.chain
-            .first()
-            .map_or(self.parent.as_str(), |r| r.as_str())
-    }
-
-    /// Refuse a child that would get more than the parent. `endpoints` are
-    /// the child harness's own API hosts, which it needs in allowlist mode.
-    pub fn check(&self, built: &Built, backend: &str) -> Result<()> {
-        let s = &built.spec;
-        let no = |what: String| -> Result<()> {
-            bail!("spawn: the child would get more than its parent: {what}")
-        };
-        if backend != self.backend {
-            no(format!(
-                "backend {backend}, the parent runs on {}",
-                self.backend
-            ))?;
-        }
-        if network_rank(s.network) > network_rank(self.network) {
-            no(format!(
-                "network {:?}, the parent has {:?}",
-                s.network, self.network
-            ))?;
-        }
-        if s.lan && !self.lan {
-            no("lan access".into())?;
-        }
-        if built.inherit_env && !self.inherit_env {
-            no("the host environment, the parent has --env clean".into())?;
-        }
-        if s.gui.mode != GuiMode::Off || s.gui.gpu {
-            no("a display".into())?;
-        }
-        if !s.publish.is_empty() {
-            no("published ports".into())?;
-        }
-        if built.home_key != self.repo {
-            no(format!("the project {}", built.home_key.display()))?;
-        }
-        for (k, v) in &s.env {
-            if from_env_or_manifest(&v.origin) && !self.env_names.contains(k) {
-                no(format!("the variable {k} ({})", v.origin))?;
-            }
-        }
-        for (p, _) in &s.host_ports {
-            if !self.host_ports.contains(p) {
-                no(format!("host port {p}"))?;
-            }
-        }
-        // A parent with a list can pass on only its own domains. A parent
-        // with open egress has more than any list.
-        let listed = matches!(self.network, Network::Allowlist | Network::Api);
-        let endpoints: BTreeSet<&String> = built.profile.network.endpoints.iter().collect();
-        for d in s.allow_domains.iter().filter(|_| listed) {
-            if !self.allow_domains.contains(d) && !endpoints.contains(d) {
-                no(format!("the domain {d}"))?;
-            }
-        }
-        for m in s.mounts.iter().filter(|m| m.origin.starts_with("manifest")) {
-            let Some(src) = &m.src else { continue };
-            let rw = m.kind == MountKind::Rw;
-            let ok = self.mounts.iter().any(|(p, prw)| p == src && (*prw || !rw));
-            if !ok {
-                no(format!(
-                    "the mount {} ({})",
-                    src.display(),
-                    if rw { "writable" } else { "read-only" }
-                ))?;
-            }
-        }
-        Ok(())
-    }
 }
 
 /// What a child sandbox knows about where it came from. Its broker uses it:
@@ -479,6 +355,9 @@ pub struct Job {
     pub hitch: Option<crate::horse::hitch::Hitched>,
     #[serde(default)]
     pub pick: model::Pick,
+    /// `--device NAME` of the spawn, within the parent's ceiling.
+    #[serde(default)]
+    pub devices: Vec<String>,
 }
 
 /// What a spawn request asks for, after the host checked it.
@@ -491,6 +370,8 @@ pub struct StartOpts {
     /// `--hitch`: the parent's run; the child joins its horse.
     pub hitch: Option<crate::horse::run::RunHorse>,
     pub pick: model::Pick,
+    /// `--device NAME`, checked against the ceiling.
+    pub devices: Vec<String>,
 }
 
 /// What the child's host process reports back.
@@ -915,6 +796,7 @@ impl Spawner {
             base: None,
             hitch: None,
             pick: o.pick,
+            devices: o.devices,
         };
         crate::privfs::dir(&job_dir).map_err(|e| fail(e.into()))?;
         if let Some(parent) = &o.hitch {
@@ -1298,12 +1180,12 @@ impl Spawner {
             capability: crate::broker::TIMEOUT_CAPABILITY.into(),
             summary: format!("{} reached its time limit", s.sandbox),
             detail,
-            reason: String::new(),
             created: now,
             expires: now + wait,
             session_allowed: false,
             started_by: self.ceiling.chain.clone(),
             choices,
+            ..Default::default()
         }
     }
 

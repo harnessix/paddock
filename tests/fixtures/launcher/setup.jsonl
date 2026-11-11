@@ -1,0 +1,10 @@
+{"v":1,"t":"2026-11-06T10:00:00Z","kind":"setup","step":"fetch","paused":false,"stopped":false,"line":"State fetch: the restore image."}
+{"v":1,"t":"2026-11-06T10:00:02Z","kind":"setup","step":"fetch","bytes":0,"total":14000000000,"paused":false,"stopped":false}
+{"v":1,"t":"2026-11-06T10:04:00Z","kind":"setup","step":"fetch","bytes":6600000000,"total":14000000000,"rate":28000000,"paused":false,"stopped":false}
+{"v":1,"t":"2026-11-06T10:04:10Z","kind":"setup","step":"fetch","bytes":6600000000,"total":14000000000,"paused":true,"stopped":false}
+{"v":1,"t":"2026-11-06T10:20:00Z","kind":"setup","step":"fetch","bytes":6600000000,"total":14000000000,"paused":false,"stopped":false}
+{"v":1,"t":"2026-11-06T10:30:00Z","kind":"setup","step":"install","paused":false,"stopped":false,"line":"install 45%, about 4 min left"}
+{"v":1,"t":"2026-11-06T10:40:00Z","kind":"setup","step":"guided","paused":false,"stopped":false}
+{"v":1,"t":"2026-11-06T10:41:00Z","kind":"setup","step":"guided","paused":false,"stopped":true}
+{"v":1,"t":"2026-11-06T11:00:00Z","kind":"setup","step":"install","paused":false,"failed":"Needs 40.0 GiB on the volume of /Users/u/Library/Application Support/paddock/macvm, 12.1 GiB free.","stopped":false}
+{"v":1,"t":"2026-11-06T11:30:00Z","kind":"setup","step":"sealed","paused":false,"stopped":false}

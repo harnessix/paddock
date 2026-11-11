@@ -3,8 +3,9 @@
 //! launchers, shell commands and state with the path of the build, and
 //! they break when the build is gone.
 //!
-//! A test file passes when it sets both XDG_DATA_HOME and XDG_STATE_HOME,
-//! or clears the environment and sets HOME.
+//! A test file passes when it isolates home, config, data, state, cache and runtime, or
+//! clears the environment and sets HOME. This is a source-level guard, not
+//! a proof about every command in a file.
 
 #[test]
 fn tests_that_run_paddock_never_use_the_users_folders() {
@@ -19,9 +20,7 @@ fn tests_that_run_paddock_never_use_the_users_folders() {
         if !text.contains("CARGO_BIN_EXE_paddock") {
             continue;
         }
-        let xdg = text.contains("XDG_DATA_HOME") && text.contains("XDG_STATE_HOME");
-        let cleared = text.contains(".env_clear()") && text.contains("\"HOME\"");
-        if !xdg && !cleared {
+        if !isolated(&text) {
             bad.push(p.file_name().unwrap().to_string_lossy().into_owned());
         }
     }
@@ -29,4 +28,45 @@ fn tests_that_run_paddock_never_use_the_users_folders() {
         bad.is_empty(),
         "these tests run paddock with the user's own folders: {bad:?}"
     );
+}
+
+fn isolated(text: &str) -> bool {
+    let home_var = "HOME";
+    let home = text.contains(&format!("\"{home_var}\""));
+    let xdg = [
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_STATE_HOME",
+        "XDG_CACHE_HOME",
+        "XDG_RUNTIME_DIR",
+    ]
+    .iter()
+    .all(|key| text.contains(key));
+    let cleared = text.contains(".env_clear()");
+    home && (xdg || cleared)
+}
+
+#[test]
+fn guard_requires_cache_and_runtime_as_well_as_data_and_state() {
+    let vars = [
+        "\"HOME\"",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_STATE_HOME",
+        "XDG_CACHE_HOME",
+        "XDG_RUNTIME_DIR",
+    ];
+    assert!(isolated(&vars.join(" ")));
+    for missing in 0..vars.len() {
+        let text = vars
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != missing)
+            .map(|(_, s)| *s)
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(!isolated(&text), "accepted without {}", vars[missing]);
+    }
+    assert!(isolated(".env_clear() \"HOME\""));
+    assert!(!isolated(".env_clear()"));
 }

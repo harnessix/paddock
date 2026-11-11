@@ -185,3 +185,42 @@ fn bwrap_binds_nothing_onto_a_symlink() {
         }
     }
 }
+
+#[test]
+#[cfg(target_os = "linux")]
+fn bwrap_binds_home_after_its_ancestor_and_before_its_children() {
+    use std::os::unix::fs::PermissionsExt;
+    let (tmp, mut env, mut spec) = fake();
+    let bin = tmp.path().join("bin");
+    std::fs::create_dir(&bin).unwrap();
+    let bwrap = bin.join("bwrap");
+    std::fs::write(&bwrap, "#!/bin/sh\nexit 0\n").unwrap();
+    std::fs::set_permissions(&bwrap, std::fs::Permissions::from_mode(0o755)).unwrap();
+    env.path = vec![bin];
+    spec.home = "/tmp/example-home".into();
+    spec.workdir = spec.home.clone();
+    spec.network = Network::None;
+    spec.add_mount(Mount::tmpfs_sized("/tmp", 4096, "private tmp"));
+    spec.add_mount(Mount::bind(
+        "/source/project",
+        "/tmp/example-home/project",
+        true,
+        "project",
+    ));
+    let launch = Bwrap.render(&env, &spec, false).unwrap();
+    let args = &launch.args;
+    let last_tmp = args
+        .windows(2)
+        .rposition(|a| a == ["--tmpfs", "/tmp"])
+        .unwrap();
+    let home_src = spec.home_src.display().to_string();
+    let home = args
+        .windows(3)
+        .position(|a| a == ["--bind", home_src.as_str(), "/tmp/example-home"])
+        .unwrap();
+    let child = args
+        .windows(3)
+        .position(|a| a == ["--bind", "/source/project", "/tmp/example-home/project"])
+        .unwrap();
+    assert!(last_tmp < home && home < child, "{args:?}");
+}

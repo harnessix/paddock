@@ -23,6 +23,7 @@ url = "https://example.com/settings"
 "#;
 
 fn explain(root: &Path, user: &str) -> String {
+    std::fs::create_dir_all(root.join("home")).unwrap();
     let cfg = root.join("config");
     std::fs::create_dir_all(cfg.join("paddock/harness.d")).unwrap();
     std::fs::write(cfg.join("paddock/harness.d/privtest.toml"), PROFILE).unwrap();
@@ -37,6 +38,8 @@ fn explain(root: &Path, user: &str) -> String {
         .env("XDG_DATA_HOME", root.join("data"))
         .env("XDG_CACHE_HOME", root.join("cache"))
         .env("XDG_STATE_HOME", root.join("state"))
+        .env("XDG_RUNTIME_DIR", root.join("run"))
+        .env("HOME", root.join("home"))
         .output()
         .unwrap();
     assert!(

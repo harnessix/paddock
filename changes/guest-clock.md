@@ -1,0 +1,1 @@
+- Fix: Correct the macOS guest clock on cold and resumed starts using the guest password and sudo.

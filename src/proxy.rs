@@ -24,9 +24,14 @@ use std::net::{IpAddr, Shutdown, TcpListener, TcpStream, ToSocketAddrs};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::sync::Arc;
+use std::time::Duration;
 use url::Url;
+
+pub use crate::macvm::proto::Identity;
+pub use sinks::{Boundary, BoundaryFn, Egress, EgressFn, Gate, GateFn, Opened};
+pub(crate) use tunnel::splice;
+pub use tunnel::{close_idle_tunnels, close_tunnels_idle_for, open_tunnels, Duplex};
 
 pub const RELAY_PORT: u16 = 3128;
 pub const SOCKET_IN_SANDBOX: &str = "/run/paddock/proxy.sock";
@@ -204,46 +209,12 @@ pub struct HostProxy {
     /// Gets the host of each connection that the proxy opens, for the
     /// egress monitor. Never a path or content.
     pub egress: Option<Egress>,
-}
-
-/// The sink of the egress monitor: the target host of an open connection.
-#[derive(Clone)]
-pub struct Egress(pub EgressFn);
-
-pub type EgressFn = Arc<dyn Fn(&str) + Send + Sync>;
-
-impl std::fmt::Debug for Egress {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("Egress")
-    }
-}
-
-/// The sink of the boundary log: target and rule, never content.
-#[derive(Clone)]
-pub struct Boundary(pub BoundaryFn);
-
-pub type BoundaryFn = Arc<dyn Fn(&str, &str) + Send + Sync>;
-
-impl std::fmt::Debug for Boundary {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("Boundary")
-    }
-}
-
-impl HostProxy {
-    /// Note a refused target in the boundary log.
-    fn refused(&self, host: &str, port: u16, rule: &str) {
-        if let Some(b) = &self.boundary {
-            (b.0)(&authority(host, port), rule);
-        }
-    }
-
-    /// Note a host that the proxy connected.
-    fn reached(&self, host: &str) {
-        if let Some(e) = &self.egress {
-            (e.0)(host);
-        }
-    }
+    /// The session token of the macOS guest route: a header line with
+    /// another token closes the connection. `None` takes any header.
+    pub token: Option<String>,
+    /// The firewall gate of the macOS guest route: asked for each
+    /// connection after the host list of the mode.
+    pub gate: Option<Gate>,
 }
 
 impl Default for HostProxy {
@@ -263,6 +234,8 @@ impl Default for HostProxy {
             tls: None,
             boundary: None,
             egress: None,
+            token: None,
+            gate: None,
         }
     }
 }
@@ -418,13 +391,18 @@ pub fn local_addrs() -> Vec<IpAddr> {
 /// Refuse targets on this host, except allowed loopback ports. Returns the
 /// addresses that passed, so a direct connection uses exactly these and a
 /// second lookup (DNS rebinding) cannot change the target.
-fn check_target(cfg: &HostProxy, host: &str, port: u16) -> Result<Vec<std::net::SocketAddr>> {
+fn check_target(
+    cfg: &HostProxy,
+    host: &str,
+    port: u16,
+    id: Option<&Identity>,
+) -> Result<Vec<std::net::SocketAddr>> {
     let resolved: Vec<std::net::SocketAddr> = match target::resolve_target(host, port) {
         Ok(v) => v,
         Err(_) => return Ok(vec![]), // only an upstream proxy may resolve this name
     };
     let local: Vec<IpAddr> = local_addrs().into_iter().map(canonical).collect();
-    target::check_resolved(cfg, host, port, &resolved, &local)?;
+    target::check_resolved(cfg, host, port, &resolved, &local, id)?;
     Ok(resolved)
 }
 
@@ -460,7 +438,7 @@ fn connect_tcp(host: &str, port: u16) -> Result<TcpStream> {
 
 /// Read an HTTP head (up to the empty line). Returns the head and any bytes
 /// that arrived after it.
-fn read_head(s: &mut impl Read) -> Result<(Vec<u8>, Vec<u8>)> {
+pub(crate) fn read_head(s: &mut impl Read) -> Result<(Vec<u8>, Vec<u8>)> {
     let mut buf = Vec::with_capacity(1024);
     let mut chunk = [0u8; 4096];
     loop {
@@ -479,7 +457,7 @@ fn read_head(s: &mut impl Read) -> Result<(Vec<u8>, Vec<u8>)> {
     }
 }
 
-fn authority(host: &str, port: u16) -> String {
+pub(crate) fn authority(host: &str, port: u16) -> String {
     if host.contains(':') {
         format!("[{host}]:{port}")
     } else {
@@ -507,8 +485,13 @@ fn connect_proxy(cfg: &HostProxy, host: &str, port: u16, tls: bool) -> Result<Bo
 }
 
 /// Open a tunnel to host:port the way a host program would.
-fn open_tunnel(cfg: &HostProxy, host: &str, port: u16) -> Result<Box<dyn Duplex>> {
-    let vetted = check_target(cfg, host, port)?;
+fn open_tunnel(
+    cfg: &HostProxy,
+    host: &str,
+    port: u16,
+    id: Option<&Identity>,
+) -> Result<Box<dyn Duplex>> {
+    let vetted = check_target(cfg, host, port, id)?;
     let up = if cfg.registry_http.is_some() || cfg.bypass(host) || is_loopback(host) {
         None
     } else {
@@ -576,101 +559,9 @@ pub fn host_connect(
     port: u16,
     timeout: Duration,
 ) -> Result<impl Read + Write + Send> {
-    let s = open_tunnel(cfg, host, port)?;
+    let s = open_tunnel(cfg, host, port, None)?;
     s.set_tick(timeout)?;
     Ok(s)
-}
-
-trait Duplex: Read + Write + Send + 'static {
-    fn dup(&self) -> std::io::Result<Box<dyn Duplex>>;
-    fn close_write(&self);
-    fn set_tick(&self, d: Duration) -> std::io::Result<()>;
-}
-
-impl Duplex for TcpStream {
-    fn dup(&self) -> std::io::Result<Box<dyn Duplex>> {
-        Ok(Box::new(self.try_clone()?))
-    }
-    fn close_write(&self) {
-        let _ = self.shutdown(Shutdown::Write);
-    }
-    fn set_tick(&self, d: Duration) -> std::io::Result<()> {
-        self.set_read_timeout(Some(d))
-    }
-}
-
-impl Duplex for Box<dyn Duplex> {
-    fn dup(&self) -> std::io::Result<Box<dyn Duplex>> {
-        (**self).dup()
-    }
-    fn close_write(&self) {
-        (**self).close_write()
-    }
-    fn set_tick(&self, d: Duration) -> std::io::Result<()> {
-        (**self).set_tick(d)
-    }
-}
-
-impl Duplex for UnixStream {
-    fn dup(&self) -> std::io::Result<Box<dyn Duplex>> {
-        Ok(Box::new(self.try_clone()?))
-    }
-    fn close_write(&self) {
-        let _ = self.shutdown(Shutdown::Write);
-    }
-    fn set_tick(&self, d: Duration) -> std::io::Result<()> {
-        self.set_read_timeout(Some(d))
-    }
-}
-
-fn pump(
-    mut from: Box<dyn Duplex>,
-    mut to: Box<dyn Duplex>,
-    last: Arc<Mutex<Instant>>,
-    idle: Duration,
-) {
-    let mut buf = [0u8; 16 * 1024];
-    loop {
-        match from.read(&mut buf) {
-            Ok(0) => break,
-            Ok(n) => {
-                if to.write_all(&buf[..n]).is_err() {
-                    break;
-                }
-                *last.lock().unwrap() = Instant::now();
-            }
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                ) =>
-            {
-                if last.lock().unwrap().elapsed() >= idle {
-                    break;
-                }
-            }
-            Err(_) => break,
-        }
-    }
-    to.close_write();
-}
-
-/// Copy both directions until one side closes, or until the tunnel has no
-/// traffic in either direction for `idle`. Long-lived connections such as
-/// WebSockets stay open while they carry traffic.
-fn splice(a: impl Duplex, b: impl Duplex, idle: Duration) {
-    let tick = Duration::from_millis(200).min(idle);
-    let _ = a.set_tick(tick);
-    let _ = b.set_tick(tick);
-    let (Ok(a_read), Ok(a_write), Ok(b_read), Ok(b_write)) = (a.dup(), a.dup(), b.dup(), b.dup())
-    else {
-        return;
-    };
-    let last = Arc::new(Mutex::new(Instant::now()));
-    let l2 = last.clone();
-    let t = std::thread::spawn(move || pump(a_read, b_write, l2, idle));
-    pump(b_read, a_write, last, idle);
-    let _ = t.join();
 }
 
 /// Hop-by-hop headers that a proxy must not forward.
@@ -685,7 +576,12 @@ const HOP: &[&str] = &[
 
 fn handle(cfg: &HostProxy, mut client: UnixStream) -> Result<()> {
     client.set_read_timeout(Some(HEAD_TIMEOUT))?;
-    let (head, rest) = read_head(&mut client)?;
+    let front = front::read_front(cfg, &mut client)?;
+    let (head, rest) = (front.head, front.rest);
+    let id = front.identity.as_ref();
+    if let (Some(id), Some((h, p))) = (id, &front.target) {
+        log::debug!("proxy: a guest connection to {h}:{p} from {id}");
+    }
     let mut headers = [httparse::EMPTY_HEADER; 100];
     let mut req = httparse::Request::new(&mut headers);
     if req.parse(&head)?.is_partial() {
@@ -703,14 +599,21 @@ fn handle(cfg: &HostProxy, mut client: UnixStream) -> Result<()> {
         };
         if let Some(api) = &cfg.api {
             if let Err(why) = api.list.check(&host, port) {
-                if api.refuse(&host, &why) {
-                    cfg.refused(&host, port, &format!("network mode api: {why}"));
+                if let Some(rule) = api.refuse(&host, &why) {
+                    cfg.refused(&host, port, &rule, id);
                 }
                 respond(&mut client, 403, "Forbidden");
                 bail!("refused: {host}:{port}: {why}");
             }
         }
-        let mut up = match open_tunnel(cfg, &host, port) {
+        let opened = match cfg.gated(&host, port, id, &client) {
+            Ok(o) => o,
+            Err(rule) => {
+                respond(&mut client, 403, "Forbidden");
+                bail!("refused: {host}:{port}: {rule}");
+            }
+        };
+        let mut up = match open_tunnel(cfg, &host, port, id) {
             Ok(up) => up,
             Err(e) => {
                 fail(&mut client, &e);
@@ -722,8 +625,8 @@ fn handle(cfg: &HostProxy, mut client: UnixStream) -> Result<()> {
             Some(api) => match checked_hello(&mut client, rest, &host) {
                 Ok(bytes) => bytes,
                 Err(why) => {
-                    if api.refuse(&host, &why) {
-                        cfg.refused(&host, port, &format!("network mode api: {why}"));
+                    if let Some(rule) = api.refuse(&host, &why) {
+                        cfg.refused(&host, port, &rule, id);
                     }
                     let _ = client.shutdown(Shutdown::Both);
                     bail!("refused: {host}:{port}: {why}");
@@ -731,25 +634,33 @@ fn handle(cfg: &HostProxy, mut client: UnixStream) -> Result<()> {
             },
             None => rest,
         };
-        cfg.reached(&host);
+        cfg.reached(&host, id);
         if !rest.is_empty() {
             up.write_all(&rest)?;
         }
-        splice(client, up, cfg.idle);
+        let (sent, got) = splice(client, up, cfg.idle);
+        if let Some(o) = opened {
+            o.close(sent + rest.len() as u64, got);
+        }
         return Ok(());
     }
 
-    // Preserve the API proxy's default refusal, including malformed targets.
-    if cfg.registry_http.is_none() {
-        if let Some(api) = &cfg.api {
-            let parsed = Url::parse(&target).ok();
-            let host = parsed.as_ref().and_then(host_of).unwrap_or_default();
-            let port = parsed.and_then(|u| u.port_or_known_default()).unwrap_or(80);
-            if api.refuse(&host, "plain HTTP") {
-                cfg.refused(&host, port, "network mode api: plain HTTP");
+    if let Some(api) = &cfg.api {
+        if cfg.registry_http.is_none() {
+            let host = Url::parse(&target)
+                .ok()
+                .as_ref()
+                .and_then(host_of)
+                .unwrap_or_default();
+            let port = Url::parse(&target)
+                .ok()
+                .and_then(|u| u.port_or_known_default())
+                .unwrap_or(80);
+            if let Some(rule) = api.refuse(&host, "plain HTTP") {
+                cfg.refused(&host, port, &rule, id);
             }
             respond(&mut client, 403, "Forbidden");
-            bail!("refused: plain HTTP to {host} in network mode api");
+            bail!("refused: plain HTTP to {host}");
         }
     }
 
@@ -769,13 +680,20 @@ fn handle(cfg: &HostProxy, mut client: UnixStream) -> Result<()> {
             |policy| policy.check(&host, port),
         );
         if let Err(why) = result {
-            if api.refuse(&host, &why) {
-                cfg.refused(&host, port, &format!("network mode api: {why}"));
+            if let Some(rule) = api.refuse(&host, &why) {
+                cfg.refused(&host, port, &rule, id);
             }
             respond(&mut client, 403, "Forbidden");
             bail!("refused: {host}:{port}: {why}");
         }
     }
+    let gated = match cfg.gated(&host, port, id, &client) {
+        Ok(o) => o,
+        Err(rule) => {
+            respond(&mut client, 403, "Forbidden");
+            bail!("refused: {host}:{port}: {rule}");
+        }
+    };
     let via = if cfg.registry_http.is_some() || cfg.bypass(&host) || is_loopback(&host) {
         None
     } else {
@@ -788,7 +706,7 @@ fn handle(cfg: &HostProxy, mut client: UnixStream) -> Result<()> {
             port: pp,
             tls,
             ..
-        }) => check_target(cfg, &host, port)
+        }) => check_target(cfg, &host, port, id)
             .and_then(|_| connect_proxy(cfg, ph, *pp, *tls))
             .map(|s| (s, format!("{method} {url} HTTP/1.{version}\r\n"))),
         _ => {
@@ -801,7 +719,7 @@ fn handle(cfg: &HostProxy, mut client: UnixStream) -> Result<()> {
                 path.push('?');
                 path.push_str(q);
             }
-            open_tunnel(&tunnel_cfg, &host, port)
+            open_tunnel(&tunnel_cfg, &host, port, id)
                 .map(|s| (s, format!("{method} {path} HTTP/1.{version}\r\n")))
         }
     };
@@ -812,7 +730,7 @@ fn handle(cfg: &HostProxy, mut client: UnixStream) -> Result<()> {
             return Err(e);
         }
     };
-    cfg.reached(&host);
+    cfg.reached(&host, id);
     let mut out = line.into_bytes();
     for h in req.headers.iter() {
         if HOP.contains(&h.name.to_ascii_lowercase().as_str()) {
@@ -831,7 +749,10 @@ fn handle(cfg: &HostProxy, mut client: UnixStream) -> Result<()> {
     if !rest.is_empty() {
         up.write_all(&rest)?;
     }
-    splice(client, up, cfg.idle);
+    let (sent, got) = splice(client, up, cfg.idle);
+    if let Some(o) = gated {
+        o.close(sent + (out.len() + rest.len()) as u64, got);
+    }
     Ok(())
 }
 
@@ -918,7 +839,7 @@ pub fn relay(listen: &str, socket: &Path, forward: &[u16], ready: Option<&Path>)
                     if resp.parse(&head).is_err() || resp.code != Some(200) || !rest.is_empty() {
                         return;
                     }
-                    splice(conn, up, idle);
+                    let _ = splice(conn, up, idle);
                 });
             }
         });
@@ -932,7 +853,7 @@ pub fn relay(listen: &str, socket: &Path, forward: &[u16], ready: Option<&Path>)
         let socket = socket.to_path_buf();
         std::thread::spawn(move || {
             if let Ok(up) = UnixStream::connect(&socket) {
-                splice(conn, up, idle);
+                let _ = splice(conn, up, idle);
             }
         });
     }
@@ -941,10 +862,14 @@ pub fn relay(listen: &str, socket: &Path, forward: &[u16], ready: Option<&Path>)
 
 pub mod allow;
 mod response;
-use response::{fail, respond};
+use response::fail;
+pub(crate) use response::respond;
+pub(crate) mod front;
+pub mod sinks;
 mod target;
-use target::connect_target;
+pub(crate) use target::connect_target;
 pub(crate) mod tls;
+mod tunnel;
 
 #[cfg(test)]
 mod tests;

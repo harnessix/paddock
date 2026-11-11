@@ -41,7 +41,8 @@ struct World {
 
 fn paddock(w: &World) -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_paddock"));
-    c.env("XDG_CONFIG_HOME", w.root.join("cfg"))
+    c.env("HOME", w.root.join("home"))
+        .env("XDG_CONFIG_HOME", w.root.join("cfg"))
         .env("XDG_DATA_HOME", w.root.join("data"))
         .env("XDG_STATE_HOME", w.root.join("state"))
         .env("XDG_CACHE_HOME", w.root.join("cache"))
@@ -61,6 +62,7 @@ fn an_agent_in_a_sandbox_and_its_starter_talk_through_the_mailbox() {
     }
     let tmp = common::tempdir();
     let root = tmp.path().to_path_buf();
+    std::fs::create_dir_all(root.join("home")).unwrap();
     let cfg = root.join("cfg/paddock/harness.d");
     std::fs::create_dir_all(&cfg).unwrap();
     std::fs::create_dir_all(root.join("project")).unwrap();

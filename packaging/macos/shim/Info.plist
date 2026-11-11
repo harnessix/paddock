@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  The Info.plist of the development build of the session shim. A process
+  takes its Dock name and icon from the bundle that holds its executable.
+  For a development run, put paddock-vm into
+  paddock-vm.app/Contents/MacOS/paddock-vm next to this file as
+  Contents/Info.plist, sign the bundle ad hoc with
+  packaging/macos/paddock-vm.entitlements, and the session shows in the
+  Dock as "paddock (dev)". `paddock app install NAME` makes the
+  per-app bundle with the app's name and icon from this template.
+-->
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleExecutable</key>
+	<string>paddock-vm</string>
+	<key>CFBundleIdentifier</key>
+	<string>dev.paddock.app.dev</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>paddock (dev)</string>
+	<key>CFBundleDisplayName</key>
+	<string>paddock (dev)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.2.1</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>LSUIElement</key>
+	<false/>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSSupportsAutomaticGraphicsSwitching</key>
+	<true/>
+</dict>
+</plist>

@@ -1,0 +1,21 @@
+#sleep 3
+{"v": 1, "kind": "session", "app": "Sample Notes", "state": "stopped"}
+#sleep 3
+{"v": 1, "kind": "session", "app": "Sample Notes", "state": "starting", "phase": "cloning"}
+#sleep 3
+{"v": 1, "kind": "session", "app": "Sample Notes", "state": "starting", "phase": "booting"}
+#sleep 3
+{"v": 1, "kind": "session", "app": "Sample Notes", "state": "starting", "phase": "copying_app"}
+#sleep 3
+{"v": 1, "kind": "session", "app": "Sample Notes", "state": "starting", "phase": "opening"}
+#sleep 3
+{"v": 1, "kind": "session", "app": "Sample Notes", "state": "running", "since": "2026-11-06T10:00:30Z", "windows": 3}
+#sleep 3
+{"v": 1, "kind": "session", "app": "Sample Notes", "state": "stopping"}
+#sleep 3
+{"v": 1, "kind": "session", "app": "Sample Notes", "state": "saved", "since": "2026-11-06T10:00:40Z"}
+#sleep 3
+{"v": 1, "kind": "session", "app": "Sample Notes", "state": "error", "reason": "The VM stopped: out of memory"}
+#sleep 3
+{"v": 1, "kind": "session", "app": "Sample Notes", "state": "blocked", "reason": "Build the base image to start this app.", "block_code": "no_golden"}
+#hold

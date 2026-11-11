@@ -8,7 +8,7 @@ use crate::spec::{GuiMode, Network, SandboxSpec};
 use crate::state::{self, AuthSync, Running, SyncStep};
 use anyhow::{bail, Context, Result};
 use sha2::{Digest, Sha256};
-use std::io::{IsTerminal, Read};
+use std::io::IsTerminal;
 mod capped;
 mod end;
 mod host_tools;
@@ -16,6 +16,9 @@ mod mcp;
 mod memory_scope;
 use capped::read_capped;
 use end::EndOfRun;
+mod help;
+mod sshagent;
+use help::help_text;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -90,37 +93,6 @@ pub fn probe_args(
     }
     crate::privfs::write(&cache, "ok")?;
     Ok(())
-}
-
-fn help_text(exe: &Path, args: &[String]) -> Result<String> {
-    let mut child = Command::new(exe)
-        .args(args)
-        // Not the project: a harness may read settings from its working folder.
-        .current_dir("/")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .with_context(|| format!("cannot run {}", exe.display()))?;
-    let start = Instant::now();
-    loop {
-        if child.try_wait()?.is_some() {
-            break;
-        }
-        if start.elapsed() > Duration::from_secs(20) {
-            let _ = child.kill();
-            bail!(
-                "{} {} did not finish in 20 seconds",
-                exe.display(),
-                args.join(" ")
-            );
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    let mut text = String::new();
-    child.stdout.take().unwrap().read_to_string(&mut text)?;
-    child.stderr.take().unwrap().read_to_string(&mut text)?;
-    Ok(text)
 }
 
 /// The credentials that a run uses.
@@ -205,7 +177,7 @@ fn setup_credentials(
             keep
         });
     }
-    if built.spec.devices.is_none() {
+    if built.spec.devices.is_none() && built.spec.device_socket.is_none() {
         plan.deliver.retain(|(n, c)| {
             let keep = c.as_ != DeliverAs::File;
             if !keep {
@@ -292,7 +264,7 @@ fn setup_credentials(
         }
     }
     if !agents.is_empty() {
-        match start_ssh_agent(env, built, &approver, Duration::from_secs(wait), &agents) {
+        match sshagent::start(env, built, &approver, Duration::from_secs(wait), &agents) {
             Ok(()) => out.agent = agents.into_iter().map(|(n, _)| n).collect(),
             Err(e) => say(&format!(
                 "the sandbox starts without the ssh agent socket: {e:#}"
@@ -399,10 +371,7 @@ fn start_api_proxy(env: &HostEnv, built: &mut Built, backend: &str) -> Result<()
     let mut cfg = backend::host_proxy_cfg(env, &built.spec);
     // The api proxy reaches no host loopback port.
     cfg.allow_loopback = Vec::new();
-    cfg.api = Some(allow::ApiPolicy {
-        list,
-        refusals: Some(refusals),
-    });
+    cfg.api = Some(allow::ApiPolicy::api(list, Some(refusals)));
     let sock = crate::vm::agent::api_proxy(sock, cfg)?;
     built.spec.add_mount(crate::spec::Mount::bind(
         &sock,
@@ -422,43 +391,6 @@ fn start_api_proxy(env: &HostEnv, built: &mut Built, backend: &str) -> Result<()
             "paddock relay --listen 127.0.0.1:{API_PORT} --socket {API_SOCKET_IN_SANDBOX} --ready-file /tmp/.paddock-api >/dev/null 2>&1 &\ni=0; while [ ! -e /tmp/.paddock-api ] && [ $i -lt 100 ]; do sleep 0.05; i=$((i+1)); done"
         ),
     );
-    Ok(())
-}
-
-/// The filtering ssh agent of the run (credentials/sshagent.rs), alive as
-/// long as this process. SSH_AUTH_SOCK in the sandbox points at it.
-fn start_ssh_agent(
-    env: &HostEnv,
-    built: &mut Built,
-    approver: &std::sync::Arc<dyn crate::broker::Approver>,
-    wait: Duration,
-    agents: &[(String, crate::credentials::Credential)],
-) -> Result<()> {
-    use crate::credentials::sshagent;
-    let upstream = env
-        .var("SSH_AUTH_SOCK")
-        .map(std::path::PathBuf::from)
-        .context("SSH_AUTH_SOCK is not set where paddock started")?;
-    let keys = sshagent::load_keys(env, agents)?;
-    sshagent::check_host(Some(&upstream), &keys)?;
-    let run_dir = env.paddock_run().join(&built.spec.id);
-    crate::privfs::dir(&run_dir)?;
-    let sock = crate::sockpath::named(env, &built.spec.id, "ssh-agent.sock")?;
-    let (e1, spec) = (env.clone(), built.spec.clone());
-    sshagent::Proxy::new(
-        keys,
-        upstream,
-        crate::credentials::revoked_file(env, &built.spec.id),
-        sshagent::approver_ask(env.clone(), built.spec.clone(), approver.clone(), wait),
-        std::sync::Arc::new(move |k: &sshagent::Key, result: &str| {
-            sshagent::audit(&e1, &spec, k, result);
-        }),
-    )
-    .serve(&sock)?;
-    for (name, _) in agents {
-        crate::credentials::audit(env, &built.spec, name, "ssh agent ready");
-    }
-    built.spec.ssh_agent_socket = Some(sock);
     Ok(())
 }
 
@@ -653,12 +585,13 @@ pub fn run(
         )
     };
     secrets.watch();
+    let grants = crate::devices::GrantCtx::for_run(env, &built);
     end.devices = crate::devices::start(
         env,
         &mut built.spec,
         backend.name(),
         built.test_devices,
-        built.device_ceiling.as_deref(),
+        &grants,
         &built
             .spawn
             .as_ref()
@@ -670,6 +603,7 @@ pub fn run(
         secrets.clone(),
         horse_access,
     );
+    crate::devices::hook_control(end.kv.as_ref(), end.devices.as_ref());
     // Terminal harnesses that log in through a browser and a localhost callback.
     let _login = if built.profile.launch.login_callback && built.spec.gui.mode != GuiMode::App {
         crate::login::prepare(env, &mut built.spec, backend.name())?
@@ -709,9 +643,7 @@ pub fn run(
         }
     }
     // The provision step, in the project sandbox with the harness's rights.
-    if let Some(mut p) = built.spec.provision_spec() {
-        // The devices are for the harness, not for the install step.
-        p.devices = None;
+    if let Some(p) = built.spec.provision_spec() {
         let what = built.spec.provision.join("; ");
         if !provision(env, backend, &p, quiet, &what)? && !quiet {
             eprintln!("paddock: warning: provisioning failed; the harness starts anyway");
@@ -946,19 +878,26 @@ pub fn run(
         let (stdin, stdout, stderr) = r.child_stdio()?;
         cmd.stdin(stdin).stdout(stdout).stderr(stderr);
     }
+    let mut terminal;
     {
         use std::os::unix::process::CommandExt;
         let take_tty = relay.is_some();
         // A child sandbox ends with the paddock process that runs it, even
         // when that one is killed. SIGTERM, so a container CLI passes it on.
         let deathsig = built.spawn.is_some();
-        if take_tty || deathsig {
-            // SAFETY: setsid and ioctl are async-signal-safe, and so is the
-            // parent-death helper. The slave is fd 0 when `take_tty` is set.
+        // A Seatbelt run gets a process group of its own for `paddock
+        // freeze` (setsid makes one too). It may take the terminal.
+        let group = backend.name() == backend::seatbelt::NAME && !take_tty;
+        terminal = crate::freeze::Terminal::note(group);
+        if take_tty || deathsig || group {
+            // SAFETY: setsid and ioctl are async-signal-safe, and so are the
+            // group and parent-death helpers. The slave is fd 0 with `take_tty`.
             unsafe {
                 cmd.pre_exec(move || {
                     if take_tty {
                         crate::relay::take_controlling_tty()?;
+                    } else if group {
+                        crate::freeze::own_group()?;
                     }
                     if deathsig {
                         crate::platform::arm_parent_death_signal()?;
@@ -1002,6 +941,9 @@ pub fn run(
     if let Some(d) = end.devices.as_mut() {
         d.after_start(env, backend.name(), &spec.id);
     }
+    // macOS: the window mark of a watched run in the caller's terminal.
+    let own = terminal_watched && !relay_on && built.spawn.is_none() && !built.detach;
+    let own_window = crate::mark::own_terminal_window(env, own);
     let running = Running {
         id: spec.id.clone(),
         harness: spec.harness.clone(),
@@ -1032,6 +974,8 @@ pub fn run(
         kept_logins: kept.clone(),
         watched: terminal_watched,
         relay: relay_on,
+        terminal_window: own_window.map(|w| w.id),
+        terminal_pid: own_window.map(|w| w.pid),
         unit,
         kv_project: Some(kv_project_path),
         pasture: kv_pasture,
@@ -1110,6 +1054,7 @@ pub fn run(
         &seam,
         crate::spawn::STOP_GRACE,
     )?;
+    terminal.take_back();
     unsafe {
         libc::signal(libc::SIGINT, old_int);
         libc::signal(libc::SIGQUIT, old_quit);
@@ -1138,15 +1083,14 @@ pub fn run(
     if forwarding.hung_up() {
         // The terminal is gone: a write to it would fail and end the exit
         // steps half way.
-        quiet_stdio();
+        crate::platform::quiet_stdio();
     }
     // The children of this sandbox end with it.
     if let Some(s) = &spawner {
         s.stop_all(Duration::from_secs(30));
     }
-    if let Some(m) = monitor {
-        m.finish();
-    }
+    // Dropping the monitor stops and joins its thread.
+    drop(monitor);
     let late = new_addrs.lock().unwrap().clone();
     if !late.is_empty() && !quiet {
         eprintln!(
@@ -1204,7 +1148,7 @@ pub fn run(
                 .filter_map(|m| m.dst.strip_prefix(&spec.home).ok())
                 .map(Path::to_path_buf)
                 .collect();
-            for l in p.summary(base, &skip).lines() {
+            for l in p.end_summary(base, &skip).lines() {
                 eprintln!("paddock: {l}");
             }
         }
@@ -1316,6 +1260,11 @@ fn start_broker(
         Ok(cfg) => {
             let mut ceiling = crate::spawn::Ceiling::of(built, backend, &policy.modes);
             crate::trainer::sandbox::capture_ceiling(env, built, &mut ceiling);
+            ceiling.devices = crate::devices::names_for(
+                env,
+                built.test_devices,
+                &crate::devices::GrantCtx::for_run(env, built),
+            );
             match crate::spawn::Spawner::new(env, cfg, ceiling, &built.spec.project) {
                 Ok(mut s) => {
                     // The card at a child's time limit waits as long as
@@ -1348,9 +1297,7 @@ fn start_broker(
             })
             .map(|h| h.join(crate::spawn::prompt_rel(&built.spec.id))),
     };
-    if backend == backend::seatbelt::NAME {
-        broker.refused = backend::seatbelt::run::BROKER_REFUSALS.to_vec();
-    }
+    broker.borrow_dir = backend::seatbelt::run::borrow_seen(backend, &built.spec);
     if built.detach {
         let ctl = std::sync::Arc::new(crate::detach::Ctl::new(env.clone(), built.spec.id.clone()));
         ctl.watch(built.profile.screens.error.clone());
@@ -1578,19 +1525,6 @@ impl Drop for Forward {
     }
 }
 
-/// Point standard output and error at /dev/null.
-fn quiet_stdio() {
-    // SAFETY: open(2) and dup2(2) on our own descriptors.
-    unsafe {
-        let fd = libc::open(c"/dev/null".as_ptr(), libc::O_WRONLY);
-        if fd >= 0 {
-            libc::dup2(fd, 1);
-            libc::dup2(fd, 2);
-            libc::close(fd);
-        }
-    }
-}
-
 /// Watches for new host network addresses that become reachable while a sandbox
 /// runs under bwrap with network mode egress. Joined before exit.
 struct EgressAddrMonitor {
@@ -1642,13 +1576,6 @@ impl EgressAddrMonitor {
         Self {
             stop_tx,
             thread: Some(thread),
-        }
-    }
-
-    fn finish(mut self) {
-        let _ = self.stop_tx.send(());
-        if let Some(t) = self.thread.take() {
-            let _ = t.join();
         }
     }
 }

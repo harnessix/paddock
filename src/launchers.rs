@@ -18,6 +18,10 @@ use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// The Dock launchers of app mode on macOS.
+#[path = "launchers/macapp.rs"]
+pub mod macapp;
+
 pub const ICON: &str = include_str!("../docs/assets/paddock-icon.svg");
 const CLI_PREFIX: &str = "paddock-cli-";
 const BLOCK_START: &str =

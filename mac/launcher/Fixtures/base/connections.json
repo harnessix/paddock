@@ -1,0 +1,16 @@
+{
+  "v": 1,
+  "app": "Sample Notes",
+  "running": true,
+  "last_session": false,
+  "connections": [
+    {"time": "2026-11-06T09:59:00Z", "last": "2026-11-06T09:59:40Z", "host": "telemetry.example.net", "port": 443,
+     "verdict": "deny", "rule": "session-7c7c7c", "process": "Sample Notes.app → helper (Renderer)", "count": 5},
+    {"time": "2026-11-06T09:58:00Z", "host": "api.example.com", "port": 443,
+     "verdict": "allow", "rule": "rule-0a0a0a-subdomains", "process": "Sample Notes.app", "count": 12},
+    {"time": "2026-11-06T09:57:00Z", "host": "203.0.113.7", "port": 8443,
+     "verdict": "deny", "rule": "timeout", "process": "Sample Notes.app", "count": 1},
+    {"time": "2026-11-06T09:50:00Z", "host": "files.files.example.com", "port": 443,
+     "verdict": "ask", "rule": "ask", "process": "Sample Notes.app → helper (Renderer)", "count": 1}
+  ]
+}

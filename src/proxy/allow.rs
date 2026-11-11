@@ -301,19 +301,43 @@ impl Refusals {
     }
 }
 
-/// The policy of network mode `api`.
+/// The policy of network mode `api`, and of mode `allowlist` on Seatbelt.
 #[derive(Debug, Clone, Default)]
 pub struct ApiPolicy {
     pub list: Allowlist,
     pub refusals: Option<Refusals>,
+    /// The policy is for network mode `allowlist`, not `api`. The rules are
+    /// the same: only the mode name in the refusal reasons differs.
+    pub allowlist: bool,
 }
 
 impl ApiPolicy {
-    pub fn refuse(&self, host: &str, reason: &str) -> bool {
-        match &self.refusals {
+    /// The policy of network mode `api`.
+    pub fn api(list: Allowlist, refusals: Option<Refusals>) -> Self {
+        Self {
+            list,
+            refusals,
+            allowlist: false,
+        }
+    }
+
+    /// The network mode that the policy enforces, for the refusal reasons.
+    pub fn mode(&self) -> &'static str {
+        if self.allowlist {
+            "allowlist"
+        } else {
+            "api"
+        }
+    }
+
+    /// Report a refused host. The rule for the boundary log, or None when
+    /// the rate limit of the refusals holds it back.
+    pub fn refuse(&self, host: &str, reason: &str) -> Option<String> {
+        let report = match &self.refusals {
             Some(r) => r.report(host, reason),
             None => true,
-        }
+        };
+        report.then(|| format!("network mode {}: {reason}", self.mode()))
     }
 }
 
@@ -325,6 +349,18 @@ mod tests {
         let (l, bad) = Allowlist::parse(items);
         assert!(bad.is_empty(), "{bad:?}");
         l
+    }
+
+    #[test]
+    fn refusals_name_the_network_mode() {
+        let mut p = ApiPolicy::api(list(&["api.example.com"]), None);
+        assert_eq!(p.mode(), "api");
+        let why = p.list.check("other.example.com", 443).unwrap_err();
+        let rule = p.refuse("other.example.com", &why);
+        assert_eq!(rule.as_deref(), Some("network mode api: not on the list"));
+        p.allowlist = true;
+        let rule = p.refuse("other.example.com", "plain HTTP");
+        assert_eq!(rule.as_deref(), Some("network mode allowlist: plain HTTP"));
     }
 
     #[test]

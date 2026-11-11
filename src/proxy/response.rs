@@ -1,6 +1,6 @@
 use std::io::Write;
 
-pub(super) fn respond(client: &mut impl Write, code: u16, reason: &str) {
+pub(crate) fn respond(client: &mut impl Write, code: u16, reason: &str) {
     let _ = write!(
         client,
         "HTTP/1.1 {code} {reason}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"

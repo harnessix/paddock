@@ -3,6 +3,132 @@ use paddock::env::HostEnv;
 use paddock::state::{self, Running};
 
 pub(crate) fn windows(env: &HostEnv, json: bool, mark: bool, focus: Option<String>) -> Result<i32> {
+    #[cfg(target_os = "macos")]
+    return mac_windows(env, json, mark, focus);
+    #[cfg(not(target_os = "macos"))]
+    hypr_windows(env, json, mark, focus)
+}
+
+/// One marked window on macOS: an app window or the terminal window of a
+/// run.
+#[derive(Debug, PartialEq, serde::Serialize)]
+struct MacRow {
+    sandbox: String,
+    kind: &'static str,
+    harness: String,
+    network: String,
+    /// The window number of the window server.
+    window: u32,
+    /// The process that owns the window.
+    pid: u32,
+    /// The color of the frame: `sage` or `amber`.
+    tone: &'static str,
+    /// The text of the badge, `paddock · sample-notes · ask · vm · 2h`.
+    badge: String,
+    /// The question id of an approval panel.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    question: String,
+}
+
+/// The windows that the marker marks, from the run records, the window
+/// list (front first) and the process table.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn mac_rows(
+    list: Vec<Running>,
+    wins: &[paddock::mark::Win],
+    procs: &paddock::mark::ProcTable,
+    vm: &dyn Fn(&[Running]) -> Vec<Option<paddock::mark::VmFacts>>,
+) -> Vec<MacRow> {
+    use paddock::mark::{self, Target, Tone};
+    let runs = mark::marked_runs(list);
+    let facts = vm(&runs);
+    let now = state::now();
+    let targets: Vec<Target> = runs.iter().map(|r| Target::of(r, procs)).collect();
+    mark::match_windows(wins, &targets, std::process::id())
+        .into_iter()
+        .map(|(w, i)| MacRow {
+            sandbox: runs[i].id.clone(),
+            kind: match targets[i] {
+                Target::Window(..) => "terminal",
+                Target::Tree(_) => "app",
+            },
+            harness: runs[i].harness.clone(),
+            network: runs[i].network.clone(),
+            window: w.id,
+            pid: w.pid,
+            tone: Tone::of(&runs[i].network).word(),
+            badge: mark::run_badge(&runs[i], facts.get(i).and_then(|f| f.as_ref()), now),
+            question: String::new(),
+        })
+        .collect()
+}
+
+/// The firewall panels of the marker, one row each with `kind = approval`:
+/// the window is the panel, the pid the marker.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn approval_rows(panels: Vec<paddock::mark::PanelRow>) -> Vec<MacRow> {
+    panels
+        .into_iter()
+        .map(|p| MacRow {
+            sandbox: p.sandbox,
+            kind: "approval",
+            harness: p.harness,
+            network: "ask".into(),
+            window: p.window,
+            pid: p.pid,
+            tone: "sage",
+            badge: String::new(),
+            question: p.question,
+        })
+        .collect()
+}
+
+/// The `paddock windows --json` answer on macOS: the envelope of Linux
+/// (`api_version` and `windows`), so one reader takes both.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn mac_json(rows: &[MacRow]) -> serde_json::Value {
+    serde_json::json!({
+        "api_version": "paddock.windows/v1",
+        "windows": rows,
+    })
+}
+
+/// `paddock windows` on macOS: the marked windows, without Hyprland. The
+/// shield menu in the menu bar raises a window, so there is no --focus.
+/// --mark starts the marker.
+#[cfg(target_os = "macos")]
+fn mac_windows(env: &HostEnv, json: bool, mark: bool, focus: Option<String>) -> Result<i32> {
+    if focus.is_some() {
+        bail!("on macOS, the shield menu in the menu bar raises a protected window");
+    }
+    if mark {
+        paddock::mark::spawn(env);
+    }
+    let list = Running::list(env);
+    let mut rows = if list.is_empty() {
+        Vec::new()
+    } else {
+        let (wins, procs) = paddock::mark::screen();
+        mac_rows(list, &wins, &procs, &|runs| {
+            paddock::mark::vm::facts(env, runs)
+        })
+    };
+    rows.extend(approval_rows(paddock::mark::read_panels(env)));
+    if json {
+        println!("{}", serde_json::to_string_pretty(&mac_json(&rows))?);
+    } else {
+        for r in &rows {
+            println!(
+                "{:<28} {:<9} {:<16} {:<10} {}",
+                r.sandbox, r.kind, r.harness, r.network, r.window
+            );
+        }
+    }
+    Ok(0)
+}
+
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+fn hypr_windows(env: &HostEnv, json: bool, mark: bool, focus: Option<String>) -> Result<i32> {
     use paddock::windows;
     let light = windows::current_theme_is_light(&env.home);
     let (found, clients) = protected_windows(env);
@@ -202,4 +328,144 @@ fn focus_address(address: &str) -> bool {
         ]);
     }
     ok
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use paddock::mark::{ProcTable, Rect, Win};
+
+    fn run(id: &str, gui: &str, pid: u32, window: Option<(u32, u32)>) -> Running {
+        Running {
+            id: id.into(),
+            harness: id.split('-').next().unwrap_or(id).into(),
+            network: "egress".into(),
+            gui: gui.into(),
+            pid,
+            terminal_window: window.map(|w| w.0),
+            terminal_pid: window.map(|w| w.1),
+            ..Default::default()
+        }
+    }
+
+    fn win(id: u32, pid: u32) -> Win {
+        Win {
+            id,
+            pid,
+            layer: 0,
+            bounds: Rect::new(0.0, 30.0, 800.0, 600.0),
+            alpha: 1.0,
+        }
+    }
+
+    #[test]
+    fn the_firewall_panels_are_approval_rows() {
+        let t = tempfile::tempdir().unwrap();
+        let env = paddock::env::HostEnv::from_parts(
+            t.path().join("home"),
+            "demo".into(),
+            1000,
+            1000,
+            [(
+                "XDG_RUNTIME_DIR".to_string(),
+                t.path().join("run").display().to_string(),
+            )]
+            .into_iter()
+            .collect(),
+        );
+        assert!(paddock::mark::read_panels(&env).is_empty());
+        let mine = paddock::mark::PanelRow {
+            question: "c-1".into(),
+            window: 77,
+            pid: std::process::id(),
+            sandbox: "macvm-sample-notes".into(),
+            harness: "sample-notes".into(),
+        };
+        let dead = paddock::mark::PanelRow {
+            pid: 2_000_000_000,
+            ..mine.clone()
+        };
+        paddock::mark::write_panels(&env, &[mine.clone(), dead]);
+        let rows = approval_rows(paddock::mark::read_panels(&env));
+        assert_eq!(rows.len(), 1, "a panel of a dead marker is not listed");
+        assert_eq!(
+            rows[0],
+            MacRow {
+                sandbox: "macvm-sample-notes".into(),
+                kind: "approval",
+                harness: "sample-notes".into(),
+                network: "ask".into(),
+                window: 77,
+                pid: std::process::id(),
+                tone: "sage",
+                badge: String::new(),
+                question: mine.question.clone(),
+            }
+        );
+        // The JSON of macOS has the envelope of Linux; none is `[]`.
+        let v = mac_json(&rows);
+        assert_eq!(v["api_version"], "paddock.windows/v1");
+        assert_eq!(v["windows"][0]["kind"], "approval");
+        assert_eq!(v["windows"][0]["window"], 77);
+        assert_eq!(mac_json(&[])["windows"], serde_json::json!([]));
+        paddock::mark::write_panels(&env, &[]);
+        assert!(!paddock::mark::panels_file(&env).exists());
+    }
+
+    #[test]
+    fn the_macos_listing_has_app_and_terminal_windows() {
+        let list = vec![
+            run("vscode-api-1a2b", "app", 100, None),
+            run("codex-api-3c4d", "off", 600, Some((42, 530))),
+            // A terminal run without a recorded window (tmux): no row.
+            run("claude-web-5e6f", "off", 700, None),
+        ];
+        // VS Code 100 has a helper 101 with the window. Terminal 530 has
+        // windows 41 and 42.
+        let procs: ProcTable = [(100, 1), (101, 100), (530, 1), (600, 532)]
+            .into_iter()
+            .collect();
+        let wins = vec![win(41, 530), win(42, 530), win(7, 101), win(8, 999)];
+        let rows = mac_rows(list, &wins, &procs, &|runs| vec![None; runs.len()]);
+        let got: Vec<(&str, &str, u32, u32)> = rows
+            .iter()
+            .map(|r| (r.sandbox.as_str(), r.kind, r.window, r.pid))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("codex-api-3c4d", "terminal", 42, 530),
+                ("vscode-api-1a2b", "app", 7, 101),
+            ]
+        );
+        assert_eq!(rows[0].harness, "codex");
+        let v = serde_json::to_value(&rows).unwrap();
+        assert_eq!(v[0]["window"], 42);
+        assert_eq!(v[0]["kind"], "terminal");
+        assert_eq!(v[0]["tone"], "sage");
+    }
+
+    #[test]
+    fn two_windows_of_a_guest_session_are_sage_with_vm() {
+        let mut r = run("macvm-sample-notes", "app", 812, None);
+        r.backend = "macvm".into();
+        r.harness = "sample-notes".into();
+        r.network = "ask".into();
+        r.started = state::now();
+        let procs: ProcTable = [(812, 1)].into_iter().collect();
+        let wins = vec![win(11, 812), win(12, 812)];
+        let facts = paddock::mark::VmFacts {
+            display_name: "Sample Notes (paddock)".into(),
+            ..Default::default()
+        };
+        let rows = mac_rows(vec![r], &wins, &procs, &|runs| {
+            vec![Some(facts.clone()); runs.len()]
+        });
+        assert_eq!(rows.len(), 2);
+        for row in &rows {
+            assert_eq!(row.tone, "sage");
+            assert!(row.badge.contains(" · vm · "), "{}", row.badge);
+            assert!(row.badge.starts_with("paddock · sample-notes · ask"));
+        }
+    }
 }

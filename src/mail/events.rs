@@ -182,14 +182,16 @@ pub fn ended(env: &HostEnv, id: &str, code: Option<i32>) -> Option<Message> {
         format!("the sandbox ended with {}", code_text(code)),
     );
     m.code = code;
-    super::append_end(env, id, m)
+    let written = super::append_end(env, id, m)?;
+    crate::run_end_hook::start(env, id, code);
+    Some(written)
 }
 
 /// Look at a run that has no end event: when its paddock process is gone,
 /// write `gone` (and `child-ended` for its parent). Returns the event when
 /// this call wrote it. Readers of the mailbox call this as they poll.
 pub fn check_gone(env: &HostEnv, id: &str) -> Option<Message> {
-    if super::end(env, id).is_some() {
+    if !matches!(super::inspect_end(env, id), super::EndState::Absent) {
         return None;
     }
     let info = super::run_info(env, id)?;
@@ -204,6 +206,7 @@ pub fn check_gone(env: &HostEnv, id: &str) -> Option<Message> {
         if pane { " Its pane in paddock's tmux server still shows the last screen, but nothing runs behind it: do not type into it." } else { "" },
     );
     let m = super::append_end(env, id, Message::event("gone", text))?;
+    crate::run_end_hook::start(env, id, None);
     if let Some(p) = super::starter(env, id).and_then(|s| s.parent) {
         let text = format!("child sandbox {id} is gone: its paddock process was killed");
         to_parent(env, &p, id, "child-ended", text, None);

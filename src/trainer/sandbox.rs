@@ -3,8 +3,11 @@ use crate::{build::Built, env::HostEnv, horse::Store, spawn::Ceiling};
 
 /// Capture the target's approved settings before its project can change.
 pub fn capture_ceiling(env: &HostEnv, built: &Built, ceiling: &mut Ceiling) {
-    ceiling.devices =
-        crate::devices::names_for(env, built.test_devices, built.device_ceiling.as_deref());
+    ceiling.devices = crate::devices::names_for(
+        env,
+        built.test_devices,
+        &crate::devices::GrantCtx::for_run(env, built),
+    );
     if !built.horse {
         return;
     }

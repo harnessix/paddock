@@ -72,7 +72,7 @@ pub(crate) enum ApprovalsCmd {
     /// TEXT, or dismiss it with deny.
     Answer {
         id: String,
-        #[arg(required_unless_present = "text")]
+        #[arg(required_unless_present_any = ["text", "connect"])]
         answer: Option<String>,
         /// The answer to a question (/dev/paddock/ask), or with deny and
         /// deny-session a note for the agent (one line, at most 300
@@ -80,6 +80,29 @@ pub(crate) enum ApprovalsCmd {
         /// input, so it never shows in the process list or the shell history.
         #[arg(long, allow_hyphen_values = true)]
         text: Option<String>,
+        /// A connect question of the firewall of paddock's macOS guest:
+        /// allow this connection.
+        #[arg(long, group = "connect", conflicts_with_all = ["answer", "text"])]
+        allow_once: bool,
+        /// Always allow the site and its subdomains.
+        #[arg(long, group = "connect", conflicts_with_all = ["answer", "text"])]
+        allow_site: bool,
+        /// Allow all hosts for ten minutes.
+        #[arg(long, group = "connect", conflicts_with_all = ["answer", "text"])]
+        allow_everything: bool,
+        /// Allow this app, host and port for the rest of the session.
+        #[arg(long, group = "connect", conflicts_with_all = ["answer", "text"])]
+        allow_session: bool,
+        /// Allow this app, host and port from now on: a rule in the rules
+        /// file of the profile (paddock app rules NAME list).
+        #[arg(long, group = "connect", conflicts_with_all = ["answer", "text"])]
+        allow_always: bool,
+        /// Deny this connection.
+        #[arg(long, group = "connect", conflicts_with_all = ["answer", "text"])]
+        deny: bool,
+        /// Deny this app, host and port from now on: a rule in the rules file.
+        #[arg(long, group = "connect", conflicts_with_all = ["answer", "text"])]
+        deny_always: bool,
     },
 }
 
@@ -114,10 +137,18 @@ the rest of its session, at once and without a new card, with the same note.
 \"The same request\" is what \"session\" (allow for this session) covers. It
 never covers a child or a parent sandbox.
 
+A connect question of the firewall of paddock's macOS guest (a desktop app
+in network mode ask wants to reach a host) takes one of --allow-once,
+--allow-session, --allow-always, --deny or --deny-always. The marker shows
+the same question as a panel next to the app's window; the first answer
+wins. --allow-always and --deny-always write a rule into the rules file of
+the app (paddock app rules NAME list).
+
 Examples:
   paddock approvals
   paddock approvals answer r-1793321234-1a2b3c4d once
   paddock approvals answer r-1793321234-1a2b3c4d deny --text \"do not ask for host exec\"
+  paddock approvals answer r-1793321234-1a2b3c4d --allow-always
   paddock approvals answer r-1793321234-1a2b3c4d deny-session --text -
   paddock approvals answer r-1793321234-9f8e7d6c --text -
   paddock approvals --json";
@@ -252,6 +283,7 @@ pub(crate) fn approver_cmd(env: &HostEnv, cmd: ApproverCmd) -> Result<i32> {
                 session_allowed: true,
                 choices: Vec::new(),
                 started_by: vec![],
+                connect: None,
             };
             let (a, note) = ap::run_hook(&hook, &p);
             match a {
@@ -269,7 +301,33 @@ pub(crate) fn run(env: &HostEnv, cmd: ApproverCmd) -> Result<i32> {
 
 pub(crate) fn approvals(env: &HostEnv, json: bool, cmd: Option<ApprovalsCmd>) -> Result<i32> {
     use paddock::broker;
-    if let Some(ApprovalsCmd::Answer { id, answer, text }) = cmd {
+    if let Some(ApprovalsCmd::Answer {
+        id,
+        answer,
+        text,
+        allow_once,
+        allow_site,
+        allow_everything,
+        allow_session,
+        allow_always,
+        deny,
+        deny_always,
+    }) = cmd
+    {
+        let flags = [
+            (allow_once, broker::ConnectAnswer::AllowOnce),
+            (allow_site, broker::ConnectAnswer::AllowSite),
+            (allow_everything, broker::ConnectAnswer::AllowEverything),
+            (allow_session, broker::ConnectAnswer::AllowSession),
+            (allow_always, broker::ConnectAnswer::AllowAlways),
+            (deny, broker::ConnectAnswer::Deny),
+            (deny_always, broker::ConnectAnswer::DenyAlways),
+        ];
+        if let Some((_, a)) = flags.iter().find(|(set, _)| *set) {
+            broker::answer_connect_cli(env, &id, *a)?;
+            println!("{}", paddock::macvm::text::connect_answered(&id, a.word()));
+            return Ok(0);
+        }
         match (answer, text) {
             (Some(a), Some(t)) => {
                 let a: broker::Answer = a.parse()?;
@@ -287,7 +345,7 @@ pub(crate) fn approvals(env: &HostEnv, json: bool, cmd: Option<ApprovalsCmd>) ->
                     t
                 };
                 let note = broker::clean_note(&t);
-                broker::answer_with_note(env, &id, a, note.as_deref())?;
+                broker::answer_with_note_cli(env, &id, a, note.as_deref())?;
                 match note {
                     Some(n) => println!(
                         "Answered {id}: {} with a note of {} characters.",
@@ -311,11 +369,11 @@ pub(crate) fn approvals(env: &HostEnv, json: bool, cmd: Option<ApprovalsCmd>) ->
                 if t.trim().is_empty() {
                     bail!("the answer is empty");
                 }
-                broker::answer_reply(env, &id, &t)?;
+                broker::answer_reply_cli(env, &id, &t)?;
                 println!("Answered {id} with {} characters.", t.chars().count());
             }
             (Some(a), None) => {
-                broker::answer(env, &id, a.parse()?)?;
+                broker::answer_with_note_cli(env, &id, a.parse()?, None)?;
                 println!("Answered {id}: {a}");
             }
             (None, None) => bail!("give an answer, or --text TEXT for a question"),
@@ -324,10 +382,7 @@ pub(crate) fn approvals(env: &HostEnv, json: bool, cmd: Option<ApprovalsCmd>) ->
     }
     let list = broker::pending(env);
     if json {
-        println!(
-            "{}",
-            serde_json::json!({ "api_version": "paddock.approvals/v1", "pending": list })
-        );
+        println!("{}", approvals_json(&list, paddock::state::now()));
     } else if list.is_empty() {
         println!("No requests wait for an answer.");
     } else {
@@ -378,6 +433,22 @@ pub(crate) fn approvals(env: &HostEnv, json: bool, cmd: Option<ApprovalsCmd>) ->
     Ok(0)
 }
 
+fn approvals_json(list: &[paddock::broker::Pending], now: u64) -> serde_json::Value {
+    let pending: Vec<_> = list
+        .iter()
+        .map(|p| {
+            let mut value = serde_json::to_value(p.cleaned()).expect("pending request serializes");
+            let item = value.as_object_mut().expect("pending request is an object");
+            let since = p.connect.as_ref().map_or(p.created, |c| c.asked_at);
+            item.insert("age_s".into(), now.saturating_sub(since).into());
+            let process = p.connect.as_ref().and_then(|c| c.path.as_ref()).cloned();
+            item.insert("process".into(), serde_json::json!(process));
+            value
+        })
+        .collect();
+    serde_json::json!({ "v": 1, "api_version": "paddock.approvals/v1", "pending": pending })
+}
+
 pub(crate) fn log(env: &HostEnv, json: bool, lines: usize) -> Result<i32> {
     let text = std::fs::read_to_string(paddock::broker::audit_file(env)).unwrap_or_default();
     let all: Vec<&str> = text.lines().collect();
@@ -401,4 +472,25 @@ pub(crate) fn log(env: &HostEnv, json: bool, lines: usize) -> Result<i32> {
         }
     }
     Ok(0)
+}
+
+#[cfg(test)]
+mod launcher_approval_tests {
+    #[test]
+    fn json_has_version_process_and_saturating_age() {
+        let p = paddock::broker::Pending {
+            created: 20,
+            connect: Some(paddock::broker::Connect {
+                asked_at: 30,
+                path: Some("/Applications/App".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let encoded = super::approvals_json(&[p], 25).to_string();
+        let v: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(v["v"], 1);
+        assert_eq!(v["pending"][0]["age_s"], 0);
+        assert_eq!(v["pending"][0]["process"], "/Applications/App");
+    }
 }

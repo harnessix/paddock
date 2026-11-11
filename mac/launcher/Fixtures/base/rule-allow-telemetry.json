@@ -1,0 +1,9 @@
+{
+  "v": 1,
+  "ok": true,
+  "applies": "live",
+  "rules": [
+    {"id": "rule-3t3t3t", "host": "telemetry.example.net", "port": 443, "verdict": "allow", "scope": "always",
+     "made": "2026-11-06T10:00:00Z", "by": "user", "source": "you", "count": 0}
+  ]
+}

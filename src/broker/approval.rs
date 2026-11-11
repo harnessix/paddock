@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 /// A request that waits for the user, as `paddock approvals --json` shows it.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Pending {
     pub id: String,
     pub sandbox: String,
@@ -37,6 +37,141 @@ pub struct Pending {
     /// deny.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub choices: Vec<String>,
+    /// For a `connect` question of the firewall of the macOS guest route:
+    /// the connection that waits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connect: Option<Connect>,
+}
+
+/// The capability name of a question of the firewall of paddock's macOS
+/// guest: a desktop app wants to connect to a host in network mode `ask`. The
+/// answer is one of the five `ConnectAnswer` words. The session helper that
+/// asks keeps the question in the store until it is answered or the session
+/// ends, so it survives a restart of paddock and of the marker on the host.
+pub const CONNECT_CAPABILITY: &str = "connect";
+
+/// The connection behind a `connect` question.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Connect {
+    /// The bundle identifier of the guest process, or its file name.
+    pub app: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub team: Option<String>,
+    pub host: String,
+    pub port: u16,
+    /// The connections that wait on this answer.
+    pub count: u64,
+    /// Unix time of the question, or of its last re-ask after a sleep of
+    /// the host.
+    pub asked_at: u64,
+    /// The session helper (`paddock-vm app`) that asks. When it is gone,
+    /// the question goes with it.
+    pub pid: u32,
+    /// The executable in the guest, for the `Why?` line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// The app profile, whose rules file an `always` answer writes.
+    pub profile: String,
+    /// The name of the app in the title of the panel: `ChatGPT`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub label: String,
+    /// The open questions of the same session that wait behind this one.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub more: u64,
+    /// The notice of a session that asks too much, not a question about
+    /// one host: `deny` denies every open question once, `allow-once`
+    /// goes on with one question at a time.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub notice: bool,
+    /// The icon file of the app on the host, for the panel.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub icon: Option<std::path::PathBuf>,
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
+}
+
+/// The five answers of a `connect` question.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ConnectAnswer {
+    AllowOnce,
+    AllowSite,
+    AllowEverything,
+    AllowSession,
+    AllowAlways,
+    Deny,
+    DenyAlways,
+}
+
+impl ConnectAnswer {
+    pub const ALL: [ConnectAnswer; 7] = [
+        ConnectAnswer::AllowOnce,
+        ConnectAnswer::AllowSite,
+        ConnectAnswer::AllowEverything,
+        ConnectAnswer::AllowSession,
+        ConnectAnswer::AllowAlways,
+        ConnectAnswer::Deny,
+        ConnectAnswer::DenyAlways,
+    ];
+
+    /// The word of the answer: `allow-once`, ..., `deny-always`.
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::AllowOnce => "allow-once",
+            Self::AllowSite => "allow-site",
+            Self::AllowEverything => "allow-everything",
+            Self::AllowSession => "allow-session",
+            Self::AllowAlways => "allow-always",
+            Self::Deny => "deny",
+            Self::DenyAlways => "deny-always",
+        }
+    }
+
+    pub fn allows(self) -> bool {
+        matches!(
+            self,
+            Self::AllowOnce
+                | Self::AllowSite
+                | Self::AllowEverything
+                | Self::AllowSession
+                | Self::AllowAlways
+        )
+    }
+
+    /// The answer of a plain card answer: `once` allows once, `session`
+    /// allows for the session, `deny` denies once. `deny-session` has no
+    /// counterpart: a session-long deny is a rule of the CLI.
+    pub fn from_answer(a: Answer) -> Result<Self> {
+        Ok(match a {
+            Answer::Once => Self::AllowOnce,
+            Answer::Session => Self::AllowSession,
+            Answer::Deny => Self::Deny,
+            Answer::DenySession => bail!("{}", crate::macvm::text::connect_answers()),
+        })
+    }
+
+    /// The answer in an answer file: `{"reply":"allow-always"}` from the
+    /// panel or `paddock approvals answer`, or a plain card answer.
+    pub fn parse_file(text: &str) -> Option<Self> {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(text) {
+            if let Some(r) = v.get("reply").and_then(|r| r.as_str()) {
+                return r.parse().ok();
+            }
+        }
+        AnswerFile::parse(text).and_then(|(a, _)| Self::from_answer(a).ok())
+    }
+}
+
+impl std::str::FromStr for ConnectAnswer {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> Result<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|a| a.word() == s)
+            .ok_or_else(|| anyhow::anyhow!("{}", crate::macvm::text::connect_answers()))
+    }
 }
 
 /// The capability name of a question from `/dev/paddock/ask` on the
@@ -185,9 +320,53 @@ pub fn pending(env: &HostEnv) -> Vec<Pending> {
             !gone
         });
     }
+    // A connect question of a session helper that is gone: nobody waits
+    // on it any more.
+    out.retain(|p| {
+        let gone = p.connect.as_ref().is_some_and(|c| !state::alive(c.pid));
+        if gone {
+            let dir = approvals_dir(env);
+            let _ = std::fs::remove_file(dir.join(format!("{}.json", p.id)));
+            let _ = std::fs::remove_file(dir.join(format!("{}.answer", p.id)));
+        }
+        !gone
+    });
     // Host requests first: questions of agents never push them off the card.
     out.sort_by_key(|p| (p.capability == ASK_CAPABILITY, p.created));
     out
+}
+
+/// Answer a `connect` question of the firewall. The panel, the CLI and
+/// the notification all come here, so they never disagree. Only the host
+/// can call this, like `answer`.
+pub fn answer_connect(env: &HostEnv, id: &str, a: ConnectAnswer) -> Result<()> {
+    answer_connect_origin(env, id, a, false)
+}
+
+/// Answer a connection question from the approvals command.
+pub fn answer_connect_cli(env: &HostEnv, id: &str, a: ConnectAnswer) -> Result<()> {
+    answer_connect_origin(env, id, a, true)
+}
+
+fn answer_connect_origin(env: &HostEnv, id: &str, a: ConnectAnswer, cli: bool) -> Result<()> {
+    if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        bail!("invalid request id");
+    }
+    let dir = approvals_dir(env);
+    let pending = dir.join(format!("{id}.json"));
+    if !pending.is_file() {
+        bail!("no pending request {id}");
+    }
+    let p: Pending = serde_json::from_str(&std::fs::read_to_string(&pending)?)?;
+    if p.capability != CONNECT_CAPABILITY {
+        bail!("{id} is not a connect question: answer it with once, session or deny");
+    }
+    write_answer(
+        &dir,
+        id,
+        serde_json::json!({ "reply": a.word(), "source": if cli { "cli" } else { "panel" } })
+            .to_string(),
+    )
 }
 
 /// Record the user's answer. Only the host can call this: the approvals
@@ -199,6 +378,20 @@ pub fn answer(env: &HostEnv, id: &str, a: Answer) -> Result<()> {
 /// Record the user's answer with a note for the agent. Only a denial
 /// carries a note.
 pub fn answer_with_note(env: &HostEnv, id: &str, a: Answer, note: Option<&str>) -> Result<()> {
+    answer_with_note_origin(env, id, a, note, false)
+}
+
+pub fn answer_with_note_cli(env: &HostEnv, id: &str, a: Answer, note: Option<&str>) -> Result<()> {
+    answer_with_note_origin(env, id, a, note, true)
+}
+
+fn answer_with_note_origin(
+    env: &HostEnv,
+    id: &str,
+    a: Answer,
+    note: Option<&str>,
+    cli: bool,
+) -> Result<()> {
     if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
         bail!("invalid request id");
     }
@@ -208,6 +401,12 @@ pub fn answer_with_note(env: &HostEnv, id: &str, a: Answer, note: Option<&str>) 
         bail!("no pending request {id}");
     }
     let p: Pending = serde_json::from_str(&std::fs::read_to_string(&pending)?)?;
+    if p.capability == CONNECT_CAPABILITY {
+        if note.is_some() {
+            bail!("a connect question takes no note");
+        }
+        return answer_connect_origin(env, id, ConnectAnswer::from_answer(a)?, cli);
+    }
     if p.capability == ASK_CAPABILITY && a != Answer::Deny {
         bail!("{id} is a question: answer it with --text TEXT, or dismiss it with deny");
     }
@@ -253,6 +452,14 @@ fn write_answer(dir: &Path, id: &str, text: String) -> Result<()> {
 /// the agent that asked; nothing runs on the host. Only the host can call
 /// this, like `answer`.
 pub fn answer_reply(env: &HostEnv, id: &str, text: &str) -> Result<()> {
+    answer_reply_origin(env, id, text, false)
+}
+
+pub fn answer_reply_cli(env: &HostEnv, id: &str, text: &str) -> Result<()> {
+    answer_reply_origin(env, id, text, true)
+}
+
+fn answer_reply_origin(env: &HostEnv, id: &str, text: &str, cli: bool) -> Result<()> {
     if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
         bail!("invalid request id");
     }
@@ -262,6 +469,9 @@ pub fn answer_reply(env: &HostEnv, id: &str, text: &str) -> Result<()> {
         bail!("no pending request {id}");
     }
     let p: Pending = serde_json::from_str(&std::fs::read_to_string(&pending)?)?;
+    if p.capability == CONNECT_CAPABILITY {
+        return answer_connect_origin(env, id, text.trim().parse()?, cli);
+    }
     // A card of paddock itself with fixed choices: only those.
     if p.capability != ASK_CAPABILITY && !p.choices.is_empty() {
         if !p.choices.iter().any(|c| c == text.trim()) {
@@ -373,8 +583,7 @@ impl Pending {
 pub fn write_pending(env: &HostEnv, p: &Pending) -> std::io::Result<PathBuf> {
     let p = &p.cleaned();
     let pending = approvals_dir(env).join(format!("{}.json", p.id));
-    crate::privfs::write(&pending, serde_json::to_string(p).unwrap_or_default())?;
-    // The run's starter hears that the run waits for the user.
+    crate::privfs::write_atomic(&pending, serde_json::to_string(p).unwrap_or_default())?;
     crate::mail::events::card(env, p);
     Ok(pending)
 }

@@ -1,0 +1,26 @@
+{
+  "v": 1,
+  "apps": [
+    {
+      "name": "Sample Notes",
+      "bundle_path": "/Applications/Sample Notes.app",
+      "state": "blocked",
+      "next_start": "Warm, about 10 s",
+      "memory_bytes": 6442450944,
+      "host_memory_bytes": 17179869184,
+      "sizes": {
+        "app_copy": 1200000000,
+        "data": 3400000000,
+        "saved_state": 2000000000
+      },
+      "network": "ask",
+      "open_questions": 0,
+      "rule_count": 14,
+      "golden": "macOS 15.1 (sealed)",
+      "app_changed": false,
+      "agent_connected": true,
+      "reason": "Build the base image to start this app.",
+      "block_code": "no_golden"
+    }
+  ]
+}

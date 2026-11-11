@@ -61,7 +61,16 @@ fn every_linked_reference_file_exists_and_is_linked() {
 
 /// The help text of `paddock-host`, which the binary prints for `paddock host`.
 fn host_help(args: &[&str]) -> String {
+    let t = tempfile::tempdir().unwrap();
+    let root = t.path();
+    std::fs::create_dir_all(root.join("home")).unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_paddock"))
+        .env("HOME", root.join("home"))
+        .env("XDG_CONFIG_HOME", root.join("cfg"))
+        .env("XDG_DATA_HOME", root.join("data"))
+        .env("XDG_STATE_HOME", root.join("state"))
+        .env("XDG_CACHE_HOME", root.join("cache"))
+        .env("XDG_RUNTIME_DIR", root.join("run"))
         .arg("host")
         .args(args)
         .output()
@@ -125,6 +134,7 @@ fn skill_install_copies_the_whole_folder() {
         .env("XDG_DATA_HOME", xdg.join("data"))
         .env("XDG_STATE_HOME", xdg.join("state"))
         .env("XDG_CACHE_HOME", xdg.join("cache"))
+        .env("XDG_RUNTIME_DIR", xdg.join("run"))
         .env_remove("PADDOCK")
         .args(["skill", "install"])
         .output()

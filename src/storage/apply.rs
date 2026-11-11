@@ -400,6 +400,7 @@ pub fn apply(env: &HostEnv, containers: &dyn Containers, items: &[Item]) -> Vec<
                 Ok(())
             })(),
             Action::View { id } => crate::view::remove(env, id),
+            Action::Macvm { dir } => crate::macvm::manage::gc_remove(env, dir),
             Action::Kv { sandboxes } => {
                 crate::kv::gc_apply(env, sandboxes, state::now()).map(|_| ())
             }
@@ -449,6 +450,10 @@ pub fn after_build(env: &HostEnv, tag: &str) {
         state::now(),
     );
     items.retain(|i| i.selected());
+    // The macOS guest folder: its automatic tier too.
+    for line in crate::macvm::manage::auto_cleanup(env) {
+        eprintln!("paddock: gc: {line}");
+    }
     if items.is_empty() {
         return;
     }

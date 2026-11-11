@@ -97,6 +97,15 @@ pub(crate) fn ps(env: &HostEnv, json: bool, mem: bool) -> Result<i32> {
                         .collect();
                     o.insert("spent".into(), rows.into());
                 }
+                // The device instances of the sandbox (devices/sandbox).
+                let devs = paddock::devices::sandbox::state::InstanceState::of_caller(env, &r.id);
+                if let (Some(o), false) = (v.as_object_mut(), devs.is_empty()) {
+                    let now = state::now();
+                    o.insert(
+                        "devices".into(),
+                        devs.iter().map(|d| d.json(now)).collect::<Vec<_>>().into(),
+                    );
+                }
                 let tunnels = paddock::monitor::read_seen(env, &r.id);
                 if let (Some(o), false) = (v.as_object_mut(), tunnels.is_empty()) {
                     o.insert("tunnels".into(), tunnels.into());
@@ -132,14 +141,44 @@ pub(crate) fn ps(env: &HostEnv, json: bool, mem: bool) -> Result<i32> {
                 v
             })
             .collect();
+        let now = state::now();
+        let shared: Vec<serde_json::Value> =
+            paddock::devices::sandbox::state::InstanceState::shared(env)
+                .iter()
+                .map(|d| d.json(now))
+                .collect();
         println!(
             "{}",
-            serde_json::json!({ "api_version": "paddock.ps/v1", "sandboxes": rows, "ended": paddock::detach::recent_ended(env, state::now()) })
+            serde_json::json!({
+                "api_version": "paddock.ps/v1",
+                "shared_devices": shared,
+                "sandboxes": rows,
+                "ended": paddock::detach::recent_ended(env, state::now()),
+            })
         );
-    } else if list.is_empty() {
-        println!("No running sandboxes.");
     } else {
+        // A shared device instance serves every run, so it stands once, at
+        // the top, with the runs that hold a lease on it.
         let now = state::now();
+        for d in paddock::devices::sandbox::state::InstanceState::shared(env) {
+            let users = d.users.unwrap_or(0);
+            println!(
+                "shared device {:<15} {} user{}, running {}m, pid {}{}",
+                d.device,
+                users,
+                if users == 1 { "" } else { "s" },
+                now.saturating_sub(d.started) / 60,
+                d.pid,
+                match (&d.unit, &d.owner) {
+                    (Some(u), _) => format!(", unit {u}"),
+                    (None, Some(o)) => format!(", owned by {}", paddock::ids::short(o)),
+                    (None, None) => String::new(),
+                }
+            );
+        }
+        if list.is_empty() {
+            println!("No running sandboxes.");
+        }
         let depth = |r: &Running| state::depth_in(&list, r);
         for r in &list {
             let id = format!("{}{}", "  ".repeat(depth(r)), r.id);
@@ -211,6 +250,16 @@ pub(crate) fn ps(env: &HostEnv, json: bool, mem: bool) -> Result<i32> {
             for n in rec.map(|d| d.notes).unwrap_or_default() {
                 println!("{:<28} {n}", "");
             }
+            for d in paddock::devices::sandbox::state::InstanceState::of_caller(env, &r.id) {
+                println!(
+                    "{:<28} device {} ({}, running {}m, pid {})",
+                    "",
+                    d.device,
+                    d.run,
+                    now.saturating_sub(d.started) / 60,
+                    d.pid
+                );
+            }
         }
     }
     Ok(0)
@@ -229,31 +278,6 @@ pub(crate) fn thaw(env: &HostEnv, id: String, tree: bool) -> Result<i32> {
         println!("Thawed {f}.");
     }
     Ok(0)
-}
-
-pub(crate) fn wait(env: &HostEnv, id: String, timeout: Option<String>) -> Result<i32> {
-    let t = match timeout {
-        Some(t) => Some(std::time::Duration::from_secs(
-            paddock::timer::parse_duration(&t)?,
-        )),
-        None => None,
-    };
-    // The tree is known only while the sandbox runs.
-    let root = paddock::speckit::tree_root_of(env, &id);
-    if let Some(t) = root
-        .as_deref()
-        .and_then(|r| paddock::speckit::record_of(env, r, &id))
-    {
-        eprintln!("paddock: {id} works on task {} of {}", t.id, t.feature);
-    }
-    let code = paddock::detach::wait(env, &id, t)?;
-    if let Some(t) = root
-        .as_deref()
-        .and_then(|r| paddock::speckit::record_of(env, r, &id))
-    {
-        println!("task {} of {}: {}", t.id, t.feature, t.state.name());
-    }
-    Ok(code)
 }
 
 /// The Spec Kit task that a running sandbox holds.

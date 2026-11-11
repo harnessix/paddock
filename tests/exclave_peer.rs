@@ -50,6 +50,7 @@ fn peer_runs_in_a_limited_sandbox() {
         .env("XDG_STATE_HOME", dir.path().join("state"))
         .env("XDG_CONFIG_HOME", dir.path().join("config"))
         .env("XDG_CACHE_HOME", dir.path().join("cache"))
+        .env("XDG_RUNTIME_DIR", dir.path().join("run"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());

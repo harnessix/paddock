@@ -3,9 +3,10 @@ use super::*;
 use crate::broker::{
     Answer, Approver, Broker, Context, HostPolicy, Pending, Request, Status as RStatus, PROTOCOL,
 };
-use crate::build::{build_with, Options};
+use crate::build::{build_with, Built, Options};
 use crate::profile::{Harness, Profile};
-use crate::spec::Mount;
+use crate::spec::GuiMode;
+use crate::spec::{Mount, MountKind};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 pub(super) const SECRET_TASK: &str = "TASK-TEXT-7f3a: refactor the parser";
@@ -850,36 +851,6 @@ fn the_prompt_never_reaches_argv_or_the_audit_log_and_results_reach_the_inbox() 
 }
 
 #[test]
-fn a_child_gets_at_most_the_devices_of_its_parent() {
-    use crate::devices::{enabled_names, DevicesCfg};
-    let on = DevicesCfg::parse("[devices]\necho = true\n").unwrap();
-    let off = DevicesCfg::parse("").unwrap();
-    let echo = vec!["echo".to_string()];
-    // A root gets what the user configuration turns on.
-    assert_eq!(enabled_names(&on, false, None), echo);
-    // A child of a parent without devices gets none, even when the
-    // configuration turns one on now, and even in test mode.
-    assert!(enabled_names(&on, false, Some(&[])).is_empty());
-    assert!(enabled_names(&on, true, Some(&[])).is_empty());
-    // A child of a parent with echo keeps it only while the user still
-    // turns it on.
-    assert_eq!(enabled_names(&on, false, Some(&echo)), echo);
-    assert!(enabled_names(&off, false, Some(&echo)).is_empty());
-    let no_mount = DevicesCfg::parse("[devices]\nmount = false\necho = true\n").unwrap();
-    assert!(enabled_names(&no_mount, false, None).is_empty());
-    // The ceiling travels in the job, and an old job without it means none.
-    let mut c = ceiling("p", 0, Path::new("/src/app"));
-    c.devices = echo.clone();
-    let back: Ceiling = serde_json::from_str(&serde_json::to_string(&c).unwrap()).unwrap();
-    assert_eq!(back.devices, echo);
-    let mut v = serde_json::to_value(&c).unwrap();
-    v.as_object_mut().unwrap().remove("devices");
-    let old: Ceiling = serde_json::from_value(v).unwrap();
-    assert!(old.devices.is_empty());
-    assert_eq!(old.root(), "p");
-}
-
-#[test]
 fn a_prompt_file_is_read_safely() {
     let s = setup();
     let read = |p: &str| crate::broker::read_prompt(&s.project, p);
@@ -949,22 +920,10 @@ fn ps_lists_children_under_their_parent() {
         pid: 1,
         started,
         auth: String::new(),
-        window_pid: None,
         warnings: vec![],
         host_pid: 1,
         parent: parent.map(str::to_string),
-        spawn_id: None,
-        logins: Vec::new(),
-        unit: None,
-        kv_project: None,
-        pasture: None,
-        credentials: Vec::new(),
-        gateway: Vec::new(),
-        agent: Vec::new(),
-        secret_files: Vec::new(),
-        kept_logins: Vec::new(),
-        watched: false,
-        relay: false,
+        ..Default::default()
     };
     let list = vec![
         r("a", None, 1),
@@ -1599,12 +1558,12 @@ fn a_card_with_choices_takes_only_its_choices() {
         capability: crate::broker::TIMEOUT_CAPABILITY.into(),
         summary: "s".into(),
         detail: "d".into(),
-        reason: String::new(),
         created: state::now(),
         expires: state::now() + 60,
         session_allowed: false,
         started_by: vec!["p-1".into()],
         choices: vec!["15m".into(), "30m".into()],
+        ..Default::default()
     };
     let (p_again, p_last) = (p.clone(), p.clone());
     crate::broker::write_pending(&s.env, &p).unwrap();

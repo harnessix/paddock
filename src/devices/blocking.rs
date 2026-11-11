@@ -113,16 +113,16 @@ impl Device for Wait {
         "wait"
     }
     fn info(&self) -> Info {
-        Info {
-            request: format!(
+        Info::builtin(
+            format!(
                 "the time to wait for: an RFC 3339 time (2026-10-30T15:00:00Z) or a duration (90, 90s, 15m, 2h), at most {} days ahead; or JSON {{\"until\": TIME, \"timeout\": SECONDS}}. One read waits at most timeout seconds (default {}, at most {}), then fails with ETIME (still waiting): send the same time again. For a long wait, send an RFC 3339 time, not a duration, so that each new read waits for the same moment.",
                 waiting::MAX_WAIT_AHEAD / 86400,
                 waiting::DEFAULT_READ_TIMEOUT,
                 waiting::MAX_READ_TIMEOUT
             ),
-            response: "one line at the time: reached TIME (RFC 3339, UTC)".into(),
-            limits: limits(1024, 128),
-        }
+            "one line at the time: reached TIME (RFC 3339, UTC)",
+            limits(1024, 128),
+        )
     }
     fn call(&self, call: &Call, request: &[u8]) -> Result<Vec<u8>, DevError> {
         let p = parse(request, "until")?;
@@ -146,19 +146,19 @@ impl Device for Wait {
 
 /// The description of `ask`, for the catalog.
 pub fn ask_info() -> Info {
-    Info {
-        request: format!(
+    Info::builtin(
+        format!(
             "a question for the user, as text (at most {MAX_QUESTION} characters); or JSON {{\"question\": TEXT, \"choices\": [up to {MAX_CHOICES} short answers], \"timeout\": SECONDS}}. The question appears on the approval card on the host. One read waits at most timeout seconds (default {}, at most {}), then fails with ETIME (still waiting): send the same question again, and the read finds the open question. A question that nobody reads for {} seconds is withdrawn.",
             waiting::DEFAULT_READ_TIMEOUT,
             waiting::MAX_READ_TIMEOUT,
             ABANDONED.as_secs()
         ),
-        response: format!(
+        format!(
             "the user's answer, as text (at most {} characters). EACCES: the user dismissed the question",
             broker::MAX_REPLY
         ),
-        limits: limits(MAX_QUESTION * 4 + 4096, broker::MAX_REPLY * 4),
-    }
+        limits(MAX_QUESTION * 4 + 4096, broker::MAX_REPLY * 4),
+    )
 }
 
 /// A question on the card.
@@ -316,13 +316,7 @@ impl Ask {
                 let _ = broker::answer(&env, &id, broker::Answer::Deny);
             }
         };
-        match broker::notify::ask(&self.ctx.env, &note, on_action) {
-            Ok(h) => Some(h),
-            Err(e) => {
-                log::debug!("cannot show the question as a notification: {e:#}");
-                None
-            }
-        }
+        broker::notify::ask_or_show(&self.ctx.env, &note, on_action)
     }
 
     /// The open question for this text, or a new one on the card.
@@ -376,6 +370,7 @@ impl Ask {
                 session_allowed: false,
                 started_by: self.ctx.started_by.clone(),
                 choices: choices.to_vec(),
+                connect: None,
             };
             // In the list before the card exists: a read of the same question
             // that comes now attaches instead of making a second card.
@@ -531,19 +526,11 @@ mod tests {
 
     fn ctx(dir: &std::path::Path) -> DeviceCtx {
         // No session bus: no desktop notification from a test.
-        let vars = [("XDG_RUNTIME_DIR", "run"), ("XDG_STATE_HOME", "state")]
-            .into_iter()
-            .map(|(k, v)| (k.to_string(), dir.join(v).display().to_string()))
-            .collect();
-        let env =
-            crate::env::HostEnv::from_parts(dir.join("home"), "demo".into(), 1000, 1000, vars);
+        let (c, _) = crate::devices::user::tests::ctx(dir, crate::broker::Answer::Deny);
         DeviceCtx {
-            env,
             sandbox: "asker".into(),
-            harness: "fake".into(),
-            project: dir.join("project"),
-            started_by: vec![],
             approver: std::sync::Arc::new(crate::broker::DenyAll),
+            ..c
         }
     }
 
@@ -782,12 +769,10 @@ mod tests {
                     capability: broker::ASK_CAPABILITY.into(),
                     summary: String::new(),
                     detail: "q".into(),
-                    reason: String::new(),
                     created: crate::state::now(),
                     expires: 0,
                     session_allowed: false,
-                    started_by: vec![],
-                    choices: vec![],
+                    ..Default::default()
                 },
             )
             .unwrap();

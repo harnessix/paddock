@@ -142,34 +142,41 @@ mod tests {
 
     #[test]
     fn the_monitor_commands_parse() {
-        assert_eq!(
-            monitor(&["list"]).unwrap(),
-            MonitorCmd::List { json: false }
-        );
-        assert_eq!(
-            monitor(&["list", "--json"]).unwrap(),
-            MonitorCmd::List { json: true }
-        );
-        assert_eq!(
-            monitor(&["ack", "claude-app-1"]).unwrap(),
-            MonitorCmd::Ack {
-                id: "claude-app-1".into()
-            }
-        );
-        assert_eq!(
-            monitor(&["mute", "/work/app"]).unwrap(),
-            MonitorCmd::Mute {
-                path: "/work/app".into()
-            }
-        );
-        assert_eq!(
-            monitor(&["unmute", "/work/app"]).unwrap(),
-            MonitorCmd::Unmute {
-                path: "/work/app".into()
-            }
-        );
-        assert!(monitor(&["ack"]).is_err());
-        assert!(monitor(&["mute"]).is_err());
-        assert!(monitor(&["silence", "/a"]).is_err());
+        std::thread::Builder::new()
+            .stack_size(8 * 1024 * 1024)
+            .spawn(|| {
+                assert_eq!(
+                    monitor(&["list"]).unwrap(),
+                    MonitorCmd::List { json: false }
+                );
+                assert_eq!(
+                    monitor(&["list", "--json"]).unwrap(),
+                    MonitorCmd::List { json: true }
+                );
+                assert_eq!(
+                    monitor(&["ack", "claude-app-1"]).unwrap(),
+                    MonitorCmd::Ack {
+                        id: "claude-app-1".into()
+                    }
+                );
+                assert_eq!(
+                    monitor(&["mute", "/work/app"]).unwrap(),
+                    MonitorCmd::Mute {
+                        path: "/work/app".into()
+                    }
+                );
+                assert_eq!(
+                    monitor(&["unmute", "/work/app"]).unwrap(),
+                    MonitorCmd::Unmute {
+                        path: "/work/app".into()
+                    }
+                );
+                assert!(monitor(&["ack"]).is_err());
+                assert!(monitor(&["mute"]).is_err());
+                assert!(monitor(&["silence", "/a"]).is_err());
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 }

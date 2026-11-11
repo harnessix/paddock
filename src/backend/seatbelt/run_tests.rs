@@ -86,6 +86,39 @@ fn the_sandbox_home_is_private_and_the_real_home_denied() {
 }
 
 #[test]
+fn the_devices_come_over_a_socket_with_no_dev_paddock_rule() {
+    let (env, mut s) = spec();
+    let sock = "/private/tmp/paddock-501/ab/id1/devices.sock";
+    let dir = env.paddock_run().join("id1").join("devices");
+    s.device_socket = Some(sock.into());
+    s.devices = Some(dir.clone());
+    // A spec with devices starts.
+    refuse(&s).unwrap();
+    let sb = profile(&env, &s);
+    assert!(
+        sb.contains(&format!(
+            "(allow network-outbound (remote unix-socket (path-literal \"{sock}\")))"
+        )),
+        "{sb}"
+    );
+    assert!(!sb.contains(&format!("file-write* (literal \"{sock}\")")));
+    assert!(!sb.contains("\"/dev/paddock"), "{sb}");
+    // The secret FIFOs are in the run folder, which the sandbox reads.
+    let run = env.paddock_run().join("id1").display().to_string();
+    assert!(
+        sb.contains(&format!("(allow file-read* (subpath \"{run}\"))")),
+        "{sb}"
+    );
+    assert!(
+        sb.contains(&format!("(deny file-write* (subpath \"{run}\"))")),
+        "{sb}"
+    );
+    let vars = run_env(&env, &s, &private_tmp(&s));
+    assert_eq!(vars["PADDOCK_DEVICES_SOCKET"], sock);
+    assert_eq!(vars["PADDOCK_DEVICES"], dir.display().to_string());
+}
+
+#[test]
 fn the_broker_and_kv_sockets_can_be_reached_but_not_replaced() {
     let (env, s) = spec();
     let sb = profile(&env, &s);
@@ -145,6 +178,102 @@ fn api_reaches_only_the_proxy_relay() {
 }
 
 #[test]
+fn allowlist_reaches_the_proxy_relay_and_allowed_host_ports() {
+    let (env, mut s) = spec();
+    s.network = Network::Allowlist;
+    assert!(refuse(&s).is_ok());
+    assert_eq!(net(Network::Allowlist).unwrap(), Net::Localhost);
+    s.add_host_port(8765, "manifest");
+    set_proxy(&mut s, 41000);
+    let sb = profile(&env, &s);
+    assert!(sb.contains("(remote ip \"localhost:41000\")"));
+    assert!(sb.contains("(remote ip \"localhost:8765\")"));
+    let vars = run_env(&env, &s, &private_tmp(&s));
+    assert_eq!(vars["HTTPS_PROXY"], "http://127.0.0.1:41000");
+}
+
+#[test]
+fn auto_picks_seatbelt_for_allowlist_on_macos_and_srt_on_linux() {
+    use crate::backend::auto_order;
+    assert_eq!(auto_order(Network::Allowlist, true), [NAME]);
+    assert_eq!(auto_order(Network::Allowlist, false), ["srt"]);
+    assert_eq!(auto_order(Network::Egress, true)[0], NAME);
+    assert_eq!(auto_order(Network::Api, false)[0], "bwrap");
+}
+
+#[test]
+fn the_proxy_enforces_the_list_in_modes_api_and_allowlist() {
+    let (_, mut s) = spec();
+    s.allow_domains = vec!["api.example.com".into(), "*.cdn.example.com".into()];
+    for (mode, want) in [
+        (Network::Egress, None),
+        (Network::None, None),
+        (Network::Api, Some("api")),
+        (Network::Allowlist, Some("allowlist")),
+    ] {
+        s.network = mode;
+        let p = crate::backend::listed_policy(&s, None);
+        assert_eq!(p.as_ref().map(|p| p.mode()), want, "{mode:?}");
+        if let Some(p) = p {
+            assert!(p.list.check("api.example.com", 443).is_ok());
+            assert!(p.list.check("a.cdn.example.com", 443).is_ok());
+            assert!(p.list.check("other.example.com", 443).is_err());
+        }
+    }
+}
+
+#[test]
+fn ip_entries_are_named_where_the_proxy_enforces_the_list() {
+    use crate::backend::ignored_entries;
+    let d = vec!["api.example.com".to_string(), "10.0.0.1".to_string()];
+    let w = ignored_entries(Network::Allowlist, &d, true).unwrap();
+    assert!(
+        w.starts_with("network mode allowlist ignores these entries: 10.0.0.1"),
+        "{w}"
+    );
+    assert!(ignored_entries(Network::Api, &d, false).is_some());
+    // srt enforces the list on Linux and takes IP entries.
+    assert!(ignored_entries(Network::Allowlist, &d, false).is_none());
+    assert!(ignored_entries(Network::Egress, &d, true).is_none());
+    assert!(ignored_entries(Network::Api, &d[..1], true).is_none());
+}
+
+/// Mode allowlist: the proxy behind the relay refuses a host outside the
+/// list, and the boundary log names it. Only the profile needs a Mac, so
+/// this runs on every platform.
+#[test]
+fn the_allowlist_proxy_refuses_a_host_outside_the_list() {
+    use std::io::{Read, Write};
+    let (_t, env, mut s) = temp_spec("");
+    s.network = Network::Allowlist;
+    s.allow_domains = vec!["api.example.com".into()];
+    std::fs::create_dir_all(env.paddock_run().join(&s.id)).unwrap();
+    start_proxy(&env, &mut s).unwrap();
+    let relay = s
+        .host_ports
+        .iter()
+        .find(|(_, o)| o == RELAY_ORIGIN)
+        .unwrap()
+        .0;
+    assert_eq!(
+        s.env["HTTPS_PROXY"].value,
+        format!("http://127.0.0.1:{relay}")
+    );
+    let mut c = std::net::TcpStream::connect(("127.0.0.1", relay)).unwrap();
+    c.write_all(b"CONNECT other.example.com:443 HTTP/1.1\r\nHost: other.example.com:443\r\n\r\n")
+        .unwrap();
+    let mut got = String::new();
+    let _ = c.read_to_string(&mut got);
+    assert!(got.starts_with("HTTP/1.1 403"), "{got}");
+    let log = crate::boundary::read(&env, &s.id);
+    assert!(
+        log.iter().any(|e| e.target == "other.example.com:443"
+            && e.rule == "network mode allowlist: not on the list"),
+        "{log:?}"
+    );
+}
+
+#[test]
 fn network_none_has_no_ip_rule_and_no_proxy() {
     let (env, mut s) = spec();
     s.network = Network::None;
@@ -155,6 +284,28 @@ fn network_none_has_no_ip_rule_and_no_proxy() {
     assert!(!sb.contains("(local ip"));
     let vars = run_env(&env, &s, &private_tmp(&s));
     assert!(!vars.contains_key("HTTPS_PROXY"));
+}
+
+#[test]
+fn network_host_reaches_everything_with_the_host_proxy() {
+    let (env, mut s) = spec();
+    s.network = Network::Host;
+    s.set_env(
+        "HTTPS_PROXY",
+        "http://proxy.example:3128",
+        "network: host proxy",
+    );
+    assert!(refuse(&s).is_ok());
+    assert_eq!(net(Network::Host).unwrap(), Net::Host);
+    let sb = profile(&env, &s);
+    assert!(sb.contains("(allow network-outbound (remote ip \"*:*\"))"));
+    assert!(sb.contains("(allow network-bind (local ip \"*:*\"))"));
+    assert!(sb.contains("(allow network-inbound (local ip \"*:*\"))"));
+    assert!(sb.contains("mDNSResponder"));
+    let vars = run_env(&env, &s, &private_tmp(&s));
+    assert_eq!(vars["HTTPS_PROXY"], "http://proxy.example:3128");
+    assert!(HOST_WARNING.starts_with("network mode host"));
+    assert!(!HOST_WARNING.contains('\n'));
 }
 
 #[test]
@@ -241,24 +392,12 @@ fn each_feature_seatbelt_cannot_give_is_refused() {
     type Change = Box<dyn Fn(&mut SandboxSpec)>;
     let cases: Vec<(&str, Change)> = vec![
         (
-            "network mode 'host'",
-            Box::new(|s| s.network = Network::Host),
-        ),
-        (
-            "needs the srt backend",
-            Box::new(|s| s.network = Network::Allowlist),
-        ),
-        (
             "display mode 'window'",
             Box::new(|s| s.gui.mode = GuiMode::Window),
         ),
         (
             "display mode 'headless'",
             Box::new(|s| s.gui.mode = GuiMode::Headless),
-        ),
-        (
-            "devices of /dev/paddock",
-            Box::new(|s| s.devices = Some("/x/dev".into())),
         ),
         (
             "login_ports",
@@ -290,9 +429,42 @@ fn each_feature_seatbelt_cannot_give_is_refused() {
 }
 
 #[test]
-fn borrow_and_return_are_refused_by_the_broker() {
-    let caps: Vec<&str> = BROKER_REFUSALS.iter().map(|(c, _)| *c).collect();
-    assert_eq!(caps, ["borrow", "return"]);
+fn the_borrow_folder_stays_at_its_host_path_and_cannot_be_replaced() {
+    let (env, mut s) = spec();
+    // Without a borrow folder: no variable, no rule.
+    assert!(borrow_dir(&s).is_none());
+    assert!(!run_env(&env, &s, &private_tmp(&s)).contains_key(crate::borrow::ENV));
+    let dir = PathBuf::from("/Users/u/.local/share/paddock/borrow/id1");
+    s.add_mount(Mount::bind(
+        &dir,
+        crate::borrow::MOUNT,
+        true,
+        "borrow folder",
+    ));
+    assert_eq!(borrow_dir(&s), Some(dir.clone()));
+    let sb = profile(&env, &s);
+    let rw = format!(
+        "(allow file-read* file-write* (subpath \"{}\"))",
+        dir.display()
+    );
+    let fixed = format!("(deny file-write* (literal \"{}\"))", dir.display());
+    assert!(sb.contains(&rw), "{sb}");
+    // The folder itself is read-only, and the rule comes after the folder.
+    assert!(
+        sb.find(&rw).unwrap() < sb.find(&fixed).expect("literal rule"),
+        "{sb}"
+    );
+    assert!(!sb.contains("/run/paddock/borrow"), "{sb}");
+    // Not named as a mount that the run does not get.
+    let (_, notes) = policy(&env, &s, &private_tmp(&s)).unwrap();
+    assert!(notes.iter().all(|n| !n.contains("borrow")), "{notes:?}");
+    // The sandbox finds it through PADDOCK_BORROW_DIR, not in the sandbox home.
+    let vars = run_env(&env, &s, &private_tmp(&s));
+    assert_eq!(vars[crate::borrow::ENV], dir.display().to_string());
+    assert_eq!(
+        crate::borrow::in_sandbox(vars.get(crate::borrow::ENV).map(|v| v.as_ref())),
+        dir
+    );
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -352,6 +524,9 @@ fn a_localhost_range_comes_from_the_user_configuration() {
         assert!(!profile(&env, &s).contains("localhost:3000"), "{mode:?}");
         assert!(range_line((3000, 3002), mode).contains("does not get it"));
     }
+    s.network = Network::Host;
+    assert!(range_line((3000, 3002), Network::Host).contains("every port already"));
+    assert!(!profile(&env, &s).contains("localhost:3000"));
     let (_t, env, s) = temp_spec("");
     assert_eq!(localhost_ports(&env).unwrap(), None);
     assert!(!profile(&env, &s).contains("localhost:3000"));
@@ -507,4 +682,29 @@ fn a_harness_without_the_pty_library_makes_its_own_ptys() {
     let sb = crate::seatbelt::render(&p).unwrap();
     assert!(!sb.contains("pseudo-tty"));
     assert!(!sb.contains("com.apple.sandbox.pty"));
+}
+
+/// `--profile default` on macOS: the sandbox home is the clone itself, with
+/// no overlay, so Seatbelt runs it.
+#[test]
+fn refuse_accepts_a_clone_snapshot_at_the_sandbox_home() {
+    let (env, mut s) = spec();
+    let dir = PathBuf::from("/Users/u/.local/share/paddock/shadow/runs/id1");
+    s.home_src = dir.join("home");
+    s.shadow = Some(crate::shadow::Plan {
+        profile: crate::shadow::DEFAULT.into(),
+        kind: crate::shadow::SnapKind::Clone,
+        home: dir.join("home"),
+        dir,
+        lower: None,
+        upper: None,
+        work: None,
+        roots: vec![".fake".into()],
+        auth: vec![".fake/auth.json".into()],
+    });
+    assert!(refuse(&s).is_ok());
+    let sb = profile(&env, &s);
+    assert!(sb.contains(
+        "(allow file-read* file-write* (subpath \"/Users/u/.local/share/paddock/shadow/runs/id1/home\"))"
+    ));
 }

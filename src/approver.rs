@@ -13,7 +13,7 @@
 //!    nobody can produce a valid file. The key exists only while paddock runs:
 //!    the user types the password when a sandbox starts.
 
-use crate::broker::{Answer, Approver, Pending, Verdict, CAPABILITIES};
+use crate::broker::{Answer, Approver, ConnectAnswer, Pending, Verdict, CAPABILITIES};
 use crate::env::HostEnv;
 use anyhow::{bail, Context as _, Result};
 use hmac::{Hmac, Mac};
@@ -256,8 +256,49 @@ struct Reply {
 
 /// Run the hook for one request. None means abstain: the user decides.
 pub fn run_hook(hook: &HookConfig, p: &Pending) -> (Option<Answer>, String) {
+    let (answer, note) = match hook_reply(hook, p) {
+        Ok(r) => r,
+        Err(why) => return (None, why),
+    };
+    match answer.as_str() {
+        "abstain" => (None, note),
+        "session" if !p.session_allowed => (
+            None,
+            "the approver asked for session, which this request does not allow".into(),
+        ),
+        a => match a.parse::<Answer>() {
+            Ok(ans) => (Some(ans), note),
+            Err(_) => (None, format!("unknown answer {a}")),
+        },
+    }
+}
+
+/// Run the hook for a `connect` question of the firewall of the macOS
+/// guest. The answer is one of the five connect words, or `once`,
+/// `session` and `deny` of a plain card. None means abstain.
+pub fn run_hook_connect(hook: &HookConfig, p: &Pending) -> (Option<ConnectAnswer>, String) {
+    let (answer, note) = match hook_reply(hook, p) {
+        Ok(r) => r,
+        Err(why) => return (None, why),
+    };
+    if answer == "abstain" {
+        return (None, note);
+    }
+    let parsed = answer.parse::<ConnectAnswer>().or_else(|_| {
+        answer
+            .parse::<Answer>()
+            .and_then(ConnectAnswer::from_answer)
+    });
+    match parsed {
+        Ok(a) => (Some(a), note),
+        Err(_) => (None, format!("unknown answer {answer}")),
+    }
+}
+
+/// The hook's answer word and its note, or why there is none.
+fn hook_reply(hook: &HookConfig, p: &Pending) -> std::result::Result<(String, String), String> {
     if !hook.capabilities.contains(&p.capability) {
-        return (None, "not a capability the approver may answer".into());
+        return Err("not a capability the approver may answer".into());
     }
     let input = serde_json::json!({ "api_version": "paddock.approval-request/v1", "request": p });
     let child = crate::env::spawn_retrying(
@@ -270,7 +311,7 @@ pub fn run_hook(hook: &HookConfig, p: &Pending) -> (Option<Answer>, String) {
     );
     let mut child = match child {
         Ok(c) => c,
-        Err(e) => return (None, format!("cannot start the approver: {e}")),
+        Err(e) => return Err(format!("cannot start the approver: {e}")),
     };
     let _ = child
         .stdin
@@ -292,44 +333,30 @@ pub fn run_hook(hook: &HookConfig, p: &Pending) -> (Option<Answer>, String) {
             _ => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return (
-                    None,
-                    format!("the approver did not answer in {} seconds", hook.timeout),
-                );
+                return Err(format!(
+                    "the approver did not answer in {} seconds",
+                    hook.timeout
+                ));
             }
         }
     }
     let text = String::from_utf8_lossy(&reader.join().unwrap_or_default()).into_owned();
     let Some(line) = text.lines().rev().find(|l| !l.trim().is_empty()) else {
-        return (None, "the approver printed nothing".into());
+        return Err("the approver printed nothing".into());
     };
     let reply: Reply = match serde_json::from_str(line.trim()) {
         Ok(r) => r,
         Err(_) => {
-            return (
-                None,
-                format!(
-                    "the approver printed something other than a JSON answer: {}",
-                    line.chars().take(200).collect::<String>()
-                ),
-            )
+            return Err(format!(
+                "the approver printed something other than a JSON answer: {}",
+                line.chars().take(200).collect::<String>()
+            ))
         }
     };
     let note: String = reply.note.chars().take(500).collect();
-    match reply.answer.as_str() {
-        "abstain" => (None, note),
-        "session" if !p.session_allowed => (
-            None,
-            "the approver asked for session, which this request does not allow".into(),
-        ),
-        a => match a.parse::<Answer>() {
-            Ok(ans) => (Some(ans), note),
-            Err(_) => (None, format!("unknown answer {a}")),
-        },
-    }
+    Ok((reply.answer, note))
 }
 
-/// The hook first; the user when it abstains, fails or times out.
 pub struct Chain {
     pub hook: HookConfig,
     pub source: Source,
@@ -411,6 +438,7 @@ mod tests {
             session_allowed: true,
             choices: Vec::new(),
             started_by: vec![],
+            connect: None,
         }
     }
 

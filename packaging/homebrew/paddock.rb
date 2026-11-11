@@ -41,6 +41,13 @@ class Paddock < Formula
            bin/"paddock-vm"
     return unless Hardware::CPU.arm?
 
+    # paddock-guest is the agent inside paddock's macOS guest. A session
+    # shares it read-only, and the agent in the guest replaces itself with
+    # it when the versions differ, after a check of this hash. So a paddock
+    # upgrade never needs a rebuild of the golden image.
+    system "codesign", "--force", "--sign", "-", bin/"paddock-guest"
+    (bin/"paddock-guest.sha256").write("#{Digest::SHA256.file(bin/"paddock-guest").hexdigest}\n")
+
     # paddock finds the guest files here when `paddock vm setup` did not
     # install its own copy.
     (pkgshare/"vm").install "packaging/vm/assets.toml"
@@ -54,6 +61,10 @@ class Paddock < Formula
     if OS.mac?
       assert_match "com.apple.security.virtualization",
                    shell_output("codesign -d --entitlements - #{bin}/paddock-vm 2>&1")
+      if Hardware::CPU.arm?
+        assert_equal Digest::SHA256.file(bin/"paddock-guest").hexdigest,
+                     (bin/"paddock-guest.sha256").read.strip
+      end
     end
   end
 end

@@ -36,9 +36,11 @@
 
 pub mod deliver;
 pub mod device;
+mod end_state;
 pub mod events;
 pub mod serve;
 pub mod text;
+pub use end_state::{inspect_end, EndState};
 
 use crate::env::HostEnv;
 use anyhow::{bail, Context as _, Result};
@@ -416,6 +418,19 @@ pub fn lock(d: &Path) -> Result<Lock> {
     Ok(Lock { _file: f })
 }
 
+fn try_lock(d: &Path) -> Result<Option<Lock>> {
+    let f = crate::privfs::append(&d.join("lock"))?;
+    // SAFETY: flock on an open file; the lock goes with the file.
+    if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+        return Ok(Some(Lock { _file: f }));
+    }
+    let error = std::io::Error::last_os_error();
+    if error.raw_os_error() == Some(libc::EWOULDBLOCK) {
+        return Ok(None);
+    }
+    Err(error.into())
+}
+
 fn log_file(d: &Path, dir: Dir) -> PathBuf {
     d.join(format!("{}.jsonl", dir.name()))
 }
@@ -488,36 +503,53 @@ fn rate_ok(d: &Path, dir: Dir, from: &str, now: u64) -> bool {
 
 /// Append one message. Sets its seq and time and returns it. Checks the
 /// size, the refs and the rate of senders; events of paddock skip the rate.
-pub fn append(env: &HostEnv, id: &str, dir: Dir, mut m: Message) -> Result<Message, SendError> {
+pub fn append(env: &HostEnv, id: &str, dir: Dir, m: Message) -> Result<Message, SendError> {
     check(&m)?;
     let d = self::dir(env, id).map_err(SendError::Io)?;
     if !exists(env, id) {
         return Err(SendError::NoMailbox(id.to_string()));
     }
     let _g = lock(&d).map_err(SendError::Io)?;
+    append_locked(env, id, &d, dir, m)
+}
+
+fn append_locked(
+    env: &HostEnv,
+    id: &str,
+    d: &Path,
+    dir: Dir,
+    mut m: Message,
+) -> Result<Message, SendError> {
+    let io = |e: std::io::Error| SendError::Io(e.into());
+    let mut f = crate::privfs::append(&log_file(d, dir)).map_err(io)?;
+    let len = f.metadata().map_err(io)?.len();
+    let mut needs_separator = false;
+    if len > 0 {
+        let mut last = [0u8];
+        let mut r = std::fs::File::open(log_file(d, dir)).map_err(io)?;
+        r.seek(std::io::SeekFrom::Start(len - 1)).map_err(io)?;
+        r.read_exact(&mut last).map_err(io)?;
+        needs_separator = last[0] != b'\n';
+        if needs_separator && dir == Dir::Up && end_state::has_unterminated_end(d) {
+            return Err(SendError::Io(anyhow::anyhow!(
+                "cannot append after an incomplete end event"
+            )));
+        }
+    }
     let now = crate::state::now();
-    if m.kind != Kind::Event && !rate_ok(&d, dir, &m.from, now) {
+    if m.kind != Kind::Event && !rate_ok(d, dir, &m.from, now) {
         return Err(SendError::Rate);
     }
     m.seq = last_seq(env, id) + 1;
     m.ts = now;
     // The seq goes first: a crash between the two leaves a gap, never two
     // messages with one seq.
-    let io = |e: std::io::Error| SendError::Io(e.into());
     crate::privfs::write_atomic(&d.join("seq"), format!("{}\n", m.seq)).map_err(io)?;
     let mut line = serde_json::to_vec(&m).map_err(|e| SendError::Io(e.into()))?;
     line.push(b'\n');
-    let mut f = crate::privfs::append(&log_file(&d, dir)).map_err(io)?;
     // A line that a crashed writer left half-written ends here.
-    let len = f.metadata().map_err(io)?.len();
-    if len > 0 {
-        let mut last = [0u8];
-        let mut r = std::fs::File::open(log_file(&d, dir)).map_err(io)?;
-        r.seek(std::io::SeekFrom::Start(len - 1)).map_err(io)?;
-        r.read_exact(&mut last).map_err(io)?;
-        if last[0] != b'\n' {
-            line.insert(0, b'\n');
-        }
+    if needs_separator {
+        line.insert(0, b'\n');
     }
     f.write_all(&line).map_err(io)?;
     Ok(m)
@@ -526,18 +558,25 @@ pub fn append(env: &HostEnv, id: &str, dir: Dir, mut m: Message) -> Result<Messa
 /// Write the end event of a run, once: `ended` or `gone`, whichever comes
 /// first. Returns the message when this call wrote it.
 pub fn append_end(env: &HostEnv, id: &str, m: Message) -> Option<Message> {
+    check(&m).ok()?;
     let d = dir(env, id).ok()?;
     if !exists(env, id) {
         return None;
     }
     let _g = lock(&d).ok()?;
-    if d.join("end").exists() {
+    if std::fs::symlink_metadata(d.join("end")).is_ok() {
         return None;
     }
-    // The lock is not reentrant: `append` takes it again after this one goes.
-    crate::privfs::write(&d.join("end"), serde_json::to_vec(&m).ok()?).ok()?;
-    drop(_g);
-    let written = append(env, id, Dir::Up, m).ok()?;
+    match end_state::logged_end(&d) {
+        end_state::LogEnd::One(event) => {
+            end_state::save_marker(&d, &event);
+            return None;
+        }
+        end_state::LogEnd::Unfinished | end_state::LogEnd::Conflict => return None,
+        end_state::LogEnd::Absent => {}
+    }
+    crate::privfs::write_atomic(&d.join("end"), serde_json::to_vec(&m).ok()?).ok()?;
+    let written = append_locked(env, id, &d, Dir::Up, m).ok()?;
     let _ = crate::privfs::write_atomic(&d.join("end"), serde_json::to_vec(&written).ok()?);
     Some(written)
 }
@@ -586,19 +625,12 @@ pub fn wait(
     end: Instant,
     stop: &dyn Fn() -> bool,
 ) -> Option<Vec<Message>> {
-    let file = self::dir(env, id).ok().map(|d| log_file(&d, dir));
-    let mut seen = None;
     loop {
-        let size = file
-            .as_ref()
-            .and_then(|f| std::fs::metadata(f).ok())
-            .map(|m| m.len());
-        if size != seen {
-            seen = size;
-            let v = read_after(env, id, dir, after);
-            if !v.is_empty() {
-                return Some(v);
-            }
+        // A writer can be partway through a line when we read it. Retry even
+        // if the file size has not changed since the preceding stat.
+        let v = read_after(env, id, dir, after);
+        if !v.is_empty() {
+            return Some(v);
         }
         if Instant::now() >= end || stop() {
             return None;
@@ -681,10 +713,15 @@ pub fn stored(env: &HostEnv) -> Vec<Stored> {
                 .map(|d| d.as_secs())
                 .max();
             events::check_gone(env, &id);
-            let ended = end(env, &id).map(|m| m.ts).or_else(|| {
-                let alive = run_info(env, &id).is_some_and(|r| events::alive(r.pid, r.pid_start));
-                (!alive).then_some(last).flatten()
-            });
+            let ended = match inspect_end(env, &id) {
+                EndState::Complete(m) => Some(m.ts),
+                EndState::Pending | EndState::Incomplete | EndState::Conflict => None,
+                EndState::Absent => {
+                    let alive =
+                        run_info(env, &id).is_some_and(|r| events::alive(r.pid, r.pid_start));
+                    (!alive).then_some(last).flatten()
+                }
+            };
             Some(Stored {
                 id,
                 path,

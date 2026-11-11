@@ -1,0 +1,41 @@
+{
+  "v": 1,
+  "dir": "/Users/demo/Library/Application Support/paddock/macvm",
+  "golden": {
+    "state": "sealed",
+    "version": "50.1 (99A101)",
+    "build": "99A101",
+    "sealed": "2000-01-02T03:04:05Z",
+    "bytes": 20000000000,
+    "flags_ok": true
+  },
+  "prev": null,
+  "host_version": "50.1 (99A101)",
+  "profiles": [
+    {
+      "app": "sample-notes",
+      "home": "default",
+      "dir": "/Users/demo/Library/Application Support/paddock/macvm/profiles.noindex/sample-notes/default",
+      "bytes": 9100000000,
+      "state": "running (pid 811)",
+      "last_end": "quit with save"
+    }
+  ],
+  "sessions": [
+    {
+      "id": "macvm-sample-notes",
+      "pid": 811,
+      "profile": "sample-notes"
+    }
+  ],
+  "slots": [
+    "sample-notes (you, pid 811)",
+    null
+  ],
+  "paused": false,
+  "setup": {
+    "running": false,
+    "paused": false,
+    "last": null
+  }
+}

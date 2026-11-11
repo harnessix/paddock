@@ -1,0 +1,1 @@
+- Fix: Keep live app grants and firewall changes working alongside the macOS launcher, guest windows and session features.

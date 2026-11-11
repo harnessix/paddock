@@ -101,40 +101,6 @@ pub(super) fn window_list() -> Vec<Win> {
     out
 }
 
-/// Each process and its parent, from the kernel.
-pub(super) fn proc_table() -> crate::mark::ProcTable {
-    let mut out = BTreeMap::new();
-    // SAFETY: proc_listallpids fills at most the given number of bytes.
-    let n = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
-    if n <= 0 {
-        return out;
-    }
-    let mut pids = vec![0 as libc::pid_t; n as usize + 64];
-    let bytes = (pids.len() * std::mem::size_of::<libc::pid_t>()) as libc::c_int;
-    let n = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast(), bytes) };
-    for &pid in pids.iter().take(n.max(0) as usize) {
-        if pid <= 0 {
-            continue;
-        }
-        // SAFETY: proc_bsdinfo is plain data, and the size matches.
-        let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
-        let size = std::mem::size_of::<libc::proc_bsdinfo>() as libc::c_int;
-        let r = unsafe {
-            libc::proc_pidinfo(
-                pid,
-                libc::PROC_PIDTBSDINFO,
-                0,
-                (&mut info as *mut libc::proc_bsdinfo).cast(),
-                size,
-            )
-        };
-        if r == size {
-            out.insert(pid as u32, info.pbi_ppid);
-        }
-    }
-    out
-}
-
 unsafe extern "C-unwind" fn ax_changed(
     _observer: NonNull<AXObserver>,
     _element: NonNull<AXUIElement>,
@@ -291,11 +257,13 @@ pub(super) fn update_menu(st: &mut State, mtm: MainThreadMarker, me: &AnyObject)
     let mut entries: Vec<(String, Option<u32>, Tone)> = Vec::new();
     for (i, r) in st.runs.iter().enumerate() {
         let tone = Tone::of(&r.network);
+        let terminal = st.terminals.get(i).and_then(|t| t.as_deref());
+        let vm = st.vm.get(i).and_then(|f| f.as_ref());
         match per_run.get(&i) {
             Some(ids) => {
                 for (n, id) in ids.iter().enumerate() {
                     entries.push((
-                        crate::mark::menu_title(r, now, n + 1, ids.len()),
+                        crate::mark::run_menu_title(r, vm, now, n + 1, ids.len(), terminal),
                         Some(*id),
                         tone,
                     ));
@@ -304,7 +272,7 @@ pub(super) fn update_menu(st: &mut State, mtm: MainThreadMarker, me: &AnyObject)
             None => entries.push((
                 format!(
                     "{} · no window on this screen",
-                    crate::mark::menu_title(r, now, 1, 1)
+                    crate::mark::run_menu_title(r, vm, now, 1, 1, terminal)
                 ),
                 None,
                 tone,

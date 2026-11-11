@@ -83,6 +83,7 @@ fn the_ctl_file_runs_granted_commands_and_answers_with_errnos() {
         project: tmp.path().into(),
         started_by: vec![],
         approver: fixed.clone(),
+        instances: crate::devices::sandbox::Instances::new(env.clone()),
     };
     let setup = hs::device::Access {
         store: store.clone(),

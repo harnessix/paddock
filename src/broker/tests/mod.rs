@@ -41,6 +41,9 @@ pub(in crate::broker::tests) fn setup(
     let project = std::fs::canonicalize(&project).unwrap();
     let mut vars = BTreeMap::new();
     vars.insert("PATH".into(), std::env::var("PATH").unwrap_or_default());
+    // The gateway key goes here, not in the per-user folder of macOS.
+    let run = tmp.path().join("run");
+    vars.insert("XDG_RUNTIME_DIR".into(), run.display().to_string());
     let env = HostEnv::from_parts(home, "tester".into(), 1000, 1000, vars);
     let fixed = Arc::new(Fixed {
         answer,
@@ -128,6 +131,7 @@ pub(in crate::broker::tests) fn pending_for(b: &Broker, detail: &str) -> Pending
         session_allowed: true,
         choices: Vec::new(),
         started_by: vec![],
+        connect: None,
     }
 }
 

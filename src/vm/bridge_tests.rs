@@ -15,13 +15,43 @@ fn parse_request_knows_three_requests() {
     );
     assert_eq!(parse_request("stop").unwrap(), Request::Stop);
     assert_eq!(parse_request("ping").unwrap(), Request::Ping);
+    assert_eq!(parse_request("pause").unwrap(), Request::Pause);
+    assert_eq!(parse_request("resume").unwrap(), Request::Resume);
+    assert_eq!(
+        parse_request("suspend both slots in use").unwrap(),
+        Request::Suspend("both slots in use".into())
+    );
+    assert_eq!(
+        parse_request("suspend").unwrap(),
+        Request::Suspend(String::new())
+    );
+    assert_eq!(
+        parse_request("window move 12 0 0 100 100").unwrap(),
+        Request::Window("move 12 0 0 100 100".into())
+    );
+    assert_eq!(
+        parse_request("bench ax 5").unwrap(),
+        Request::Bench("ax 5".into())
+    );
+    assert_eq!(
+        parse_request("grant share add ro /a b").unwrap(),
+        Request::Grant("share add ro /a b".into())
+    );
     for bad in [
         "connect 22",
         "connect",
         "connect 1027 x",
         "stop now",
+        "pause now",
+        "resume 1",
         "",
         "PING",
+        "window",
+        "window ",
+        "bench",
+        "bench ",
+        "grant",
+        "grant ",
     ] {
         assert!(parse_request(bad).is_err(), "{bad}");
     }
@@ -132,12 +162,27 @@ fn control_socket_connects_stops_and_refuses() {
     assert_eq!(answer, "error nothing listens on port 1024 in the guest");
     let (answer, _) = ask(&path, "connect 80\n");
     assert_eq!(answer, "error unknown port 80");
-    let (answer, _) = ask(&path, &format!("{}\n", "x".repeat(100)));
+    let (answer, _) = ask(&path, &format!("{}\n", "x".repeat(20_000)));
     assert!(
         "error the request is too long".starts_with(&answer),
         "{answer}"
     );
     assert_eq!(*guest.ports.lock().unwrap(), vec![1027, 1024]);
+    // A guest without host windows refuses the window and bench lines.
+    let (answer, _) = ask(&path, "window list\n");
+    assert_eq!(answer, "error this guest has no host windows");
+    let (answer, _) = ask(&path, "bench ax 1\n");
+    assert_eq!(answer, "error this guest has no bench");
+    let (answer, _) = ask(&path, "grant list\n");
+    assert_eq!(answer, "error this guest has no live grants");
+    // A guest that cannot pause refuses both lines.
+    for line in ["pause\n", "resume\n"] {
+        assert_eq!(ask(&path, line).0, "error this guest cannot pause");
+    }
+    assert_eq!(
+        ask(&path, "suspend slots full\n").0,
+        "error this guest cannot suspend"
+    );
 
     assert!(!guest.stopped.load(Ordering::SeqCst));
     assert_eq!(ask(&path, "stop\n").0, "ok");
