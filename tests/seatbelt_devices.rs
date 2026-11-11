@@ -24,11 +24,15 @@ use std::time::Duration;
 /// comes from `paddock-host device list`.
 const AGENT: &str = r#"
 paddock-host device list > flags/catalog1 2>/dev/null || echo NOLIST
-echo "FIRST $(printf abc | paddock-host device up - | tail -n 1) EXIT $?"
+# $? after a pipe is the status of its last command, so keep the
+# status of the client itself.
+ask() { r=$(printf "$2" | paddock-host device up -); c=$?; echo "$1 $(printf '%s\n' "$r" | tail -n 1) EXIT $c"; }
+ask FIRST abc
+: > flags/first
 while [ ! -e flags/go ]; do sleep 0.1; done
-echo "SECOND $(printf def | paddock-host device up - | tail -n 1) EXIT $?"
+ask SECOND def
 while [ ! -e flags/go2 ]; do sleep 0.1; done
-echo "THIRD $(printf ghi | paddock-host device up - | tail -n 1) EXIT $?"
+ask THIRD ghi
 "#;
 
 fn say(o: &std::process::Output) -> String {
@@ -411,8 +415,13 @@ fn a_seatbelt_run_drives_the_instance_and_the_host_sees_it() {
     wait_for("the ws instance", Duration::from_secs(60), || {
         !w.state_files("ws").is_empty()
     });
+    // The first request must end before the test stops its instance: a
+    // stop cuts a request at work, and the state file is written before
+    // the request reaches the program.
     wait_for("the first request", Duration::from_secs(60), || {
-        flags.join("catalog1").exists() && !w.state_files("up").is_empty()
+        flags.join("catalog1").exists()
+            && flags.join("first").exists()
+            && !w.state_files("up").is_empty()
     });
     let catalog: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(flags.join("catalog1")).unwrap()).unwrap();
@@ -495,10 +504,11 @@ fn a_seatbelt_run_drives_the_instance_and_the_host_sees_it() {
     let out = child.wait_with_output().unwrap();
     let text = String::from_utf8_lossy(&out.stdout).into_owned();
     assert!(out.status.success(), "{}", say(&out));
-    assert!(!text.contains("NOLIST"), "{text}");
-    assert!(text.contains("FIRST ABC EXIT 0"), "{text}");
-    assert!(text.contains("SECOND DEF EXIT 0"), "{text}");
-    assert!(text.contains("THIRD GHI EXIT 0"), "{text}");
+    let all = say(&out);
+    assert!(!text.contains("NOLIST"), "{all}");
+    assert!(text.contains("FIRST ABC EXIT 0"), "{all}");
+    assert!(text.contains("SECOND DEF EXIT 0"), "{all}");
+    assert!(text.contains("THIRD GHI EXIT 0"), "{all}");
     // The instances end with the run.
     wait_for("the instances to end", Duration::from_secs(2), || {
         !alive(pid3) && w.state_files("up").is_empty() && w.state_files("ws").is_empty()
