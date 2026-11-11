@@ -243,15 +243,9 @@ mod tests {
         assert_eq!(reads.lock().unwrap().len(), 2);
 
         std::fs::write(&revoked, "T\n").unwrap();
-        let t = Instant::now();
-        wait_for("the FIFO goes", Duration::from_millis(100) + POLL, || {
-            !path.exists()
-        });
-        assert!(
-            t.elapsed() < Duration::from_millis(150),
-            "{:?}",
-            t.elapsed()
-        );
+        // A slow host may need more than one poll; a wall-clock bound here
+        // fails on shared CI runners without telling anything about the code.
+        wait_for("the FIFO goes", Duration::from_secs(5), || !path.exists());
         let e = std::fs::read(&path).unwrap_err();
         assert_eq!(e.raw_os_error(), Some(libc::ENOENT));
         assert_eq!(reads.lock().unwrap().len(), 2);

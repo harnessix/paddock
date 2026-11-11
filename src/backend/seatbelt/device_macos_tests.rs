@@ -117,20 +117,7 @@ impl Drop for World {
 fn sandboxed(w: &World, script: &str) -> (i32, String) {
     let paddock = std::env::current_exe().unwrap();
     let spec = sspec::spec(&w.env, &w.def, &w.ctx, &w.plan, &paddock).unwrap();
-    let mut pol = policy(&w.env, &w.def, &w.ctx, &w.plan, &w.sockets, &paddock).unwrap();
-    // /usr/bin/python3 may be an xcrun shim into a versioned Xcode folder.
-    // Give this test the selected tools just as an explicit ro mount would.
-    if let Some(out) = Command::new("/usr/bin/xcode-select")
-        .arg("-p")
-        .output()
-        .ok()
-        .filter(|out| out.status.success())
-    {
-        let path = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
-        if path.is_absolute() && path.is_dir() {
-            pol.add(real(&path), Access::ReadOnly, "test developer tools");
-        }
-    }
+    let pol = policy(&w.env, &w.def, &w.ctx, &w.plan, &w.sockets, &paddock).unwrap();
     let profile = w.ctx.dir.join("seatbelt.sb");
     std::fs::write(&profile, crate::seatbelt::render(&pol).unwrap()).unwrap();
     let out = Command::new(SANDBOX_EXEC)
@@ -254,7 +241,7 @@ fn no_network_without_connect_and_the_port_of_connect_with_it() {
     // The supervisor can bind a localhost port inside.
     assert!(ok(
         &w,
-        "/usr/bin/python3 -c 'import socket; s=socket.socket(); s.bind((\"127.0.0.1\", 0)); s.listen(1); print(\"BOUND\")'"
+        "/usr/bin/perl -MIO::Socket::INET -e 'IO::Socket::INET->new(LocalAddr => \"127.0.0.1\", LocalPort => 0, Listen => 1) or die $!; print \"BOUND\\n\"'"
     ));
 }
 
@@ -269,7 +256,7 @@ fn listen(path: &Path) -> UnixListener {
 
 fn unix_connect(path: &Path) -> String {
     format!(
-        "/usr/bin/python3 -c 'import socket; s=socket.socket(socket.AF_UNIX); s.connect(\"{}\"); print(\"CONNECTED\")'",
+        "/usr/bin/perl -MIO::Socket::UNIX -e 'IO::Socket::UNIX->new(Peer => \"{}\") or die $!; print \"CONNECTED\\n\"'",
         path.display()
     )
 }
@@ -314,7 +301,7 @@ fn the_supervisor_can_create_its_socket_and_the_program_cannot_touch_the_host_si
     let w = world(PLAIN);
     let sock = w.sockets.supervisor.display().to_string();
     assert!(ok(&w, &format!(
-        "/usr/bin/python3 -c 'import socket; s=socket.socket(socket.AF_UNIX); s.bind(\"{sock}\"); print(\"LISTENING\")'"
+        "/usr/bin/perl -MIO::Socket::UNIX -e 'IO::Socket::UNIX->new(Local => \"{sock}\", Listen => 1) or die $!; print \"LISTENING\\n\"'"
     )));
     assert!(w.sockets.supervisor.exists());
     assert!(!ok(&w, &format!("touch {}/x", w.sockets.host.display())));
