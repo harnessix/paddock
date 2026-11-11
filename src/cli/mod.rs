@@ -1,3 +1,5 @@
+mod help_render;
+pub(crate) mod help_topics;
 mod run_args;
 use clap::{Args, Parser, Subcommand};
 use paddock::spec::Network;

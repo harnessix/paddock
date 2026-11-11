@@ -24,7 +24,7 @@ pub struct Row {
 }
 
 /// The table of limits: what paddock tells the user before it spends
-/// time or disk. The README section "App mode on macOS in a guest VM"
+/// time or disk. The `paddock help macos` topic
 /// has each row, which a test checks.
 pub const TABLE: &[Row] = &[
     Row {

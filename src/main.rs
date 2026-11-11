@@ -30,6 +30,9 @@ fn main() {
     if let Some(code) = paddock::cleanstart::again(&argv[1..]) {
         std::process::exit(code);
     }
+    if let Some(code) = cli::help_topics::handle(&argv) {
+        std::process::exit(code);
+    }
     match real_main() {
         Ok(code) => std::process::exit(code),
         Err(e) => {

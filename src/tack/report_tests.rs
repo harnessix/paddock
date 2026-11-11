@@ -53,7 +53,7 @@ fn doctor_is_one_line_without_secrets() {
     let (_t, env) = world("", &[]);
     assert_eq!(
         doctor(&env, Memory::default()),
-        ["  off      no secrets are set up (README \"tack\")"]
+        ["  off      no secrets are set up (`paddock help environment`)"]
     );
     std::fs::write(config::file(&env), "[tack.secrets.A]\nbackend = 2\n").unwrap();
     let l = doctor(&env, Memory::default());

@@ -420,7 +420,7 @@ pub(crate) fn explain(env: &HostEnv, a: &RunArgs, json: bool) -> Result<()> {
     let screens = paddock::screens::explain(&built.profile);
     if !screens.is_empty() {
         println!(
-            "\nstart screens that paddock answers, and errors it names (README \"Start screens\"):"
+            "\nstart screens that paddock answers, and errors it names (`paddock help host-requests`):"
         );
         for l in screens {
             println!("{l}");

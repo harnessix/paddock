@@ -482,7 +482,7 @@ pub fn package_owner(env: &HostEnv, path: &Path) -> Option<String> {
 /// What to do instead when a package owns the binary.
 pub fn package_hint(owner: &str, version: &str) -> String {
     format!(
-        "paddock was installed by a package ({owner}), so paddock update does not overwrite it. Update the package instead: in a clone of {REPO_URL}, run `git fetch --tags && git checkout v{version} && bin/install`, which builds and installs the new package with makepkg and pacman. To switch to a binary in ~/.local/bin, run `sudo pacman -R omarchy-paddock` first and install the prebuilt binary (see the README)"
+        "paddock was installed by a package ({owner}), so paddock update does not overwrite it. Update the package instead: in a clone of {REPO_URL}, run `git fetch --tags && git checkout v{version} && bin/install`, which builds and installs the new package with makepkg and pacman. To switch to a binary in ~/.local/bin, run `sudo pacman -R omarchy-paddock` first and install the prebuilt binary (see `paddock help install`)"
     )
 }
 

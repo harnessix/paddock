@@ -1,0 +1,3 @@
+## Main sections
+
+Install (`paddock help install`) · Use (`paddock help usage`) · Undo a run (`paddock help undo-runs`) · Network (`paddock help network`) · Logins and MCP (`paddock help agent-logins`) · Privacy defaults (`paddock help privacy`) · Host requests (`paddock help host-requests`) · Spawn other agents (`paddock help host-requests`) · Shared state (`paddock help shared-state`) · The loft (`paddock help private-notes`) · Spec Kit projects (`paddock help spec-kit`) · Forage (`paddock help usage-limits`) · App mode (`paddock help app-mode`) · Add a harness (`paddock help harness`) · Limits (`paddock help macos`)

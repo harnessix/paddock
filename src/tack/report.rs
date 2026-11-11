@@ -16,7 +16,7 @@ use std::time::Duration;
 const DOCTOR_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Who gets the values in this version, said once in each report.
-pub const PHASE_NOTE: &str = "with tackd on Linux, an allowlisted program that starts through its stand-in on PATH (paddock tack setup) or through paddock tack run gets the values: at protect = \"uid\" it runs as your helper account, out of reach of your other processes; at protect = \"refs\" it runs as you, and your other processes can still read its environment. Every other process sees the reference, such as tack://NAME (README \"tack\")";
+pub const PHASE_NOTE: &str = "with tackd on Linux, an allowlisted program that starts through its stand-in on PATH (paddock tack setup) or through paddock tack run gets the values: at protect = \"uid\" it runs as your helper account, out of reach of your other processes; at protect = \"refs\" it runs as you, and your other processes can still read its environment. Every other process sees the reference, such as tack://NAME (`paddock help environment`)";
 
 /// One secret for `paddock tack list`.
 #[derive(Debug, Serialize)]
@@ -138,7 +138,7 @@ pub fn doctor_with(env: &HostEnv, open: import::Opener) -> Vec<String> {
     };
     let rows = rows(env, &cfg);
     if rows.is_empty() {
-        out.push("  off      no secrets are set up (README \"tack\")".into());
+        out.push("  off      no secrets are set up (`paddock help environment`)".into());
         return out;
     }
     let files = import::default_files(env);

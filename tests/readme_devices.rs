@@ -6,12 +6,13 @@
 use paddock::devices::DevicesCfg;
 
 fn section() -> String {
-    let readme =
-        std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/README.md")).unwrap();
-    let start = readme
-        .find("\n## Devices: /dev/paddock\n")
-        .expect("the devices section");
-    let rest = &readme[start + 1..];
+    let readme = std::fs::read_to_string(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/src/help/guide-devices.md"
+    ))
+    .unwrap();
+    let rest = readme.as_str();
+    assert!(rest.starts_with("## Devices: /dev/paddock\n"));
     // Up to "Wait without sleep", which is about blocking reads, not the
     // devices themselves.
     let end = rest
