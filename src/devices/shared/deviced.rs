@@ -138,13 +138,15 @@ impl Shared {
     }
 
     /// Write the number of open leases into the state file, so `paddock ps`
-    /// and `paddock device ls` show it.
-    fn write_users(&self, users: u64) {
+    /// and `paddock device ls` show it. The count is read under the record
+    /// lock: two leases that change at once could otherwise write their
+    /// counts in the wrong order and leave a stale number in the file.
+    fn write_users(&self) {
         if self.closing.load(Ordering::SeqCst) {
             return;
         }
         let mut g = self.record.lock().unwrap_or_else(|e| e.into_inner());
-        g.users = Some(users as u32);
+        g.users = Some(self.leases.load(Ordering::SeqCst) as u32);
         if let Err(e) = g.write(&self.env) {
             self.log
                 .line(&format!("cannot write the state file: {e:#}"));
@@ -516,7 +518,7 @@ fn clean(s: &str) -> String {
 /// broker closes it. Nothing more is written on it.
 fn hold_lease(shared: &Arc<Shared>, mut conn: UnixStream, caller: &str) {
     let n = shared.leases.fetch_add(1, Ordering::SeqCst) + 1;
-    shared.write_users(n);
+    shared.write_users();
     shared.touch();
     shared
         .log
@@ -562,7 +564,7 @@ fn hold_lease(shared: &Arc<Shared>, mut conn: UnixStream, caller: &str) {
         .leases
         .fetch_sub(1, Ordering::SeqCst)
         .saturating_sub(1);
-    shared.write_users(n);
+    shared.write_users();
     shared
         .log
         .line(&format!("lease of {} dropped: {n} users", clean(caller)));
