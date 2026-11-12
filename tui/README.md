@@ -45,6 +45,86 @@ The footer always shows the main keys of the current screen.
 While the mouse is on, the terminal does not select text on a plain drag.
 Hold Shift to select text, or press `M` to turn the mouse off.
 
+Every key counts, also when several arrive at once (fast typing, a key that
+repeats, a slow connection): the interface takes them one by one, in their
+order. A paste goes into the open text field, with its line breaks as
+spaces. With no text field open, a paste does nothing: its letters are never
+commands. The question before a stop takes no answer from keys typed ahead.
+
+A button shows a press at once (inverse video) and acts on the release. A
+room, a row or a button under the pointer is marked. `Ctrl+L` draws the
+whole screen again, for when another program wrote over it. `R` does the
+same and reads paddock again.
+
+## Rooms
+
+The runs show as rooms: one card per run, with its agent as a small
+character at a desk, the agent and project, the state word and the time in
+the state. The character shows the state at a glance: it works, waits for
+you, idles, sleeps (ended or frozen) or is blocked (failed or stuck). Each
+agent has its color: orange claude, blue codex, purple gemini, green copilot,
+pink grok, teal opencode, gray for any other.
+
+The rooms need 80 columns and 24-bit or 256 colors. Under 80 columns, with
+`--plain`, with `NO_COLOR` or in a terminal with only 16 colors, the runs show
+as the list. `L` switches between the rooms and the list.
+`PADDOCK_TUI_ART=off` turns the art off; `PADDOCK_TUI_ART=256` or
+`truecolor` sets the colors when the terminal does not say.
+
+The characters move at 8 frames a second while the terminal has the focus.
+Each step writes only the cells that change. In the background, or when the
+terminal does not show the card, nothing moves.
+
+## Colors and small terminals
+
+The colors are the 16 colors of the terminal, so its light or dark palette
+decides the shades. No state shows by color alone: each has a glyph and a
+word. With `NO_COLOR` the interface writes no color code at all; bold, dim,
+inverse and underline carry the roles, and the runs show as the list.
+`--plain` has no boxes, no colors and no mouse.
+
+Under 80 columns the runs show as the list. Under 43 columns a row shows the
+state in one word, the agent and where it runs. The header then has only the
+tabs. A pane that is too low for its lines cuts them at the bottom.
+
+## Drawing
+
+The interface keeps the cells that the terminal shows. For a new frame it
+writes only the cells that differ, each run of cells with one cursor move
+and the shortest color codes. It clears the screen once at the start and
+after a resize, and it never erases a line, so the screen does not flicker.
+Frames that come faster than every 8 ms are joined, and a terminal that is
+slow gets only the last frame. Where the terminal knows synchronized output
+(mode 2026), a frame shows all at once.
+
+While nothing changes, nothing happens: a read of paddock with the same
+answer as before draws nothing, and a time such as "12 s" or "4 min" wakes
+the interface only when its word changes. Measured with 20 rooms on a
+200 x 60 terminal: no byte and about 0.3 % of one processor while the
+terminal is in the background (the reads of paddock), about 3 % with the
+animation, and about 10 ms from a key to its frame.
+`PADDOCK_TUI_STATS=1 npx vitest run test/perf.test.tsx` prints the numbers
+of the test with a fake clock.
+
+### Sprites
+
+The characters are the toon sprites of the launch video
+(`sprites/README.txt`). A sprite is `sprites/character-COLOR-STATE.json`:
+COLOR is `orange` (claude), `blue` (codex), `purple` (gemini), `green`
+(copilot), `pink` (grok), `teal` (opencode) or `gray` (any other agent),
+STATE is `idle`, `work` or `wait` (8 frames each), `sleep` or `blocked`
+(4 frames each). The file holds
+`{"w":24,"h":24,"fps":8,"frames":[[[r,g,b] or null per pixel, row by row]]}`;
+`null` is a transparent pixel. Each terminal cell shows two pixels, so a
+sprite takes 24 columns and 12 rows. All loops play at 8 frames a second.
+
+The build puts these 35 files into the program, also into the single binary,
+and nothing else from `sprites/`. It stops when a file is missing or has the
+wrong frame count. At run time a color whose file does not load gets the gray
+sprite of the state, and without that a built-in gray character. The cells
+and their color codes are made once per sprite, when it first shows; an
+animation step only writes the ready text of the changed cells.
+
 ## How it works
 
 The interface reads and changes everything through paddock's commands.

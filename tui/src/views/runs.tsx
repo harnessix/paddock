@@ -11,6 +11,8 @@ import { useTheme, type Role } from '../theme.js';
 // what is left.
 const BACKENDS = ['bwrap', 'docker', 'podman', 'srt', 'seatbelt', 'vm'];
 export const PLACE_WIDTH = Math.max(...BACKENDS.map((b) => cells(`sandbox ${b}`))) + 1;
+/** Under this width, a row has no room for the full state, the place and the agent: see runRow. */
+export const COMPACT_WIDTH = 1 + 16 + PLACE_WIDTH + 5;
 
 /** The approvals mode of a run in plain words. */
 export function approvalsLabel(a: string): string {
@@ -31,6 +33,13 @@ export function runRow(r: RunRow, width: number, marked: boolean): ListRow {
   const wide = width >= 100;
   const state = { text: col(stateLabel(r.state), 16), role: s.role, bold: r.state === 'waiting' };
   const place = { text: col(placeLabel(r), PLACE_WIDTH), role: 'muted' as Role };
+  if (width < COMPACT_WIDTH) {
+    // A very narrow screen: the state in one word, the agent, and where it runs, whole.
+    return {
+      key: r.id,
+      parts: [...(marked ? [{ text: '+' }] : []), { ...state, text: col(`${s.glyph} ${s.word.split(' ')[0] ?? ''}`, 10) }, { text: col(r.harness, 8) }, { ...place, text: placeLabel(r) }, { text: ` ${r.short}`, role: 'muted' }],
+    };
+  }
   if (width < 60) {
     // A narrow pane (the left pane of the wide layout): where the run runs
     // comes right after its state, so it is never cut (SPLIT1 rule).
@@ -123,6 +132,9 @@ export function RunDetail(props: {
   for (const w of r.warnings) facts.push(['warning', w, 'warning']);
   const factRows = Math.min(facts.length + 2, Math.max(4, props.height - 7));
   const top = inner(theme.plain, props.width, factRows);
+  // Facts that do not fit: the last line says how many, in place of a silent cut.
+  const hiddenFacts = facts.length > top.height ? facts.length - Math.max(0, top.height - 1) : 0;
+  const shownFacts = hiddenFacts > 0 ? facts.slice(0, Math.max(0, top.height - 1)) : facts;
   const outHeight = props.height - factRows;
   const out = inner(theme.plain, props.width, outHeight);
   const lines = props.tail;
@@ -133,12 +145,13 @@ export function RunDetail(props: {
   return (
     <Box flexDirection="column" width={props.width} height={props.height}>
       <Pane title={`Run · ${r.harness}-${r.short} · ${placeLabel(r)}`} focused={props.focused} width={props.width} height={factRows}>
-        {facts.slice(0, top.height).map(([k, v, role], i) => (
+        {shownFacts.map(([k, v, role], i) => (
           <T key={i} role={role ?? 'normal'}>
             {fit(k, 9)}
             {cut(v, Math.max(0, top.width - 9))}
           </T>
         ))}
+        {hiddenFacts > 0 ? <T role="muted">{cut(`… ${hiddenFacts} more: ↵ opens the run`, top.width)}</T> : null}
       </Pane>
       <Pane
         title={`Output · last ${lines.length} lines${props.scroll > 0 ? ` · ${props.scroll} up` : ''}`}

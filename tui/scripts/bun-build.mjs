@@ -18,6 +18,8 @@ const result = await Bun.build({
   entrypoints: [new URL('../dist/cli.js', import.meta.url).pathname],
   compile: { target: `bun-${target}`, outfile },
   minify: true,
+  // React's production code, as in cli.ts.
+  define: { 'process.env.NODE_ENV': JSON.stringify('production') },
   plugins: [stub],
 });
 if (!result.success) {

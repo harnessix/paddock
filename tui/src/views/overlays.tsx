@@ -1,8 +1,8 @@
 import React from 'react';
 import { Box } from 'ink';
-import { cut, fit } from '../clean.js';
+import { cells, cut, fit } from '../clean.js';
 import { searchActions, visibleActions, type Action } from '../actions.js';
-import { Button, List, Pane, T, inner } from '../ui.js';
+import { Button, Clickable, List, Pane, T, inner } from '../ui.js';
 import { useTheme } from '../theme.js';
 import type { ApprovalsMode } from '../paddock.js';
 
@@ -11,9 +11,11 @@ export function helpLines(readonly: boolean, mouse: boolean): { key: string; tex
   lines.push({ key: '', text: '' });
   for (const t of [
     '↑↓ j k move · PgUp PgDn page · Home End first and last',
+    'Rooms: ←→ h l one card, ↑↓ j k one row of cards; L the list',
     'Approval card: 1-7 or y s n answer, ←→ choose, ↵ answer, Esc deny',
     'Wide grants (⚠: always, or every host) need the key again within 3 s',
     readonly ? '' : 'New run: Ctrl+A switches the approvals mode (default, manual, auto)',
+    'R reads paddock again and draws the whole screen again, Ctrl+L only draws',
     mouse ? 'Mouse: click selects, double-click opens, wheel scrolls; hold Shift to select text' : 'The mouse is off: M turns it on',
     readonly ? 'Read-only: the actions that change something are hidden' : '',
   ]) {
@@ -119,6 +121,7 @@ export function NewRunForm(props: {
   const theme = useTheme();
   const box = inner(theme.plain, props.width, props.height);
   const f = props.form;
+  const fieldWidth = Math.max(8, Math.min(60, box.width - 4));
   const hints = [
     props.harnesses.length > 0 ? `installed: ${props.harnesses.join(', ')}` : 'paddock list shows the harnesses',
     'a folder; empty is the current folder',
@@ -129,11 +132,21 @@ export function NewRunForm(props: {
       {FORM_FIELDS.map((name, i) => (
         <Box key={name} flexDirection="column">
           <Button label={`${fit(name, 12)}`} focused={f.field === i} onClick={() => props.onField(i)} />
-          <T>
-            {'  '}
-            {cut(f.values[i] ?? '', Math.max(0, box.width - 4))}
-            {f.field === i ? <T inverse> </T> : null}
-          </T>
+          {/* The field shows as a line to write on, so an empty one is not an empty row. */}
+          <Clickable onClick={() => props.onField(i)}>
+            {() => (
+              <T>
+                {'  '}
+                <T underline={!theme.plain} role={f.field === i ? 'normal' : 'muted'}>
+                  {cut(f.values[i] ?? '', fieldWidth - 1)}
+                </T>
+                {f.field === i ? <T inverse> </T> : null}
+                <T underline={!theme.plain} role="muted">
+                  {' '.repeat(Math.max(0, fieldWidth - cells(cut(f.values[i] ?? '', fieldWidth - 1)) - (f.field === i ? 1 : 0)))}
+                </T>
+              </T>
+            )}
+          </Clickable>
           <T role="muted">{cut(`  ${hints[i] ?? ''}`, box.width)}</T>
         </Box>
       ))}

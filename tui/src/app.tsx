@@ -4,9 +4,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { existsSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
-import { Box, Text, useApp, useInput, useWindowSize, type Key } from 'ink';
-import { cleanText, cut, oneLine } from './clean.js';
+import { Box, Text, useApp, useWindowSize, type Key } from 'ink';
+import { useKeys, type Keys } from './keys.js';
+import { cells, cleanText, cut, fit, oneLine } from './clean.js';
 import { poll, useSnapshot } from './data.js';
+import { msUntilChange, useRedrawAfter } from './clock.js';
 import { editLine } from './edit.js';
 import { buildRuns, liveUnread, matches, type RunRow } from './model.js';
 import { isMouseInput, MouseProvider, parseMouse, type MouseDispatcher } from './mouse.js';
@@ -17,6 +19,8 @@ import { Button, Clickable, T } from './ui.js';
 import { useTheme } from './theme.js';
 import type { MailMessage, Pending } from './types.js';
 import { RunDetail, RunsPane } from './views/runs.js';
+import { gridCols, roomsGrid, RoomsPane, ROOMS_MIN_COLUMNS } from './views/rooms.js';
+import { useArt } from './art-layer.js';
 import { ApprovalCard, ApprovalsView, cardHeight, type CardState } from './views/approvals.js';
 import { BoardPane, boardLines } from './views/board.js';
 import { MailListPane, MessagePane, mailBoxRow, messageRow } from './views/mail.js';
@@ -43,6 +47,8 @@ export interface AppProps {
   cwd?: string;
   /** Turn the terminal's mouse reports on or off. */
   onMouseChange?: (on: boolean) => void;
+  /** Draw every cell of the screen again (another program wrote over it). */
+  onRedraw?: () => void;
   /** Override the terminal size (tests). */
   size?: { columns: number; rows: number };
 }
@@ -90,20 +96,60 @@ export function App(props: AppProps): React.JSX.Element {
   const [split, setSplit] = useState<boolean | null>(null);
   const [harnesses, setHarnesses] = useState<string[]>([]);
   const dispatcher = useRef<MouseDispatcher | null>(null);
+  const keysRef = useRef<Keys | null>(null);
 
   const screen: Screen = stack[stack.length - 1] ?? { kind: 'root' };
-  const wide = columns >= WIDE;
+  const art = useArt();
+  const [roomsOn, setRoomsOn] = useState(true);
+  // The rooms: wide enough, colours for the art, not plain. Else the list.
+  const rooms = roomsOn && art.enabled && !theme.plain && columns >= ROOMS_MIN_COLUMNS;
+  // The split layout of a wide screen: the list left, the detail right.
+  const wide = columns >= WIDE && !rooms;
   // Cards answered here: hidden until paddock stops listing them (at most 30 s).
   const [answered, setAnswered] = useState(new Map<string, number>());
   const pending: Pending[] = useMemo(
     () => (snap.approvals?.pending ?? []).filter((p) => !(answered.has(p.id) && Date.now() - (answered.get(p.id) ?? 0) < 30_000)),
     [snap.approvals, answered],
   );
+  // After 30 s, a card that paddock still lists shows again.
+  useEffect(() => {
+    if (answered.size === 0) return;
+    const t = setTimeout(() => setAnswered((m) => new Map([...m].filter(([, at]) => Date.now() - at < 30_000))), Math.max(0, Math.min(...answered.values()) + 30_000 - Date.now()) + 10);
+    return () => clearTimeout(t);
+  }, [answered]);
   const allRuns = useMemo(() => buildRuns(snap.ps, snap.board, pending, snap.mail ?? []), [snap.ps, snap.board, pending, snap.mail]);
   const runs = useMemo(() => allRuns.filter((r) => matches(r, filter)), [allRuns, filter]);
   const bLines = useMemo(() => boardLines(snap.board), [snap.board]);
   const boxes = useMemo(() => (snap.mail ?? []).filter((m) => !filter || `${m.id} ${m.state ?? ''}`.toLowerCase().includes(filter.toLowerCase())), [snap.mail, filter]);
-  const selRun: RunRow | undefined = runs[Math.min(sel.runs, Math.max(0, runs.length - 1))];
+  // The selected run, kept by its id: when paddock sorts the runs anew (a
+  // run starts to wait, another ends), the selection stays on its run and
+  // does not jump to the run that took its place.
+  const selRunId = useRef<string | null>(null);
+  let runIndex = Math.min(sel.runs, Math.max(0, runs.length - 1));
+  if (runs[runIndex]?.id !== selRunId.current) {
+    const i = selRunId.current === null ? -1 : runs.findIndex((r) => r.id === selRunId.current);
+    if (i >= 0) runIndex = i;
+    else selRunId.current = runs[runIndex]?.id ?? null;
+  }
+  const selRun: RunRow | undefined = runs[runIndex];
+  useEffect(() => {
+    if (sel.runs !== runIndex) setSel((s) => ({ ...s, runs: runIndex }));
+  }, [sel.runs, runIndex]);
+  /** Move the selection by `d` runs. It counts from the last move, so several wheel steps in one read add up. */
+  const runAt = useRef(0);
+  runAt.current = runIndex;
+  const moveRun = (d: number): void => {
+    const at = Math.max(0, Math.min(runs.length - 1, runAt.current + d));
+    runAt.current = at;
+    selRunId.current = runs[at]?.id ?? null;
+    setSel((s) => ({ ...s, runs: at }));
+  };
+  /** Select the run at a place in the list. */
+  const selectRun = (i: number): void => {
+    const at = Math.max(0, Math.min(runs.length - 1, i));
+    selRunId.current = runs[at]?.id ?? null;
+    setSel((s) => ({ ...s, runs: at }));
+  };
 
   // The card in front, kept by its id, not by its place in the list: when
   // a card goes, the next one must not take its answer. A card that came
@@ -141,6 +187,17 @@ export function App(props: AppProps): React.JSX.Element {
     !isDone(p.id) && seen.current?.id === p.id && Date.now() - seen.current.at >= SETTLE_MS;
   const detailRun = screen.kind === 'run' ? allRuns.find((r) => r.id === screen.id) : undefined;
 
+  // The words of time on the screen ("12 s", "4 min") change at known
+  // moments: draw again then, and not in between.
+  useRedrawAfter(
+    msUntilChange(Date.now(), {
+      since: [...allRuns.flatMap((r) => [r.since, r.stateSince]), ...pending.map((p) => (p.age_s === undefined ? (p.created ?? 0) : 0))],
+      until: pending.map((p) => p.expires ?? 0),
+      // The bar of the time left moves in small steps.
+      at: pending.some((p) => p.expires) ? [Date.now() + 5000] : [],
+    }),
+  );
+
   const say = useCallback((text: string, role: Toast['role'] = 'success') => setToast({ text: oneLine(text), role, at: Date.now() }), []);
 
   useEffect(() => {
@@ -174,6 +231,8 @@ export function App(props: AppProps): React.JSX.Element {
             setTail((old) => {
             const lines = v.lines.map((l) => cleanText(l).replace(/\n/g, ' ').trimEnd());
             if (old.id !== tailId) return { id: tailId, lines, error: '', scroll: 0, newLines: 0 };
+            // The same output as before: nothing to draw.
+            if (old.error === '' && old.lines.length === lines.length && old.lines.every((l, i) => l === lines[i])) return old;
             const added = old.scroll > 0 ? newCount(old.lines, lines) : 0;
             return { ...old, lines, error: '', scroll: old.scroll > 0 ? Math.min(old.scroll + added, lines.length) : 0, newLines: old.newLines + added };
           });
@@ -198,7 +257,7 @@ export function App(props: AppProps): React.JSX.Element {
     const load = () =>
       api.mailMessages(mailRun).then(
         (list) => {
-          if (alive) setMessages({ run: mailRun, list, error: '' });
+          if (alive) setMessages((old) => (old.run === mailRun && old.error === '' && JSON.stringify(old.list) === JSON.stringify(list) ? old : { run: mailRun, list, error: '' }));
           return list;
         },
         (e: unknown) => {
@@ -378,6 +437,8 @@ export function App(props: AppProps): React.JSX.Element {
       case 'stop':
         if (!target) return say('Select a run first', 'warning');
         if (!target.live) return say('The run has ended', 'warning');
+        // The question gets its answer from a key pressed after it showed, not from keys typed ahead.
+        keysRef.current?.clear();
         return setConfirmStop(target);
       case 'split':
         return void splitView();
@@ -412,15 +473,25 @@ export function App(props: AppProps): React.JSX.Element {
         return setOverlay({ kind: 'help', scroll: 0 });
       case 'mouse':
         return toggleMouse();
+      case 'layout':
+        if (!art.enabled || theme.plain) return say('No art in this terminal: the runs stay a list (256 colours, not NO_COLOR, not --plain)', 'muted');
+        if (columns < ROOMS_MIN_COLUMNS) return say(`The rooms need ${ROOMS_MIN_COLUMNS} columns`, 'muted');
+        setRoomsOn((on) => !on);
+        return say(rooms ? 'Runs as a list' : 'Runs as rooms', 'muted');
       case 'refresh':
         refresh();
+        // Also draw the whole screen again: when another program wrote over it, this puts it right.
+        props.onRedraw?.();
         return say('Reading paddock again', 'muted');
       case 'quit':
         return exit();
     }
   };
 
-  const widePanes = (): WidePane[] => (pending.length > 0 ? ['approvals', 'runs', 'detail', 'board', 'mail'] : ['runs', 'detail', 'board', 'mail']);
+  const widePanes = (): WidePane[] => {
+    if (rooms) return pending.length > 0 && columns >= WIDE ? ['approvals', 'runs'] : ['runs'];
+    return pending.length > 0 ? ['approvals', 'runs', 'detail', 'board', 'mail'] : ['runs', 'detail', 'board', 'mail'];
+  };
   // With no card, the approvals strip is gone, and so is its focus: a new
   // card must not get the keys that the user meant for the runs.
   const focusPane: WidePane = widePanes().includes(widePane) ? widePane : 'runs';
@@ -429,7 +500,7 @@ export function App(props: AppProps): React.JSX.Element {
   }, [pending.length, widePane]);
 
   const nextTab = (d: 1 | -1) => {
-    if (wide && tab === 'runs' && screen.kind === 'root') {
+    if ((wide || (rooms && widePanes().length > 1)) && tab === 'runs' && screen.kind === 'root') {
       const panes = widePanes();
       const i = panes.indexOf(focusPane);
       setWidePane(panes[(i + d + panes.length) % panes.length] as WidePane);
@@ -451,6 +522,7 @@ export function App(props: AppProps): React.JSX.Element {
     if (screen.kind === 'run') return 'tail';
     if (screen.kind === 'mailbox') return 'messages';
     if (screen.kind === 'message') return 'message';
+    if (tab === 'runs' && rooms && focusPane === 'approvals') return 'approvals';
     if (tab === 'runs' && wide) {
       if (focusPane === 'detail') return 'tail';
       if (focusPane === 'board') return 'board';
@@ -491,6 +563,7 @@ export function App(props: AppProps): React.JSX.Element {
     }
     if (!l) return;
     if (l === 'approvals') return pickCard(fi + Math.max(-pending.length, Math.min(pending.length, d)));
+    if (l === 'runs') return moveRun(d);
     const n = listLength(l);
     setSel((s) => ({ ...s, [l]: Math.max(0, Math.min(n - 1, s[l as keyof typeof s] + d)) }));
   };
@@ -575,13 +648,27 @@ export function App(props: AppProps): React.JSX.Element {
     return false;
   };
 
-  useInput((input, key) => {
+  /** What is not a key: a focus or a mouse report. */
+  const report = (input: string): boolean => {
+    // Focus reports of the terminal (DECSET 1004): the art rests in the background.
+    if (input === '[I' || input === '[O') {
+      art.setFocused(input === '[I');
+      // In the background the pointer is elsewhere: nothing stays lit.
+      if (input === '[O') dispatcher.current?.leave();
+      return true;
+    }
     if (isMouseInput(input)) {
       const e = parseMouse(input);
       if (e && mouseOn) dispatcher.current?.dispatch(e);
-      return;
+      return true;
     }
+    return false;
+  };
+
+  const onKey = (input: string, key: Key): void => {
     if (key.ctrl && input === 'c') return exit();
+    // Ctrl+L, as in a shell: draw the screen again.
+    if (key.ctrl && input === 'l') return props.onRedraw?.();
 
     if (confirmStop) {
       const r = confirmStop;
@@ -611,6 +698,8 @@ export function App(props: AppProps): React.JSX.Element {
         const next = editLine(filter, input, key);
         if (next !== null) {
           setFilter(next);
+          // A new filter: the first run that matches.
+          selRunId.current = null;
           setSel((s) => ({ ...s, runs: 0, mail: 0 }));
         }
       } else {
@@ -670,6 +759,16 @@ export function App(props: AppProps): React.JSX.Element {
     const front = l === 'approvals' && screen.kind === 'root' ? frontCard : undefined;
     if (front && cardKeys(front, input, key)) return;
 
+    if (rooms && l === 'runs' && screen.kind === 'root' && tab === 'runs') {
+      // The grid: left and right one card, up and down one row of cards.
+      const cols = gridCols(columns);
+      if (key.leftArrow || input === 'h') return move(l, -1);
+      if (key.rightArrow || input === 'l') return move(l, 1);
+      if (key.upArrow || input === 'k') return move(l, -cols);
+      if (key.downArrow || input === 'j') return move(l, cols);
+      if (key.pageUp) return move(l, -cols * roomsRows());
+      if (key.pageDown) return move(l, cols * roomsRows());
+    }
     if (key.upArrow || input === 'k') return move(l, -1);
     if (key.downArrow || input === 'j') return move(l, 1);
     if (key.pageUp) return move(l, -Math.max(1, rows - 6));
@@ -697,12 +796,17 @@ export function App(props: AppProps): React.JSX.Element {
       ':': 'palette',
       '?': 'help',
       M: 'mouse',
+      L: 'layout',
       R: 'refresh',
       Q: 'quit',
     };
     const id = byKey[input];
     if (id) runAction(id);
-  });
+  };
+  // A text field is open: what is typed is text, not commands.
+  const typingCard = tab === 'approvals' || focusPane === 'approvals' ? frontCard : undefined;
+  const textMode = line !== null || overlay?.kind === 'form' || overlay?.kind === 'palette' || (typingCard !== undefined && cardState(typingCard).typing !== undefined);
+  keysRef.current = useKeys({ onKey, textMode, report, onDrop: () => say('Pasted text goes into a text field: none is open', 'muted') });
 
   // ---- drawing ----
   const bodyHeight = Math.max(3, rows - 3);
@@ -711,15 +815,30 @@ export function App(props: AppProps): React.JSX.Element {
   const headLeft = `paddock${readonly ? ' · read-only' : ''} · ${live} running${waiting > 0 ? ` · ${waiting} wait${waiting === 1 ? 's' : ''} for you` : ''}`;
   const unread = liveUnread(snap.mail ?? []);
 
+  // A tab with a count keeps room for it also when there is none: the tabs
+  // stay where they are when a card or a mail comes or goes.
+  const tabLabel = (t: { id: Tab; label: string }): string => {
+    if (t.id !== 'approvals' && t.id !== 'mail') return t.label;
+    const n = t.id === 'approvals' ? waiting : unread;
+    return fit(`${t.label}${n > 0 ? ` ${t.id === 'approvals' ? '◆' : '✉'}${n}` : ''}`, Math.max(cells(t.label) + 3, cells(t.label) + 2 + String(n).length));
+  };
+  // Each tab has a space on both sides, and one cell lies between two tabs.
+  const tabsWidth = TABS.reduce((n, t) => n + cells(tabLabel(t)) + 2, 0) + TABS.length - 1;
+
   const header = (
     <Box width={columns} height={1} flexDirection="row" justifyContent="space-between">
-      <Text wrap="truncate-end">
-        <T bold>{'paddock'}</T>
-        <T>{cut(headLeft.slice('paddock'.length), Math.max(0, columns - 44))}</T>
-      </Text>
+      {/* The tabs always fit. The name and the counts take what is left, or nothing. */}
+      {columns - tabsWidth >= 'paddock'.length + 1 ? (
+        <Text wrap="truncate-end">
+          <T bold>{'paddock'}</T>
+          <T>{cut(headLeft.slice('paddock'.length), Math.max(0, columns - tabsWidth - 'paddock'.length - 1))}</T>
+        </Text>
+      ) : (
+        <Text> </Text>
+      )}
       <Box flexDirection="row" gap={1} flexShrink={0}>
         {TABS.map((t) => {
-          const label = t.id === 'approvals' && waiting > 0 ? `${t.label} ◆${waiting}` : t.id === 'mail' && unread > 0 ? `${t.label} ✉${unread}` : t.label;
+          const label = tabLabel(t);
           return (
             <Button
               key={t.id}
@@ -737,7 +856,7 @@ export function App(props: AppProps): React.JSX.Element {
   const runsPane = (w: number, h: number, focused: boolean) => (
     <RunsPane
       runs={runs}
-      selected={Math.min(sel.runs, Math.max(0, runs.length - 1))}
+      selected={runIndex}
       marked={marked}
       width={w}
       height={h}
@@ -745,7 +864,7 @@ export function App(props: AppProps): React.JSX.Element {
       filter={filter}
       title={snap.loaded ? undefined : 'Runs · reading paddock…'}
       onSelect={(i) => {
-        setSel((s) => ({ ...s, runs: i }));
+        selectRun(i);
         setWidePane('runs');
       }}
       onOpen={(i) => {
@@ -753,7 +872,43 @@ export function App(props: AppProps): React.JSX.Element {
         if (r) go({ kind: 'run', id: r.id });
       }}
       onWheel={(d) => {
-        setSel((s) => ({ ...s, runs: Math.max(0, Math.min(runs.length - 1, s.runs + d * 3)) }));
+        moveRun(d * 3);
+      }}
+    />
+  );
+
+  // The rooms: a sticky approval strip on a wide screen, the grid under it.
+  const front0 = frontCard;
+  // The strip is as high as the highest card that waits, so the panes under
+  // it do not move when another card comes to the front.
+  const stripFor = (width: number): number => Math.min(Math.floor(bodyHeight / 3), Math.max(0, ...pending.map((p) => cardHeight(p, width, readonly, 2))));
+  const roomsStrip = rooms && columns >= WIDE && front0 ? stripFor(columns - 4) : 0;
+  const roomsHeight = bodyHeight - roomsStrip;
+  function roomsRows(): number {
+    return roomsGrid(columns, Math.max(0, roomsHeight - 1), art.enabled).rows;
+  }
+  const roomsPane = (focused: boolean) => (
+    <RoomsPane
+      runs={runs}
+      selected={runIndex}
+      marked={marked}
+      width={columns}
+      height={roomsHeight}
+      focused={focused}
+      filter={filter}
+      art={art.enabled}
+      title={snap.loaded ? undefined : 'Runs · reading paddock…'}
+      onSelect={(i) => {
+        selectRun(i);
+        setWidePane('runs');
+      }}
+      onOpen={(i) => {
+        const r = runs[i];
+        if (r) go({ kind: 'run', id: r.id });
+      }}
+      onWheel={(d) => {
+        const cols = gridCols(columns);
+        moveRun(d * cols);
       }}
     />
   );
@@ -915,16 +1070,40 @@ export function App(props: AppProps): React.JSX.Element {
     body = approvalsView(columns, bodyHeight);
   } else if (tab === 'mail') {
     body = mailPane(columns, bodyHeight, true);
+  } else if (rooms) {
+    body = (
+      <Box flexDirection="column" width={columns} height={bodyHeight}>
+        {roomsStrip > 0 && front0 ? (
+          <Box height={roomsStrip} flexShrink={0} overflow="hidden">
+          <ApprovalCard
+            pending={front0}
+            state={cardState(front0)}
+            width={columns}
+            focused={focusPane === 'approvals'}
+            readonly={readonly}
+            maxRequest={2}
+            onChoose={(c) => choose(front0, c)}
+            onFocusCard={() => {
+              pickCard(fi);
+              setWidePane('approvals');
+            }}
+          />
+          </Box>
+        ) : null}
+        {roomsPane(focusPane === 'runs' || roomsStrip === 0)}
+      </Box>
+    );
   } else if (wide) {
     // Wide: a sticky approval strip, runs left, the selected run right, board and mail below.
     const front = frontCard;
-    const stripHeight = front ? Math.min(Math.floor(bodyHeight / 3), cardHeight(front, columns - 4, readonly, 2)) : 0;
+    const stripHeight = front ? stripFor(columns - 4) : 0;
     const bottom = Math.max(5, Math.floor((bodyHeight - stripHeight) / 3));
     const mid = bodyHeight - stripHeight - bottom;
     const left = Math.min(56, Math.max(36, Math.floor(columns * 0.36)));
     body = (
       <Box flexDirection="column" width={columns} height={bodyHeight}>
         {front ? (
+          <Box height={stripHeight} flexShrink={0} overflow="hidden">
           <ApprovalCard
             pending={front}
             state={cardState(front)}
@@ -938,6 +1117,7 @@ export function App(props: AppProps): React.JSX.Element {
               setWidePane('approvals');
             }}
           />
+          </Box>
         ) : null}
         <Box flexDirection="row" height={mid}>
           {runsPane(left, mid, focusPane === 'runs')}
@@ -994,11 +1174,10 @@ export function App(props: AppProps): React.JSX.Element {
   } else if (snap.errors.length > 0) {
     status = <T role="error">{cut(`✖ ${snap.errors[0]}`, columns)}</T>;
   } else {
-    const ago = snap.loaded ? Math.max(0, Math.floor((Date.now() - snap.at) / 1000)) : -1;
     status = (
       <T role="muted">
         {cut(
-          `${snap.loaded ? `read ${ago} s ago` : 'reading paddock…'}${filter ? ` · filter "${filter}"` : ''}${marked.size > 0 ? ` · ${marked.size} marked for split` : ''}${split === false ? ' · v opens a view window (no paddock split)' : ''}`,
+          `${snap.loaded ? 'up to date' : 'reading paddock…'}${filter ? ` · filter "${filter}"` : ''}${marked.size > 0 ? ` · ${marked.size} marked for split` : ''}${split === false ? ' · v opens a view window (no paddock split)' : ''}`,
           columns,
         )}
       </T>
@@ -1016,13 +1195,14 @@ export function App(props: AppProps): React.JSX.Element {
     return () => runAction(id);
   };
   const mouseNote = mouseOn ? 'hold Shift to select text' : 'M mouse on';
+  const hintsWidth = hints.reduce((n, [k, label]) => n + cells(k) + cells(label.text) + 3, 0);
   const footer = (
     <Box width={columns} height={1} flexDirection="row" justifyContent="space-between">
       <Box flexDirection="row" overflow="hidden" flexShrink={1}>
         {hints.map(([k, label], i) => (
           <Clickable key={i} onClick={hintAction(label.id)}>
-            {(hovered) => (
-              <Text underline={hovered && label.id !== null}>
+            {(hovered, pointer) => (
+              <Text underline={hovered && label.id !== null} inverse={pointer.pressed && label.id !== null}>
                 <T role="accent" bold>
                   {k}
                 </T>
@@ -1032,7 +1212,8 @@ export function App(props: AppProps): React.JSX.Element {
           </Clickable>
         ))}
       </Box>
-      {columns >= 60 ? <Box flexShrink={0}><T role="muted">{mouseNote}</T></Box> : null}
+      {/* The note shows only when the hints leave room for it and two cells of space. */}
+      {hintsWidth + 2 + cells(mouseNote) <= columns ? <Box flexShrink={0}><T role="muted">{mouseNote}</T></Box> : null}
     </Box>
   );
 

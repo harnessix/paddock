@@ -19,8 +19,8 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && chmod +x dist/cli.js",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "node scripts/bundle-sprites.mjs && tsc -p tsconfig.build.json && chmod +x dist/cli.js",
+    "typecheck": "node scripts/bundle-sprites.mjs && tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
     "test": "npm run build && vitest run",
     "compile": "node scripts/compile.mjs",

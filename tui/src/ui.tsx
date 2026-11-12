@@ -4,14 +4,14 @@
 import React, { useRef, type ReactNode } from 'react';
 import { Box, Text, type DOMElement } from 'ink';
 import { cells, cut, fit } from './clean.js';
-import { useClickable, type Handlers } from './mouse.js';
-import { roleProps, useTheme, type Role } from './theme.js';
+import { usePointer, type Handlers, type Pointer } from './mouse.js';
+import { accentColor, roleProps, useTheme, type Role } from './theme.js';
 
 export function T(props: { role?: Role; bold?: boolean; inverse?: boolean; underline?: boolean; children: ReactNode; wrap?: 'truncate-end' | 'wrap' }): React.JSX.Element {
   const theme = useTheme();
   const colors = theme.plain ? {} : roleProps(theme, props.role ?? 'normal');
   return (
-    <Text {...colors} bold={props.bold} inverse={props.inverse} underline={props.underline} wrap={props.wrap ?? 'truncate-end'}>
+    <Text {...colors} bold={props.bold || colors.bold} inverse={props.inverse} underline={props.underline} wrap={props.wrap ?? 'truncate-end'}>
       {props.children}
     </Text>
   );
@@ -30,30 +30,36 @@ export function Pane(props: {
   children: ReactNode;
   onWheel?: (dir: 1 | -1) => void;
   onClick?: () => void;
+  onDoubleClick?: () => void;
 }): React.JSX.Element {
   const theme = useTheme();
   const ref = useRef<DOMElement>(null);
-  useClickable(ref, { onWheel: props.onWheel, onClick: props.onClick });
+  const pointer = usePointer(ref, { onWheel: props.onWheel, onClick: props.onClick, onDoubleClick: props.onDoubleClick });
   const { width, height, focused } = props;
+  // A pane that a click selects (a card) lights up under the pointer.
+  const lit = !focused && pointer.hovered && (props.onClick !== undefined || props.onDoubleClick !== undefined);
   if (theme.plain) {
     return (
       <Box ref={ref} flexDirection="column" width={width} height={height} overflow="hidden">
-        <Text bold>{cut(`${focused ? '> ' : ''}${props.title}`, width)}</Text>
+        <Text bold underline={lit}>{cut(`${focused ? '> ' : ''}${props.title}`, width)}</Text>
         <Box flexDirection="column" height={height - 1} overflow="hidden">
-          {props.children}
+          <Box flexDirection="column" flexShrink={0}>
+            {props.children}
+          </Box>
         </Box>
       </Box>
     );
   }
-  const border = focused ? { borderColor: theme.color.accent } : { borderDimColor: true };
+  const accent = accentColor(theme);
+  const border = focused ? { borderColor: accent } : lit ? {} : { borderDimColor: true };
   const title = cut(props.title, Math.max(0, width - 6));
   const fill = Math.max(0, width - 5 - cells(title));
-  const color = focused ? { color: theme.color.accent } : { dimColor: true };
+  const color = focused ? { color: accent } : lit ? {} : { dimColor: true };
   return (
     <Box ref={ref} flexDirection="column" width={width} height={height} overflow="hidden">
       <Text wrap="truncate-end">
         <Text {...color}>{'╭─ '}</Text>
-        <Text bold={focused} dimColor={!focused}>{title}</Text>
+        <Text bold={focused || pointer.pressed} dimColor={!focused && !lit} underline={lit}>{title}</Text>
         <Text {...color}>{' ' + '─'.repeat(fill) + '╮'}</Text>
       </Text>
       <Box
@@ -66,18 +72,21 @@ export function Pane(props: {
         paddingX={1}
         overflow="hidden"
       >
-        {props.children}
+        {/* Lines that do not fit are cut at the bottom. Without this box they would shrink to no height and lie over each other. */}
+        <Box flexDirection="column" flexShrink={0}>
+          {props.children}
+        </Box>
       </Box>
     </Box>
   );
 }
 
-export function Clickable(props: Handlers & { children: (hovered: boolean) => ReactNode; width?: number }): React.JSX.Element {
+export function Clickable(props: Handlers & { children: (hovered: boolean, pointer: Pointer) => ReactNode; width?: number }): React.JSX.Element {
   const ref = useRef<DOMElement>(null);
-  const hovered = useClickable(ref, props);
+  const pointer = usePointer(ref, props);
   return (
     <Box ref={ref} width={props.width} flexShrink={0}>
-      {props.children(hovered)}
+      {props.children(pointer.hovered, pointer)}
     </Box>
   );
 }
@@ -90,8 +99,14 @@ export function Button(props: {
 }): React.JSX.Element {
   return (
     <Clickable onClick={props.onClick}>
-      {(hovered) => (
-        <T role={props.focused ? 'normal' : (props.role ?? 'normal')} inverse={props.focused} bold={props.focused} underline={hovered && !props.focused}>
+      {(hovered, pointer) => (
+        // Under the pointer: underlined and bold. Held down: inverse, as the focused button, so the press shows before it acts.
+        <T
+          role={props.focused ? 'normal' : (props.role ?? 'normal')}
+          inverse={props.focused || pointer.pressed}
+          bold={props.focused || hovered}
+          underline={hovered && !props.focused && !pointer.pressed}
+        >
           {props.label}
         </T>
       )}
@@ -138,7 +153,7 @@ export function List(props: {
         const sel = index === selected;
         return (
           <Clickable key={r.key} width={width} onClick={() => props.onSelect(index)} onDoubleClick={() => props.onOpen(index)}>
-            {(hovered) => <RowText parts={r.parts} width={width} selected={sel} focused={props.focused} hovered={hovered} />}
+            {(hovered, pointer) => <RowText parts={r.parts} width={width} selected={sel} focused={props.focused} hovered={hovered} pressed={pointer.pressed} />}
           </Clickable>
         );
       })}
@@ -146,7 +161,7 @@ export function List(props: {
   );
 }
 
-function RowText(props: { parts: ListRow['parts']; width: number; selected: boolean; focused: boolean; hovered: boolean }): React.JSX.Element {
+function RowText(props: { parts: ListRow['parts']; width: number; selected: boolean; focused: boolean; hovered: boolean; pressed: boolean }): React.JSX.Element {
   const theme = useTheme();
   const marker = props.selected ? '› ' : '  ';
   let left = props.width - 2;
@@ -156,12 +171,12 @@ function RowText(props: { parts: ListRow['parts']; width: number; selected: bool
     return { ...p, text: t };
   });
   const pad = ' '.repeat(Math.max(0, left));
-  const selColor = props.selected && props.focused && !theme.plain ? { color: theme.color.accent } : {};
+  const selColor = props.selected && props.focused ? { color: accentColor(theme) } : {};
   return (
-    <Text wrap="truncate-end" inverse={props.selected && props.focused} underline={props.hovered}>
+    <Text wrap="truncate-end" inverse={(props.selected && props.focused) || props.pressed} underline={props.hovered && !props.pressed}>
       <Text {...selColor} bold={props.selected}>{marker}</Text>
       {parts.map((p, i) => (
-        <Text key={i} {...(theme.plain ? {} : roleProps(theme, p.role ?? 'normal'))} bold={p.bold || props.selected}>
+        <Text key={i} {...(theme.plain ? {} : roleProps(theme, p.role ?? 'normal'))} bold={p.bold || props.selected || (theme.mono && (p.role === 'warning' || p.role === 'error' || p.role === 'accent'))}>
           {p.text}
         </Text>
       ))}

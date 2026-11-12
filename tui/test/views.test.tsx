@@ -4,7 +4,7 @@ import { afterEach, describe, expect, test } from 'vitest';
 import { cleanup } from 'ink-testing-library';
 import { ACTIONS } from '../src/actions.js';
 import { cells } from '../src/clean.js';
-import { fakeWorld, renderApp, writeJson, type Rendered } from './helpers.js';
+import { fakeWorld, find, renderApp, writeJson, type Rendered } from './helpers.js';
 
 afterEach(() => cleanup());
 
@@ -228,3 +228,91 @@ test('the place column keeps "sandbox seatbelt" whole at every width from 80 to 
   }
   expect(cut).toEqual([]);
 }, 120_000);
+
+describe('narrow terminals', () => {
+  const stripped = (f: string): string[] => f.replace(/\u001b\[[\d;]*m/g, '').split('\n');
+
+  test('40 columns: each run shows its state, its agent and the whole place', async () => {
+    fakeWorld();
+    const r = await renderApp({ columns: 40, rows: 12 });
+    const lines = stripped(await r.waitFor('sandbox seatbelt'));
+    for (const l of lines) expect(cells(l), l).toBeLessThanOrEqual(40);
+    expect(lines.length).toBeLessThanOrEqual(12);
+    const rows = lines.filter((l) => /sandbox/.test(l) && l.startsWith('│'));
+    expect(rows.length).toBe(7);
+    expect(rows[0]).toMatch(/◆ waits +claude +sandbox bwrap/);
+    expect(rows[2]).toMatch(/▲ stuck +evil +sandbox seatbelt/);
+    for (const l of rows) expect(l, l).not.toMatch(/sandbox [a-z]*…/);
+    // The header has room for the tabs only: no cut name, no "…".
+    expect(lines[0]).toMatch(/^ *Runs +Board +Approvals ◆3 +Mail ✉2 *$/);
+  });
+
+  test.each([40, 60, 80, 100])('%i columns: the key hints and the mouse note never run into each other', async (columns) => {
+    fakeWorld();
+    const r = await renderApp({ columns, rows: 20 });
+    await r.waitFor('sandbox');
+    for (const keys of ['', '\r', 'a']) {
+      if (keys) await r.press(keys);
+      await r.waitFor((f) => (keys === 'a' ? f.includes('Approval ·') : keys === '\r' ? f.includes('Run ·') : true));
+      const foot = stripped(r.frame()).pop() ?? '';
+      expect(cells(foot), foot).toBeLessThanOrEqual(columns);
+      if (foot.includes('hold Shift')) expect(foot, foot).toMatch(/ {2,}hold Shift to select text$/);
+      if (keys === '\r') await r.press('\u001b');
+    }
+  });
+
+  test('a card that is higher than the screen is cut at the bottom: its lines never lie over each other', async () => {
+    fakeWorld();
+    const r = await renderApp({ columns: 40, rows: 12 });
+    await r.waitFor('sandbox');
+    await r.press('a');
+    const lines = stripped(await r.waitFor('Approval ·'));
+    expect(lines.length).toBeLessThanOrEqual(12);
+    const at = (s: string): number => lines.findIndex((l) => l.includes(s));
+    // Each line of the card on its own row, in its order, each whole.
+    expect(at('◆ Approval needed')).toBe(2);
+    expect(lines[3]).toMatch(/^│ codex wants to run a command: +│$/);
+    expect(at('│ exec: git push')).toBe(4);
+    expect(at('[1] Allow once')).toBeGreaterThan(at('remember:'));
+  });
+
+  test('the wide layout says how many facts of the run do not fit', async () => {
+    fakeWorld();
+    const r = await renderApp({ columns: 120, rows: 34 });
+    const f = stripped(await r.waitFor('Output · last')).join('\n');
+    expect(f).toMatch(/… \d more: ↵ opens the run/);
+  });
+});
+
+describe('the layout stays where it is as cards and mail come and go', () => {
+  const plain = (f: string): string => f.replace(/\u001b\[[\d;]*m/g, '');
+
+  test('the tabs keep their place when the counts in them come and go', async () => {
+    const dir = fakeWorld();
+    const r = await renderApp({ columns: 100, rows: 30 });
+    const before = plain(await r.waitFor((f) => f.includes('Approvals ◆3') && f.includes('Mail ✉2')));
+    const places = (f: string): number[] => ['Runs ', 'Board ', 'Approvals', 'Mail'].map((t) => find(f.split('\n')[0] ?? '', ` ${t}`).x);
+    writeJson(dir, 'approvals.json', { v: 1, pending: [] });
+    writeJson(dir, 'mail.json', []);
+    const after = plain(await r.waitFor((f) => !f.includes('◆3') && !f.includes('✉2')));
+    expect(places(after)).toEqual(places(before));
+  });
+
+  test('the panes under the approval strip do not move when another card comes to the front', async () => {
+    fakeWorld();
+    const r = await renderApp({ columns: 120, rows: 40 });
+    const first = plain(await r.waitFor((f) => f.includes('Approval · codex-alpha') && f.includes('Output · last')));
+    const top = find(first, '╭─ Runs · ').y;
+    // Shift+Tab: the focus goes to the strip. Down: the next card, with other lines.
+    await r.press('\u001b[Z');
+    await r.waitFor('←→ choose');
+    for (const card of ['Approval · app-mac-123456', 'Approval · claude-alpha-71c3ac9d']) {
+      await r.press('\u001b[B');
+      const f = plain(await r.waitFor(card));
+      expect(find(f, '╭─ Runs · ').y, card).toBe(top);
+      const lines = f.split('\n');
+      expect(lines.length).toBeLessThanOrEqual(40);
+      for (const l of lines) expect(cells(l), l).toBeLessThanOrEqual(120);
+    }
+  });
+});

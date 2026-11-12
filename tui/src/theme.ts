@@ -10,6 +10,11 @@ export interface Theme {
   name: 'dark' | 'light';
   /** Box borders and text colours, or none at all in plain mode. */
   plain: boolean;
+  /**
+   * No colour codes at all (NO_COLOR): bold, dim, inverse and underline
+   * carry the roles. The boxes stay.
+   */
+  mono: boolean;
   color: Record<Exclude<Role, 'muted' | 'normal'>, string>;
 }
 
@@ -17,8 +22,18 @@ const DARK: Theme['color'] = { accent: 'cyan', success: 'green', warning: 'yello
 // Yellow and cyan are faint on a light background in most palettes.
 const LIGHT: Theme['color'] = { accent: 'blue', success: 'green', warning: 'magenta', error: 'red' };
 
-export function makeTheme(name: 'dark' | 'light', plain = false): Theme {
-  return { name, plain, color: name === 'light' ? LIGHT : DARK };
+export function makeTheme(name: 'dark' | 'light', plain = false, mono = false): Theme {
+  return { name, plain, mono, color: name === 'light' ? LIGHT : DARK };
+}
+
+/** NO_COLOR is set to any value but the empty one (no-color.org). */
+export function noColor(env: NodeJS.ProcessEnv): boolean {
+  return env.NO_COLOR !== undefined && env.NO_COLOR !== '';
+}
+
+/** The colour of the focus (borders, the selection mark), or none without colours. */
+export function accentColor(theme: Theme): string | undefined {
+  return theme.plain || theme.mono ? undefined : theme.color.accent;
 }
 
 /**
@@ -40,8 +55,10 @@ export function useTheme(): Theme {
 }
 
 /** Props for Ink's Text for a role. */
-export function roleProps(theme: Theme, role: Role): { color?: string; dimColor?: boolean } {
+export function roleProps(theme: Theme, role: Role): { color?: string; dimColor?: boolean; bold?: boolean } {
   if (role === 'normal') return {};
   if (role === 'muted') return { dimColor: true };
+  // Without colours, what needs the eye is bold. Each role also has its glyph and its word.
+  if (theme.mono) return role === 'success' ? {} : { bold: true };
   return { color: theme.color[role] };
 }

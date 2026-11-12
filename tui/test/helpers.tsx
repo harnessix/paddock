@@ -7,6 +7,7 @@ import { render } from 'ink-testing-library';
 import { App } from '../src/app.js';
 import { paddock } from '../src/paddock.js';
 import { makeTheme, ThemeContext } from '../src/theme.js';
+import { ArtContext, ArtLayer } from '../src/art-layer.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 export const FAKE = join(here, 'fake-paddock.mjs');
@@ -96,14 +97,21 @@ export async function renderApp(opts: {
   mouse?: boolean;
   theme?: 'dark' | 'light';
   plain?: boolean;
+  /** No colour codes (NO_COLOR). */
+  mono?: boolean;
   cwd?: string;
   api?: typeof paddock;
+  /** The art layer: none by default, so the runs show as the list. */
+  art?: ArtLayer;
 }): Promise<Rendered> {
   const columns = opts.columns ?? 80;
   const rows = opts.rows ?? 24;
+  const art = opts.art ?? new ArtLayer({ mode: 'none', sink: null, screen: () => ({ columns, rows }) });
   const inst = render(
-    <ThemeContext.Provider value={makeTheme(opts.theme ?? 'dark', opts.plain ?? false)}>
-      <App api={opts.api ?? paddock} readonly={opts.readonly} initialMouse={opts.mouse ?? true} intervalMs={300} cwd={opts.cwd} size={{ columns, rows }} />
+    <ThemeContext.Provider value={makeTheme(opts.theme ?? 'dark', opts.plain ?? false, opts.mono ?? false)}>
+      <ArtContext.Provider value={art}>
+        <App api={opts.api ?? paddock} readonly={opts.readonly} initialMouse={opts.mouse ?? true} intervalMs={300} cwd={opts.cwd} size={{ columns, rows }} />
+      </ArtContext.Provider>
     </ThemeContext.Provider>,
   );
   Object.defineProperty(inst.stdout, 'columns', { value: columns, configurable: true });

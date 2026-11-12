@@ -3,13 +3,13 @@
 // (main screen, mouse reports off, cursor on, cooked mode).
 import { afterEach, expect, test } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pty from 'node-pty';
 import xterm from '@xterm/headless';
-import { actions, fakeWorld, HANG_MS, sleep, until } from './helpers.js';
+import { actions, fakeWorld, HANG_MS, rounds, sleep, until } from './helpers.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const CLI = join(root, 'dist', 'cli.js');
@@ -172,6 +172,128 @@ test('PADDOCK_TUI_MOUSE=0 starts with the mouse off', async () => {
   s.p.write('M');
   await waitScreen(s, 'hold Shift to select text');
   expect(s.term.modes.mouseTrackingMode).toBe('any');
+  s.p.write('Q');
+  await waitScreen(s, 'EXIT=0');
+  await restored(s);
+});
+
+test('rooms in a 24-bit terminal: the art animates in place, and rests while the terminal has no focus', async () => {
+  fakeWorld();
+  const s = start([], { COLORTERM: 'truecolor', TERM: 'xterm-256color' });
+  const first = await waitScreen(s, '1/7 · ←→↑↓ move');
+  expect(first).toContain('◆ waits for you');
+  expect(first).toContain('▀');
+  expect(s.raw()).toMatch(/\u001b\[38;2;\d+;\d+;\d+/);
+  // The program asked for focus reports.
+  expect(s.raw()).toContain('\u001b[?1004h');
+  // Animation steps: the cursor is saved, cells are drawn, the cursor goes back.
+  const steps = () => (s.raw().match(/\u001b7\u001b\[\d+;\d+H/g) ?? []).length;
+  await until(() => steps() >= 3);
+  // The screen still has the words after the steps: they draw only art cells.
+  expect(s.screen()).toContain('◆ waits for you');
+  s.p.write('\u001b[O');
+  await sleep(300);
+  const n = steps();
+  await sleep(800);
+  expect(steps()).toBe(n);
+  s.p.write('\u001b[I');
+  await until(() => steps() > n);
+  s.p.write('Q');
+  await waitScreen(s, 'EXIT=0');
+  await restored(s);
+  // Focus reports off again, and no art after the program left the alternate screen.
+  const raw = s.raw();
+  expect(raw.lastIndexOf('\u001b[?1004l')).toBeGreaterThan(raw.lastIndexOf('\u001b[?1004h'));
+  expect(raw.slice(raw.lastIndexOf('\u001b[?1049l'))).not.toMatch(/\u001b7\u001b\[\d+;\d+H/);
+});
+
+/** A world in which every time is hours old: no word of time changes during a test. */
+function oldWorld(): string {
+  return fakeWorld((dir) => {
+    const edit = (name: string, f: (v: Record<string, unknown>) => void): void => {
+      const walk = (v: unknown): void => {
+        if (Array.isArray(v)) v.forEach(walk);
+        else if (v && typeof v === 'object') {
+          f(v as Record<string, unknown>);
+          Object.values(v).forEach(walk);
+        }
+      };
+      const p = join(dir, name);
+      const v = JSON.parse(readFileSync(p, 'utf8')) as unknown;
+      walk(v);
+      writeFileSync(p, JSON.stringify(v));
+    };
+    edit('ps.json', (o) => {
+      for (const k of ['started', 'ended', 'idle_since']) if (typeof o[k] === 'number') o[k] = 4000;
+    });
+    edit('approvals.json', (o) => {
+      if (typeof o.age_s === 'number') o.age_s = 4000;
+    });
+  });
+}
+
+test('the real program draws by cell: one clear, no erased line, nothing while nothing changes, a few cells for a key', async () => {
+  const dir = oldWorld();
+  const s = start([], { COLORTERM: 'truecolor', TERM: 'xterm-256color' });
+  await waitScreen(s, '1/7 · ←→↑↓ move');
+  await waitScreen(s, 'no paddock split');
+  // In the background: the animation rests, and paddock is still read.
+  s.p.write('\u001b[O');
+  await rounds(dir, 2);
+  const quiet = s.raw().length;
+  await rounds(dir, 4);
+  // Four more reads of paddock with the same answers: not one byte for the terminal.
+  expect(s.raw().length).toBe(quiet);
+  // A key: the selection moves from one card to the next. Only their borders and titles are written.
+  s.p.write('\u001b[C');
+  await waitScreen(s, '2/7 · ←→↑↓ move');
+  const key = s.raw().slice(quiet);
+  expect(key.length).toBeLessThan(2500);
+  expect(key).not.toContain('▀');
+  expect(key).toContain('\u001b[?2026h');
+  // The frame of xterm is the frame of the program: the cards and their words are whole.
+  const screen = s.screen();
+  expect(screen).toContain('╭─ › codex-0b0b0b');
+  expect(screen).toContain('╭─ claude-71c3ac');
+  expect(screen).toContain('◆ waits for you · 1 h');
+  expect(screen.split('\n').length).toBe(24);
+  s.p.write('Q');
+  await waitScreen(s, 'EXIT=0');
+  await restored(s);
+  const raw = s.raw();
+  // The screen is cleared once, when the program starts. No line is ever erased: no flicker.
+  expect(raw.match(/\u001b\[2J/g) ?? []).toHaveLength(1);
+  expect(raw.slice(0, raw.lastIndexOf('\u001b[?1049l'))).not.toMatch(/\u001b\[[012]?K|\u001b\[[01]?J/);
+  // Bracketed paste is off again.
+  expect(raw.lastIndexOf('\u001b[?2004l')).toBeGreaterThan(raw.lastIndexOf('\u001b[?2004h'));
+});
+
+test('a new size of the terminal: the frame is drawn anew in it', async () => {
+  oldWorld();
+  const s = start([], { COLORTERM: 'truecolor', TERM: 'xterm-256color' });
+  await waitScreen(s, '1/7 · ←→↑↓ move');
+  s.term.resize(120, 34);
+  s.p.resize(120, 34);
+  await waitScreen(s, 'Approval · codex-alpha-0b0b0b11');
+  const wide = await waitScreen(s, '╭─ grok-0f0f0f');
+  expect(wide.split('\n')[0]).toMatch(/^paddock · 4 running.{80,}Mail ✉2$/);
+  // Four rooms in a row, each with its character.
+  expect(wide).toMatch(/╭─ › claude-71c3ac ─+╮╭─ codex-0b0b0b ─+╮╭─ evil-0e0e0e ─+╮╭─ grok-0f0f0f ─+╮/);
+  // Under 80 columns: the list, and no cell of the rooms is left over.
+  s.term.resize(70, 20);
+  s.p.resize(70, 20);
+  const narrow = await waitScreen(s, '╭─ Runs · 4 live, 3 ended ─');
+  await until(() => !s.screen().includes('▀'));
+  expect(narrow.split('\n').length).toBe(20);
+  // Another program writes over the screen. Ctrl+L draws every cell again.
+  const clears = (): number => (s.raw().match(/\u001b\[2J/g) ?? []).length;
+  const n = clears();
+  s.term.write('\u001b[2;1H' + 'X'.repeat(70));
+  await until(() => s.screen().includes('XXXXXXXX'));
+  s.p.write('\u000c');
+  await until(() => clears() === n + 1);
+  await until(() => !s.screen().includes('XXXXXXXX'));
+  expect(s.screen()).toContain('╭─ Runs · 4 live, 3 ended ─');
   s.p.write('Q');
   await waitScreen(s, 'EXIT=0');
   await restored(s);

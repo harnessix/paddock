@@ -1,0 +1,79 @@
+{
+  "size": [
+    512,
+    512
+  ],
+  "rooms": {
+    "room-cream.png": {
+      "character": {
+        "spriteScale": 0.512,
+        "feet": [
+          256,
+          298
+        ],
+        "heightPx": 150
+      }
+    },
+    "room-blue.png": {
+      "character": {
+        "spriteScale": 0.512,
+        "feet": [
+          256,
+          298
+        ],
+        "heightPx": 150
+      }
+    },
+    "room-lilac.png": {
+      "character": {
+        "spriteScale": 0.512,
+        "feet": [
+          256,
+          298
+        ],
+        "heightPx": 150
+      }
+    },
+    "room-mint.png": {
+      "character": {
+        "spriteScale": 0.512,
+        "feet": [
+          256,
+          298
+        ],
+        "heightPx": 150
+      }
+    },
+    "room-cream-screen.png": {
+      "screen": {
+        "corners": [
+          [
+            224,
+            248.1
+          ],
+          [
+            288,
+            248.1
+          ],
+          [
+            288,
+            287.2
+          ],
+          [
+            224,
+            287.2
+          ]
+        ],
+        "order": "top-left, top-right, bottom-right, bottom-left"
+      },
+      "character": {
+        "spriteScale": 0.512,
+        "feet": [
+          191,
+          295
+        ],
+        "heightPx": 150
+      }
+    }
+  }
+}

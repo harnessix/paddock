@@ -1,0 +1,29 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`the approval card 1`] = `
+"╭─ Approval · claude-alpha-71c3ac9d · sandbox ─────────────────────────╮
+│ ◆ Approval needed  times out in 3 min · asked 1 min ago              │
+│ claude wants to run a command:                                       │
+│ │ exec: npm publish --access public                                  │
+│ reason given by the agent: release 0.3.0                             │
+│ remember: this request only                                          │
+│ [1] Allow once  [2] Allow for this run  [3] Deny                     │
+│ [4] Deny for this run                                                │
+│ ←→ choose · ↵ answer · 1/2/3/4 keys · Esc deny                       │
+│ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━────────────── 3 min left │
+╰──────────────────────────────────────────────────────────────────────╯"
+`;
+
+exports[`the approval card in plain mode 1`] = `
+"> Approval · claude-alpha-71c3ac9d · sandbox
+◆ Approval needed  times out in 3 min · asked 1 min ago
+claude wants to run a command:
+│ exec: npm publish --access public
+reason given by the agent: release 0.3.0
+remember: this request only
+[1] Allow once  [2] Allow for this run  [3] Deny
+[4] Deny for this run
+←→ choose · ↵ answer · 1/2/3/4 keys · Esc deny
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━─────────────── 3 min left
+"
+`;

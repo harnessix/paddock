@@ -8,6 +8,7 @@ import React, {
   useContext,
   useEffect,
   useId,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -69,12 +70,15 @@ interface Target {
 interface MouseApi {
   enabled: boolean;
   hovered: string | null;
+  /** The box that the left button is held down on. */
+  pressed: string | null;
   register: (key: string, t: Target) => () => void;
 }
 
 const MouseContext = createContext<MouseApi>({
   enabled: false,
   hovered: null,
+  pressed: null,
   register: () => () => undefined,
 });
 
@@ -82,6 +86,8 @@ const DOUBLE_CLICK_MS = 400;
 
 export interface MouseDispatcher {
   dispatch: (e: MouseEvent) => boolean;
+  /** The pointer left: nothing is under it (the terminal lost the focus). */
+  leave: () => void;
 }
 
 /** The box under a point: the smallest registered box that contains it. */
@@ -111,6 +117,7 @@ export function MouseProvider(props: {
   const targets = useRef(new Map<string, Target>());
   const counter = useRef(0);
   const [hovered, setHovered] = useState<string | null>(null);
+  const [held, setHeld] = useState<string | null>(null);
   const lastClick = useRef<{ key: string; at: number } | null>(null);
   const pressed = useRef<string | null>(null);
   const { enabled, dispatcherRef } = props;
@@ -129,6 +136,8 @@ export function MouseProvider(props: {
         const found = hit(targets.current, e.x, e.y);
         if (e.kind === 'move' || e.kind === 'drag') {
           setHovered(found ? found[0] : null);
+          // A drag off the box lets go of it: the release there will not click.
+          if (e.kind === 'drag' && pressed.current !== null) setHeld(found && found[0] === pressed.current ? pressed.current : null);
           return true;
         }
         if (e.kind === 'wheelUp' || e.kind === 'wheelDown') {
@@ -152,11 +161,15 @@ export function MouseProvider(props: {
         // so a drag that starts on a button and ends elsewhere does nothing.
         if (e.kind === 'press') {
           pressed.current = found ? found[0] : null;
+          // The box shows the press at once, before the release acts.
+          setHeld(found && (found[1].handlers.current?.onClick || found[1].handlers.current?.onDoubleClick) ? found[0] : null);
+          setHovered(found ? found[0] : null);
           return true;
         }
         if (e.kind !== 'release') return true;
         const start = pressed.current;
         pressed.current = null;
+        setHeld(null);
         if (!found || start !== found[0]) {
           lastClick.current = null;
           return true;
@@ -174,25 +187,43 @@ export function MouseProvider(props: {
         h?.onClick?.();
         return true;
       },
+      leave(): void {
+        pressed.current = null;
+        setHovered(null);
+        setHeld(null);
+      },
     };
     return () => {
       dispatcherRef.current = null;
     };
   }, [enabled, dispatcherRef]);
 
-  const api = useMemo(() => ({ enabled, hovered, register }), [enabled, hovered, register]);
+  const api = useMemo(() => ({ enabled, hovered, pressed: held, register }), [enabled, hovered, held, register]);
   return <MouseContext.Provider value={api}>{props.children}</MouseContext.Provider>;
 }
 
-/** Make a box clickable. Returns whether the pointer is over it. */
-export function useClickable(ref: RefObject<DOMElement | null>, handlers: Handlers): boolean {
+export interface Pointer {
+  /** The pointer is over the box. */
+  hovered: boolean;
+  /** The left button is held down on the box. */
+  pressed: boolean;
+}
+
+/** Make a box clickable. Returns what the pointer does with it. */
+export function usePointer(ref: RefObject<DOMElement | null>, handlers: Handlers): Pointer {
   const key = useId();
   const api = useContext(MouseContext);
   const h = useRef<Handlers>(handlers);
   h.current = handlers;
   const { register } = api;
-  useEffect(() => register(key, { ref, handlers: h, order: 0 }), [register, key, ref]);
-  return api.enabled && api.hovered === key;
+  // In the layout phase: a box takes the pointer from the frame that first shows it.
+  useLayoutEffect(() => register(key, { ref, handlers: h, order: 0 }), [register, key, ref]);
+  return { hovered: api.enabled && api.hovered === key, pressed: api.enabled && api.pressed === key };
+}
+
+/** Make a box clickable. Returns whether the pointer is over it. */
+export function useClickable(ref: RefObject<DOMElement | null>, handlers: Handlers): boolean {
+  return usePointer(ref, handlers).hovered;
 }
 
 export function useMouseEnabled(): boolean {

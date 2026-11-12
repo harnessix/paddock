@@ -45,6 +45,8 @@ export interface RunRow {
   live: boolean;
   /** Unix seconds: start of a live run, end of an ended one. */
   since: number;
+  /** Unix seconds: since when the run is in its state (0: not known). */
+  stateSince: number;
   /** The last thing paddock knows of the run, one line. */
   last: string;
   model: string;
@@ -102,9 +104,14 @@ export function buildRuns(
 ): RunRow[] {
   const byBoard = boardRuns(board);
   const cards = new Map<string, number>();
+  // The oldest card of a run: it waits for you since then.
+  const asked = new Map<string, number>();
+  const t = now();
   for (const p of pending) {
     if (!p.sandbox) continue;
     cards.set(p.sandbox, (cards.get(p.sandbox) ?? 0) + 1);
+    const at = p.age_s !== undefined ? t - p.age_s : (p.created ?? 0);
+    if (at > 0) asked.set(p.sandbox, Math.min(asked.get(p.sandbox) ?? Infinity, at));
   }
   const unread = new Map<string, number>();
   for (const m of mail) unread.set(m.id, m.unread_up ?? 0);
@@ -122,6 +129,11 @@ export function buildRuns(
     if (state === 'ended') state = 'running';
     seen.add(s.id);
     const project = oneLine(s.project ?? '');
+    let stateSince = s.started ?? 0;
+    if (state === 'waiting') stateSince = asked.get(s.id) ?? stateSince;
+    else if (state === 'stuck') stateSince = s.stuck?.since ?? stateSince;
+    else if (state === 'idle') stateSince = s.idle_since ?? stateSince;
+    if (s.frozen_since !== undefined && state !== 'waiting') stateSince = s.frozen_since;
     rows.push({
       id: s.id,
       short,
@@ -134,6 +146,7 @@ export function buildRuns(
       state,
       live: true,
       since: s.started ?? 0,
+      stateSince,
       last: oneLine(b?.run.last || s.activity || ''),
       model: oneLine(b?.run.model || s.model || ''),
       ticket: b?.ticket ?? '',
@@ -164,6 +177,7 @@ export function buildRuns(
       state,
       live: false,
       since: e.ended ?? 0,
+      stateSince: e.ended ?? 0,
       last: oneLine(e.text || b?.run.last || (e.status === 'stopped' ? 'stopped' : '')),
       model: oneLine(b?.run.model ?? ''),
       ticket: b?.ticket ?? '',

@@ -6,18 +6,25 @@ import { writeSync } from 'node:fs';
 /** Button events (1002), any motion for hover (1003), SGR coordinates (1006). */
 export const MOUSE_ON = '\u001b[?1002h\u001b[?1003h\u001b[?1006h';
 export const MOUSE_OFF = '\u001b[?1003l\u001b[?1002l\u001b[?1006l';
+export const ALT_ON = '\u001b[?1049h';
 export const ALT_OFF = '\u001b[?1049l';
+/** Focus reports (1004): the terminal sends ESC [ I on focus in, ESC [ O on focus out. */
+export const FOCUS_ON = '\u001b[?1004h';
+export const FOCUS_OFF = '\u001b[?1004l';
+export const PASTE_OFF = '\u001b[?2004l';
 export const CURSOR_ON = '\u001b[?25h';
+export const CURSOR_OFF = '\u001b[?25l';
 
 export interface TerminalState {
   fd: number;
   mouse: boolean;
   alt: boolean;
+  focus: boolean;
   restored: boolean;
 }
 
 export function newTerminalState(fd = 1): TerminalState {
-  return { fd, mouse: false, alt: false, restored: false };
+  return { fd, mouse: false, alt: false, focus: false, restored: false };
 }
 
 function write(fd: number, s: string): void {
@@ -34,14 +41,23 @@ export function setMouse(t: TerminalState, on: boolean): void {
   t.mouse = on;
 }
 
+export function setFocusReports(t: TerminalState, on: boolean): void {
+  if (on === t.focus) return;
+  write(t.fd, on ? FOCUS_ON : FOCUS_OFF);
+  t.focus = on;
+}
+
 /** Every mode off, synchronously, so it also works in a signal handler. */
 export function restore(t: TerminalState, stdin: NodeJS.ReadStream = process.stdin): void {
   if (t.restored) return;
   t.restored = true;
-  let out = MOUSE_OFF + CURSOR_ON;
+  // Bracketed paste off too: Ink turns it on for the paste handler.
+  let out = MOUSE_OFF + PASTE_OFF + CURSOR_ON;
+  if (t.focus) out += FOCUS_OFF;
   if (t.alt) out += ALT_OFF;
   write(t.fd, out);
   t.mouse = false;
+  t.focus = false;
   try {
     if (stdin.isTTY) stdin.setRawMode(false);
   } catch {
