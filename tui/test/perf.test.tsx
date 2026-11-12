@@ -161,7 +161,9 @@ test('20 rooms: a frame is fast, a step of the animation is cheap, and nothing h
   }
   expect(frame()).toContain('1/20');
   // One frame of 200 x 60 with 20 rooms, from the key to the bytes for the terminal: its processor time.
-  expect(median(keyMs)).toBeLessThan(50);
+  // About 20 ms on a workstation, about 90 ms on a shared CI runner. The bound catches a real slowdown
+  // (a full redraw per key, a timer before the frame), not the speed of the machine.
+  expect(median(keyMs)).toBeLessThan(250);
 
   // 4. A change in paddock: one frame, and only the cells of the changed card.
   const sandbox = w.ps.sandboxes[0];

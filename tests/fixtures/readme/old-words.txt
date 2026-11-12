@@ -2182,7 +2182,7 @@
 5 groups
 2 grow
 1 grows
-12 guard
+11 guard
 1 guarded
 2 guards
 1 guessing
