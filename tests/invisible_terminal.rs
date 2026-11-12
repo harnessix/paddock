@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 const SCRIPT: &str = "printf 'relay-marker\\n'; sleep 30; exit 0";
 
 struct World {
-    _tmp: tempfile::TempDir,
+    _tmp: common::TestDir,
     root: PathBuf,
 }
 

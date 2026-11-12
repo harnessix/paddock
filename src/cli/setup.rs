@@ -126,9 +126,17 @@ pub(crate) fn setup(
 pub(crate) fn approve(env: &HostEnv, path: Option<PathBuf>) -> Result<i32> {
     let project = build::resolve_project(path.as_deref())?;
     let file = project.join(manifest::PROJECT_FILE);
-    let m = Manifest::read(&file)?;
-    println!("{}", serde_json::to_string_pretty(&m.widening())?);
-    manifest::approve(env, &file, &m)?;
+    // Load with the user configuration: it is the base of the widening,
+    // and network.max refuses a file above it.
+    let loaded = Manifest::load(env, &project)?;
+    let Some((file, m)) = &loaded.project else {
+        bail!("{} does not exist", file.display());
+    };
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&m.widening(&loaded.base))?
+    );
+    manifest::approve(env, file, m, &loaded.base)?;
     println!("Approved {}", file.display());
     Ok(0)
 }

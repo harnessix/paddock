@@ -1,10 +1,14 @@
 //! The commands of the live grants: `paddock app share NAME
 //! add|remove|mode|list`, `paddock app network NAME MODE` and `paddock app
-//! clipboard NAME`. Each change runs under the lock of the grants file:
-//! while the session runs it goes to the shim first (`grant ...` on the
-//! control socket), and only a change that the shim took is written into
-//! the profile. A refused or failed live change leaves the file as it was.
-//! Then the change goes to `changes[]` and the event log.
+//! clipboard NAME`. Each change runs under the lock of the grants file.
+//! First the new grants are checked against every rule of the save, so a
+//! save that would be refused changes nothing, also not the live session.
+//! While the session runs the change then goes to the shim (`grant ...` on
+//! the control socket), and only a change that the shim took is written
+//! into the profile. A refused or failed live change leaves the file as it
+//! was. When the disk then fails the save, the live change is undone; when
+//! the undo fails too, the error says so, and the session keeps the change
+//! until it stops. Then the change goes to `changes[]` and the event log.
 
 use super::grants::{self, Applies, Change, Clipboard, FolderGrant, Source, What};
 use super::grants_live::{Answer, LiveShare, Op};
@@ -32,6 +36,8 @@ pub struct Target {
     pub name: String,
     pub profile: Profile,
     pub running: Option<Session>,
+    /// The session record, read again under the grants lock.
+    pub record: PathBuf,
 }
 
 impl Target {
@@ -42,6 +48,7 @@ impl Target {
         let layout = Layout::new(env);
         let profile = layout.profile(name, DEFAULT_HOME);
         let running = host::running(&layout, name, DEFAULT_HOME);
+        let record = layout.record(name, DEFAULT_HOME);
         if !profile.dir.is_dir() && running.is_none() && crate::app::app_profile(env, name).is_err()
         {
             bail!(text::grant_no_profile(name));
@@ -50,6 +57,7 @@ impl Target {
             name: name.to_string(),
             profile,
             running,
+            record,
         })
     }
 
@@ -62,21 +70,56 @@ impl Target {
     }
 }
 
+/// The session side of one change under the grants lock.
+struct Step<'a> {
+    t: &'a Target,
+    /// The live change that undoes the one applied, when one was applied.
+    inverse: Option<Op>,
+}
+
+impl Step<'_> {
+    /// Ask the session without changing it.
+    fn read(&self, op: &Op) -> Result<Option<Answer>> {
+        self.t.live(op)
+    }
+
+    /// Apply `op` live. `g` holds the grants as the save will write them:
+    /// a save that would refuse them is refused here, before the session
+    /// changes. `undo` puts the session back when the save fails later.
+    fn apply(&mut self, g: &grants::Grants, op: &Op, undo: Op) -> Result<Option<Answer>> {
+        grants::check_save(&self.t.profile, g)?;
+        let answer = self.t.live(op)?;
+        if answer.is_some() {
+            self.inverse = Some(undo);
+        }
+        Ok(answer)
+    }
+}
+
 /// Persist a live change, restoring the old live state if persistence fails.
+/// `f` changes the grants before it applies the change through the step,
+/// so no change goes live that the save would refuse.
 fn update_live<T>(
     t: &Target,
-    f: impl FnOnce(&mut grants::Grants, &mut Option<Op>) -> Result<T>,
+    f: impl FnOnce(&mut grants::Grants, &mut Step) -> Result<T>,
 ) -> Result<T> {
-    let mut inverse = None;
+    let mut step = Step { t, inverse: None };
     let _lock = grants::Lock::take(&t.profile)?;
+    // A start registers its session under this lock: one that began after
+    // `Target::of` must get the change live, not as a next-start change.
+    if running_pid(&t.record) != t.running.as_ref().map(|s| s.pid) {
+        bail!(text::grant_session_changed(&t.name));
+    }
     let mut grants = grants::load(&t.profile)?;
-    let result = f(&mut grants, &mut inverse).and_then(|value| {
+    let result = f(&mut grants, &mut step).and_then(|value| {
         grants::save(&t.profile, &grants)?;
         Ok(value)
     });
     match result {
         Ok(value) => Ok(value),
-        Err(e) => match inverse {
+        // The renamed policy has the change: the live state matches it.
+        Err(e) if grants::unconfirmed(&e) => Err(e.context(text::grant_kept_unconfirmed())),
+        Err(e) => match step.inverse {
             Some(op) => match t.live(&op) {
                 Ok(_) => Err(e.context(text::grant_reverted())),
                 Err(rollback) => {
@@ -86,6 +129,12 @@ fn update_live<T>(
             None => Err(e),
         },
     }
+}
+
+fn running_pid(record: &Path) -> Option<u32> {
+    let text = std::fs::read_to_string(record).ok()?;
+    let s: Session = serde_json::from_str(&text).ok()?;
+    host::alive(s.pid).then_some(s.pid)
 }
 
 /// One `grant` line to the shim and its answer.
@@ -192,16 +241,9 @@ pub fn share_add(
     )?;
     let read_only = !rw;
     let now = crate::state::now();
-    let (change, live) = update_live(&t, |g, inverse| {
+    let (change, live) = update_live(&t, |g, step| {
         if let Some(f) = g.shares.iter().find(|f| f.path == real) {
             bail!(text::grant_already_shared(name, &real, f.read_only));
-        }
-        let live = t.live(&Op::ShareAdd {
-            path: real.clone(),
-            read_only,
-        })?;
-        if live.is_some() {
-            *inverse = Some(Op::ShareRemove { path: real.clone() });
         }
         g.shares.push(FolderGrant {
             path: real.clone(),
@@ -209,6 +251,14 @@ pub fn share_add(
             unprotected,
             added: now,
         });
+        let live = step.apply(
+            g,
+            &Op::ShareAdd {
+                path: real.clone(),
+                read_only,
+            },
+            Op::ShareRemove { path: real.clone() },
+        )?;
         let c = Change::new(
             now,
             What::Folder,
@@ -231,8 +281,9 @@ pub fn share_add(
 }
 
 /// The live folder of a path, from the shim.
-fn live_share(t: &Target, path: &Path, fresh: bool) -> Result<Option<LiveShare>> {
-    Ok(t.live(if fresh { &Op::ListFresh } else { &Op::List })?
+fn live_share(step: &Step, path: &Path, fresh: bool) -> Result<Option<LiveShare>> {
+    Ok(step
+        .read(if fresh { &Op::ListFresh } else { &Op::List })?
         .and_then(|a| a.shares.into_iter().find(|s| s.path == path)))
 }
 
@@ -249,9 +300,12 @@ pub fn share_remove(
     let cwd = std::env::current_dir().unwrap_or_else(|_| env.home.clone());
     let p = named_folder(path, &cwd);
     let now = crate::state::now();
-    let (change, live) = update_live(&t, |g, inverse| {
+    let (change, live) = update_live(&t, |g, step| {
         let granted = g.shares.iter().position(|f| f.path == p);
-        let live = match live_share(&t, &p, true)? {
+        if let Some(i) = granted {
+            g.shares.remove(i);
+        }
+        let live = match live_share(step, &p, true)? {
             Some(ls) => {
                 let open = match ls.open_handles {
                     Some(n) => n,
@@ -265,22 +319,19 @@ pub fn share_remove(
                         open
                     ));
                 }
-                let result = t.live(&Op::ShareRemove { path: p.clone() })?;
-                if result.is_some() {
-                    *inverse = Some(Op::ShareAdd {
+                step.apply(
+                    g,
+                    &Op::ShareRemove { path: p.clone() },
+                    Op::ShareAdd {
                         path: p.clone(),
                         read_only: ls.read_only,
-                    });
-                }
-                result
+                    },
+                )?
             }
             None => None,
         };
         if granted.is_none() && live.is_none() {
             bail!(text::grant_not_shared(name, &p));
-        }
-        if let Some(i) = granted {
-            g.shares.remove(i);
         }
         let c = Change::new(
             now,
@@ -317,9 +368,12 @@ pub fn share_mode(
     let cwd = std::env::current_dir().unwrap_or_else(|_| env.home.clone());
     let p = named_folder(path, &cwd);
     let now = crate::state::now();
-    let (change, live) = update_live(&t, |g, inverse| {
+    let (change, live) = update_live(&t, |g, step| {
         let granted = g.shares.iter().position(|f| f.path == p);
-        let live = match live_share(&t, &p, false)? {
+        if let Some(i) = granted {
+            g.shares[i].read_only = read_only;
+        }
+        let live = match live_share(step, &p, false)? {
             Some(ls) => {
                 if granted.is_none() {
                     grants::check_folder(
@@ -330,30 +384,31 @@ pub fn share_mode(
                         &grants::paddock_dirs(env),
                         false,
                     )?;
-                }
-                let result = t.live(&Op::ShareMode {
-                    path: p.clone(),
-                    read_only,
-                })?;
-                if result.is_some() {
-                    *inverse = Some(Op::ShareMode {
+                    // A folder of `app run` becomes a grant: only a
+                    // running session lists one.
+                    g.shares.push(FolderGrant {
                         path: p.clone(),
-                        read_only: ls.read_only,
+                        read_only,
+                        unprotected: false,
+                        added: now,
                     });
                 }
-                result
+                step.apply(
+                    g,
+                    &Op::ShareMode {
+                        path: p.clone(),
+                        read_only,
+                    },
+                    Op::ShareMode {
+                        path: p.clone(),
+                        read_only: ls.read_only,
+                    },
+                )?
             }
             None => None,
         };
-        match granted {
-            Some(i) => g.shares[i].read_only = read_only,
-            None if live.is_some() => g.shares.push(FolderGrant {
-                path: p.clone(),
-                read_only,
-                unprotected: false,
-                added: now,
-            }),
-            None => bail!(text::grant_not_shared(name, &p)),
+        if granted.is_none() && live.is_none() {
+            bail!(text::grant_not_shared(name, &p));
         }
         let c = Change::new(
             now,
@@ -534,23 +589,25 @@ pub fn network(env: &HostEnv, name: &str, mode: &str, json: bool) -> Result<i32>
     }
     let t = Target::of(env, name)?;
     let now = crate::state::now();
-    let (change, live) = update_live(&t, |g, inverse| {
-        let previous = t
-            .live(&Op::List)?
+    let (change, live) = update_live(&t, |g, step| {
+        let previous = step
+            .read(&Op::List)?
             .map(|a| {
                 a.network
                     .context(text::grant_missing_live_setting("network mode"))
             })
             .transpose()?;
-        let live = t.live(&Op::Network {
-            mode: mode.to_string(),
-        })?;
-        if live.is_some() {
-            *inverse = Some(Op::Network {
-                mode: previous.expect("running session reported its mode"),
-            });
-        }
         g.network = Some(mode.to_string());
+        let live = match previous {
+            Some(previous) => step.apply(
+                g,
+                &Op::Network {
+                    mode: mode.to_string(),
+                },
+                Op::Network { mode: previous },
+            )?,
+            None => None,
+        };
         let c = Change::new(
             now,
             What::Network,
@@ -598,25 +655,23 @@ pub fn clipboard(
         return Ok(0);
     }
     let now = crate::state::now();
-    let (change, live) = update_live(&t, |g, inverse| {
+    let (change, live) = update_live(&t, |g, step| {
         let new = Clipboard {
             to_app: to_app.unwrap_or(g.clipboard.to_app),
             from_app: from_app.unwrap_or(g.clipboard.from_app),
         };
-        let previous = t
-            .live(&Op::List)?
+        let previous = step
+            .read(&Op::List)?
             .map(|a| {
                 a.clipboard
                     .context(text::grant_missing_live_setting("clipboard settings"))
             })
             .transpose()?;
-        let live = t.live(&Op::Clipboard(new))?;
-        if live.is_some() {
-            *inverse = Some(Op::Clipboard(
-                previous.expect("running session reported its clipboard settings"),
-            ));
-        }
         g.clipboard = new;
+        let live = match previous {
+            Some(previous) => step.apply(g, &Op::Clipboard(new), Op::Clipboard(previous))?,
+            None => None,
+        };
         let c = Change::new(
             now,
             What::Clipboard,
@@ -653,10 +708,12 @@ pub const DEVICES: [&str; 3] = ["camera", "microphone", "usb"];
 
 /// The grants part of `paddock app status --json`: the open file handles
 /// per shared folder (path to count, while the session runs), the
-/// clipboard directions, the devices, and the last grant changes, newest
-/// first.
+/// clipboard directions, the devices, and the last grant changes. Effects
+/// with unknown current state have their own list; neither list proves a
+/// complete history across old writers or lost sidecars.
 pub fn status_part(profile: &Profile, record: Option<&Session>) -> serde_json::Value {
     let g = grants::load(profile).unwrap_or_default();
+    let (changes, historical_changes) = grants::recent_compatible(&g);
     let handles: serde_json::Map<String, serde_json::Value> = record
         .map(|r| {
             r.shares
@@ -684,7 +741,10 @@ pub fn status_part(profile: &Profile, record: Option<&Session>) -> serde_json::V
             "applies": if record.is_some() { Applies::Live } else { Applies::NextStart },
         },
         "devices": devices,
-        "changes": grants::recent(&g),
+        "changes": changes,
+        "historical_changes": historical_changes,
+        "changes_complete": false,
+        "changes_history": g.history_state,
     })
 }
 

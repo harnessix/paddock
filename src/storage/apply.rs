@@ -222,13 +222,6 @@ pub fn remove_path(env: &HostEnv, path: &Path) -> Result<()> {
         .with_context(|| format!("remove {}", path.display()))
 }
 
-/// A git command on the repository that may write or read its work tree, for
-/// example `worktree remove`, which runs a status internally. It is refused
-/// when the repository configuration can start a program (see hostgit.rs).
-fn git_write(repo: &Path, args: &[&str]) -> Result<()> {
-    crate::hostgit::Checkout::open(repo)?.run(args).map(|_| ())
-}
-
 /// Remove a worktree that paddock made, and its branch with `delete_branch`.
 /// Gives back a note when it kept the branch.
 pub fn remove_worktree(
@@ -255,9 +248,15 @@ pub fn remove_worktree(
             if let Ok(Some(l)) = crate::hostgit::Layout::discover(path) {
                 l.guard()?;
             }
-            git_write(repo, &a)?;
+            // One worktree change per repository at a time: two removals
+            // or a removal and an add at once fail on each other.
+            let co = crate::hostgit::Checkout::open(repo)?;
+            let lock = co.layout.lock_worktrees(env)?;
+            co.run_worktree(&lock, &a)?;
             match branch {
-                Some(b) if delete_branch => git_write(repo, &["branch", "-D", b])?,
+                Some(b) if delete_branch => {
+                    co.run_worktree(&lock, &["branch", "-D", b])?;
+                }
                 Some(b) => note = Some(format!("kept the branch {b}")),
                 None => {}
             }

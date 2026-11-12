@@ -294,3 +294,95 @@ pub(crate) fn view(env: &HostEnv, id: String, write: bool) -> Result<i32> {
 pub(crate) fn boundary(env: &HostEnv, id: String, json: bool, follow: bool) -> Result<i32> {
     paddock::boundary::cmd(env, &id, json, follow)
 }
+
+/// The most lines `paddock view --tail` prints. The sources hold no more:
+/// the tmux capture keeps the last 120 lines of the pane, and the view log
+/// is read from its last 8 KiB.
+const TAIL_MAX: usize = 120;
+
+/// `paddock view ID --tail N`: the end of the output of a run, as the
+/// terminal UI shows it beside the run. A detached run keeps its output in
+/// its tmux pane, another run in its view log.
+pub(crate) fn view_tail(env: &HostEnv, id: &str, lines: usize, json: bool) -> Result<i32> {
+    let n = lines.clamp(1, TAIL_MAX);
+    let pane = paddock::view::Tmux::find(env)
+        .filter(|t| t.has(id))
+        .and_then(|t| t.pane_tail(id));
+    let (source, text) = match pane {
+        Some(text) => (Some("tmux"), Some(text)),
+        None => match paddock::view::read_tail(&paddock::view::log_file(env, id)) {
+            Some(text) => (Some("log"), Some(text)),
+            None => (None, None),
+        },
+    };
+    let rows = text
+        .as_deref()
+        .map(|t| tail_lines(t, n))
+        .unwrap_or_default();
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "api_version": "paddock.view-tail/v1",
+                "id": id,
+                "source": source,
+                "lines": rows,
+            })
+        );
+    } else {
+        for l in rows {
+            println!("{l}");
+        }
+    }
+    Ok(0)
+}
+
+/// The last `n` lines of terminal output, as a terminal shows them: `\r`
+/// starts the line again, escapes and control characters go. A tmux
+/// capture also holds the empty screen area of the agent, so empty lines
+/// at the start and the end go, and a run of empty lines becomes one.
+fn tail_lines(text: &str, n: usize) -> Vec<String> {
+    let mut rows: Vec<String> = text
+        .split('\n')
+        .map(|l| {
+            let visible = l.rsplit('\r').find(|p| !p.is_empty()).unwrap_or("");
+            paddock::view::strip_controls(visible)
+                .trim_end()
+                .to_string()
+        })
+        .collect();
+    rows.dedup_by(|b, a| a.is_empty() && b.is_empty());
+    while rows.last().is_some_and(|l| l.is_empty()) {
+        rows.pop();
+    }
+    if rows.first().is_some_and(|l| l.is_empty()) {
+        rows.remove(0);
+    }
+    let skip = rows.len().saturating_sub(n);
+    rows.split_off(skip)
+}
+
+#[cfg(test)]
+mod tail_tests {
+    #[test]
+    fn tail_lines_keep_the_visible_text_of_the_last_lines() {
+        let text = "one\ntwo\x1b[31m red\x1b[0m\r\nthree\rTHREE\n\x07four\x1b]0;title\x07\n\n\n";
+        assert_eq!(super::tail_lines(text, 3), vec!["two red", "THREE", "four"]);
+        assert_eq!(super::tail_lines(text, 10).len(), 4);
+        assert!(super::tail_lines("", 5).is_empty());
+    }
+
+    #[test]
+    fn tail_lines_drop_the_empty_screen_area_of_a_capture() {
+        // A tmux capture: the agent drew three lines at the top of a
+        // 40-line screen, with blank rows in between and below.
+        let mut text = String::from("\n\n  \nfirst\n\n\n\n\nsecond\n   \n\nthird");
+        text.push_str(&"\n".repeat(37));
+        assert_eq!(super::tail_lines(&text, 3), vec!["second", "", "third"]);
+        assert_eq!(
+            super::tail_lines(&text, 120),
+            vec!["first", "", "second", "", "third"]
+        );
+        assert!(super::tail_lines("\n \n\t\n", 10).is_empty());
+    }
+}

@@ -52,7 +52,7 @@ fn explain(root: &Path, user: &str) -> String {
 
 #[test]
 fn explain_shows_the_privacy_defaults_and_vendor_mode_removes_them() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = paddock::view::guard::tempdir();
     let off = explain(&tmp.path().join("off"), "");
     assert!(
         off.contains("VENDOR_TELEMETRY_OFF=1\n         profile privtest privacy (telemetry off)"),

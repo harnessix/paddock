@@ -46,6 +46,36 @@ impl super::super::store::Lock<'_> {
         binding: Binding,
         first: Option<(&str, &str)>,
     ) -> Result<Session> {
+        self.make_session(horse, binding, first, None)
+    }
+
+    /// Create a host session of `origin`. Its entry in the index of the
+    /// host sessions is written first, then the session: a failed write of
+    /// the index makes no session, and a crash after it leaves an entry
+    /// that names no session, which the next read makes anew. So no host
+    /// session is ever there without its entry, and the lookup of the
+    /// index (`host_session_at`) never misses one and makes a second
+    /// session for the same native id.
+    pub(crate) fn new_host_session(
+        &self,
+        horse: &str,
+        binding: Binding,
+        origin: HostOrigin,
+    ) -> Result<Session> {
+        anyhow::ensure!(
+            binding.native_id.is_some(),
+            "a host session needs a native id"
+        );
+        self.make_session(horse, binding, None, Some(origin))
+    }
+
+    fn make_session(
+        &self,
+        horse: &str,
+        binding: Binding,
+        first: Option<(&str, &str)>,
+        host: Option<HostOrigin>,
+    ) -> Result<Session> {
         let store = self.store;
         let mut h = store.horse(horse)?;
         let s = Session {
@@ -63,7 +93,16 @@ impl super::super::store::Lock<'_> {
                 until_ms: None,
             }],
             created_ms: super::super::now_ms(),
+            host,
+            origin_run: None,
         };
+        if s.host.is_some() {
+            self.index_host_session(&s)?;
+            #[cfg(test)]
+            if super::host_index::CRASH_AFTER_INDEX.with(std::cell::Cell::get) {
+                anyhow::bail!("test: paddock dies after the index entry, before the session");
+            }
+        }
         if let Some((role, text)) = first {
             store
                 .for_horse(&h.id)?

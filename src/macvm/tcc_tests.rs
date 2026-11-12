@@ -341,8 +341,11 @@ fn the_agent_also_gets_full_disk_access_with_the_same_requirement() {
         service_row(&p, FULL_DISK),
         Some((ALLOWED, Some(req.clone())))
     );
-    // No Screen Recording: a window capture would ask in the guest.
-    assert_eq!(service_row(&p, SCREEN_CAPTURE), None);
+    // Screen Recording, for computer use.
+    assert_eq!(
+        service_row(&p, SCREEN_CAPTURE),
+        Some((ALLOWED, Some(req.clone())))
+    );
     // Photos is a service of the user: never in the system database.
     assert_eq!(service_row(&p, PHOTOS), None);
     assert_eq!(service_row(&p, ACCESSIBILITY), Some((ALLOWED, Some(req))));

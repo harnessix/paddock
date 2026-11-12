@@ -1,26 +1,22 @@
 //! Peer isolation requires a host with bwrap and a systemd user manager.
+#[allow(dead_code)]
+mod common;
+
 #[cfg(target_os = "linux")]
 #[test]
 fn peer_runs_in_a_limited_sandbox() {
     use base64::{engine::general_purpose::STANDARD, Engine as _};
     use std::io::Write;
     use std::process::{Command, Stdio};
-    let bwrap = Command::new("bwrap")
-        .args(["--unshare-user", "--ro-bind", "/", "/", "true"])
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success());
-    let scope = Command::new("systemd-run")
-        .args(["--user", "--scope", "--quiet", "true"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success());
-    if !bwrap || !scope {
-        eprintln!("skipped: peer test requires bwrap and a systemd user manager");
+    if !common::peer_host_ready("peer_runs_in_a_limited_sandbox") {
         return;
     }
-    let dir = tempfile::tempdir().unwrap();
+    let dir = paddock::view::guard::tempdir();
+    // The peer gets a scratch XDG_RUNTIME_DIR without the user manager in
+    // it, as a peer started from a bare ssh session can have. paddock finds
+    // the manager by itself (src/exclave/sandbox.rs, manager_runtime_dir).
+    // The session bus address is the fallback where /run/user/UID has none.
+    let bus = common::user_bus_address();
     let project = "a".repeat(64);
     let content = b"original";
     let blob = blake3::hash(content).to_hex().to_string();
@@ -54,6 +50,9 @@ fn peer_runs_in_a_limited_sandbox() {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if let Some(bus) = &bus {
+        cmd.env("DBUS_SESSION_BUS_ADDRESS", bus);
+    }
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let port = listener.local_addr().unwrap().port();
     let mut child = cmd.spawn().unwrap();

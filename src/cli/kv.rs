@@ -1,8 +1,67 @@
 use anyhow::{bail, Result};
-use clap::Subcommand;
+use clap::{Args, Subcommand};
 use paddock::env::HostEnv;
+use std::path::PathBuf;
 
-use super::{KvAs, KvAsRequired, KvScope};
+/// Which scope a `paddock kv` command reads. Without a flag: the pastures
+/// of the project of the current folder.
+#[derive(Args)]
+pub(crate) struct KvScope {
+    /// The project folder (default: the current folder).
+    #[arg(long, conflicts_with_all = ["user", "sandbox", "tree", "ns"])]
+    project: Option<PathBuf>,
+    /// A pasture of the project: a name from [pastures] of the user
+    /// configuration, or solo-<sandbox id> for a sandbox started without one.
+    #[arg(long, conflicts_with_all = ["user", "sandbox", "tree", "legacy", "ns"])]
+    pasture: Option<String>,
+    /// The project scope that all sandboxes of the project shared in older
+    /// paddock versions. Sandboxes no longer read it.
+    #[arg(long, conflicts_with_all = ["user", "sandbox", "tree", "ns"])]
+    legacy: bool,
+    /// The scope that all projects share.
+    #[arg(long, conflicts_with_all = ["sandbox", "tree", "ns"])]
+    user: bool,
+    /// The self scope of one sandbox, by its id or short id.
+    #[arg(long, conflicts_with_all = ["tree", "ns"])]
+    sandbox: Option<String>,
+    /// The tree scope of a spawn tree, by the id or short id of its root sandbox.
+    #[arg(long, conflicts_with = "ns")]
+    tree: Option<String>,
+    /// A namespace of [kv.namespaces] in the user configuration, by name.
+    /// The host is the user: it needs no membership, and its writes record
+    /// the writer `user`.
+    #[arg(long, value_name = "NAME")]
+    ns: Option<String>,
+}
+
+/// `--as NAME`: a principal from [kv.principals] of the user configuration.
+#[derive(Args)]
+pub(crate) struct KvAs {
+    /// Act as this principal of [kv.principals]; needs --pasture.
+    #[arg(
+        long = "as",
+        id = "as_",
+        value_name = "NAME",
+        requires = "pasture",
+        conflicts_with = "ns"
+    )]
+    as_: Option<String>,
+}
+
+#[derive(Args)]
+pub(crate) struct KvAsRequired {
+    /// The principal of [kv.principals] to act as; needs --pasture. With
+    /// --ns instead, the user on the host writes.
+    #[arg(
+        long = "as",
+        id = "as_",
+        value_name = "NAME",
+        requires = "pasture",
+        conflicts_with = "ns",
+        required_unless_present = "ns"
+    )]
+    as_: Option<String>,
+}
 
 #[derive(Subcommand)]
 pub(crate) enum KvCmd {
@@ -49,7 +108,8 @@ pub(crate) enum KvCmd {
         #[command(flatten)]
         principal: KvAs,
     },
-    /// Write a key of a pasture as a principal of [kv.principals].
+    /// Write a key of a pasture as a principal of [kv.principals], or of a
+    /// namespace (--ns) as the user.
     Put {
         key: String,
         /// The value (default: read from stdin).
@@ -65,7 +125,8 @@ pub(crate) enum KvCmd {
         #[arg(long)]
         version: Option<u64>,
     },
-    /// Wait for a change of a key or a prefix of a pasture, as a principal.
+    /// Wait for a change of a key or a prefix of a pasture as a principal, or
+    /// of a namespace (--ns).
     Watch {
         key: Option<String>,
         #[command(flatten)]
@@ -81,7 +142,8 @@ pub(crate) enum KvCmd {
         #[arg(long)]
         timeout: Option<u64>,
     },
-    /// Take or renew the lease lease:NAME of a pasture, as a principal.
+    /// Take or renew the lease lease:NAME of a pasture as a principal, or of
+    /// a namespace (--ns) as the user.
     Claim {
         name: String,
         #[command(flatten)]
@@ -111,6 +173,17 @@ fn kv_request(
 }
 
 impl KvScope {
+    /// A write or a watch: as a principal, or as the user in a namespace.
+    fn call(&self, env: &HostEnv, who: Option<&str>, req: paddock::kv::Request) -> Result<i32> {
+        match (who, &self.ns) {
+            (Some(who), _) => self.principal(env, who, req),
+            (None, Some(name)) => paddock::kv::host::in_namespace(env, name, req),
+            (None, None) => {
+                bail!("name a principal with --as NAME --pasture P, or a namespace with --ns NAME")
+            }
+        }
+    }
+
     fn principal(&self, env: &HostEnv, who: &str, req: paddock::kv::Request) -> Result<i32> {
         let Some(pasture) = &self.pasture else {
             bail!("--as needs --pasture NAME");
@@ -122,7 +195,10 @@ impl KvScope {
     fn target(&self, env: &HostEnv) -> Result<paddock::kv::host::Target> {
         use paddock::kv::host::{project_of, Target};
         use paddock::kv::shard::Ns;
-        Ok(if self.user {
+        Ok(if let Some(name) = &self.ns {
+            paddock::kv::namespace::check_name(name)?;
+            Target::One(Ns::Named(name.clone()))
+        } else if self.user {
             Target::One(Ns::User)
         } else if let Some(id) = &self.sandbox {
             Target::One(Ns::Own(paddock::ids::resolve(env, id)?))
@@ -176,6 +252,15 @@ pub(crate) fn run(env: &HostEnv, cmd: KvCmd) -> Result<i32> {
                 );
             }
             println!("user scope: {} keys", v["user"]["keys"]);
+            for n in v["namespaces"].as_array().into_iter().flatten() {
+                println!(
+                    "ns:{}: {} keys, {} leases (paddock kv list --ns {})",
+                    n["name"].as_str().unwrap_or_default(),
+                    n["keys"],
+                    n["leases"],
+                    n["name"].as_str().unwrap_or_default()
+                );
+            }
             for l in v["legacy"].as_array().into_iter().flatten() {
                 println!(
                     "older paddock: {} keys of {} (paddock kv list --legacy)",
@@ -229,9 +314,9 @@ pub(crate) fn run(env: &HostEnv, cmd: KvCmd) -> Result<i32> {
                     v
                 }
             };
-            scope.principal(
+            scope.call(
                 env,
-                &principal.as_,
+                principal.as_.as_deref(),
                 kv_request("put", Some(key), |r| {
                     r.value = Some(value);
                     r.ttl = ttl;
@@ -246,9 +331,9 @@ pub(crate) fn run(env: &HostEnv, cmd: KvCmd) -> Result<i32> {
             prefix,
             version,
             timeout,
-        } => scope.principal(
+        } => scope.call(
             env,
-            &principal.as_,
+            principal.as_.as_deref(),
             kv_request("watch", key, |r| {
                 r.prefix = prefix;
                 r.version = version;
@@ -260,9 +345,9 @@ pub(crate) fn run(env: &HostEnv, cmd: KvCmd) -> Result<i32> {
             scope,
             principal,
             ttl,
-        } => scope.principal(
+        } => scope.call(
             env,
-            &principal.as_,
+            principal.as_.as_deref(),
             kv_request("claim", Some(name), |r| r.ttl = Some(ttl)),
         ),
     }

@@ -3,7 +3,7 @@ use std::process::Command;
 
 #[test]
 fn explain_reports_backends_that_cannot_remap_caches() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = paddock::view::guard::tempdir();
     let root = temp.path();
     let config = root.join("config/paddock/harness.d");
     let project = root.join("project");

@@ -715,6 +715,13 @@ fn alive(pid: u32) -> bool {
     r == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
+/// The record says ended, but the paddock in the pane still runs: it
+/// is about to write the end event of the mailbox. An older paddock wrote
+/// the record before the event.
+pub fn finishing(rec: &Record) -> bool {
+    rec.ended.is_some() && rec.pid.is_some_and(alive)
+}
+
 /// The run ended, by its record, its process or its missing pane.
 pub fn ended(env: &HostEnv, id: &str, rec: Option<&Record>, now: u64) -> bool {
     let running = crate::state::Running::list(env).iter().any(|r| r.id == id);

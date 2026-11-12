@@ -13,6 +13,9 @@ unverified = [
 [locate]
 mise = "codex"
 commands = ["codex"]
+# Codex 0.167 starts codex-code-mode-host and codex-exec-server from the
+# folder of its binary. In /usr/bin paddock mounts only these names.
+helpers = ["code-mode-host", "exec-server"]
 
 [launch]
 # Logs in through a browser and a localhost callback.
@@ -105,6 +108,28 @@ path = ["hooks", "SessionStart"]
 append = true
 value = { matcher = "compact", hooks = [{ type = "command", command = "paddock-host compacted --harness codex", timeout = 20 }] }
 
+# The mail hooks (src/mail/deliver.rs), as for Claude Code. Stop: with
+# unread mail, `paddock-host mail hook stop` prints {"decision": "block",
+# "reason": TEXT}, and Codex goes on with TEXT as the next prompt
+# (codex-rs hooks/src/events/stop.rs, rust-v0.167.0). rust-v0.166.0 does
+# the same: hooks/src/engine/output_parser.rs `parse_stop` reads the
+# decision, stop.rs sets should_block with the reason, and
+# core/src/session/turn.rs continues the turn with it. PostToolUse: an
+# interrupt comes as hookSpecificOutput.additionalContext. paddock trusts
+# these two entries by their hash, like the compaction hook ([hooks]
+# codex_trust below), so they run without the hooks review.
+[[state.settings]]
+file = ".codex/hooks.json"
+path = ["hooks", "Stop"]
+append = true
+value = { hooks = [{ type = "command", command = "paddock-host mail hook stop", timeout = 20 }] }
+
+[[state.settings]]
+file = ".codex/hooks.json"
+path = ["hooks", "PostToolUse"]
+append = true
+value = { hooks = [{ type = "command", command = "paddock-host mail hook tool", timeout = 20 }] }
+
 # One task without a terminal, for `paddock-host spawn`. `codex exec --help`:
 # with `-` as the prompt, codex reads the instructions from stdin.
 [oneshot]
@@ -175,7 +200,11 @@ rows = [
 # Start screens (src/screens.rs). Codex 0.166.0 stops at "Hooks need review"
 # when a hook of the user changed since the last trust. In a run that nobody
 # watches, paddock chooses "Continue without trusting": the changed hooks do
-# not run. The mailbox event names the possible effect on compaction.
+# not run. "Trust all" would trust every hook that Codex lists, also plugin
+# and project hooks that paddock did not check (codex-rs
+# tui/src/startup_hooks_review.rs, rust-v0.167.0), so paddock never chooses
+# it. paddock's own hooks have their trust by hash beforehand ([hooks]
+# codex_trust). The mailbox event says whether they run.
 # The screen was recorded on 2026-11-03 in a detached run.
 [[screens.rule]]
 id = "codex-hooks-review"

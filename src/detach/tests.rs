@@ -1,4 +1,5 @@
 use super::*;
+use crate::view::guard::TmuxGuard;
 use crate::view::Tmux;
 use std::collections::BTreeMap;
 use std::process::{Command, Stdio};
@@ -21,20 +22,6 @@ pub(super) fn env_in(t: &Path) -> HostEnv {
     );
     vars.insert("PATH".into(), std::env::var("PATH").unwrap_or_default());
     HostEnv::from_parts(t.join("home"), "demo".into(), 1000, 1000, vars)
-}
-
-/// The private tmux server of a test, killed at the end.
-pub(super) struct Server(pub(super) Tmux);
-impl Drop for Server {
-    fn drop(&mut self) {
-        let _ = Command::new(&self.0.exe)
-            .arg("-S")
-            .arg(&self.0.sock)
-            .arg("kill-server")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status();
-    }
 }
 
 fn wait_for(what: &str, mut f: impl FnMut() -> bool) {
@@ -99,15 +86,15 @@ fn a_write_client_keeps_the_run_until_it_leaves() {
         eprintln!("skipped: needs tmux");
         return;
     };
-    let server = Server(tmux.clone());
+    let _server = TmuxGuard::of(&tmux);
     let id = "fake-p-2";
     tmux.new_session(id, &["sleep".into(), "60".into()])
         .unwrap();
     record(&env, id);
     // A read-only client does not count.
     let attach = |ro: bool| {
-        let mut c = Command::new(&server.0.exe);
-        c.arg("-S").arg(&server.0.sock).args(["-C", "attach"]);
+        let mut c = Command::new(&tmux.exe);
+        c.arg("-S").arg(&tmux.sock).args(["-C", "attach"]);
         if ro {
             c.arg("-r");
         }
@@ -121,9 +108,9 @@ fn a_write_client_keeps_the_run_until_it_leaves() {
     let mut reader = attach(true);
     wait_for("the read-only client", || {
         tmux.sessions().len() == 1
-            && Command::new(&server.0.exe)
+            && Command::new(&tmux.exe)
                 .arg("-S")
-                .arg(&server.0.sock)
+                .arg(&tmux.sock)
                 .args(["list-clients", "-F", "#{client_readonly}"])
                 .output()
                 .is_ok_and(|o| !o.stdout.is_empty())
@@ -532,7 +519,7 @@ fn a_quiet_pane_goes_idle_then_the_timeout_stops_it() {
         eprintln!("skipped: needs tmux");
         return;
     };
-    let _server = Server(tmux.clone());
+    let _server = TmuxGuard::of(&tmux);
     write_idle_cfg(&env, "2s", "3s");
     let id = "idle-pane-1";
     quiet_session(&tmux, id, "echo once; exec sleep 60");
@@ -562,7 +549,7 @@ fn output_clears_idle_before_the_timeout() {
         eprintln!("skipped: needs tmux");
         return;
     };
-    let _server = Server(tmux.clone());
+    let _server = TmuxGuard::of(&tmux);
     write_idle_cfg(&env, "8s", "40s");
     let flag = t.path().join("more");
     let id = "idle-pane-2";
@@ -595,14 +582,14 @@ fn a_write_client_is_told_and_the_run_stops_when_it_leaves() {
         eprintln!("skipped: needs tmux");
         return;
     };
-    let server = Server(tmux.clone());
+    let _server = TmuxGuard::of(&tmux);
     write_idle_cfg(&env, "2s", "3s");
     let id = "idle-pane-3";
     quiet_session(&tmux, id, "echo once; exec sleep 60");
     record(&env, id);
-    let mut writer = Command::new(&server.0.exe)
+    let mut writer = Command::new(&tmux.exe)
         .arg("-S")
-        .arg(&server.0.sock)
+        .arg(&tmux.sock)
         .args(["-C", "attach", "-t", id])
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
@@ -613,9 +600,9 @@ fn a_write_client_is_told_and_the_run_stops_when_it_leaves() {
     let (c, stops) = ctl(&env, id);
     c.watch(Vec::new());
     until("the idle notice", Duration::from_secs(20), || {
-        let out = Command::new(&server.0.exe)
+        let out = Command::new(&tmux.exe)
             .arg("-S")
-            .arg(&server.0.sock)
+            .arg(&tmux.sock)
             .arg("show-messages")
             .output()
             .unwrap();
@@ -648,7 +635,7 @@ fn a_zero_idle_timeout_never_stops_the_run() {
         eprintln!("skipped: needs tmux");
         return;
     };
-    let _server = Server(tmux.clone());
+    let _server = TmuxGuard::of(&tmux);
     write_idle_cfg(&env, "2s", "0");
     let id = "idle-pane-4";
     quiet_session(&tmux, id, "echo once; exec sleep 60");
@@ -668,7 +655,7 @@ fn cursor_redraws_do_not_keep_a_static_pane_busy() {
     let t = tempfile::tempdir().unwrap();
     let env = env_in(t.path());
     let Some(tmux) = Tmux::find(&env) else { return };
-    let _server = Server(tmux.clone());
+    let _server = TmuxGuard::of(&tmux);
     write_idle_cfg(&env, "2s", "0");
     let id = "idle-cursor";
     quiet_session(
@@ -691,7 +678,7 @@ fn quiet_run_without_mail_reports_idle_once_with_status() {
     let t = tempfile::tempdir().unwrap();
     let env = env_in(t.path());
     let Some(tmux) = Tmux::find(&env) else { return };
-    let _server = Server(tmux.clone());
+    let _server = TmuxGuard::of(&tmux);
     write_idle_cfg(&env, "2s", "0");
     let id = "idle-mail";
     crate::mail::create(&env, id, &crate::mail::Starter::host()).unwrap();
@@ -729,7 +716,7 @@ fn a_fake_tui_clock_does_not_prevent_idle() {
     let t = tempfile::tempdir().unwrap();
     let env = env_in(t.path());
     let Some(tmux) = Tmux::find(&env) else { return };
-    let _server = Server(tmux.clone());
+    let _server = TmuxGuard::of(&tmux);
     write_idle_cfg(&env, "2s", "0");
     let id = "idle-clock";
     quiet_session(
@@ -750,7 +737,7 @@ fn a_done_status_ends_a_fake_tui_after_grace() {
     let t = tempfile::tempdir().unwrap();
     let env = env_in(t.path());
     let Some(tmux) = Tmux::find(&env) else { return };
-    let _server = Server(tmux.clone());
+    let _server = TmuxGuard::of(&tmux);
     std::fs::create_dir_all(env.paddock_config()).unwrap();
     std::fs::write(
         env.paddock_config().join("config.toml"),

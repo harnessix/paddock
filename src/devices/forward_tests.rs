@@ -491,7 +491,11 @@ fn a_cancel_closes_the_transport_and_the_program_on_the_other_side_dies_within_5
     let s = script(
         t.path(),
         "sleeper.sh",
-        &format!("echo $$ > {}\nsleep 30\n", pidfile.display()),
+        // The pid comes by a rename: the file is never there but empty.
+        &format!(
+            "echo $$ > {p}.tmp && mv {p}.tmp {p}\nsleep 30\n",
+            p = pidfile.display()
+        ),
     );
     let serving = Home::new(
         t.path(),

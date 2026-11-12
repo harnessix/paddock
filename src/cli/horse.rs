@@ -10,6 +10,7 @@ mod agy;
 mod dna;
 mod grant;
 mod grok;
+mod host;
 mod key;
 mod migrate;
 mod registry;
@@ -208,6 +209,13 @@ pub(crate) enum HorseCmd {
     },
     /// The ctl grants of sandboxes and what each used.
     Grants,
+    /// Read chosen host sessions into the store, from a private copy of each file.
+    Import(host::ImportArgs),
+    /// Adopt the host sessions of a harness: convert them, then watch them.
+    Adopt(host::AdoptArgs),
+    /// The host hook of an adoption (stdin: the hook input).
+    #[command(hide = true)]
+    Hook(host::HookArgs),
     /// Read a dsh session file or session folder into the store.
     IngestDsh {
         path: PathBuf,
@@ -301,6 +309,7 @@ pub(crate) fn run(env: &HostEnv, cmd: HorseCmd) -> Result<i32> {
     let cmd = match cmd {
         HorseCmd::Migrate { verify, drop_plain } => return migrate::run(env, verify, drop_plain),
         HorseCmd::Key { cmd } => return key::run(env, cmd),
+        HorseCmd::Hook(a) => return Ok(host::hook(env, &a.harness, &a.event)),
         other => other,
     };
     let st = Store::open_host(env)?;
@@ -322,10 +331,7 @@ pub(crate) fn run(env: &HostEnv, cmd: HorseCmd) -> Result<i32> {
                     s.binding.harness,
                     s.binding.native_id.as_deref().unwrap_or("(not projected)"),
                     n,
-                    s.fork_of
-                        .as_ref()
-                        .map(|f| format!("fork of {} at {}", f.session, f.node.short()))
-                        .unwrap_or_default()
+                    host::list_notes(&s)
                 );
             }
         }
@@ -465,7 +471,7 @@ pub(crate) fn run(env: &HostEnv, cmd: HorseCmd) -> Result<i32> {
                 .any(|r| r.sessions.iter().any(|x| x.session == session));
             println!("{}", e.id);
             if !live {
-                eprintln!("paddock: session {session} is in no live horse-mode run; the entry waits in its inbox");
+                eprintln!("paddock: {}", host::append_note(env, &st, &session));
             }
         }
         HorseCmd::Status { json } => status(&st, json)?,
@@ -478,6 +484,9 @@ pub(crate) fn run(env: &HostEnv, cmd: HorseCmd) -> Result<i32> {
             revoke,
         } => return grant::run(&st, &sandbox, allow, horses, commands, tokens, revoke),
         HorseCmd::Grants => return grant::list(&st),
+        HorseCmd::Import(a) => return host::import(env, &st, a),
+        HorseCmd::Adopt(a) => return host::adopt(env, &st, a),
+        HorseCmd::Hook(_) => unreachable!("the hook runs before the store opens"),
         HorseCmd::Guard {
             session,
             fork_at,

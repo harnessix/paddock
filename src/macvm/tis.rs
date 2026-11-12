@@ -30,10 +30,26 @@ extern "C" {
     fn TISEnableInputSource(source: *mut c_void) -> i32;
     fn TISDisableInputSource(source: *mut c_void) -> i32;
     fn TISSelectInputSource(source: *mut c_void) -> i32;
+    static kTISPropertyUnicodeKeyLayoutData: *const CFString;
+    fn TISCopyCurrentKeyboardLayoutInputSource() -> *mut c_void;
+    fn LMGetKbdType() -> u8;
+    fn UCKeyTranslate(
+        layout: *const c_void,
+        code: u16,
+        action: u16,
+        modifiers: u32,
+        keyboard_type: u32,
+        options: u32,
+        dead_key_state: *mut u32,
+        max_len: usize,
+        len: *mut usize,
+        chars: *mut u16,
+    ) -> i32;
 }
 
 #[link(name = "CoreFoundation", kind = "framework")]
 extern "C" {
+    fn CFDataGetBytePtr(data: *const c_void) -> *const u8;
     fn CFPreferencesGetAppIntegerValue(
         key: *const CFString,
         application: *const CFString,
@@ -199,6 +215,69 @@ pub fn current() -> Option<String> {
     id
 }
 
+/// The character of the key `code` with cmd, and with shift when
+/// `shift`, on the current keyboard layout: what the menus of an app match
+/// a shortcut against. None for a layout without Unicode data, a dead key
+/// or a key with no single character. It must run on the main thread:
+/// since macOS 14 the TIS calls assert it and end the process. On another
+/// thread it calls nothing and gives None.
+pub fn key_char(code: u16, shift: bool) -> Option<char> {
+    if objc2::MainThreadMarker::new().is_none() {
+        log::warn!("tis: key_char called off the main thread");
+        return None;
+    }
+    // kUCKeyActionDown; cmdKey and shiftKey of Events.h, shifted right by
+    // 8; kUCKeyTranslateNoDeadKeysMask.
+    const ACTION_DOWN: u16 = 0;
+    const CMD: u32 = 0x01;
+    const SHIFT: u32 = 0x02;
+    const NO_DEAD_KEYS: u32 = 1;
+    // SAFETY: a +1 reference, or null; the drop below releases it.
+    let src = unsafe { TISCopyCurrentKeyboardLayoutInputSource() };
+    let _owned: Option<CFRetained<CFType>> =
+        NonNull::new(src.cast::<CFType>()).map(|p| unsafe { CFRetained::from_raw(p) });
+    if src.is_null() {
+        return None;
+    }
+    // SAFETY: a valid source; the property is a CFData that it owns.
+    let data = unsafe { TISGetInputSourceProperty(src, kTISPropertyUnicodeKeyLayoutData) };
+    if data.is_null() {
+        return None;
+    }
+    // SAFETY: the bytes of the CFData, alive while `src` is.
+    let layout = unsafe { CFDataGetBytePtr(data) };
+    if layout.is_null() {
+        return None;
+    }
+    let modifiers = CMD | if shift { SHIFT } else { 0 };
+    let mut dead = 0u32;
+    let mut len = 0usize;
+    let mut buf = [0u16; 4];
+    // SAFETY: a valid layout, a buffer of `buf.len()` units and its length.
+    let r = unsafe {
+        UCKeyTranslate(
+            layout.cast(),
+            code,
+            ACTION_DOWN,
+            modifiers,
+            u32::from(LMGetKbdType()),
+            NO_DEAD_KEYS,
+            &mut dead,
+            buf.len(),
+            &mut len,
+            buf.as_mut_ptr(),
+        )
+    };
+    if r != 0 || len == 0 {
+        return None;
+    }
+    let mut it = char::decode_utf16(buf[..len.min(buf.len())].iter().copied());
+    match (it.next(), it.next()) {
+        (Some(Ok(c)), None) => Some(c),
+        _ => None,
+    }
+}
+
 /// The localized name of a source, enabled or not.
 pub fn name_of(id: &str) -> Option<String> {
     let (_list, src) = List::find_any(id)?;
@@ -254,3 +333,7 @@ pub fn globe_switches_sources() -> bool {
     };
     exists == 0 || value == 1
 }
+
+#[cfg(test)]
+#[path = "tis_tests.rs"]
+mod tests;

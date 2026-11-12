@@ -77,7 +77,7 @@ pub fn audit_detail(req: &Request, project: &Path, prepared: Option<&str>) -> St
                 Err(_) => format!("open a URL ({} characters)", u.chars().count()),
             }
         }
-        "fetch" | "git-push" | "spawn" | "borrow" | "return" if prepared.is_some() => {
+        "fetch" | "git-push" | "spawn" | "borrow" | "return" | "mac" if prepared.is_some() => {
             prepared.unwrap_or_default().to_string()
         }
         "spawn" => format!(
@@ -96,6 +96,7 @@ pub fn audit_detail(req: &Request, project: &Path, prepared: Option<&str>) -> St
             git::redact(arg_str(req, "remote").unwrap_or(""))
         ),
         "screenshot" | "clipboard-read" => describe(req, project).1,
+        "mac" => crate::macvm::computer_broker::audit(&req.args),
         other => other.to_string(),
     }
 }

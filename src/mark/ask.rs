@@ -5,8 +5,8 @@
 //! The store is the truth: the marker reads it every second, so a panel
 //! shows the same question after a restart of the marker, and an answer
 //! goes through `broker::answer_connect`, the way `paddock approvals
-//! answer` does from a terminal. A panel goes only when its card is gone
-//! (`panels::to_close`), never by itself. The panels are listed in
+//! answer` does from a terminal. A panel closes after the store confirms
+//! its own card was selected or retired. The panels are listed in
 //! `mark-panels.json` of the run folder, so `paddock windows --json`
 //! shows them with `kind = approval`.
 
@@ -20,6 +20,7 @@ pub(super) struct AskPanel {
     drawn: Drawn,
     content: Content,
     key: SessionKey,
+    card: Pending,
     /// The last frame, in window server coordinates.
     rect: Option<Rect>,
     shown: bool,
@@ -78,12 +79,13 @@ pub(super) fn refresh_panels(
         .iter()
         .map(|(id, p)| (id.clone(), p.key.clone()))
         .collect();
-    let dir = broker::approvals_dir(&st.env);
-    let close = panels::to_close(&open, &picked, |id| {
-        dir.join(format!("{id}.json")).is_file() // not user text
+    let close = panels::to_close(&open, |id, _| {
+        st.panels
+            .get(id)
+            .is_some_and(|p| broker::connect_card_retired(&st.env, &p.card).unwrap_or(false))
     });
-    for id in close {
-        if let Some(p) = st.panels.remove(&id) {
+    for id in &close {
+        if let Some(p) = st.panels.remove(id) {
             p.drawn.panel.orderOut(None);
         }
     }
@@ -93,11 +95,15 @@ pub(super) fn refresh_panels(
         else {
             continue;
         };
+        if close.contains(&q.id) || st.panels.iter().any(|(id, p)| id != &q.id && p.key == key) {
+            continue;
+        }
         let win = window_of(wins, c.pid);
         let p = st.panels.entry(q.id.clone()).or_insert_with(|| AskPanel {
             drawn: draw(mtm, q, &content, me),
             content: content.clone(),
             key,
+            card: q.clone(),
             rect: None,
             shown: false,
             sandbox: q.sandbox.clone(),
@@ -169,6 +175,9 @@ fn answer(st: &mut State, id: &str, tag: isize) {
     };
     if let Err(e) = broker::answer_connect(&st.env, id, answer) {
         log::warn!("the firewall panel could not answer {id}: {e:#}");
+        // The write may have failed or its result may be unknown. Keep the
+        // panel until the store confirms a selection or retirement.
+        return;
     }
     if let Some(p) = st.panels.remove(id) {
         p.drawn.panel.orderOut(None);

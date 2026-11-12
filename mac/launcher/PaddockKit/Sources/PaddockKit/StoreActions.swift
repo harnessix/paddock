@@ -60,26 +60,46 @@ extension LauncherStore {
     /// Answers a question. The panel next to the app's window closes too:
     /// paddock owns it, the launcher only sends the answer.
     public func answer(_ question: QuestionJSON, _ answer: Answer) async {
-        guard let service else { return }
+        guard let service, confirmedQuestionIDs.contains(question.id) else { return }
         do {
             try await service.execute(PaddockArgs.answer(question.id, answer))
-            questions.removeAll { $0.id == question.id }
+            retireQuestion(question.id)
         } catch {
             lastError = .command(title: UIText("The answer did not reach paddock"), line: LauncherStore.line(of: error))
         }
     }
 
     public func pausedDenyAll() async {
-        guard let service, let paused else { return }
-        try? await service.execute(PaddockArgs.pausedDenyAll(paused.app))
-        questions.removeAll { $0.app == paused.app }
-        self.paused = nil
+        guard let service, let paused, pausedConfirmed else { return }
+        let args = paused.id.map { NetworkArgs.answer($0, .deny) }
+            ?? PaddockArgs.pausedDenyAll(paused.app)
+        do {
+            try await service.execute(args)
+            if self.paused == paused {
+                if paused.id == nil { questions.removeAll { $0.app == paused.app } }
+                self.paused = nil
+                pausedConfirmed = false
+                if questionSnapshotPending { pauseTouched = true }
+            }
+        } catch {
+            lastError = .command(title: UIText("The answer did not reach paddock"), line: LauncherStore.line(of: error))
+        }
     }
 
     public func pausedOneByOne() async {
-        guard let service, let paused else { return }
-        try? await service.execute(PaddockArgs.pausedOneByOne(paused.app))
-        self.paused = nil
+        guard let service, let paused, pausedConfirmed else { return }
+        let args = paused.id.map { NetworkArgs.answer($0, .allowOnce) }
+            ?? PaddockArgs.pausedOneByOne(paused.app)
+        do {
+            try await service.execute(args)
+            if self.paused == paused {
+                self.paused = nil
+                pausedConfirmed = false
+                if questionSnapshotPending { pauseTouched = true }
+            }
+        } catch {
+            lastError = .command(title: UIText("The answer did not reach paddock"), line: LauncherStore.line(of: error))
+        }
     }
 
     // MARK: Base image

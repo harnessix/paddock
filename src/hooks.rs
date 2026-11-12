@@ -38,7 +38,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::{Component, Path, PathBuf};
 
-pub use write::write;
+pub use write::{codex_paddock_trusted, write};
 
 /// The longest host hook file that paddock reads.
 const MAX_FILE: u64 = 1 << 20;
@@ -513,6 +513,13 @@ fn judge(env: &HostEnv, spec: &SandboxSpec, cfg: &Cfg, listed: &[Listed], h: &Va
             why: "not a command".into(),
         };
     };
+    // paddock's own entry of a host adoption reads host sessions: it has
+    // no place in a sandbox.
+    if crate::horse::host::hooks::is_entry(cmd) {
+        return Verdict::Ignored {
+            rule: "paddock horse adopt".into(),
+        };
+    }
     let parts: Vec<command::Parsed> = command::split(cmd)
         .iter()
         .map(|p| command::parse(p))

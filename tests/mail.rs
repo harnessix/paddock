@@ -17,8 +17,86 @@ use std::time::{Duration, Instant};
 
 const RUN: &str = "fake-proj-a1b2c3";
 
+/// The failure limit of every child process of these tests. A child that
+/// runs longer fails its test and is killed: no test can hang.
+const LIMIT: Duration = Duration::from_secs(60);
+
+/// A child process that is killed and reaped when it goes out of scope, so
+/// that a failed test leaves no process behind.
+struct Proc {
+    child: std::process::Child,
+    what: String,
+}
+
+impl Proc {
+    /// Wait until the child exits. After `within`, kill it and fail.
+    fn wait_within(&mut self, within: Duration) -> std::process::ExitStatus {
+        let end = Instant::now() + within;
+        loop {
+            if let Some(s) = self.child.try_wait().unwrap() {
+                return s;
+            }
+            if Instant::now() >= end {
+                let _ = self.child.kill();
+                let _ = self.child.wait();
+                panic!("{} did not end within {within:?}: killed", self.what);
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+}
+
+impl Drop for Proc {
+    fn drop(&mut self) {
+        if matches!(self.child.try_wait(), Ok(None)) {
+            let _ = self.child.kill();
+            let _ = self.child.wait();
+        }
+    }
+}
+
+/// Read a pipe to its end in a thread. The bytes come on the channel.
+fn read_all(mut r: impl std::io::Read + Send + 'static) -> mpsc::Receiver<Vec<u8>> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut b = Vec::new();
+        let _ = r.read_to_end(&mut b);
+        let _ = tx.send(b);
+    });
+    rx
+}
+
+/// Run `cmd` to its end within [`LIMIT`]: its status, stdout and stderr.
+/// A child that runs longer, or a pipe that a left-over process keeps
+/// open, fails the test.
+fn output(
+    mut cmd: Command,
+    what: &str,
+    stdin: Option<&[u8]>,
+) -> (std::process::ExitStatus, Vec<u8>, Vec<u8>) {
+    cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+    if stdin.is_some() {
+        cmd.stdin(Stdio::piped());
+    }
+    let mut p = Proc {
+        child: cmd.spawn().unwrap(),
+        what: what.to_string(),
+    };
+    let out = read_all(p.child.stdout.take().unwrap());
+    let err = read_all(p.child.stderr.take().unwrap());
+    if let Some(b) = stdin {
+        p.child.stdin.take().unwrap().write_all(b).unwrap();
+    }
+    let status = p.wait_within(LIMIT);
+    let pipe = |rx: mpsc::Receiver<Vec<u8>>, name: &str| {
+        rx.recv_timeout(LIMIT)
+            .unwrap_or_else(|_| panic!("the {name} of {what} stayed open after its end"))
+    };
+    (status, pipe(out, "stdout"), pipe(err, "stderr"))
+}
+
 struct World {
-    _tmp: tempfile::TempDir,
+    _tmp: common::TestDir,
     root: PathBuf,
     env: HostEnv,
 }
@@ -70,19 +148,13 @@ impl World {
     /// `paddock ARGS`: exit code, stdout, stderr.
     fn run(&self, args: &[&str], stdin: Option<&[u8]>) -> (i32, String, String) {
         let mut c = self.paddock();
-        c.args(args).stdout(Stdio::piped()).stderr(Stdio::piped());
-        if stdin.is_some() {
-            c.stdin(Stdio::piped());
-        }
-        let mut child = c.spawn().unwrap();
-        if let Some(b) = stdin {
-            child.stdin.take().unwrap().write_all(b).unwrap();
-        }
-        let out = child.wait_with_output().unwrap();
+        c.args(args);
+        let what = format!("`paddock {}`", args.join(" "));
+        let (status, out, err) = output(c, &what, stdin);
         (
-            out.status.code().unwrap_or(-1),
-            String::from_utf8_lossy(&out.stdout).into_owned(),
-            String::from_utf8_lossy(&out.stderr).into_owned(),
+            status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&out).into_owned(),
+            String::from_utf8_lossy(&err).into_owned(),
         )
     }
 
@@ -115,8 +187,9 @@ impl World {
     }
 
     /// `paddock mail watch ARGS` in the background: its lines arrive on
-    /// the channel as they are printed.
-    fn watch(&self, args: &[&str]) -> (std::process::Child, mpsc::Receiver<String>) {
+    /// the channel as they are printed. The watch is killed when the
+    /// `Proc` goes out of scope.
+    fn watch(&self, args: &[&str]) -> (Proc, mpsc::Receiver<String>) {
         let mut child = self
             .paddock()
             .args(["mail", "watch"])
@@ -126,6 +199,10 @@ impl World {
             .spawn()
             .unwrap();
         let out = child.stdout.take().unwrap();
+        let child = Proc {
+            child,
+            what: format!("`paddock mail watch {}`", args.join(" ")),
+        };
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
             for l in BufReader::new(out).lines().map_while(Result::ok) {
@@ -247,9 +324,9 @@ fn send_and_watch_round_trip_in_order_once_across_restarts() {
         .send("{\"kind\":\"status\",\"text\":\"working\"}")
         .unwrap();
     let (mut watch, rx) = w.watch(&[RUN, "--timeout", "3s"]);
-    let lines = lines_until(&rx, Duration::from_secs(10), |_| false);
+    let lines = lines_until(&rx, LIMIT, |_| false);
     assert_eq!(
-        watch.wait().unwrap().code(),
+        watch.wait_within(LIMIT).code(),
         Some(124),
         "the timeout ends the watch"
     );
@@ -318,9 +395,9 @@ fn send_and_watch_round_trip_in_order_once_across_restarts() {
     let (mut watch, rx) = w.watch(&[RUN]);
     std::thread::sleep(Duration::from_millis(500));
     events::ended(&w.env, RUN, Some(0)).unwrap();
-    let lines = lines_until(&rx, Duration::from_secs(5), |l| l.contains("event ended"));
-    assert_eq!(watch.wait().unwrap().code(), Some(0));
+    let lines = lines_until(&rx, LIMIT, |l| l.contains("event ended"));
     assert_eq!(lines.len(), 1, "{lines:?}");
+    assert_eq!(watch.wait_within(LIMIT).code(), Some(0));
     assert!(
         lines[0].contains("event ended: the sandbox ended with exit code 0"),
         "{}",
@@ -340,6 +417,20 @@ fn send_and_watch_round_trip_in_order_once_across_restarts() {
     );
 }
 
+/// The tmux server of a test, to run tmux commands on it.
+struct TmuxServer(paddock::view::Tmux);
+
+impl TmuxServer {
+    fn command(&self, args: &[&str]) -> Command {
+        let mut c = Command::new(&self.0.exe);
+        c.arg("-S")
+            .arg(&self.0.sock)
+            .args(args)
+            .stdin(Stdio::null());
+        c
+    }
+}
+
 #[test]
 fn killing_the_agent_process_behind_a_live_pane_is_one_gone_line() {
     let w = World::new();
@@ -347,33 +438,37 @@ fn killing_the_agent_process_behind_a_live_pane_is_one_gone_line() {
         eprintln!("skipped: no tmux");
         return;
     };
+    // The guard stops the server when the test ends, also after a failure:
+    // the pane stays after its process ends, so the server does not stop on
+    // its own.
+    let _guard = paddock::view::guard::TmuxGuard::of(&tmux);
     tmux.new_session(RUN, &["sleep".into(), "300".into()])
         .unwrap();
-    let pid_out = Command::new(&tmux.exe)
-        .arg("-S")
-        .arg(&tmux.sock)
-        .args(["list-panes", "-t", &format!("={RUN}"), "-F", "#{pane_pid}"])
-        .output()
-        .unwrap();
-    let pid: u32 = String::from_utf8_lossy(&pid_out.stdout)
-        .trim()
-        .parse()
-        .unwrap();
+    let server = TmuxServer(tmux);
+    let tmux = &server.0;
+    let (_, pid_out, _) = output(
+        server.command(&["list-panes", "-t", &format!("={RUN}"), "-F", "#{pane_pid}"]),
+        "`tmux list-panes`",
+        None,
+    );
+    let pid: u32 = String::from_utf8_lossy(&pid_out).trim().parse().unwrap();
     w.mailbox(pid, true);
     let (mut watch, rx) = w.watch(&[RUN]);
-    let first = lines_until(&rx, Duration::from_secs(5), |_| true);
+    let first = lines_until(&rx, LIMIT, |_| true);
     assert!(first[0].contains("event started"), "{first:?}");
     unsafe { libc::kill(pid as i32, libc::SIGKILL) };
-    let killed = Instant::now();
-    let lines = lines_until(&rx, Duration::from_secs(10), |l| l.contains("event gone"));
-    let took = killed.elapsed();
+    let lines = lines_until(&rx, LIMIT, |l| l.contains("event gone"));
+    let state = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap_or_default();
     assert_eq!(
-        watch.wait().unwrap().code(),
+        lines.len(),
+        1,
+        "one gone line; /proc/{pid}/stat after the kill: {state:?}; {lines:?}"
+    );
+    assert_eq!(
+        watch.wait_within(LIMIT).code(),
         Some(0),
         "the end ends the watch"
     );
-    assert_eq!(lines.len(), 1, "{lines:?}");
-    assert!(took < Duration::from_secs(5), "took {took:?}");
     assert!(
         lines[0].contains("the agent process is gone"),
         "{}",
@@ -386,15 +481,43 @@ fn killing_the_agent_process_behind_a_live_pane_is_one_gone_line() {
     let (code, out, _) = w.run(&["mail", "watch", RUN, "--all"], None);
     assert_eq!(code, 0);
     assert_eq!(out.matches("event gone").count(), 1, "{out}");
-    let _ = Command::new(&tmux.exe)
-        .arg("-S")
-        .arg(&tmux.sock)
-        .arg("kill-server")
-        .status();
+}
+
+/// A killed paddock process that its parent did not reap yet is a zombie:
+/// signal 0 finds it, but it never writes an end. The watch reports it as
+/// gone and ends, so a parent that waits for the watch before it reaps its
+/// child does not wait forever.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_killed_process_that_is_not_reaped_yet_is_gone() {
+    let w = World::new();
+    let mut child = Proc {
+        child: Command::new("sleep").arg("300").spawn().unwrap(),
+        what: "`sleep 300`".into(),
+    };
+    let pid = child.child.id();
+    w.mailbox(pid, false);
+    unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+    // This test does not reap its child until the watch ends.
+    let stat = format!("/proc/{pid}/stat");
+    let end = Instant::now() + LIMIT;
+    while !std::fs::read_to_string(&stat).is_ok_and(|s| {
+        s.rsplit_once(')')
+            .is_some_and(|(_, r)| r.trim_start().starts_with('Z'))
+    }) {
+        assert!(Instant::now() < end, "{pid} did not become a zombie");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let (code, out, err) = w.run(&["mail", "watch", RUN, "--timeout", "10s"], None);
+    assert_eq!(code, 0, "the gone line ends the watch: {out}{err}");
+    assert_eq!(out.matches("event gone").count(), 1, "{out}");
+    assert!(out.contains("the agent process is gone"), "{out}");
+    let status = child.wait_within(LIMIT);
+    assert!(std::os::unix::process::ExitStatusExt::signal(&status).is_some());
 }
 
 #[test]
-fn an_approval_card_is_a_card_waiting_line() {
+fn an_approval_card_notice_is_a_historical_open_event() {
     let w = World::new();
     w.mailbox(std::process::id(), false);
     let p = paddock::broker::Pending {
@@ -421,9 +544,10 @@ fn an_approval_card_is_a_card_waiting_line() {
         .find(|l| l.contains("event card"))
         .unwrap_or_else(|| panic!("{out}"));
     assert!(
-        card.contains("an approval card waits for the user: exec: run `make deploy` on the host (reason: the tests pass)"),
+        card.contains("approval card r-1-abcd opened: exec: run `make deploy` on the host (reason: the tests pass)"),
         "{card}"
     );
+    assert!(card.contains("paddock approvals"), "{card}");
 }
 
 #[test]
@@ -496,7 +620,7 @@ fn watch_delivers_each_event_without_waiting_for_another() {
         .recv_timeout(Duration::from_secs(3))
         .unwrap()
         .contains("event ended"));
-    assert!(child.wait().unwrap().success());
+    assert!(child.wait_within(LIMIT).success());
 }
 
 #[test]

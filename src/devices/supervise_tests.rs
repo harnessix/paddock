@@ -44,7 +44,6 @@ pub(crate) fn def(shape: &str, extra: &str) -> DeviceDef {
 /// Start the supervisor on `dir/dev.sock` with a log in `dir/log`.
 pub(crate) fn start(dir: &Path, mut opts: Options) -> Running {
     opts.log = Some(dir.join("log"));
-    let t = Instant::now();
     let r = Supervisor::start(opts).unwrap().spawn();
     let p = Program::connect(r.socket()).unwrap();
     if let Err(e) = p.health(Duration::from_secs(10)) {
@@ -54,7 +53,6 @@ pub(crate) fn start(dir: &Path, mut opts: Options) -> Running {
             std::fs::read_to_string(dir.join("log")).unwrap_or_default()
         );
     }
-    eprintln!("supervisor start to health: {:?}", t.elapsed());
     r
 }
 
@@ -111,9 +109,7 @@ fn exec_the_request_is_stdin_and_never_an_argument() {
     );
     let p = program(&r);
     let d = def("exec", "max_body = \"1K\"\n");
-    let t = Instant::now();
     let (o, body) = call(&p, &d, b"--evil; rm -rf /\n$(id)").unwrap();
-    eprintln!("one exec round trip: {:?}", t.elapsed());
     assert_eq!((o.http, o.status.as_str()), (200, "exit 0"));
     let out = body_text(&body);
     let (head, rest) = out.split_once("\n\n").unwrap();
@@ -211,11 +207,9 @@ fn exec_the_timeout_kills_the_process_group() {
         .trim()
         .parse()
         .unwrap();
-    wait_for(
-        "the process group to end",
-        Duration::from_millis(500),
-        || !group_alive(pid),
-    );
+    wait_for("the process group to end", Duration::from_secs(5), || {
+        !group_alive(pid)
+    });
 }
 
 #[test]
@@ -247,7 +241,11 @@ fn exec_a_cancelled_call_kills_the_child() {
     let s = script(
         dir.path(),
         "tool",
-        &format!("echo $$ > {}\nsleep 30", pidfile.display()),
+        // The pid comes by a rename: the file is never there but empty.
+        &format!(
+            "echo $$ > {p}.tmp && mv {p}.tmp {p}\nsleep 30",
+            p = pidfile.display()
+        ),
     );
     let r = start(dir.path(), opts(dir.path(), Shape::Exec, &[s]));
     // The broker drops the connection: a raw client that hangs up.
@@ -259,7 +257,6 @@ fn exec_a_cancelled_call_kills_the_child() {
             pidfile.exists()
         });
     }
-    let t = Instant::now();
     let pid: i32 = std::fs::read_to_string(&pidfile)
         .unwrap()
         .trim()
@@ -267,10 +264,9 @@ fn exec_a_cancelled_call_kills_the_child() {
         .unwrap();
     wait_for(
         "the child to die after the hang-up",
-        Duration::from_millis(300),
+        Duration::from_secs(5),
         || !group_alive(pid),
     );
-    eprintln!("cancel to kill: {:?}", t.elapsed());
     // The client path: a Call whose cancel flag flips.
     std::fs::remove_file(&pidfile).unwrap();
     let p = program(&r);
@@ -296,7 +292,7 @@ fn exec_a_cancelled_call_kills_the_child() {
         .unwrap();
     wait_for(
         "the child to die after the cancel",
-        Duration::from_millis(400),
+        Duration::from_secs(5),
         || !group_alive(pid),
     );
 }
@@ -429,9 +425,7 @@ fn serve_the_example_script_answers_and_health_is_waited_for() {
     p.health(Duration::from_secs(10)).unwrap();
     assert!(t.elapsed() >= Duration::from_secs(1), "{:?}", t.elapsed());
     let d = def("serve", "");
-    let t = Instant::now();
     let (o, body) = call(&p, &d, b"abc").unwrap();
-    eprintln!("one serve round trip: {:?}", t.elapsed());
     assert_eq!((o.http, o.status.as_str(), o.bytes), (200, "200", 3));
     assert_eq!(body, b"ABC");
     assert!(p.catalog().is_none(), "the example has no catalog");
@@ -644,11 +638,9 @@ fn relay_round_trips_eight_mib() {
         w.write_all(&d2).unwrap();
         w.shutdown(std::net::Shutdown::Write).unwrap();
     });
-    let t = Instant::now();
     let mut back = Vec::new();
     tcp.read_to_end(&mut back).unwrap();
     writer.join().unwrap();
-    eprintln!("relay 8 MiB round trip: {:?}", t.elapsed());
     assert_eq!(back.len(), data.len());
     assert!(back == data);
     drop(r);

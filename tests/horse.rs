@@ -46,7 +46,7 @@ fn host_store(tmp: &Path) -> paddock::horse::Store {
 
 #[test]
 fn horse_key_commands_refuse_wrong_keys_and_restore_backup() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = paddock::view::guard::tempdir();
     let t = tmp.path();
     paddock(t, &["list"]);
     let backup = t.join("horse.key");
@@ -74,7 +74,7 @@ fn horse_key_commands_refuse_wrong_keys_and_restore_backup() {
 
 #[test]
 fn ingest_fork_and_project_a_dsh_session() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = paddock::view::guard::tempdir();
     let t = tmp.path();
     let root = t.join("dsh/sessions");
     let header = Header {
@@ -423,14 +423,14 @@ fn sandbox_works() -> bool {
 }
 /// A test folder whose dsh harness is the fake dsh `fixture`.
 #[cfg(target_os = "linux")]
-fn sandbox_setup(fixture: &str) -> tempfile::TempDir {
+fn sandbox_setup(fixture: &str) -> common::TestDir {
     let tmp = test_folder();
     install_harness(tmp.path(), "dsh", fixture, "[launch]\nargs = [\"web\"]\n");
     tmp
 }
 /// An empty test folder: project, home, runtime folder and harness folders.
 #[cfg(target_os = "linux")]
-fn test_folder() -> tempfile::TempDir {
+fn test_folder() -> common::TestDir {
     use std::os::unix::fs::PermissionsExt;
     let tmp = common::tempdir();
     let root = tmp.path();

@@ -40,6 +40,20 @@ final class StateTests: XCTestCase {
         }
     }
 
+    func testProducerApprovalSnapshotKeepsPresentationAndNoticeIDs() throws {
+        let approvals = try Fixtures.decode(ApprovalsJSON.self, "approvals-paddock-v1.json")
+        XCTAssertEqual(approvals.questions.map(\.id), ["r-shown-g1"])
+        XCTAssertEqual(approvals.questions.first?.app, "sample-notes")
+        XCTAssertEqual(approvals.questions.first?.host, "api.example.com")
+        XCTAssertEqual(approvals.questions.first?.port, 443)
+        XCTAssertEqual(approvals.paused?.id, "r-notice")
+        XCTAssertEqual(approvals.paused?.app, "sample-mail")
+        XCTAssertEqual(approvals.paused?.count, 21)
+        let legacy = try Fixtures.decode(ApprovalsJSON.self, "approvals-paused.json")
+        XCTAssertNil(legacy.paused?.id)
+        XCTAssertEqual(legacy.paused?.count, 23)
+    }
+
     // MARK: Build progress
 
     func testBuildProgressReplay() throws {

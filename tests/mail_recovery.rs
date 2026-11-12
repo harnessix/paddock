@@ -10,7 +10,7 @@ use std::process::{Command, Output, Stdio};
 const RUN: &str = "fake-proj-1a2b3c";
 
 struct World {
-    _tmp: tempfile::TempDir,
+    _tmp: common::TestDir,
     root: PathBuf,
     env: HostEnv,
 }

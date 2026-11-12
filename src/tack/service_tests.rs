@@ -192,6 +192,24 @@ fn setup_again_upgrades_in_place_and_restarts() {
 }
 
 #[test]
+fn a_development_build_installs() {
+    let b = fixture();
+    let dev = Fake {
+        new_version: format!(
+            "paddock {}-dev (commit 1a2b3c4, dirty)",
+            env!("CARGO_PKG_VERSION")
+        ),
+        ..Fake::new(&b.p)
+    };
+    setup(&b.p, &b.src, me(), &stop(&b), &dev).unwrap();
+    let other = Fake {
+        new_version: "paddock 0.0.1-dev (commit 1a2b3c4)".into(),
+        ..Fake::new(&b.p)
+    };
+    assert!(setup(&b.p, &b.src, me(), &stop(&b), &other).is_err());
+}
+
+#[test]
 fn a_copy_that_does_not_report_this_version_leaves_the_old_tackd() {
     let b = fixture();
     let r = Fake::new(&b.p);

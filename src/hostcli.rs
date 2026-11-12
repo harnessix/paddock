@@ -15,6 +15,7 @@ mod git;
 #[path = "hostcli/horse.rs"]
 pub(crate) mod horse;
 pub mod kv;
+pub mod mac;
 pub mod mail;
 pub mod mail_hook;
 pub mod pasture;
@@ -23,6 +24,7 @@ pub mod spec;
 pub mod status;
 pub mod timer;
 mod transport;
+pub use spawn::wait_exit_code;
 pub use transport::send;
 pub const EXIT_USAGE: i32 = 2;
 pub const EXIT_NO_HOST: i32 = 6;
@@ -68,6 +70,7 @@ USAGE
   paddock-host forage [--refresh] [--json]      (limits left and how fast they go)
   paddock-host status                           (your timers and limits in a few lines)
   paddock-host device NAME [REQUEST]            (a device in /dev/paddock, see `paddock-host device --help`)
+  paddock-host mac COMMAND | mcp mac [--app NAME] (drive an app of the macOS guest, see `paddock-host mac --help`)
   paddock-host mail wait|send|ask|status        (messages with whoever started this run, see `paddock-host mail --help`)
   paddock-host help [CAPABILITY]
 Common options
@@ -155,6 +158,7 @@ EXAMPLES
 
 fn cap_help(cap: &str) -> Option<&'static str> {
     Some(match cap {
+        "mac" | "mcp" => mac::HELP,
         "screenshot" => {
             r#"paddock-host screenshot: capture the host screen into the project.
 
@@ -372,16 +376,6 @@ fn usage(msg: &str) -> i32 {
     EXIT_USAGE
 }
 
-/// 0 when the child ended with exit code 0, else 1.
-pub fn wait_exit_code(status: &serde_json::Value) -> i32 {
-    let ok = status["state"] == "exited" && status["exit_code"] == 0;
-    if ok {
-        0
-    } else {
-        1
-    }
-}
-
 /// The entry point. Returns the process exit code.
 pub fn main(args: &[String]) -> i32 {
     let Some(cmd) = args.first().map(String::as_str) else {
@@ -395,6 +389,8 @@ pub fn main(args: &[String]) -> i32 {
         "gh" => return git::gh_main(rest),
         "kv" => return kv::main(rest),
         "timer" => return timer::main(rest),
+        "mac" => return mac::main(rest),
+        "mcp" => return mac::mcp_main(rest),
         "pasture" => return pasture::main(rest),
         "forage" => return forage::main(rest),
         "status" => return status::main(rest),

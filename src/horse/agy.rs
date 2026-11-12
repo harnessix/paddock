@@ -205,7 +205,7 @@ pub fn ingest_locked(
     version: &str,
     horse: Option<&str>,
 ) -> Result<Ingest> {
-    ingest_impl(locked, path, version, horse, false)
+    ingest_impl(locked, path, version, super::target::Target::Any(horse))
 }
 
 pub(crate) fn ingest_run_locked(
@@ -214,38 +214,36 @@ pub(crate) fn ingest_run_locked(
     version: &str,
     horse: &str,
 ) -> Result<Ingest> {
-    ingest_impl(locked, path, version, Some(horse), true)
+    ingest_impl(locked, path, version, super::target::Target::Run(horse))
+}
+
+/// Ingest a private copy of a host session file into its host session,
+/// or into a new host session in `horse`.
+pub(crate) fn ingest_host_locked(
+    locked: &Lock<'_>,
+    path: &Path,
+    version: &str,
+    horse: &str,
+    origin: &super::HostOrigin,
+) -> Result<Ingest> {
+    ingest_impl(
+        locked,
+        path,
+        version,
+        super::target::Target::Host { horse, origin },
+    )
 }
 
 fn ingest_impl(
     locked: &Lock<'_>,
     path: &Path,
     version: &str,
-    horse: Option<&str>,
-    scoped: bool,
+    target: super::target::Target<'_>,
 ) -> Result<Ingest> {
     let store = locked.store;
     check_version(version)?;
     let conv = db::read(path)?;
-    let existing = if scoped {
-        store.sessions()?.into_iter().find(|s| {
-            s.horse == horse.unwrap_or_default()
-                && s.binding.harness == HARNESS
-                && s.binding.native_id.as_deref() == Some(&conv.id)
-        })
-    } else {
-        store.session_by_native(HARNESS, &conv.id)?
-    };
-    let session = match existing {
-        Some(s) => s,
-        None => {
-            let h = match horse {
-                Some(h) => store.horse(h)?,
-                None => super::dna::new_default_horse_locked(locked)?,
-            };
-            locked.new_session(&h.id, binding(Some(conv.id.clone())))?
-        }
-    };
+    let session = target.session(locked, HARNESS, &conv.id, || binding(Some(conv.id.clone())))?;
     check_version(&session.binding.version)?;
     if session.binding.harness != HARNESS || session.binding.container != CONTAINER {
         bail!("invalid agy binding");

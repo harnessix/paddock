@@ -10,6 +10,10 @@ struct QuestionsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            if let issue = store.questionsIssue {
+                Text(verbatim: issue).font(.caption).padding()
+                    .accessibilityIdentifier("questions-incomplete")
+            }
             if let paused = store.paused {
                 GroupBox {
                     HStack(alignment: .top) {
@@ -27,17 +31,18 @@ struct QuestionsView: View {
                 }
                 .backgroundStyle(.yellow.opacity(0.25))
                 .padding()
+                .disabled(!store.pausedConfirmed)
             }
             if store.questions.isEmpty {
                 PlainEmpty {
-                    Label { Text("No open questions") } icon: { DecorativeSymbol(name: "checkmark.shield") }
+                    Label { Text(store.questionsComplete ? "No open questions" : "Questions are not confirmed") } icon: { DecorativeSymbol(name: "checkmark.shield") }
                 } description: {
                     Text("When an app wants to reach a new server, the question appears here and next to the app's window.")
                 } actions: {
                     EmptyView()
                 }
                 .accessibilityElement(children: .contain)
-                .accessibilityLabel(Text("No open questions"))
+                .accessibilityLabel(Text(store.questionsComplete ? "No open questions" : "Questions are not confirmed"))
             } else {
                 List {
                     ForEach(store.questions) { question in
@@ -108,7 +113,7 @@ struct QuestionRow: View {
                     .tint(choice.answer == .allowSite ? Color.accentColor : nil)
             }
         }
-        .disabled(working)
+        .disabled(working || !store.confirmedQuestionIDs.contains(question.id))
         .padding(.vertical, 4)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(Text(QuestionChoices.title(question)))

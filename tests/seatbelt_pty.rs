@@ -9,33 +9,15 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
 struct World {
-    _tmp: tempfile::TempDir,
+    _tmp: paddock::view::guard::TestDir,
     root: PathBuf,
-}
-
-/// A one-shot run starts a tmux server for `paddock view`. On macOS its
-/// socket lives in `/tmp/paddock-<uid>`, outside the test folder, so stop it.
-impl Drop for World {
-    fn drop(&mut self) {
-        let uid = unsafe { libc::getuid() };
-        let sock = paddock::sockpath::socket_dir(&self.root.join("run/paddock"), uid, "")
-            .join("view.sock");
-        if sock.exists() {
-            let _ = Command::new("tmux")
-                .arg("-S")
-                .arg(&sock)
-                .arg("kill-server")
-                .stderr(Stdio::null())
-                .status();
-        }
-    }
 }
 
 impl World {
     /// A fake harness `fake` that runs `program` with `args`, and the user
     /// configuration `config`.
     fn new(program: &str, args: &[&str], config: &str) -> Self {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = paddock::view::guard::tempdir();
         let root = std::fs::canonicalize(tmp.path()).unwrap();
         let cfg = root.join("cfg/paddock/harness.d");
         std::fs::create_dir_all(&cfg).unwrap();

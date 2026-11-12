@@ -36,7 +36,7 @@ fn row(ty: &str, payload: &str) -> String {
 
 #[test]
 fn a_side_branch_is_logged_as_live_and_never_projected() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = paddock::view::guard::tempdir();
     let t = tmp.path();
     let dir = t.join("home/.codex/sessions/2026/11/06");
     std::fs::create_dir_all(&dir).unwrap();

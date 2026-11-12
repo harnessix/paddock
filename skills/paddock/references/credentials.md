@@ -24,4 +24,4 @@ Register a credential in `[credentials.NAME]` of `~/.config/paddock/config.toml`
 
 A credential can need the user's answer on a start card. Never answer it for the user. `paddock credentials list` shows the registered credentials and how often each was used, never a value. `paddock credentials revoke ID [NAME]` stops a running sandbox from using one at once.
 
-The README section "Credentials" has the full key list and examples.
+`paddock help environment` has the full key list and examples.

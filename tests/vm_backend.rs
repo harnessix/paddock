@@ -252,7 +252,7 @@ fn the_vm_boots_its_agent_and_stops() {
 /// `$TMPDIR` of macOS, as in a real test run.
 #[cfg(target_os = "macos")]
 struct VmRun {
-    _tmp: tempfile::TempDir,
+    _tmp: paddock::view::guard::TestDir,
     root: std::path::PathBuf,
 }
 
@@ -276,22 +276,12 @@ impl VmRun {
     }
 }
 
-/// Stop the VM and the tmux server of `paddock view`, also after a failure.
+/// Stop the VM, also after a failure. The guard of `_tmp` then stops the
+/// tmux server of `paddock view`.
 #[cfg(target_os = "macos")]
 impl Drop for VmRun {
     fn drop(&mut self) {
         let _ = self.paddock().args(["vm", "stop"]).output();
-        let uid = unsafe { libc::getuid() };
-        let sock = paddock::sockpath::socket_dir(&self.root.join("run/paddock"), uid, "")
-            .join("view.sock");
-        if sock.exists() {
-            let _ = Command::new("tmux")
-                .arg("-S")
-                .arg(&sock)
-                .arg("kill-server")
-                .stderr(Stdio::null())
-                .status();
-        }
     }
 }
 
@@ -309,7 +299,7 @@ fn a_fake_run_goes_through_the_vm() {
         return;
     };
     sign_helper();
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = paddock::view::guard::tempdir();
     let root = tmp.path().canonicalize().unwrap();
     let w = VmRun { _tmp: tmp, root };
     let root = &w.root;

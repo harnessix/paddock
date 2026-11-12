@@ -43,7 +43,7 @@ const OPEN_MAC_CHECKS: &[&str] = &[
 ];
 
 fn readme() -> String {
-    std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/README.md")).unwrap()
+    std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/help/macos.md")).unwrap()
 }
 
 /// The section, up to the next section of the same level.

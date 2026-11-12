@@ -1,15 +1,41 @@
 //! Approval cards, answers and the approver.
 
-use super::notify;
 use crate::env::HostEnv;
+#[cfg(test)]
 use crate::state;
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
+#[cfg(test)]
+use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+#[path = "approval_store.rs"]
+mod store;
+pub(crate) use store::{
+    abandon_owner, claim_connect, claim_connect_exact, claim_connect_question, close_pending,
+    confirm_pause_resume, is_store_lock_error, record_connect_outcome_bound,
+    record_hook_connect_selection, record_pause_outcome, record_wake_selection,
+    retire_connect_outcome, take_answer, update_pending, withdraw_unanswered, UNVERIFIED_RULE,
+};
+pub use store::{
+    approvals_dir, connect_card_retired, pending, pending_checked, pending_report, write_pending,
+    AffectedDecision, ApplicationScope, ApprovalUnresolved, ConnectOutcome, LocalApplication,
+    PendingReport,
+};
+use store::{close_owned, lock_approvals, try_write_pending, PublishError};
+#[cfg(test)]
+use store::{reap_stale, retry_interrupted};
+#[cfg(test)]
+pub(crate) use store::{record_connect_outcome, CARD_MAIL_HOOK, OUTCOME_TIME, PID_LIVENESS_HOOK};
+
+#[path = "approval_notify.rs"]
+mod notifications;
+pub use notifications::{approval_note, approval_ui_active, approval_ui_file};
+use notifications::{notify_choices, notify_with_actions};
+
 /// A request that waits for the user, as `paddock approvals --json` shows it.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Pending {
     pub id: String,
     pub sandbox: String,
@@ -55,6 +81,10 @@ pub const CONNECT_CAPABILITY: &str = "connect";
 pub struct Connect {
     /// The bundle identifier of the guest process, or its file name.
     pub app: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_app: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_app: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub team: Option<String>,
     pub host: String,
@@ -275,65 +305,8 @@ impl std::str::FromStr for Answer {
     }
 }
 
-pub fn approvals_dir(env: &HostEnv) -> PathBuf {
-    env.paddock_run().join("approvals")
-}
-
-/// Every request that waits for an answer, from every running sandbox.
-pub fn pending(env: &HostEnv) -> Vec<Pending> {
-    let mut out = Vec::new();
-    let Ok(entries) = std::fs::read_dir(approvals_dir(env)) else {
-        return out;
-    };
-    for e in entries.flatten() {
-        let p = e.path();
-        if p.extension().is_some_and(|x| x == "json") {
-            if let Some(req) = std::fs::read_to_string(&p)
-                .ok()
-                .and_then(|t| serde_json::from_str::<Pending>(&t).ok())
-            {
-                out.push(req);
-            }
-        }
-    }
-    // A question of a sandbox that no longer runs: its paddock process was
-    // killed before it could withdraw the question. Older than a minute, so
-    // a question that is being put on the card is never removed.
-    let now = state::now();
-    if out
-        .iter()
-        .any(|p| p.capability == ASK_CAPABILITY && now.saturating_sub(p.created) > 60)
-    {
-        let running: Vec<String> = state::Running::list(env)
-            .into_iter()
-            .map(|r| r.id)
-            .collect();
-        out.retain(|p| {
-            let gone = p.capability == ASK_CAPABILITY
-                && now.saturating_sub(p.created) > 60
-                && !running.contains(&p.sandbox);
-            if gone {
-                let dir = approvals_dir(env);
-                let _ = std::fs::remove_file(dir.join(format!("{}.json", p.id)));
-                let _ = std::fs::remove_file(dir.join(format!("{}.answer", p.id)));
-            }
-            !gone
-        });
-    }
-    // A connect question of a session helper that is gone: nobody waits
-    // on it any more.
-    out.retain(|p| {
-        let gone = p.connect.as_ref().is_some_and(|c| !state::alive(c.pid));
-        if gone {
-            let dir = approvals_dir(env);
-            let _ = std::fs::remove_file(dir.join(format!("{}.json", p.id)));
-            let _ = std::fs::remove_file(dir.join(format!("{}.answer", p.id)));
-        }
-        !gone
-    });
-    // Host requests first: questions of agents never push them off the card.
-    out.sort_by_key(|p| (p.capability == ASK_CAPABILITY, p.created));
-    out
+fn valid_id(id: &str) -> bool {
+    !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
 
 /// Answer a `connect` question of the firewall. The panel, the CLI and
@@ -349,24 +322,35 @@ pub fn answer_connect_cli(env: &HostEnv, id: &str, a: ConnectAnswer) -> Result<(
 }
 
 fn answer_connect_origin(env: &HostEnv, id: &str, a: ConnectAnswer, cli: bool) -> Result<()> {
-    if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+    if !valid_id(id) {
         bail!("invalid request id");
     }
     let dir = approvals_dir(env);
-    let pending = dir.join(format!("{id}.json"));
-    if !pending.is_file() {
-        bail!("no pending request {id}");
-    }
-    let p: Pending = serde_json::from_str(&std::fs::read_to_string(&pending)?)?;
+    let _lock = lock_approvals(&dir, id)?;
+    let p = read_pending_locked(&dir, id)?;
+    answer_connect_locked(&dir, id, &p, a, cli)
+}
+
+fn answer_connect_locked(
+    dir: &Path,
+    id: &str,
+    p: &Pending,
+    a: ConnectAnswer,
+    cli: bool,
+) -> Result<()> {
     if p.capability != CONNECT_CAPABILITY {
         bail!("{id} is not a connect question: answer it with once, session or deny");
     }
-    write_answer(
-        &dir,
-        id,
-        serde_json::json!({ "reply": a.word(), "source": if cli { "cli" } else { "panel" } })
-            .to_string(),
-    )
+    if p.connect.as_ref().is_some_and(|c| c.notice)
+        && !matches!(a, ConnectAnswer::AllowOnce | ConnectAnswer::Deny)
+    {
+        bail!("this notice takes allow-once or deny");
+    }
+    let mut answer =
+        serde_json::json!({ "reply": a.word(), "source": if cli { "cli" } else { "panel" } });
+    // Bind every new selection to the card read under this lock.
+    answer["request"] = serde_json::to_value(p)?;
+    write_answer(dir, id, answer.to_string())
 }
 
 /// Record the user's answer. Only the host can call this: the approvals
@@ -392,20 +376,17 @@ fn answer_with_note_origin(
     note: Option<&str>,
     cli: bool,
 ) -> Result<()> {
-    if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+    if !valid_id(id) {
         bail!("invalid request id");
     }
     let dir = approvals_dir(env);
-    let pending = dir.join(format!("{id}.json"));
-    if !pending.is_file() {
-        bail!("no pending request {id}");
-    }
-    let p: Pending = serde_json::from_str(&std::fs::read_to_string(&pending)?)?;
+    let _lock = lock_approvals(&dir, id)?;
+    let p = read_pending_locked(&dir, id)?;
     if p.capability == CONNECT_CAPABILITY {
         if note.is_some() {
             bail!("a connect question takes no note");
         }
-        return answer_connect_origin(env, id, ConnectAnswer::from_answer(a)?, cli);
+        return answer_connect_locked(&dir, id, &p, ConnectAnswer::from_answer(a)?, cli);
     }
     if p.capability == ASK_CAPABILITY && a != Answer::Deny {
         bail!("{id} is a question: answer it with --text TEXT, or dismiss it with deny");
@@ -436,10 +417,26 @@ fn answer_with_note_origin(
     Ok(())
 }
 
+fn read_pending_locked(dir: &Path, id: &str) -> Result<Pending> {
+    let pending = dir.join(format!("{id}.json"));
+    let p: Pending = serde_json::from_str(&store::read_evidence_text(pending)?)?;
+    if p.id != id {
+        bail!("invalid pending request {id}");
+    }
+    store::require_live_owner(dir, &p)?;
+    Ok(p)
+}
+
 /// Write the answer file of `id` whole, at once, and only the first time:
 /// a poller never reads half an answer, and a second answer does not
 /// replace the first.
 fn write_answer(dir: &Path, id: &str, text: String) -> Result<()> {
+    #[cfg(test)]
+    ANSWER_HOOK.with(|hook| {
+        if let Some(hook) = hook.borrow().as_ref() {
+            hook();
+        }
+    });
     match crate::privfs::write_new(&dir.join(format!("{id}.answer")), text) {
         Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
             bail!("{id} was already answered")
@@ -460,17 +457,14 @@ pub fn answer_reply_cli(env: &HostEnv, id: &str, text: &str) -> Result<()> {
 }
 
 fn answer_reply_origin(env: &HostEnv, id: &str, text: &str, cli: bool) -> Result<()> {
-    if id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+    if !valid_id(id) {
         bail!("invalid request id");
     }
     let dir = approvals_dir(env);
-    let pending = dir.join(format!("{id}.json"));
-    if !pending.is_file() {
-        bail!("no pending request {id}");
-    }
-    let p: Pending = serde_json::from_str(&std::fs::read_to_string(&pending)?)?;
+    let _lock = lock_approvals(&dir, id)?;
+    let p = read_pending_locked(&dir, id)?;
     if p.capability == CONNECT_CAPABILITY {
-        return answer_connect_origin(env, id, text.trim().parse()?, cli);
+        return answer_connect_locked(&dir, id, &p, text.trim().parse()?, cli);
     }
     // A card of paddock itself with fixed choices: only those.
     if p.capability != ASK_CAPABILITY && !p.choices.is_empty() {
@@ -498,6 +492,74 @@ fn answer_reply_origin(env: &HostEnv, id: &str, text: &str, cli: bool) -> Result
     }
     write_answer(&dir, id, serde_json::json!({ "reply": text }).to_string())?;
     Ok(())
+}
+
+#[cfg(test)]
+type RemoveHook = Box<dyn Fn(&Path) -> io::Result<()>>;
+#[cfg(test)]
+type AnswerReadHook = Box<dyn Fn() -> io::Result<()>>;
+
+#[cfg(test)]
+thread_local! {
+    static ANSWER_HOOK: std::cell::RefCell<Option<Box<dyn Fn()>>> = std::cell::RefCell::new(None);
+    static REMOVE_HOOK: std::cell::RefCell<Option<RemoveHook>> = std::cell::RefCell::new(None);
+    pub(crate) static OWNER_PUBLISHED_HOOK: std::cell::RefCell<Option<Box<dyn Fn()>>> = std::cell::RefCell::new(None);
+    static ANSWER_READ_HOOK: std::cell::RefCell<Option<AnswerReadHook>> = std::cell::RefCell::new(None);
+    static PUBLISH_CONTENDED_HOOK: std::cell::RefCell<Option<Box<dyn Fn()>>> = std::cell::RefCell::new(None);
+}
+
+// Only contention acquiring the store lock proves that this attempt did not
+// publish anything. Other failures can leave an uncertain store state.
+fn publish_while_waiting(
+    env: &HostEnv,
+    p: &Pending,
+    start: Instant,
+    wait: Duration,
+    cancelled: &dyn Fn() -> bool,
+) -> std::io::Result<bool> {
+    let mut first = true;
+    loop {
+        if cancelled() || (!first && start.elapsed() >= wait) {
+            return Ok(false);
+        }
+        first = false;
+        match try_write_pending(env, p) {
+            Ok(_) => return Ok(true),
+            Err(PublishError::Contended) => {
+                #[cfg(test)]
+                PUBLISH_CONTENDED_HOOK.with(|hook| {
+                    if let Some(hook) = hook.borrow().as_ref() {
+                        hook();
+                    }
+                });
+                if cancelled() || start.elapsed() >= wait {
+                    return Ok(false);
+                }
+                std::thread::sleep(
+                    Duration::from_millis(20).min(wait.saturating_sub(start.elapsed())),
+                );
+            }
+            Err(PublishError::Failed(e)) => return Err(e),
+        }
+    }
+}
+
+/// Whether the owner's answer was established before it stopped waiting.
+pub enum ApprovalOutcome {
+    Answered(Verdict),
+    NoAnswer,
+    /// No card was published, so the user had no opportunity to answer.
+    Unavailable,
+    Unknown,
+}
+
+impl ApprovalOutcome {
+    pub(crate) fn into_verdict(self) -> Option<Verdict> {
+        match self {
+            Self::Answered(v) => Some(v),
+            Self::NoAnswer | Self::Unavailable | Self::Unknown => None,
+        }
+    }
 }
 
 /// The answer source. The real one waits for `paddock approvals answer` or a
@@ -533,6 +595,13 @@ pub trait Approver: Send + Sync {
                 note: None,
                 who,
             })
+    }
+
+    fn ask_outcome(&self, env: &HostEnv, p: &Pending, wait: Duration) -> ApprovalOutcome {
+        match self.ask_verdict(env, p, wait) {
+            Some(v) => ApprovalOutcome::Answered(v),
+            None => ApprovalOutcome::NoAnswer,
+        }
     }
 }
 
@@ -580,14 +649,6 @@ impl Pending {
     }
 }
 
-pub fn write_pending(env: &HostEnv, p: &Pending) -> std::io::Result<PathBuf> {
-    let p = &p.cleaned();
-    let pending = approvals_dir(env).join(format!("{}.json", p.id));
-    crate::privfs::write_atomic(&pending, serde_json::to_string(p).unwrap_or_default())?;
-    crate::mail::events::card(env, p);
-    Ok(pending)
-}
-
 impl Approver for HostApprover {
     fn ask(&self, env: &HostEnv, p: &Pending, wait: Duration) -> Option<Answer> {
         self.ask_verdict(env, p, wait).map(|v| v.answer)
@@ -603,21 +664,38 @@ impl Approver for HostApprover {
     }
 
     fn ask_verdict(&self, env: &HostEnv, p: &Pending, wait: Duration) -> Option<Verdict> {
+        match self.ask_outcome(env, p, wait) {
+            ApprovalOutcome::Answered(v) => Some(v),
+            ApprovalOutcome::NoAnswer | ApprovalOutcome::Unavailable | ApprovalOutcome::Unknown => {
+                None
+            }
+        }
+    }
+
+    fn ask_outcome(&self, env: &HostEnv, p: &Pending, wait: Duration) -> ApprovalOutcome {
         let p = &p.cleaned();
         let answer_file = approvals_dir(env).join(format!("{}.answer", p.id));
-        let Ok(pending) = write_pending(env, p) else {
-            return None;
-        };
-        let shown = notify_with_actions(env, p);
         let start = Instant::now();
-        let mut got = None;
+        match publish_while_waiting(env, p, start, wait, &|| false) {
+            Ok(true) => {}
+            Ok(false) => {
+                log::warn!("approval {} was not published before the deadline", p.id);
+                return ApprovalOutcome::Unavailable;
+            }
+            Err(e) => {
+                log::warn!("approval {} publication failed: {e}", p.id);
+                return ApprovalOutcome::Unknown;
+            }
+        }
+        #[cfg(test)]
+        OWNER_PUBLISHED_HOOK.with(|hook| {
+            if let Some(hook) = hook.borrow().as_ref() {
+                hook();
+            }
+        });
+        let shown = notify_with_actions(env, p);
         while start.elapsed() < wait {
-            if let Ok(t) = std::fs::read_to_string(&answer_file) {
-                got = AnswerFile::parse(&t).map(|(answer, note)| Verdict {
-                    answer,
-                    note,
-                    who: "user",
-                });
+            if answer_file.is_file() {
                 break;
             }
             std::thread::sleep(Duration::from_millis(200));
@@ -626,9 +704,21 @@ impl Approver for HostApprover {
         if let Some(h) = shown {
             h.close();
         }
-        let _ = std::fs::remove_file(&pending);
-        let _ = std::fs::remove_file(&answer_file);
-        got
+        match close_owned(env, &p.id, &|| start.elapsed() < wait) {
+            Ok(Some(t)) => match AnswerFile::parse(&t) {
+                Some((answer, note)) => ApprovalOutcome::Answered(Verdict {
+                    answer,
+                    note,
+                    who: "user",
+                }),
+                None => ApprovalOutcome::Unknown,
+            },
+            Ok(None) => ApprovalOutcome::NoAnswer,
+            Err(e) => {
+                log::warn!("approval {} outcome is unknown: {e}", p.id);
+                ApprovalOutcome::Unknown
+            }
+        }
     }
 }
 
@@ -644,21 +734,30 @@ pub fn ask_choice(
     use crate::spawn::Choice;
     let p = &p.cleaned();
     let answer_file = approvals_dir(env).join(format!("{}.answer", p.id));
-    let Ok(pending) = write_pending(env, p) else {
-        return Choice::NoAnswer;
-    };
-    let shown = notify_choices(env, p);
     let start = Instant::now();
-    let mut got = Choice::NoAnswer;
+    match publish_while_waiting(env, p, start, wait, cancelled) {
+        Ok(true) => {}
+        Ok(false) => {
+            log::warn!(
+                "approval {} was not published before cancellation or deadline",
+                p.id
+            );
+            return Choice::Unavailable;
+        }
+        Err(e) => {
+            log::warn!("approval {} publication failed: {e}", p.id);
+            return Choice::Unknown;
+        }
+    }
+    #[cfg(test)]
+    OWNER_PUBLISHED_HOOK.with(|hook| {
+        if let Some(hook) = hook.borrow().as_ref() {
+            hook();
+        }
+    });
+    let shown = notify_choices(env, p);
     while start.elapsed() < wait && !cancelled() {
-        if let Ok(t) = std::fs::read_to_string(&answer_file) {
-            let reply = serde_json::from_str::<serde_json::Value>(&t)
-                .ok()
-                .and_then(|v| v["reply"].as_str().map(str::to_string));
-            got = match reply {
-                Some(r) if p.choices.contains(&r) => Choice::More(r),
-                _ => Choice::Stop,
-            };
+        if answer_file.is_file() {
             break;
         }
         std::thread::sleep(Duration::from_millis(200));
@@ -666,111 +765,25 @@ pub fn ask_choice(
     if let Some(h) = shown {
         h.close();
     }
-    let _ = std::fs::remove_file(&pending);
-    let _ = std::fs::remove_file(&answer_file);
-    got
-}
-
-/// The notification for a card with fixed choices, when the bar does not
-/// run: one button per choice, and Stop.
-fn notify_choices(env: &HostEnv, p: &Pending) -> Option<notify::Handle> {
-    if approval_ui_active(env) {
-        return None;
-    }
-    let mut actions: Vec<(String, String)> = p
-        .choices
-        .iter()
-        .enumerate()
-        .map(|(i, c)| (format!("choice:{i}"), format!("+{c}")))
-        .collect();
-    actions.push(("deny".into(), "Stop".into()));
-    let note = notify::Note {
-        summary: format!("paddock: {}", p.summary),
-        body: p.detail.clone(),
-        actions,
-        critical: true,
-    };
-    let (env2, id, choices) = (env.clone(), p.id.clone(), p.choices.clone());
-    let on_action = move |key: &str| {
-        if let Some(c) = key
-            .strip_prefix("choice:")
-            .and_then(|i| i.parse::<usize>().ok())
-            .and_then(|i| choices.get(i))
-        {
-            let _ = answer_reply(&env2, &id, c);
-        } else if key == "deny" {
-            let _ = answer(&env2, &id, Answer::Deny);
-        }
-    };
-    match notify::ask(env, &note, on_action) {
-        Ok(h) => Some(h),
-        Err(e) => {
-            log::debug!("cannot show the card as a notification: {e:#}");
-            None
-        }
-    }
-}
-
-/// A desktop notification with buttons. Its answer goes through the same
-/// answer file, so the panel, the CLI and the notification never disagree.
-/// The bar plugin's approval service writes the Unix time to this file every
-/// few seconds while it runs. Then it shows the request itself, and a second
-/// popup would only repeat it.
-pub fn approval_ui_file(env: &HostEnv) -> PathBuf {
-    env.paddock_run().join("approval-ui")
-}
-
-pub fn approval_ui_active(env: &HostEnv) -> bool {
-    std::fs::read_to_string(approval_ui_file(env))
-        .ok()
-        .and_then(|t| t.trim().parse::<u64>().ok())
-        .is_some_and(|t| state::now().saturating_sub(t) < 15)
-}
-
-/// The fallback prompt when the bar does not run. The request detail can
-/// hold clipboard text, so it goes over the user's session bus, never into
-/// the arguments of a process, which every local user can read.
-pub fn approval_note(p: &Pending) -> notify::Note {
-    let mut actions = vec![("once".to_string(), "Allow once".to_string())];
-    if p.session_allowed {
-        actions.push(("session".into(), "Allow for this session".into()));
-    }
-    actions.push(("deny".into(), "Deny".into()));
-    if p.session_allowed {
-        actions.push(("deny-session".into(), "Deny for this session".into()));
-    }
-    notify::Note {
-        summary: format!("paddock: {} asks for {}", p.harness, p.capability),
-        body: {
-            let mut b = match crate::spawn::chain_text(&p.started_by) {
-                Some(c) => format!("{c}\n\n{}", p.detail),
-                None => p.detail.clone(),
-            };
-            if !p.reason.is_empty() {
-                b.push_str(&format!("\n\nReason: {}", p.reason));
+    match close_owned(env, &p.id, &|| start.elapsed() < wait && !cancelled()) {
+        Ok(Some(t)) => {
+            let reply = serde_json::from_str::<serde_json::Value>(&t)
+                .ok()
+                .and_then(|v| v["reply"].as_str().map(str::to_string));
+            match reply {
+                Some(r) if p.choices.contains(&r) => Choice::More(r),
+                _ if AnswerFile::parse(&t).is_some_and(|(a, _)| a == Answer::Deny) => Choice::Stop,
+                _ => Choice::Unknown,
             }
-            b
-        },
-        actions,
-        critical: true,
+        }
+        Ok(None) => Choice::NoAnswer,
+        Err(e) => {
+            log::warn!("approval {} outcome is unknown: {e}", p.id);
+            Choice::Unknown
+        }
     }
 }
 
-fn notify_with_actions(env: &HostEnv, p: &Pending) -> Option<notify::Handle> {
-    if approval_ui_active(env) {
-        return None;
-    }
-    let (env2, id) = (env.clone(), p.id.clone());
-    let on_action = move |key: &str| {
-        if let Ok(a) = key.parse::<Answer>() {
-            let _ = answer(&env2, &id, a);
-        }
-    };
-    match notify::ask(env, &approval_note(p), on_action) {
-        Ok(h) => Some(h),
-        Err(e) => {
-            log::debug!("cannot show the approval notification: {e:#}");
-            None
-        }
-    }
-}
+#[cfg(test)]
+#[path = "approval_race_tests.rs"]
+mod race_tests;

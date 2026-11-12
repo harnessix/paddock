@@ -1,0 +1,4 @@
+[
+  {"id": "claude-alpha-71c3ac9d", "short": "71c3ac", "state": "running", "starter": "user", "parent": null, "up": 3, "unread_up": 2, "unread_down": 0, "last": 1000},
+  {"id": "codex-beta-0d0d0d55", "short": "0d0d0d", "state": "ended (1)", "starter": "user", "parent": null, "up": 1, "unread_up": 0, "unread_down": 0, "last": 900}
+]

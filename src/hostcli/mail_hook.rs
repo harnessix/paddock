@@ -1,6 +1,7 @@
-//! `paddock-host mail hook stop|tool`: the mail hooks of Claude Code
-//! (mail/deliver.rs). Claude Code runs them with the hook input as JSON on
-//! stdin and reads the answer from stdout.
+//! `paddock-host mail hook stop|tool`: the mail hooks of Claude Code and
+//! Codex (mail/deliver.rs). The harness runs them with the hook input as
+//! JSON on stdin and reads the answer from stdout. Codex 0.167.0 reads the
+//! same Stop and PostToolUse answers (codex-rs hooks/src/schema.rs).
 //!
 //! - `stop` (Stop event): with unread mail, it prints
 //!   `{"decision":"block","reason":TEXT}`, so Claude Code does not end the

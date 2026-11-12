@@ -143,6 +143,9 @@ check_kernel() {
 # dependencies (ring, sqlite) builds with clang against the Alpine musl
 # headers. rust-lld links the binary statically. The path prefixes are
 # remapped, so the binary does not depend on the folder of the checkout.
+# PADDOCK_BUILD_NO_GIT keeps the commit out of `paddock --version`: the run
+# before the tag and the release build the guest from different commits,
+# and both must give the same sha256.
 # It needs: rustup target add aarch64-unknown-linux-musl, clang, llvm-ar.
 build_guest() {
   sysroot="$WORKDIR/sysroot"
@@ -155,6 +158,7 @@ build_guest() {
     CFLAGS_aarch64_unknown_linux_musl="--target=aarch64-linux-musl --sysroot=$sysroot" \
     AR_aarch64_unknown_linux_musl=llvm-ar \
     CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=rust-lld \
+    PADDOCK_BUILD_NO_GIT=1 PADDOCK_RELEASE_BUILD=1 \
     CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUSTFLAGS="--remap-path-prefix=$ROOT=/paddock --remap-path-prefix=$cargo_home=/cargo" \
       "${CARGO:-cargo}" build --release --locked --target "$TARGET" \
       --target-dir "$ROOT/build/vm-target" --bin paddock >&2

@@ -22,7 +22,7 @@ fn write_exec(p: &Path, text: &str) {
 }
 
 struct World {
-    _tmp: tempfile::TempDir,
+    _tmp: common::TestDir,
     home: PathBuf,
     vars: BTreeMap<String, String>,
 }

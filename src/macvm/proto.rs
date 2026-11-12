@@ -89,7 +89,7 @@ impl Frame {
 }
 
 /// A point in guest points.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 pub struct Point {
     pub x: f64,
     pub y: f64,

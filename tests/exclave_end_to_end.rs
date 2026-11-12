@@ -1,24 +1,22 @@
 //! End-to-end fake transport; requires host namespaces and a user manager.
+#[allow(dead_code)]
+mod common;
+
 #[cfg(target_os = "linux")]
 #[test]
 fn fake_peer_streams_output_and_returns_exit_code() {
-    use std::process::{Command, Stdio};
-    let bwrap = Command::new("bwrap")
-        .args(["--unshare-user", "--ro-bind", "/", "/", "true"])
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success());
-    let scope = Command::new("systemd-run")
-        .args(["--user", "--scope", "--quiet", "true"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|s| s.success());
-    if !bwrap || !scope {
-        eprintln!("skipped: peer requires bwrap and a systemd user manager");
+    use std::process::Command;
+    if !common::peer_host_ready("fake_peer_streams_output_and_returns_exit_code") {
         return;
     }
-    let temp = tempfile::tempdir().unwrap();
+    let temp = paddock::view::guard::tempdir();
+    // The peer gets a scratch XDG_RUNTIME_DIR without the user manager in
+    // it, as a peer started from a bare ssh session can have. paddock finds
+    // the manager by itself (src/exclave/sandbox.rs, manager_runtime_dir).
+    // The session bus address is the fallback where /run/user/UID has none.
+    let bus = common::user_bus_address()
+        .map(|b| format!(" DBUS_SESSION_BUS_ADDRESS='{b}'"))
+        .unwrap_or_default();
     let project = temp.path().join("project");
     std::fs::create_dir(&project).unwrap();
     let home = temp.path().join("home");
@@ -55,10 +53,33 @@ fn fake_peer_streams_output_and_returns_exit_code() {
     .unwrap();
     std::os::unix::fs::symlink(tools.join("tool-real"), tools.join("tool-link")).unwrap();
     std::fs::create_dir_all(peer.join("config/paddock")).unwrap();
+    // The peer runs with this scratch home. A real peer user's home holds
+    // their rustup toolchain, which the peer exposes to its runs; link the
+    // test host's one in. A host with cargo in /usr needs nothing.
+    let real_home = std::path::PathBuf::from(std::env::var_os("HOME").unwrap());
+    let rustup_home = std::env::var_os("RUSTUP_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| real_home.join(".rustup"));
+    let cargo_home = std::env::var_os("CARGO_HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| real_home.join(".cargo"));
+    let peer_rustup =
+        rustup_home.join("toolchains").is_dir() && cargo_home.join("bin/cargo").is_file();
+    if peer_rustup {
+        std::os::unix::fs::symlink(&rustup_home, peer.join(".rustup")).unwrap();
+        std::fs::create_dir(peer.join(".cargo")).unwrap();
+        std::os::unix::fs::symlink(cargo_home.join("bin"), peer.join(".cargo/bin")).unwrap();
+    } else {
+        assert!(
+            std::path::Path::new("/usr/bin/cargo").is_file(),
+            "the peer needs cargo: neither rustup in {} nor /usr/bin/cargo",
+            rustup_home.display()
+        );
+    }
     std::fs::write(peer.join("config/paddock/config.toml"), format!("[exclave.serve]\nallow_shared_disk = true\nro_paths = ['{}']\n[exclave.serve.env]\nPIP_INDEX_URL = 'https://mirror.example/simple'\nUV_INDEX_URL = 'https://mirror.example/simple'\n", tools.display())).unwrap();
     let script = temp.path().join("transport.sh");
     let binary = env!("CARGO_BIN_EXE_paddock");
-    std::fs::write(&script, format!("#!/bin/sh\nexport HOME='{0}' XDG_CONFIG_HOME='{0}/config' XDG_DATA_HOME='{0}/data' XDG_STATE_HOME='{0}/state' XDG_CACHE_HOME='{0}/cache' XDG_RUNTIME_DIR='{0}/run'\nexec '{1}' exclave serve\n", peer.display(), binary)).unwrap();
+    std::fs::write(&script, format!("#!/bin/sh\nexport HOME='{0}' XDG_CONFIG_HOME='{0}/config' XDG_DATA_HOME='{0}/data' XDG_STATE_HOME='{0}/state' XDG_CACHE_HOME='{0}/cache' XDG_RUNTIME_DIR='{0}/run'{2}\nexec '{1}' exclave serve\n", peer.display(), binary, bus)).unwrap();
     let canary = "EXCLAVE_TEST_TRANSPORT_CANARY";
     std::fs::write(
         config.join("config.toml"),
@@ -176,7 +197,19 @@ fn fake_peer_streams_output_and_returns_exit_code() {
     let environment = run("env");
     assert!(environment.status.success());
     let env_text = String::from_utf8_lossy(&environment.stdout);
-    assert!(env_text.contains("PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"));
+    // The exact PATH: the rustup proxies first when the peer user has them,
+    // then the system folders, and nothing from the project.
+    let system_path = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+    let expected_path = if peer_rustup {
+        format!("PATH=/home/.cargo/bin:{system_path}")
+    } else {
+        format!("PATH={system_path}")
+    };
+    let paths: Vec<_> = env_text
+        .lines()
+        .filter(|l| l.starts_with("PATH="))
+        .collect();
+    assert_eq!(paths, [expected_path.as_str()], "{env_text}");
     assert!(env_text.contains("PIP_INDEX_URL=https://mirror.example/simple"));
     assert!(env_text.contains("UV_INDEX_URL=https://mirror.example/simple"));
     assert!(env_text.contains("SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt"));

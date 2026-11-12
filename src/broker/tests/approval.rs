@@ -29,6 +29,44 @@ fn ask_mode_follows_the_answer() {
 }
 
 #[test]
+fn an_unknown_approval_fails_without_executing_the_request() {
+    struct Unknown;
+    impl Approver for Unknown {
+        fn ask(&self, _: &HostEnv, _: &Pending, _: Duration) -> Option<Answer> {
+            None
+        }
+        fn ask_outcome(&self, _: &HostEnv, _: &Pending, _: Duration) -> ApprovalOutcome {
+            ApprovalOutcome::Unknown
+        }
+    }
+    let (_t, mut b, _) = setup(None, HostPolicy::default());
+    b.approver = Arc::new(Unknown);
+    let response = b.handle(&exec(&["true"]));
+    assert_eq!(response.status, Status::Failed);
+    assert!(response.message.contains("outcome is unknown"));
+}
+
+#[test]
+fn an_unpublished_approval_is_reported_as_unavailable_in_response_and_audit() {
+    struct Unavailable;
+    impl Approver for Unavailable {
+        fn ask(&self, _: &HostEnv, _: &Pending, _: Duration) -> Option<Answer> {
+            None
+        }
+        fn ask_outcome(&self, _: &HostEnv, _: &Pending, _: Duration) -> ApprovalOutcome {
+            ApprovalOutcome::Unavailable
+        }
+    }
+    let (_t, mut b, _) = setup(None, HostPolicy::default());
+    b.approver = Arc::new(Unavailable);
+    let response = b.handle(&exec(&["true"]));
+    assert_eq!(response.status, Status::Failed);
+    assert!(response.message.contains("could not be published"));
+    let audit = audit_lines(&b);
+    assert_eq!(audit.last().unwrap()["decision"], "approval unavailable");
+}
+
+#[test]
 fn a_session_grant_covers_only_the_same_command_line() {
     let (_t, b, fixed) = setup(Some(Answer::Session), HostPolicy::default());
     assert_eq!(b.handle(&exec(&["echo", "a"])).status, Status::Done);

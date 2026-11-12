@@ -18,7 +18,7 @@ fn can_run() -> bool {
 }
 
 struct World {
-    _tmp: tempfile::TempDir,
+    _tmp: common::TestDir,
     root: PathBuf,
 }
 

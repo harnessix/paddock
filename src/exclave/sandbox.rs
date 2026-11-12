@@ -29,6 +29,50 @@ fi
 exec "$@"
 "#;
 
+const SYSTEM_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+
+/// The peer user's rustup toolchains and proxies, as `detect::Rustup` gives
+/// them to a sandbox: both read-only, the proxies first on PATH. Without
+/// them `cargo` exists only where the system installs it in /usr. The peer
+/// owner turns this off with `[exclave.serve] rustup = false`.
+///
+/// The binds need no `ro_paths` entry, so a link must not widen them: a
+/// source that resolves to the home, an ancestor of it, a home bin folder or
+/// a folder that holds Cargo credentials is refused, and so is the run.
+fn rustup_toolchain(home: &Path) -> Result<Option<(std::path::PathBuf, std::path::PathBuf)>> {
+    let (Ok(rustup), Ok(bin)) = (
+        std::fs::canonicalize(home.join(".rustup")),
+        std::fs::canonicalize(home.join(".cargo/bin")),
+    ) else {
+        return Ok(None);
+    };
+    if !(rustup.join("toolchains").is_dir() && bin.join("cargo").is_file()) {
+        return Ok(None);
+    }
+    let real_home = std::fs::canonicalize(home).unwrap_or_else(|_| home.to_path_buf());
+    let mut protected = vec![real_home.clone()];
+    for inside in [
+        ".local/bin",
+        "bin",
+        ".cargo/credentials.toml",
+        ".cargo/credentials",
+    ] {
+        protected.push(real_home.join(inside));
+        if let Ok(p) = std::fs::canonicalize(home.join(inside)) {
+            protected.push(p);
+        }
+    }
+    for (name, source) in [("~/.rustup", &rustup), ("~/.cargo/bin", &bin)] {
+        if protected.iter().any(|p| p.starts_with(source)) {
+            bail!(
+                "exclave: {name} resolves to {}, which holds the home, a home bin folder or Cargo credentials; fix the link or set [exclave.serve] rustup = false",
+                source.display()
+            );
+        }
+    }
+    Ok(Some((rustup, bin)))
+}
+
 #[derive(Debug, Clone)]
 pub struct Limits {
     pub memory_bytes: u64,
@@ -59,9 +103,21 @@ pub fn offline(
     env: &BTreeMap<String, String>,
     gpu: bool,
     ro_paths: &[std::path::PathBuf],
+    rustup_home: Option<&Path>,
 ) -> Result<Command> {
     command(
-        project, cache, cargo, python, argv, limits, env, gpu, ro_paths, None, None,
+        project,
+        cache,
+        cargo,
+        python,
+        argv,
+        limits,
+        env,
+        gpu,
+        ro_paths,
+        rustup_home,
+        None,
+        None,
     )
 }
 
@@ -79,6 +135,7 @@ pub fn registries(
     env: &BTreeMap<String, String>,
     gpu: bool,
     ro_paths: &[std::path::PathBuf],
+    rustup_home: Option<&Path>,
 ) -> Result<Command> {
     command(
         project,
@@ -90,6 +147,7 @@ pub fn registries(
         env,
         gpu,
         ro_paths,
+        rustup_home,
         Some((socket, executable)),
         None,
     )
@@ -109,6 +167,7 @@ pub fn egress(
     vars: &BTreeMap<String, String>,
     gpu: bool,
     ro_paths: &[std::path::PathBuf],
+    rustup: bool,
 ) -> Result<Command> {
     let spec = crate::spec::SandboxSpec::new(
         "exclave".into(),
@@ -135,6 +194,7 @@ pub fn egress(
         vars,
         gpu,
         ro_paths,
+        rustup.then_some(env.home.as_path()),
         None,
         Some((pasta, args, resolv.to_path_buf())),
     )
@@ -151,6 +211,7 @@ fn command(
     vars: &BTreeMap<String, String>,
     gpu: bool,
     ro_paths: &[std::path::PathBuf],
+    rustup_home: Option<&Path>,
     proxy: Option<(&Path, &Path)>,
     egress: Option<(std::path::PathBuf, Vec<String>, std::path::PathBuf)>,
 ) -> Result<Command> {
@@ -263,6 +324,21 @@ fn command(
     for path in ro_paths {
         c.arg("--ro-bind").arg(path).arg(path);
     }
+    let mut path = String::from(SYSTEM_PATH);
+    let toolchain = match rustup_home {
+        Some(home) => rustup_toolchain(home)?,
+        None => None,
+    };
+    if let Some((rustup, bin)) = toolchain {
+        c.arg("--ro-bind")
+            .arg(rustup)
+            .arg("/home/.rustup")
+            .arg("--ro-bind")
+            .arg(bin)
+            .arg("/home/.cargo/bin")
+            .args(["--setenv", "RUSTUP_HOME", "/home/.rustup"]);
+        path = format!("/home/.cargo/bin:{SYSTEM_PATH}");
+    }
     c.args([
         "--chdir",
         "/work",
@@ -272,7 +348,7 @@ fn command(
         "/home",
         "--setenv",
         "PATH",
-        "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        &path,
         "--setenv",
         "CARGO_TARGET_DIR",
         "/cache/target",
@@ -327,7 +403,54 @@ fn command(
     // systemd-run needs the user's manager address, but the sandbox starts
     // with a separate cleared environment above.
     let _ = std::env::var_os("PATH").context("PATH is required for peer execution")?;
+    match manager_runtime_dir(
+        std::env::var_os("XDG_RUNTIME_DIR")
+            .map(std::path::PathBuf::from)
+            .as_deref(),
+        // SAFETY: getuid has no failure case.
+        unsafe { libc::getuid() },
+    ) {
+        ManagerDir::Keep => {}
+        ManagerDir::Use(dir) => {
+            c.env("XDG_RUNTIME_DIR", dir);
+        }
+        ManagerDir::Unset => {
+            c.env_remove("XDG_RUNTIME_DIR");
+        }
+    }
     Ok(c)
+}
+
+/// The XDG_RUNTIME_DIR that `systemd-run --user --scope` gets.
+#[derive(Debug, PartialEq, Eq)]
+enum ManagerDir {
+    Keep,
+    Use(std::path::PathBuf),
+    Unset,
+}
+
+/// `systemd-run --user --scope` connects only to the private socket of the
+/// user manager, `$XDG_RUNTIME_DIR/systemd/private`. It falls back to
+/// DBUS_SESSION_BUS_ADDRESS only when XDG_RUNTIME_DIR is not set, not when
+/// the socket is missing (systemd 262, bus_connect_transport_systemd). A
+/// peer whose runtime folder is not the one of the manager (a scratch
+/// folder, or the /tmp fallback of a session without pam_systemd) failed
+/// with "Failed to connect to user scope bus via local transport". Then
+/// systemd-run gets /run/user/UID when the manager listens there, else no
+/// XDG_RUNTIME_DIR, so that it uses the session bus. Only systemd-run and
+/// the commands before bwrap see this value: bwrap clears the environment.
+fn manager_runtime_dir(current: Option<&Path>, uid: u32) -> ManagerDir {
+    manager_runtime_dir_in(current, &Path::new("/run/user").join(uid.to_string()))
+}
+
+fn manager_runtime_dir_in(current: Option<&Path>, standard: &Path) -> ManagerDir {
+    let private = |d: &Path| d.join("systemd/private").exists();
+    match current {
+        None => ManagerDir::Keep,
+        Some(d) if !d.as_os_str().is_empty() && private(d) => ManagerDir::Keep,
+        Some(_) if private(standard) => ManagerDir::Use(standard.to_path_buf()),
+        Some(_) => ManagerDir::Unset,
+    }
 }
 
 fn bind_gpu(c: &mut Command, dev: &Path, sys: &Path, require_device: bool) -> Result<()> {
@@ -375,6 +498,37 @@ fn gpu_nodes(root: &Path, require_device: bool) -> Result<Vec<std::path::PathBuf
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn systemd_run_gets_the_runtime_folder_of_the_user_manager() {
+        let dir = tempfile::tempdir().unwrap();
+        let scratch = dir.path().join("scratch");
+        let standard = dir.path().join("standard");
+        std::fs::create_dir_all(&scratch).unwrap();
+        std::fs::create_dir_all(standard.join("systemd")).unwrap();
+        // No XDG_RUNTIME_DIR: systemd-run uses the session bus by itself.
+        assert_eq!(manager_runtime_dir_in(None, &standard), ManagerDir::Keep);
+        // A scratch folder: the folder where the manager listens.
+        std::fs::write(standard.join("systemd/private"), "").unwrap();
+        assert_eq!(
+            manager_runtime_dir_in(Some(&scratch), &standard),
+            ManagerDir::Use(standard.clone())
+        );
+        // The folder of the manager stays.
+        std::fs::create_dir_all(scratch.join("systemd")).unwrap();
+        std::fs::write(scratch.join("systemd/private"), "").unwrap();
+        assert_eq!(
+            manager_runtime_dir_in(Some(&scratch), &standard),
+            ManagerDir::Keep
+        );
+        // No private socket anywhere: the session bus.
+        std::fs::remove_file(scratch.join("systemd/private")).unwrap();
+        std::fs::remove_file(standard.join("systemd/private")).unwrap();
+        assert_eq!(
+            manager_runtime_dir_in(Some(&scratch), &standard),
+            ManagerDir::Unset
+        );
+    }
 
     #[test]
     fn fake_gpu_nodes_are_selected_by_name_without_following_links() {
@@ -459,6 +613,7 @@ mod tests {
             &vars,
             false,
             std::slice::from_ref(&tools),
+            Some(&dir.path().join("home")),
         )
         .unwrap();
         let args: Vec<_> = cmd
@@ -486,5 +641,141 @@ mod tests {
         assert!(args
             .windows(3)
             .any(|a| a == ["--setenv", "PIP_INDEX_URL", "https://mirror.example/simple"]));
+        assert!(!args.iter().any(|s| s == "RUSTUP_HOME"));
+        // A peer user with rustup gets its toolchain read-only, as a sandbox does.
+        let home = dir.path().join("home");
+        std::fs::create_dir_all(home.join(".rustup/toolchains")).unwrap();
+        std::fs::create_dir_all(home.join(".cargo/bin")).unwrap();
+        std::fs::write(home.join(".cargo/bin/cargo"), "proxy").unwrap();
+        let cmd = offline(
+            &project,
+            &cache,
+            &cargo,
+            &python,
+            &["true".into()],
+            &Limits::default(),
+            &vars,
+            false,
+            &[],
+            Some(&home),
+        )
+        .unwrap();
+        let args: Vec<_> = cmd
+            .get_args()
+            .map(|s| s.to_string_lossy().into_owned())
+            .collect();
+        let rustup = std::fs::canonicalize(home.join(".rustup")).unwrap();
+        let bin = std::fs::canonicalize(home.join(".cargo/bin")).unwrap();
+        let (rustup, bin) = (rustup.to_str().unwrap(), bin.to_str().unwrap());
+        assert!(args
+            .windows(3)
+            .any(|a| a == ["--ro-bind", rustup, "/home/.rustup"]));
+        assert!(args
+            .windows(3)
+            .any(|a| a == ["--ro-bind", bin, "/home/.cargo/bin"]));
+        assert!(args
+            .windows(3)
+            .any(|a| a == ["--setenv", "RUSTUP_HOME", "/home/.rustup"]));
+        assert!(args.windows(3).any(|a| a
+            == [
+                "--setenv",
+                "PATH",
+                "/home/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+            ]));
+    }
+
+    fn offline_args(home: Option<&Path>) -> Result<Vec<String>> {
+        let dir = tempfile::tempdir().unwrap();
+        let python = dir.path().join("python");
+        std::fs::create_dir_all(python.join("venv")).unwrap();
+        let cmd = offline(
+            dir.path(),
+            dir.path(),
+            dir.path(),
+            &python,
+            &["true".into()],
+            &Limits::default(),
+            &BTreeMap::new(),
+            false,
+            &[],
+            home,
+        )?;
+        Ok(cmd
+            .get_args()
+            .map(|s| s.to_string_lossy().into_owned())
+            .collect())
+    }
+
+    fn path_of(args: &[String]) -> &str {
+        let i = args
+            .windows(2)
+            .position(|a| a == ["--setenv", "PATH"])
+            .expect("PATH is set");
+        &args[i + 2]
+    }
+
+    #[test]
+    fn the_peer_owner_can_turn_off_the_rustup_binds() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        std::fs::create_dir_all(home.join(".rustup/toolchains")).unwrap();
+        std::fs::create_dir_all(home.join(".cargo/bin")).unwrap();
+        std::fs::write(home.join(".cargo/bin/cargo"), "proxy").unwrap();
+        let on = offline_args(Some(&home)).unwrap();
+        assert_eq!(path_of(&on), format!("/home/.cargo/bin:{SYSTEM_PATH}"));
+        let off = offline_args(None).unwrap();
+        assert_eq!(path_of(&off), SYSTEM_PATH);
+        assert!(!off
+            .iter()
+            .any(|s| s == "RUSTUP_HOME" || s == "/home/.rustup" || s == "/home/.cargo/bin"));
+    }
+
+    #[test]
+    fn a_rustup_link_to_the_home_or_a_home_bin_folder_is_refused() {
+        // Each case links one source into a folder that must not reach every
+        // run. The other source stays a plain toolchain folder.
+        type Target = fn(&Path) -> std::path::PathBuf;
+        let cases: [(&str, Target); 5] = [
+            (".rustup", |h| h.to_path_buf()),
+            (".rustup", |h| h.parent().unwrap().to_path_buf()),
+            (".cargo/bin", |h| h.join(".local/bin")),
+            (".cargo/bin", |h| h.join("bin")),
+            (".cargo/bin", |h| h.join(".cargo")),
+        ];
+        for (source, target) in cases {
+            let dir = tempfile::tempdir().unwrap();
+            let home = dir.path().join("home");
+            std::fs::create_dir_all(home.join(".rustup/toolchains")).unwrap();
+            std::fs::create_dir_all(home.join(".cargo/bin")).unwrap();
+            std::fs::create_dir_all(home.join(".local/bin")).unwrap();
+            std::fs::create_dir_all(home.join("bin")).unwrap();
+            std::fs::create_dir_all(home.join("toolchains")).unwrap();
+            std::fs::create_dir_all(dir.path().join("toolchains")).unwrap();
+            std::fs::write(home.join(".cargo/credentials.toml"), "token").unwrap();
+            for bin in [".local/bin", "bin", ".cargo"] {
+                std::fs::write(home.join(bin).join("cargo"), "proxy").unwrap();
+            }
+            std::fs::write(home.join(".cargo/bin/cargo"), "proxy").unwrap();
+            let target = target(&home);
+            let link = home.join(source);
+            std::fs::remove_dir_all(&link).unwrap();
+            std::os::unix::fs::symlink(&target, &link).unwrap();
+            let err =
+                offline_args(Some(&home)).expect_err(&format!("{source} -> {}", target.display()));
+            assert!(
+                err.to_string().contains("rustup = false"),
+                "{source} -> {}: {err}",
+                target.display()
+            );
+        }
+        // The same home with plain folders binds both.
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        std::fs::create_dir_all(home.join(".rustup/toolchains")).unwrap();
+        std::fs::create_dir_all(home.join(".cargo/bin")).unwrap();
+        std::fs::write(home.join(".cargo/bin/cargo"), "proxy").unwrap();
+        std::fs::write(home.join(".cargo/credentials.toml"), "token").unwrap();
+        let args = offline_args(Some(&home)).unwrap();
+        assert_eq!(path_of(&args), format!("/home/.cargo/bin:{SYSTEM_PATH}"));
     }
 }

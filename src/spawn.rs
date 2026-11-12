@@ -41,9 +41,11 @@ pub use units::{format_bytes, format_cpus, parse_bytes, parse_cpus, parse_durati
 mod ceiling;
 mod cfg;
 mod child;
+mod choice;
 pub mod model;
 mod units;
 pub use child::child_main;
+pub use choice::Choice;
 pub const DEFAULT_MAX_RUNNING: u32 = 2;
 pub const DEFAULT_MAX_DEPTH: u32 = 1;
 /// Seconds that a child may run in total.
@@ -452,17 +454,6 @@ pub struct Status {
 
 fn is_zero(n: &u64) -> bool {
     *n == 0
-}
-
-/// What the user decided on the card of a child at its time limit.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Choice {
-    /// More time: one of the choices on the card.
-    More(String),
-    /// Stop the child.
-    Stop,
-    /// No answer within the approval wait, or the child stopped meanwhile.
-    NoAnswer,
 }
 
 /// Freeze, thaw and the question at the time limit (`on_timeout = "ask"`).
@@ -1126,6 +1117,8 @@ impl Spawner {
             }
             _ if stopped_meanwhile => (0, "stopped while it waited".into(), "paddock"),
             (None, Choice::Stop) => (0, "stop".into(), "user"),
+            (None, Choice::Unavailable) => (0, "approval unavailable: stop".into(), "paddock"),
+            (None, Choice::Unknown) => (0, "approval outcome unknown: stop".into(), "paddock"),
             _ => (0, "no answer: stop".into(), "paddock"),
         };
         {
@@ -1495,15 +1488,13 @@ pub fn create_worktree(
         .join(state::slug(repo))
         .join(&plan.id);
     crate::privfs::dir(path.parent().unwrap())?;
-    crate::hostgit::Checkout::open(repo)?.run(&[
-        "worktree",
-        "add",
-        "-q",
-        "-b",
-        &plan.branch,
-        &path.display().to_string(),
-        &base,
-    ])?;
+    // Two children that start together must not run into each other's git
+    // lock files: one worktree change per repository at a time.
+    let co = crate::hostgit::Checkout::open(repo)?;
+    let lock = co.layout.lock_worktrees(env)?;
+    let dest = path.display().to_string();
+    let args = ["worktree", "add", "-q", "-b", &plan.branch, &dest, &base];
+    co.run_worktree(&lock, &args)?;
     crate::storage::record_worktree_branch(env, &path, &plan.branch);
     Ok(crate::build::Worktree {
         repo: repo.to_path_buf(),

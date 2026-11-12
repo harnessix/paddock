@@ -13,7 +13,7 @@
 use super::host::DEFAULT_HOME;
 use super::layout::PROFILES_DIR;
 use crate::eventstream::schema::{
-    Applies, Event, Grant, GrantSource, GrantWhat, Session, SessionState,
+    Applies, Event, Grant, GrantSource, GrantWhat, Session, SessionState, Stream, StreamState,
 };
 use std::path::Path;
 
@@ -93,6 +93,20 @@ pub fn rule_grant(
     })
 }
 
+/// The ordered rule event is unavailable. Request a legacy-readable global
+/// refresh without claiming a live grant. Some consumers do not refresh open
+/// rule views on this signal. Details are best-effort history, not current state.
+pub fn historical_rule_grant(
+    _app: &str,
+    _rule: &super::firewall::Rule,
+    _action: &str,
+    _source: GrantSource,
+) -> Event {
+    Event::Stream(Stream {
+        state: StreamState::Lost,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -168,28 +182,26 @@ mod tests {
         assert_eq!(change(None, "network", "x"), None);
     }
 
-    /// The event log publishes on the bus of the process. The only test
-    /// that sets that bus: the lines of other tests go to the same folder
-    /// and are told apart by the app.
+    /// The event log emits session lines to an injected in-memory sink.
     #[test]
     fn the_event_log_publishes_session_lines() {
-        let t = tempfile::tempdir().unwrap().keep();
-        let env = crate::privfs::tests::env_in(&t);
-        crate::eventstream::init(&env);
-        let bus = crate::eventstream::default_bus().unwrap();
-        assert_eq!(bus, &crate::eventstream::Bus::of(&env));
-        let f = crate::eventstream::bus::Follower::bind(bus, std::process::id()).unwrap();
-        let (tx, rx) = crate::eventstream::bus::queue();
-        f.serve(tx).unwrap();
-        let profile =
-            super::super::layout::Layout::at(t.join("macvm")).profile("stream-test", "default");
+        use std::cell::RefCell;
+        use std::rc::Rc;
+        let t = tempfile::tempdir().unwrap();
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let sink = events.clone();
+        super::super::events::SESSION_EVENT_HOOK.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move |event| sink.borrow_mut().push(event)));
+        });
+        let profile = super::super::layout::Layout::at(t.path().join("macvm"))
+            .profile("stream-test", "default");
         let ev = super::super::events::Events::open(&profile);
         ev.record("start", "cold: first", &[]);
         ev.record("menu", "x", &[]);
         ev.record("window", "opened", &[]);
         let mut got = Vec::new();
-        while got.len() < 2 {
-            let line = rx.recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+        for event in events.borrow().iter() {
+            let line = crate::eventstream::Line::at(1, event.clone()).to_text();
             let l: crate::eventstream::Line = serde_json::from_str(&line).unwrap();
             if let Event::Session(s) = l.event {
                 if s.app == "stream-test" {
@@ -208,7 +220,7 @@ mod tests {
                 (Running, None, "opened".to_string())
             ]
         );
-        let _ = std::fs::remove_dir_all(&t);
+        super::super::events::SESSION_EVENT_HOOK.with(|hook| *hook.borrow_mut() = None);
     }
 
     #[test]

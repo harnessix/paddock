@@ -177,12 +177,7 @@ fn a_request_goes_through_ssh_to_the_paddock_binary_on_the_other_side() {
     let argv = fake_ssh(&forwarding, &serving);
     let (f, rec) = forwarding.forward("mac-upper");
     let call = Call::for_test("box1", Duration::from_secs(60));
-    let t = Instant::now();
     let out = f.call(&call, b"abc").unwrap();
-    eprintln!(
-        "first remote request over the fake ssh, serve-remote start included: {} ms",
-        t.elapsed().as_millis()
-    );
     assert_eq!(out, b"status: exit 0\n\nABC");
     assert_eq!(
         std::fs::read_to_string(&argv).unwrap(),

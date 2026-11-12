@@ -1,0 +1,139 @@
+# paddock
+## Why
+## Start in 30 seconds
+## See it
+## Main sections
+## Install
+### Quick start
+### From a clone or a release
+### macOS
+### Update
+### Let your agent set it up
+## Remove
+## Use
+## What the sandbox contains
+### Git on the host
+### mise toolchains
+## Undo a run
+## Files outside the project
+## Continue your host history in a sandbox (`--profile default`)
+## Disk space
+### Automatic cleanup
+### Free space
+### Build cache of worktree runs
+### Cleanup settings
+### Caches
+### Deduplication
+## Network
+### Network mode `api`
+### Network mode `allowlist` on macOS
+### Monitoring
+#### Tunnel watch
+#### Traffic
+#### Credential files
+#### Egress targets
+#### Findings in the panel, OK and mute
+### Boundary log
+## Logins and MCP
+### Codex logins: the refresh stays outside the sandbox
+### MCP servers
+## Environment variables
+### Credentials
+### tack: secrets that only allowlisted programs receive
+#### tackd: the service that decides
+#### Starting allowlisted programs with their secrets
+#### Protection levels: uid and refs
+## Privacy defaults
+#### The training question in a harness's setup
+### The machine identity
+## Desktop projects
+## Host requests
+### Borrow a host folder
+### Named host tools
+### Push and pull requests
+### Exclave
+### Spawn other agents
+### Watch a sandbox without a window
+#### Detached runs: watch and take over
+#### Start screens and stuck runs
+### The run mailbox
+## Shared state: paddock kv
+### Pastures
+### Host scripts as principals
+## The loft
+## Spec Kit projects
+### The external spec store
+### How far a feature is: paddock gauge
+#### Done with evidence
+#### The forecast
+#### Where the history comes from
+#### Appetite
+## Turnout: scheduled host checks
+## Trainer (experimental)
+## horse (experimental)
+### How paddock holds a run
+### Queue a message
+### The prefix guard
+### Forks and swaps
+### Hitch mode
+### DNA
+### Published DNA (registry)
+### The horse device
+## Timers
+## Forage: how much of the limits is left
+### In the agent's context
+### After a context compaction
+### Your own hooks
+## Devices: /dev/paddock
+### The built-in devices
+### Your own devices
+#### The device sandbox
+#### A device on the host
+#### Shared devices: one instance per user
+#### Remote devices
+#### Streaming
+#### The worked example: build and test on a Mac
+#### The commands
+#### Write a device
+#### Paid devices: budgets and the ledger
+#### Migration from 0.2.1
+#### The limits
+### Wait without sleep
+### Freeze a sandbox
+## App mode
+### One worktree per app
+### Protected windows
+### App mode on macOS in a guest VM
+#### The first run
+#### The commands
+#### Grants while the app runs
+#### The marks and freeze
+#### When something fails
+#### Reset and backups
+#### Status and logs
+#### Keyboard and input methods
+#### Screens, Spaces and full screen
+#### VoiceOver
+#### Clipboard and drag and drop
+#### Limits
+#### Performance
+#### Security
+#### Not confirmed on a Mac yet
+#### Links and logins in the guest
+#### Details of the route
+### App mode on macOS under Seatbelt
+### Terminal runs on macOS
+### The VM backend on macOS
+## Sandbox by default
+### Only the agents that Omarchy starts
+#### Usage statistics in the Omarchy agents panel
+## Launchers
+### Keeping the menu and the shims current
+## Project settings
+## Backends
+## Add a harness
+## Limits
+## Logs and bug reports
+## Support scope
+## Development
+## License

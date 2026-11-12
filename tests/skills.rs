@@ -61,7 +61,7 @@ fn every_linked_reference_file_exists_and_is_linked() {
 
 /// The help text of `paddock-host`, which the binary prints for `paddock host`.
 fn host_help(args: &[&str]) -> String {
-    let t = tempfile::tempdir().unwrap();
+    let t = paddock::view::guard::tempdir();
     let root = t.path();
     std::fs::create_dir_all(root.join("home")).unwrap();
     let out = Command::new(env!("CARGO_BIN_EXE_paddock"))
@@ -124,7 +124,7 @@ fn every_named_paddock_host_command_exists() {
 
 #[test]
 fn skill_install_copies_the_whole_folder() {
-    let t = tempfile::tempdir().unwrap();
+    let t = paddock::view::guard::tempdir();
     let home = t.path().join("home");
     let xdg = t.path().join("xdg");
     std::fs::create_dir_all(&home).unwrap();

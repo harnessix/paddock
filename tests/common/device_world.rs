@@ -25,7 +25,7 @@ pub fn python() -> Option<&'static str> {
 }
 
 pub struct World {
-    _tmp: tempfile::TempDir,
+    _tmp: super::TestDir,
     pub root: PathBuf,
 }
 
@@ -193,7 +193,7 @@ pub fn alive(pid: u64) -> bool {
     unsafe { libc::kill(pid as i32, 0) == 0 }
 }
 
-pub fn wait_for(what: &str, within: Duration, mut f: impl FnMut() -> bool) -> Duration {
+pub fn wait_for(what: &str, within: Duration, mut f: impl FnMut() -> bool) {
     let t = Instant::now();
     while !f() {
         assert!(
@@ -202,7 +202,6 @@ pub fn wait_for(what: &str, within: Duration, mut f: impl FnMut() -> bool) -> Du
         );
         std::thread::sleep(Duration::from_millis(50));
     }
-    t.elapsed()
 }
 
 pub fn can_run() -> bool {

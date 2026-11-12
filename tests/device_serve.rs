@@ -21,7 +21,7 @@ fn alive(pid: i32) -> bool {
     unsafe { libc::kill(pid, 0) == 0 }
 }
 
-fn wait_until(what: &str, within: Duration, mut f: impl FnMut() -> bool) -> Duration {
+fn wait_until(what: &str, within: Duration, mut f: impl FnMut() -> bool) {
     let t = Instant::now();
     while !f() {
         assert!(
@@ -30,7 +30,6 @@ fn wait_until(what: &str, within: Duration, mut f: impl FnMut() -> bool) -> Dura
         );
         std::thread::sleep(Duration::from_millis(10));
     }
-    t.elapsed()
 }
 
 /// One raw request over the socket: the response text.
@@ -64,7 +63,7 @@ fn health(sock: &Path) -> bool {
 
 #[test]
 fn the_binary_serves_a_request_and_dies_with_its_parent() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = paddock::view::guard::tempdir();
     std::fs::create_dir_all(dir.path().join("home")).unwrap();
     let sock = dir.path().join("dev.sock");
     let log = dir.path().join("log");
@@ -79,7 +78,6 @@ fn the_binary_serves_a_request_and_dies_with_its_parent() {
     );
     let supervisor_pid = dir.path().join("supervisor-pid");
     // A parent that can be killed: the supervisor is its child.
-    let t = Instant::now();
     let mut parent = Command::new("sh")
         .arg("-c")
         .arg("\"$0\" device-serve --socket \"$1\" --shape exec --timeout 5 --log \"$2\" -- \"$3\" & echo $! > \"$4\"; wait")
@@ -100,14 +98,10 @@ fn the_binary_serves_a_request_and_dies_with_its_parent() {
         .stderr(Stdio::inherit())
         .spawn()
         .unwrap();
-    let started = wait_until("the health answer", Duration::from_secs(10), || {
+    wait_until("the health answer", Duration::from_secs(10), || {
         health(&sock)
     });
-    eprintln!("binary start to health: {started:?} (from the spawn of the parent shell)");
-    let _ = t;
-    let t = Instant::now();
     let out = post(&sock, b"hello MARKER-9c1e\n");
-    eprintln!("one exec round trip through the binary: {:?}", t.elapsed());
     assert!(out.starts_with("HTTP/1.1 200 OK\r\n"), "{out}");
     assert!(
         out.ends_with("\r\n\r\nstatus: exit 0\n\ngot hello MARKER-9c1e\n"),
@@ -137,12 +131,11 @@ fn the_binary_serves_a_request_and_dies_with_its_parent() {
     // SAFETY: kill our own parent shell.
     unsafe { libc::kill(parent.id() as i32, libc::SIGKILL) };
     let _ = parent.wait();
-    let gone = wait_until(
+    wait_until(
         "the supervisor and its child to end",
         Duration::from_secs(2),
         || !alive(sup) && !alive(child),
     );
-    eprintln!("parent death to supervisor and child gone: {gone:?}");
     let out = long.join().unwrap();
     assert!(
         !out.contains("got"),
@@ -153,7 +146,7 @@ fn the_binary_serves_a_request_and_dies_with_its_parent() {
 
 #[test]
 fn the_binary_stops_on_sigterm_and_removes_its_socket() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = paddock::view::guard::tempdir();
     std::fs::create_dir_all(dir.path().join("home")).unwrap();
     let sock = dir.path().join("dev.sock");
     let tool = script(dir.path(), "tool", "cat");

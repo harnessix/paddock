@@ -1,0 +1,2 @@
+- Fix: On tmux 3.2 to 3.4, which have no allow-set-title option, a program in a `paddock split` pane could set the pane title. A hook now sets the title back to paddock's label. `paddock split` refuses a tmux older than 3.2 with a message that names the version.
+- Fix: `paddock tui` draws its screen also when the CI variable is set. Before, Ink drew nothing until the program ended.

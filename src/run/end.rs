@@ -69,7 +69,7 @@ impl<'a> EndOfRun<'a> {
                 harness: &built.spec.harness,
                 project: &built.spec.project,
                 detached: built.detach,
-                delivery: crate::mail::deliver::of_command(&built.spec.command),
+                delivery: crate::mail::deliver::of_spec(&built.spec),
                 parent: built
                     .spawn
                     .as_ref()
@@ -93,6 +93,22 @@ impl<'a> EndOfRun<'a> {
                 .then(|| crate::trainer::monitor::start(env, &built.spec.id))
                 .flatten(),
             code: None,
+        }
+    }
+
+    /// After the sandbox home is written: record again whether the harness
+    /// runs the mail hooks. A Codex hook runs only with the trust that the
+    /// write put into the home (mail/deliver.rs `of_spec`).
+    pub fn home_written(&self, spec: &crate::spec::SandboxSpec) {
+        if self.mail.is_none() {
+            return;
+        }
+        let hooks = crate::mail::deliver::of_spec(spec).is_some();
+        if let Err(e) = crate::mail::deliver::record_hooks(self.env, &self.id, hooks) {
+            log::warn!(
+                "sandbox {}: cannot record the mail delivery: {e:#}",
+                self.id
+            );
         }
     }
 }
@@ -123,6 +139,17 @@ impl Drop for EndOfRun<'_> {
         // Last: a manager that reads `ended` finds the run cleaned up.
         if let Some(m) = self.mail.take() {
             m.finish(self.code);
+        }
+    }
+}
+
+/// The run folder of a shadow run: removed when the run ends or fails.
+pub(super) struct ShadowRun(pub(super) crate::shadow::Plan);
+
+impl Drop for ShadowRun {
+    fn drop(&mut self) {
+        if let Err(e) = self.0.remove() {
+            log::warn!("{e:#}");
         }
     }
 }

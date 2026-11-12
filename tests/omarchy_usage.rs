@@ -49,7 +49,7 @@ fn box_works(w: &World) -> bool {
 }
 
 struct World {
-    _tmp: tempfile::TempDir,
+    _tmp: common::TestDir,
     home: PathBuf,
     run: PathBuf,
     vars: BTreeMap<String, String>,

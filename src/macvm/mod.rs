@@ -30,6 +30,13 @@ pub mod backup;
 pub mod bench;
 pub mod bench_run;
 pub mod clipboard;
+pub mod computer;
+pub mod computer_broker;
+pub mod computer_client;
+pub mod computer_frames;
+pub mod computer_host;
+pub mod computer_input;
+pub mod computer_mcp;
 pub mod configure;
 pub mod configure_quiet;
 pub mod connlog;
@@ -161,6 +168,7 @@ pub mod text;
 pub mod tis;
 pub mod trace;
 pub mod version;
+pub mod view;
 #[cfg(target_os = "macos")]
 pub mod vz_mac;
 #[cfg(target_os = "macos")]

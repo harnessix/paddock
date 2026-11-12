@@ -375,7 +375,113 @@ fn declining_codex_hooks_sends_a_mail_event() {
     let messages = crate::mail::read(&env, id, crate::mail::Dir::Up);
     assert_eq!(messages.len(), 1);
     assert_eq!(messages[0].event.as_deref(), Some("hooks-untrusted"));
-    assert!(messages[0].text.contains("SessionStart compaction hook"));
+    // This spec has no hooks that paddock prepared: the event says that
+    // paddock cannot confirm the trust of its own hooks.
+    assert_eq!(messages[0].text, hooks_untrusted_text(false));
+    assert!(messages[0].text.contains("cannot confirm"));
+}
+
+/// Review of HOOK1, item b: when the hooks review shows and paddock's own
+/// hooks lack their trust, the run no longer records delivery through the
+/// hooks, so `paddock mail send` does not promise mail at the end of a
+/// turn. A horse relay keeps its delivery.
+#[test]
+fn an_untrusted_hooks_review_takes_back_the_hooks_delivery() {
+    use crate::mail::deliver::{HOOKS, RELAY};
+    for (before, after) in [(Some(HOOKS), None), (Some(RELAY), Some(RELAY))] {
+        let tmp = tempfile::tempdir().unwrap();
+        let env = crate::privfs::tests::env_in(tmp.path());
+        let id = "codex-screen-456def";
+        crate::mail::create(&env, id, &crate::mail::Starter::host()).unwrap();
+        crate::mail::set_run_info(
+            &env,
+            &crate::mail::RunInfo {
+                id: id.into(),
+                harness: "codex".into(),
+                project: tmp.path().into(),
+                pid: std::process::id(),
+                pid_start: None,
+                started: 0,
+                detached: true,
+                delivery: before.map(String::from),
+                horse_session: None,
+            },
+        )
+        .unwrap();
+        let spec = crate::spec::SandboxSpec::new(
+            id.into(),
+            "codex",
+            tmp.path(),
+            tmp.path().into(),
+            tmp.path(),
+            env.uid,
+            env.gid,
+            "test",
+        );
+        let e = env.clone();
+        let w = Watcher::new(
+            valid("codex", &codex().screens.rule),
+            || false,
+            move |r| report(&e, &spec, false, r),
+        );
+        let t = Instant::now();
+        assert!(w.decide(&screen_bytes(CODEX_HOOKS), t).is_some());
+        w.decide(&screen_bytes("working\n"), t);
+        let info = crate::mail::run_info(&env, id).unwrap();
+        assert_eq!(info.delivery.as_deref(), after, "before {before:?}");
+        if before == Some(HOOKS) {
+            let m = crate::mail::Message::new(crate::mail::HOST, crate::mail::Kind::Say, "x");
+            let when = crate::mail::delivery(&env, id).when(&m);
+            assert!(!when.contains("end of its turn"), "{when}");
+        }
+    }
+}
+
+#[test]
+fn the_hooks_untrusted_event_names_what_stays_off() {
+    let own = hooks_untrusted_text(true);
+    assert!(own.contains("did not write or check"), "{own}");
+    assert!(own.contains("are trusted by their hash and run"), "{own}");
+    let not = hooks_untrusted_text(false);
+    assert!(not.contains("mail") && not.contains("compaction"), "{not}");
+}
+
+/// HOOK1: paddock trusts its own Codex hooks by their hash beforehand, so
+/// it never needs "Trust all": that answer trusts every hook that Codex
+/// lists, plugin and project hooks too. Every rule of every built-in
+/// profile that is not a folder trust grants nothing, and the Codex hooks
+/// review keeps "Continue without trusting".
+#[test]
+fn no_profile_rule_other_than_folder_trust_grants_anything() {
+    let mut review = 0;
+    for (name, text) in crate::profile::BUILTIN {
+        let p: crate::profile::Profile = toml::from_str(text).unwrap();
+        for r in &p.screens.rule {
+            if r.kind == RuleKind::FolderTrust {
+                continue;
+            }
+            assert!(!grants(&r.answer), "{name} {}: {:?}", r.id, r.answer);
+            assert!(r.check().is_ok(), "{name} {}", r.id);
+            if r.id.starts_with("codex-hooks-review") {
+                review += 1;
+                assert_eq!(r.answer, "3. Continue without trusting (hooks won't run)");
+                assert!(!r.send.iter().any(|k| k == "2"), "{:?}", r.send);
+            }
+        }
+    }
+    assert_eq!(review, 2);
+    // A rule that chose "Trust all" for this screen does not load.
+    let mut r = codex()
+        .screens
+        .rule
+        .into_iter()
+        .find(|r| r.id == "codex-hooks-review")
+        .unwrap();
+    r.answer = "2. Trust all and continue".into();
+    r.send = vec!["down".into(), "enter".into()];
+    assert!(r.check().is_err());
+    r.kind = RuleKind::FolderTrust;
+    assert!(r.check().is_err());
 }
 
 #[test]

@@ -1,0 +1,1 @@
+- Changed: help topics use short names, grouped descriptions and readable terminal output. The macOS and app mode guides have separate topics. Help exits quietly when its output pipe closes.

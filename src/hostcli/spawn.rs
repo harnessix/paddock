@@ -184,6 +184,16 @@ pub(super) fn args(
     Ok((a, p.reason, p.json))
 }
 
+/// 0 when the child ended with exit code 0, else 1.
+pub fn wait_exit_code(status: &serde_json::Value) -> i32 {
+    let ok = status["state"] == "exited" && status["exit_code"] == 0;
+    if ok {
+        0
+    } else {
+        1
+    }
+}
+
 #[cfg(test)]
 mod tests {
     fn args(v: &[&str]) -> Result<serde_json::Value, String> {

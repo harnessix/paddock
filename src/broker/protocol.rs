@@ -73,7 +73,12 @@ impl Response {
 
 pub(crate) fn new_request_id() -> String {
     use sha2::{Digest, Sha256};
-    let seed = format!("{:?}-{}", Instant::now(), std::process::id());
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
+    let n = NEXT.fetch_add(1, Ordering::Relaxed);
+    let seed = format!("{:?}-{}-{n}", Instant::now(), std::process::id());
     let h = crate::manifest::hex(&Sha256::digest(seed.as_bytes()));
-    format!("r-{}-{}", state::now(), &h[..8])
+    // The counter guarantees distinct ids within this process, even if the
+    // clock has coarse resolution; the wider digest separates processes.
+    format!("r-{}-{}-{n}", state::now(), &h[..32])
 }

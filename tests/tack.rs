@@ -13,7 +13,7 @@ use std::process::{Command, Output};
 const VALUE: &str = "fake-token-for-the-tack-test";
 
 struct World {
-    _tmp: tempfile::TempDir,
+    _tmp: paddock::view::guard::TestDir,
     root: PathBuf,
     /// No system folders on PATH: the host's own secret-tool stays out.
     bare: bool,
@@ -23,7 +23,7 @@ impl World {
     /// `mode` of the fake keyring: "ok", "locked", or "none" for no
     /// secret-tool at all.
     fn new(mode: &str) -> Self {
-        let tmp = tempfile::tempdir().unwrap();
+        let tmp = paddock::view::guard::tempdir();
         let root = tmp.path().to_path_buf();
         for d in ["home", "cfg/paddock", "bin", "items"] {
             std::fs::create_dir_all(root.join(d)).unwrap();

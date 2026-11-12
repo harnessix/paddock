@@ -588,6 +588,51 @@ impl Checkout {
         run(cmd.args(args))
     }
 
+    /// The same for a change of the repository's worktrees and branches,
+    /// under paddock's worktree lock of the repository (taken by the
+    /// caller). A lock file of a git process outside paddock is waited out:
+    /// the command is tried again a few times with a short pause, and the
+    /// error then names the lock file.
+    pub fn run_worktree(&self, _lock: &WorktreeLock, args: &[&str]) -> Result<String> {
+        let mut held: Option<String> = None;
+        for attempt in 0..LOCK_TRIES {
+            if attempt > 0 {
+                std::thread::sleep(LOCK_PAUSE * attempt);
+            }
+            self.layout.guard()?;
+            let mut cmd = hardened(&self.layout.git_dir, Some(&self.layout.work_tree));
+            // English messages: the lock file is read from them.
+            cmd.current_dir(&self.layout.work_tree)
+                .env("LC_ALL", "C")
+                .env("LANGUAGE", "C");
+            let e = match run(cmd.args(args)) {
+                Ok(out) => return Ok(out),
+                Err(e) => e,
+            };
+            match lock_file_in(&format!("{e:#}")) {
+                Some(file) => held = Some(file),
+                // A later try can fail on what the try before the lock error
+                // did: say that a lock file was in the way first.
+                None => {
+                    return Err(match held {
+                        Some(file) => e.context(format!(
+                            "git {} failed after an earlier try found the lock file {file}",
+                            args.first().unwrap_or(&"")
+                        )),
+                        None => e,
+                    })
+                }
+            }
+        }
+        let file = held.unwrap_or_default();
+        bail!(
+            "git {} in {}: the lock file {file} of another git process was still there after {LOCK_TRIES} tries. \
+             When no git process runs in this repository any more, remove {file} and try again.",
+            args.iter().take(2).copied().collect::<Vec<_>>().join(" "),
+            self.layout.work_tree.display()
+        )
+    }
+
     /// The same, with `who` (name, email) as the author and committer of a
     /// new commit. None leaves the identity to the repository configuration.
     pub fn run_as(&self, who: Option<(&str, &str)>, args: &[&str]) -> Result<String> {
@@ -619,177 +664,71 @@ impl Checkout {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+/// How often a worktree change is tried when a lock file of another git
+/// process is in the way, and the pause before the second try. Each further
+/// pause is one step longer.
+const LOCK_TRIES: u32 = 6;
+const LOCK_PAUSE: std::time::Duration = std::time::Duration::from_millis(150);
 
-    fn git(dir: &Path, args: &[&str]) {
-        let ok = Command::new("git")
-            .arg("-C")
-            .arg(dir)
-            .args(["-c", "user.name=t", "-c", "user.email=t@localhost"])
-            .args(args)
-            .status()
-            .unwrap()
-            .success();
-        assert!(ok, "git {args:?}");
-    }
+/// Paddock's lock on the worktrees of one repository, held while paddock
+/// adds or removes one of them. Two git processes that change the worktrees
+/// of one repository at once fail on each other's lock files (such as
+/// `packed-refs.lock`) or read a worktree that the other one removes half-way.
+/// The lock lives in paddock's state, where no sandbox can hold it. The
+/// kernel drops it with the file, also on a crash.
+pub struct WorktreeLock {
+    _file: std::fs::File,
+}
 
-    fn repo(root: &Path) -> PathBuf {
-        let p = root.join("repo");
-        std::fs::create_dir_all(&p).unwrap();
-        git(&p, &["init", "-q", "-b", "main"]);
-        git(&p, &["commit", "-q", "--allow-empty", "-m", "one"]);
-        p
-    }
-
-    #[test]
-    fn finds_a_plain_repository() {
-        let tmp = tempfile::tempdir().unwrap();
-        let p = repo(tmp.path());
-        std::fs::create_dir_all(p.join("a/b")).unwrap();
-        let l = Layout::discover(&p.join("a/b")).unwrap().unwrap();
-        assert_eq!(l.work_tree, p);
-        assert_eq!(l.git_dir, p.join(".git"));
-        assert_eq!(l.common_dir, l.git_dir);
-        assert!(!l.linked);
-        // A directory with no repository above it is not one.
-        let bare = tmp.path().join("plain/deep");
-        std::fs::create_dir_all(&bare).unwrap();
-        assert!(Layout::discover(&bare).unwrap().is_none() || !bare.join(".git").exists());
-        // An empty .git where paddock was pointed is reported, not ignored.
-        let broken = tmp.path().join("broken");
-        std::fs::create_dir_all(broken.join(".git")).unwrap();
-        assert!(Layout::discover(&broken).is_err());
-    }
-
-    #[test]
-    fn ignores_core_worktree_and_refuses_a_planted_commondir() {
-        let tmp = tempfile::tempdir().unwrap();
-        let p = repo(tmp.path());
-        let elsewhere = tmp.path().join("elsewhere");
-        std::fs::create_dir_all(&elsewhere).unwrap();
-        // A sandbox-written core.worktree must not move the project.
-        std::fs::write(
-            p.join(".git/config"),
-            format!("[core]\n\tworktree = {}\n", elsewhere.display()),
-        )
-        .unwrap();
-        assert_eq!(Layout::discover(&p).unwrap().unwrap().work_tree, p);
-        // A planted commondir is refused by name.
-        std::fs::write(
-            p.join(".git/commondir"),
-            format!("{}\n", elsewhere.display()),
-        )
-        .unwrap();
-        let e = Layout::discover(&p).unwrap_err().to_string();
-        assert!(e.contains("commondir"), "{e}");
-        // The harmless self-reference that paddock itself writes is fine.
-        std::fs::write(p.join(".git/commondir"), ".\n").unwrap();
-        assert!(Layout::discover(&p).unwrap().is_some());
-    }
-
-    #[test]
-    fn refuses_a_dot_git_file_that_points_anywhere() {
-        let tmp = tempfile::tempdir().unwrap();
-        let p = repo(tmp.path());
-        let wt = tmp.path().join("wt");
-        git(&p, &["worktree", "add", "-q", wt.to_str().unwrap()]);
-        let l = Layout::discover(&wt).unwrap().unwrap();
-        assert!(l.linked);
-        assert_eq!(l.common_dir, p.join(".git"));
-        assert_eq!(l.work_tree, wt);
-
-        let other = repo(&tmp.path().join("other"));
-        std::fs::write(
-            wt.join(".git"),
-            format!("gitdir: {}\n", other.join(".git").display()),
-        )
-        .unwrap();
-        let e = Layout::discover(&wt).unwrap_err().to_string();
-        assert!(e.contains("registered worktree"), "{e}");
-
-        // A git directory inside the work tree is refused too.
-        std::fs::write(wt.join(".git"), "gitdir: inside\n").unwrap();
-        assert!(Layout::discover(&wt).is_err());
-    }
-
-    #[test]
-    fn queries_do_not_run_repository_config() {
-        let tmp = tempfile::tempdir().unwrap();
-        let p = repo(tmp.path());
-        let canary = tmp.path().join("canary");
-        std::fs::write(
-            p.join(".git/config"),
-            format!(
-                "[core]\n\tfsmonitor = touch {}\n\tpager = touch {0}\n",
-                canary.display()
-            ),
-        )
-        .unwrap();
-        let l = Layout::discover(&p).unwrap().unwrap();
-        let head = l.query(&["rev-parse", "HEAD"]).unwrap();
-        assert_eq!(head.trim().len(), 40);
-        assert!(l.try_query(&["log", "--oneline", "-n1"]).is_some());
-        assert!(!canary.exists(), "a host query ran repository config");
-        // A command that must write the work tree is refused instead.
-        let e = Checkout::open(&p)
-            .unwrap()
-            .run(&["checkout", "main"])
-            .unwrap_err()
-            .to_string();
-        assert!(e.contains("core.fsmonitor"), "{e}");
-    }
-
-    #[test]
-    fn finds_config_keys_that_run_programs() {
-        for text in [
-            "[core]\n\tfsmonitor = evil\n",
-            "[core]\nhooksPath = /tmp/h\n",
-            "[filter \"x\"]\n\tclean = evil\n",
-            "[alias]\n\tst = !evil\n",
-            "[include]\n\tpath = /tmp/other\n",
-            "[diff]\n\texternal = evil\n",
-            "[credential]\n\thelper = evil\n",
-        ] {
-            assert!(exec_key(text).is_some(), "{text}");
+impl Layout {
+    /// Wait for and take the worktree lock of this repository. All worktrees
+    /// of a repository share the lock: it is named after the common folder.
+    pub fn lock_worktrees(&self, env: &HostEnv) -> Result<WorktreeLock> {
+        use std::os::fd::AsRawFd;
+        let common =
+            std::fs::canonicalize(&self.common_dir).unwrap_or_else(|_| self.common_dir.clone());
+        let path = env
+            .paddock_state()
+            .join("locks")
+            .join(format!("worktrees-{}.lock", crate::state::slug(&common)));
+        let file = crate::privfs::append(&path)
+            .with_context(|| format!("open the worktree lock {}", path.display()))?;
+        loop {
+            // SAFETY: flock on an open file descriptor that the lock owns.
+            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } == 0 {
+                return Ok(WorktreeLock { _file: file });
+            }
+            let e = std::io::Error::last_os_error();
+            if e.kind() != std::io::ErrorKind::Interrupted {
+                return Err(e).with_context(|| format!("lock {}", path.display()));
+            }
         }
-        for text in [
-            "[core]\n\trepositoryformatversion = 0\n\tbare = false\n",
-            "[remote \"origin\"]\n\turl = https://example.com/x.git\n",
-            "[branch \"main\"]\n\tmerge = refs/heads/main\n",
-            "# a comment\n",
-        ] {
-            assert_eq!(exec_key(text), None, "{text}");
-        }
-    }
-
-    #[test]
-    fn status_runs_in_a_sandbox() {
-        let tmp = tempfile::tempdir().unwrap();
-        let p = repo(tmp.path());
-        std::fs::write(p.join("new.txt"), "x").unwrap();
-        let canary = tmp.path().join("canary");
-        std::fs::write(
-            p.join(".git/config"),
-            format!("[core]\n\tfsmonitor = touch {}\n", canary.display()),
-        )
-        .unwrap();
-        let env = HostEnv::detect().unwrap();
-        let l = Layout::discover(&p).unwrap().unwrap();
-        if env.which("bwrap").is_none() {
-            assert!(l.status(&env, "all").unwrap().is_none());
-            return;
-        }
-        if !crate::testutil::bwrap_works() {
-            // A bwrap that cannot start gives no status, as a missing one.
-            assert!(l.status(&env, "all").unwrap().is_none());
-            assert!(!canary.exists(), "the planted fsmonitor reached the host");
-            eprintln!("skipped: needs a working bwrap");
-            return;
-        }
-        let lines = l.status(&env, "all").unwrap().unwrap();
-        assert!(lines.iter().any(|l| l.contains("new.txt")), "{lines:?}");
-        assert!(!canary.exists(), "the planted fsmonitor reached the host");
     }
 }
+
+/// The lock file of another git process that a git error names, from the
+/// messages of `LC_ALL=C` git: "Unable to create '<file>.lock': File exists."
+/// and "could not lock config file <file>: File exists".
+pub fn lock_file_in(error: &str) -> Option<String> {
+    for line in error.lines() {
+        if !line.contains("File exists") {
+            continue;
+        }
+        if let Some(i) = line.find("Unable to create '") {
+            let rest = &line[i + "Unable to create '".len()..];
+            if let Some(end) = rest.find(".lock'") {
+                return Some(format!("{}.lock", &rest[..end]));
+            }
+        }
+        if let Some(i) = line.find("could not lock config file ") {
+            let rest = &line[i + "could not lock config file ".len()..];
+            if let Some(end) = rest.rfind(": File exists") {
+                return Some(format!("{}.lock", &rest[..end]));
+            }
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod tests;

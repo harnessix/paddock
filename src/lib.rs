@@ -7,10 +7,17 @@ compile_error!("exclave-fake-registry-test is for debug test builds only");
 pub mod app;
 pub mod approver;
 pub mod backend;
+pub mod board;
 pub mod borrow;
 pub mod boundary;
 pub mod broker;
 pub mod build;
+pub mod buildinfo;
+/// `paddock --version` prints `paddock ` and this text: the version, and for
+/// a development build the commit and a dirty mark (src/buildinfo.rs).
+pub const VERSION_LONG: &str = env!("PADDOCK_VERSION");
+/// `release (commit HASH)` or `development build (commit HASH, dirty)`.
+pub const BUILD: &str = env!("PADDOCK_BUILD");
 pub mod busy;
 pub mod cleanstart;
 pub mod compaction;

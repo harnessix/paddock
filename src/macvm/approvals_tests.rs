@@ -1,5 +1,6 @@
 use super::*;
 use crate::broker;
+use crate::broker::{Pending, CONNECT_CAPABILITY};
 use crate::macvm::connlog;
 use crate::macvm::firewall::{Mode, Rules};
 use crate::macvm::gate::Firewall;
@@ -37,6 +38,7 @@ fn triple() -> Triple {
 
 fn host(h: &str) -> Triple {
     Triple {
+        identity: None,
         app: "com.example.notes".into(),
         host: h.into(),
         port: 443,
@@ -91,18 +93,21 @@ fn wait_for_question(env: &HostEnv) -> Pending {
 fn settled(answer: ConnectAnswer, word: &str) -> Settled {
     Settled {
         answer,
+        allowed: answer.allows(),
         who: "user",
         word: word.into(),
     }
 }
 
 #[test]
-fn pending_map_shares_answer() {
+fn separate_connections_get_separate_questions_and_session_rule_rechecks_them() {
     let t = tempfile::tempdir().unwrap();
     let (env, a) = asker(t.path(), Duration::from_secs(10));
-    let fw = firewall(t.path(), a);
+    a.set_wake_fence_for_test(true); // Models a platform wake fence.
+                                     // The test clock and the settle clock differ; the rate is not under test.
+    let fw = firewall(t.path(), a.rate(100));
     let id = identity();
-    // Two connections to the same triple: one question, both wait.
+    // Even identical PIDs cannot establish a shared process generation.
     let waiters: Vec<_> = (0..2)
         .map(|_| {
             let (fw, id) = (fw.clone(), id.clone());
@@ -111,32 +116,27 @@ fn pending_map_shares_answer() {
         .collect();
     let q = wait_for_question(&env);
     for _ in 0..2000 {
-        if question(&env).and_then(|q| q.connect).map(|c| c.count) == Some(2) {
+        if fw.asker().unwrap().waiting() == 2 {
             break;
         }
         std::thread::sleep(Duration::from_millis(10));
     }
     let q2 = question(&env).unwrap();
-    assert_eq!(q2.id, q.id, "one question for both");
+    assert_eq!(q2.id, q.id);
     let c = q2.connect.unwrap();
-    assert_eq!(c.count, 2);
+    assert_eq!(c.count, 1);
     assert_eq!(c.asked_at, 1000);
     assert_eq!(c.pid, std::process::id());
     assert_eq!(c.profile, "sample-notes");
     assert_eq!(
         (c.label.as_str(), c.more, c.notice),
-        ("Sample Notes", 0, false)
+        ("Sample Notes", 1, false)
     );
     assert_eq!(c.team.as_deref(), Some("EXAMPLE123"));
     assert_eq!(q2.sandbox, "macvm-sample-notes");
     assert_eq!(
         q2.summary,
         "Sample Notes wants to connect to telemetry.example.com port 443"
-    );
-    assert!(
-        q2.detail.contains("2 connections wait on this answer"),
-        "{}",
-        q2.detail
     );
     assert!(
         q2.detail.contains(
@@ -146,22 +146,31 @@ fn pending_map_shares_answer() {
         q2.detail
     );
     let a = fw.asker().unwrap();
-    assert_eq!(a.waiting(), 1);
+    assert_eq!(a.waiting(), 2);
     // The card file is private.
     let file = broker::approvals_dir(&env).join(format!("{}.json", q.id));
     assert_eq!(
         std::fs::metadata(&file).unwrap().permissions().mode() & 0o777,
         0o600
     );
-    // One answer, both get it, the files go, the map forgets.
+    // A session rule can settle the other question through normal recheck.
     broker::answer_connect(&env, &q.id, ConnectAnswer::AllowSession).unwrap();
+    let mut sources = Vec::new();
     for w in waiters {
         let s = w.join().unwrap().unwrap();
-        assert_eq!((s.answer, s.who), (ConnectAnswer::AllowSession, "user"));
+        sources.push(s.who);
         assert!(s.word.starts_with("session-"), "{}", s.word);
     }
+    sources.sort();
+    assert_eq!(sources, ["rule", "user"]);
     assert!(question(&env).is_none());
-    assert!(!file.exists());
+    assert!(file.exists());
+    assert!(broker::approvals_dir(&env)
+        .join(format!("{}.answer", q.id))
+        .exists());
+    assert!(broker::approvals_dir(&env)
+        .join(format!("{}.done", q.id))
+        .exists());
     assert_eq!(a.waiting(), 0);
     assert_eq!(fw.rules().session.len(), 1, "one rule for both waiters");
     // A second answer to the same id fails: the question is gone.
@@ -187,7 +196,7 @@ fn pending_map_shares_answer() {
     let s = w.join().unwrap().unwrap();
     assert_eq!(s.answer, ConnectAnswer::DenyAlways);
     assert_eq!(s.who, "cli");
-    // An answer file that holds nothing readable counts as deny.
+    // A malformed answer remains unknown until it is repaired.
     let f2 = fw.clone();
     let w = std::thread::spawn(move || ask(&f2, &host("d.example"), None, 1300));
     let q = wait_for_question(&env);
@@ -196,13 +205,18 @@ fn pending_map_shares_answer() {
         "garbage",
     )
     .unwrap();
+    fw.settle(1301);
+    assert!(!w.is_finished());
+    std::fs::remove_file(broker::approvals_dir(&env).join(format!("{}.answer", q.id))).unwrap();
+    broker::answer_connect(&env, &q.id, ConnectAnswer::Deny).unwrap();
     assert_eq!(w.join().unwrap(), Ok(settled(ConnectAnswer::Deny, "once")));
 }
 
 #[test]
-fn timeout_denies_once_keeps_question_and_a_late_answer_counts() {
+fn timeout_keeps_question_without_transferring_a_late_once_answer() {
     let t = tempfile::tempdir().unwrap();
     let (env, a) = asker(t.path(), Duration::from_millis(150));
+    a.set_wake_fence_for_test(true); // Models a platform wake fence.
     let nudges = Arc::new(AtomicUsize::new(0));
     let n = nudges.clone();
     let fw = firewall(
@@ -230,31 +244,14 @@ fn timeout_denies_once_keeps_question_and_a_late_answer_counts() {
     }
     let a = fw.asker().unwrap();
     assert_eq!(a.waiting(), 1);
-    // The next connection joins the same question, and the answer ends it.
-    let f2 = fw.clone();
-    let w = std::thread::spawn(move || ask(&f2, &triple(), Some(&identity()), 2001));
-    for _ in 0..2000 {
-        if question(&env).and_then(|q| q.connect).map(|c| c.count) == Some(1) {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    let q2 = question(&env).unwrap();
-    assert_eq!(q2.id, q.id, "the same question, not a second one");
-    assert_eq!(
-        q2.connect.unwrap().asked_at,
-        2000,
-        "the time of the first ask stays"
-    );
+    // A late persistent answer can still create its requested rule.
     broker::answer_connect(&env, &q.id, ConnectAnswer::AllowAlways).unwrap();
-    let s = w.join().unwrap().unwrap();
-    assert_eq!(s.answer, ConnectAnswer::AllowAlways);
+    fw.settle(2001);
     assert!(question(&env).is_none());
     assert_eq!(a.waiting(), 0);
-    // An answer that comes when nobody waits: the tick applies it, and
-    // the next connection of the triple gets it.
+    // A late once answer has no waiter and is never transferred.
     assert_eq!(
-        ask(&fw, &host("late.example"), None, 2100),
+        ask(&fw, &host("late.example"), Some(&identity()), 2100),
         Err("timeout".into())
     );
     let q = question(&env).unwrap();
@@ -265,10 +262,14 @@ fn timeout_denies_once_keeps_question_and_a_late_answer_counts() {
         "the answered panel does not come back"
     );
     assert_eq!(
-        ask(&fw, &host("late.example"), None, 2102),
-        Ok(settled(ConnectAnswer::AllowOnce, "once"))
+        ask(&fw, &host("late.example"), Some(&identity()), 2102),
+        Err("timeout".into())
     );
-    assert_eq!(a.waiting(), 0, "allow-once is used up");
+    let retry = question(&env).unwrap();
+    assert_ne!(retry.id, q.id);
+    broker::answer_connect(&env, &retry.id, ConnectAnswer::Deny).unwrap();
+    fw.settle(2103);
+    assert_eq!(a.waiting(), 0);
     // A late always answer makes its rule, which then decides alone.
     assert_eq!(
         ask(&fw, &host("rule.example"), None, 2200),
@@ -283,43 +284,31 @@ fn timeout_denies_once_keeps_question_and_a_late_answer_counts() {
 #[test]
 fn stale_after_wake_denied_once() {
     let t = tempfile::tempdir().unwrap();
-    let (env, a) = asker(t.path(), Duration::from_millis(150));
-    let fw = firewall(t.path(), a);
-    let a = fw.asker().unwrap();
-    // A question asked at 3000, left unanswered.
-    assert_eq!(ask(&fw, &triple(), None, 3000), Err("timeout".into()));
-    let q = question(&env).unwrap();
-    // The host wakes at 3500: the next connection is denied once and the
-    // question is asked again with the new time.
+    let (env, a) = asker(t.path(), Duration::from_secs(60));
+    let old_key = host("before.example");
+    let q = match a.join(&old_key, who(), None, 3000) {
+        Join::Wait(q, false) => q,
+        _ => panic!("expected a question"),
+    };
+    let old = question(&env).unwrap();
     a.note_wake(3500);
-    assert_eq!(a.last_wake(), 3500);
-    assert_eq!(ask(&fw, &triple(), None, 3600), Err("stale".into()));
-    let q2 = question(&env).unwrap();
-    assert_eq!(q2.id, q.id);
-    assert_eq!(q2.connect.as_ref().unwrap().asked_at, 3600);
-    assert_eq!(q2.connect.as_ref().unwrap().count, 0);
-    assert_eq!(q2.created, 3600);
-    // Then it waits as usual, and an answer ends it.
-    let f2 = fw.clone();
-    let w = std::thread::spawn(move || ask(&f2, &triple(), None, 3601));
-    for _ in 0..2000 {
-        if question(&env).and_then(|q| q.connect).map(|c| c.count) == Some(1) {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    broker::answer_connect(&env, &q.id, ConnectAnswer::Deny).unwrap();
-    assert_eq!(w.join().unwrap(), Ok(settled(ConnectAnswer::Deny, "once")));
-    // A wake before the question changes nothing; an older wake never
-    // lowers the mark.
-    assert_eq!(ask(&fw, &triple(), None, 4000), Err("timeout".into()));
+    assert_eq!(q.result().unwrap().word, "stale");
+    assert!(broker::answer_connect(&env, &old.id, ConnectAnswer::Deny).is_err());
+    let fresh_key = host("after.example");
+    assert!(matches!(
+        a.join(&fresh_key, who(), None, 3600),
+        Join::Wait(_, false)
+    ));
+    assert_ne!(question(&env).unwrap().id, old.id);
     a.note_wake(3000);
     assert_eq!(a.last_wake(), 3500);
-    assert_eq!(ask(&fw, &triple(), None, 4001), Err("timeout".into()));
 }
 
 #[test]
 fn a_dead_helper_takes_its_question_along() {
+    crate::broker::PID_LIVENESS_HOOK.with(|h| {
+        *h.borrow_mut() = Some(Box::new(|pid| Some(pid != 2_000_000_000)));
+    });
     let t = tempfile::tempdir().unwrap();
     let env = crate::privfs::tests::env_in(t.path());
     // A question of a pid that is not alive: `pending` removes it.
@@ -328,10 +317,24 @@ fn a_dead_helper_takes_its_question_along() {
     let fw = firewall(t.path(), dead);
     assert_eq!(ask(&fw, &triple(), None, 1), Err("timeout".into()));
     let dir = broker::approvals_dir(&env);
-    let files = std::fs::read_dir(&dir).unwrap().count();
-    assert_eq!(files, 1);
+    let lock = dir.join(".lock");
+    use std::os::unix::fs::MetadataExt;
+    let lock_inode = std::fs::metadata(&lock).unwrap().ino();
+    let cards = || {
+        std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| {
+                e.path()
+                    .extension()
+                    .is_some_and(|x| x == "json" || x == "answer")
+            })
+            .count()
+    };
+    assert_eq!(cards(), 1);
     assert!(question(&env).is_none());
-    assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
+    assert_eq!(cards(), 0);
+    assert_eq!(std::fs::metadata(&lock).unwrap().ino(), lock_inode);
 }
 
 #[test]
@@ -399,7 +402,7 @@ fn the_approver_hook_answers_first() {
 fn answer_shown(env: &HostEnv, a: &Asker, answer: ConnectAnswer, now: u64) -> Vec<String> {
     let q = question(env).expect("a card on the screen");
     broker::answer_connect(env, &q.id, answer).unwrap();
-    let got = a.poll(now);
+    let got = a.poll(now).answers;
     for x in &got {
         a.finish(&x.triple, &x.question, settled(x.answer, "once"), now);
     }
@@ -438,7 +441,7 @@ fn one_card_per_session_the_rest_queue_with_a_count() {
     assert_eq!(question(&env).unwrap().connect.unwrap().host, "c");
     assert_eq!(answer_shown(&env, &a, ConnectAnswer::Deny, 112), ["c"]);
     assert!(question(&env).is_none(), "the rate limit holds d back");
-    assert!(a.poll(150).is_empty());
+    assert!(a.poll(150).answers.is_empty());
     assert!(question(&env).is_none());
     a.poll(160);
     assert_eq!(
@@ -477,7 +480,7 @@ fn too_many_questions_pause_with_one_notice() {
     assert_eq!(qs[0].connect.clone().unwrap().more, n as u64 + 1);
     // "Ask one by one": the first question comes up again.
     broker::answer_connect(&env, &qs[0].id, ConnectAnswer::AllowOnce).unwrap();
-    assert!(a.poll(102).is_empty());
+    assert!(a.poll(102).answers.is_empty());
     assert!(!a.paused());
     let q = question(&env).unwrap().connect.unwrap();
     assert!(!q.notice);
@@ -490,7 +493,7 @@ fn too_many_questions_pause_with_one_notice() {
     let notice = question(&env).unwrap();
     assert!(notice.connect.unwrap().notice);
     broker::answer_connect(&env, &notice.id, ConnectAnswer::Deny).unwrap();
-    let got = a.poll(104);
+    let got = a.poll(104).answers;
     assert_eq!(got.len(), n + 1 + crate::macvm::ask_queue::GUARD_MAX + 1);
     assert!(got.iter().all(|x| x.answer == ConnectAnswer::Deny));
     for x in &got {
@@ -501,6 +504,205 @@ fn too_many_questions_pause_with_one_notice() {
     assert!(!a.paused());
 }
 
+#[test]
+fn pause_resume_invalidates_the_old_presentation() {
+    let t = tempfile::tempdir().unwrap();
+    let (env, a) = asker(t.path(), Duration::from_secs(60));
+    a.join(&host("first.example"), who(), None, 100);
+    let old = question(&env).unwrap();
+    for i in 0..crate::macvm::ask_queue::GUARD_MAX {
+        a.join(&host(&format!("queued-{i}.example")), who(), None, 101);
+    }
+    let notice = question(&env).unwrap();
+    assert!(notice.connect.as_ref().unwrap().notice);
+    assert!(broker::answer_connect(&env, &old.id, ConnectAnswer::AllowAlways).is_err());
+    assert!(broker::answer_connect(&env, &notice.id, ConnectAnswer::AllowAlways).is_err());
+    assert!(broker::answer_reply_cli(&env, &notice.id, "deny-always").is_err());
+    assert!(broker::answer(&env, &notice.id, broker::Answer::Session).is_err());
+    broker::answer_connect(&env, &notice.id, ConnectAnswer::AllowOnce).unwrap();
+    assert!(a.poll(102).answers.is_empty());
+    let shown = question(&env).unwrap();
+    assert_ne!(old.id, shown.id);
+    assert_eq!(shown.connect.as_ref().unwrap().host, "first.example");
+    assert!(broker::answer_connect(&env, &old.id, ConnectAnswer::AllowAlways).is_err());
+    broker::answer_connect(&env, &shown.id, ConnectAnswer::Deny).unwrap();
+    let got = a.poll(103).answers;
+    assert_eq!(got.len(), 1);
+    assert_eq!(got[0].answer, ConnectAnswer::Deny);
+}
+
+#[test]
+fn an_accepted_answer_survives_pause_and_notice_deny_all() {
+    let t = tempfile::tempdir().unwrap();
+    let (env, a) = asker(t.path(), Duration::from_secs(60));
+    a.join(&host("first.example"), who(), None, 100);
+    let old = question(&env).unwrap();
+    broker::answer_connect_cli(&env, &old.id, ConnectAnswer::DenyAlways).unwrap();
+    for i in 0..crate::macvm::ask_queue::GUARD_MAX {
+        a.join(&host(&format!("queued-{i}.example")), who(), None, 101);
+    }
+    let notice = question(&env).unwrap();
+    assert!(notice.connect.as_ref().unwrap().notice);
+    broker::answer_connect(&env, &notice.id, ConnectAnswer::Deny).unwrap();
+    let got = a.poll(102).answers;
+    let first = got
+        .iter()
+        .find(|x| x.triple.host == "first.example")
+        .unwrap();
+    assert_eq!(
+        (first.answer, first.who),
+        (ConnectAnswer::DenyAlways, "cli")
+    );
+    assert_eq!(
+        got.iter()
+            .filter(|x| x.triple.host == "first.example")
+            .count(),
+        1
+    );
+    assert_eq!(got.len(), crate::macvm::ask_queue::GUARD_MAX + 1);
+    assert!(broker::answer_connect(&env, &old.id, ConnectAnswer::AllowAlways).is_err());
+}
+
+#[test]
+fn an_accepted_answer_wins_wake_and_a_competing_rule_claim() {
+    let t = tempfile::tempdir().unwrap();
+    let (env, a) = asker(t.path(), Duration::from_secs(60));
+    let key = host("first.example");
+    let q = match a.join(&key, who(), None, 100) {
+        Join::Wait(q, false) => q,
+        _ => panic!("expected a queued question"),
+    };
+    let old = question(&env).unwrap();
+    broker::answer_connect(&env, &old.id, ConnectAnswer::DenyAlways).unwrap();
+    let got = a.poll(101).answers;
+    assert_eq!(got.len(), 1);
+    a.note_wake(110);
+    assert!(!a.claim_decision(&key, &q).claimed);
+    assert_eq!(got[0].answer, ConnectAnswer::DenyAlways);
+    assert!(
+        !a.claim_decision(&key, &q).claimed,
+        "a claimed user answer cannot also be decided by a rule"
+    );
+    a.finish(&key, &q, settled(got[0].answer, "once"), 120);
+    assert_eq!(q.result().unwrap().answer, ConnectAnswer::DenyAlways);
+    assert!(question(&env).is_none());
+}
+
+#[test]
+fn a_rule_that_claims_first_rejects_a_delayed_answer() {
+    let t = tempfile::tempdir().unwrap();
+    let (env, a) = asker(t.path(), Duration::from_secs(60));
+    let key = host("first.example");
+    let q = match a.join(&key, who(), None, 100) {
+        Join::Wait(q, false) => q,
+        _ => panic!("expected a queued question"),
+    };
+    let old = question(&env).unwrap();
+    assert!(a.claim_decision(&key, &q).claimed);
+    assert!(broker::answer_connect(&env, &old.id, ConnectAnswer::AllowAlways).is_err());
+    assert!(!a.claim_decision(&key, &q).claimed);
+    a.finish(
+        &key,
+        &q,
+        Settled {
+            answer: ConnectAnswer::Deny,
+            allowed: false,
+            who: BY_RULE,
+            word: "rule".into(),
+        },
+        101,
+    );
+    assert_eq!(q.result().unwrap().who, BY_RULE);
+}
+
+#[test]
+fn presentation_events_retire_old_ids_across_pause_and_wake() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    let events = Rc::new(RefCell::new(Vec::<EventQuestion>::new()));
+    let sink = events.clone();
+    EVENT_HOOK.with(|hook| *hook.borrow_mut() = Some(Box::new(move |e| sink.borrow_mut().push(e))));
+
+    let t = tempfile::tempdir().unwrap();
+    let (env, a) = asker(t.path(), Duration::from_secs(60));
+    let key = host("first.example");
+    let q = match a.join(&key, who(), None, 100) {
+        Join::Wait(q, false) => q,
+        _ => panic!("expected a question"),
+    };
+    let old = question(&env).unwrap();
+    for i in 0..crate::macvm::ask_queue::GUARD_MAX {
+        a.join(&host(&format!("queued-{i}.example")), who(), None, 101);
+    }
+    let notice = question(&env).unwrap();
+    broker::answer_connect_cli(&env, &notice.id, ConnectAnswer::AllowOnce).unwrap();
+    a.poll(102);
+    let new = question(&env).unwrap();
+    broker::answer_connect_cli(&env, &new.id, ConnectAnswer::Deny).unwrap();
+    let got = a.poll(103).answers;
+    assert_eq!(got.len(), 1);
+    a.finish(
+        &key,
+        &q,
+        Settled {
+            answer: got[0].answer,
+            allowed: got[0].answer.allows(),
+            who: got[0].who,
+            word: "once".into(),
+        },
+        103,
+    );
+
+    let all = events.borrow();
+    let pos = |state, id: &str| {
+        all.iter()
+            .position(|e| e.state == state && e.id == id)
+            .unwrap()
+    };
+    let opened = pos(QuestionState::Open, &old.id);
+    let withdrawn = pos(QuestionState::Withdrawn, &old.id);
+    let reopened = pos(QuestionState::Open, &new.id);
+    let paused = pos(QuestionState::Paused, &notice.id);
+    let resumed = pos(QuestionState::Resumed, &notice.id);
+    let answered = pos(QuestionState::Answered, &new.id);
+    assert!(
+        opened < withdrawn
+            && withdrawn < paused
+            && paused < resumed
+            && resumed < reopened
+            && reopened < answered
+    );
+    assert_eq!(all[answered].answer.as_deref(), Some("deny"));
+    assert_eq!(all[answered].by.as_deref(), Some("cli"));
+    drop(all);
+
+    let t2 = tempfile::tempdir().unwrap();
+    let (env2, a2) = asker(t2.path(), Duration::from_secs(60));
+    let wake_key = host("wake.example");
+    a2.join(&wake_key, who(), None, 200);
+    let before = question(&env2).unwrap();
+    a2.note_wake(210);
+    assert!(matches!(
+        a2.join(&wake_key, who(), None, 220),
+        Join::Wait(_, false)
+    ));
+    let after = question(&env2).unwrap();
+    let all = events.borrow();
+    let retire = all
+        .iter()
+        .position(|e| e.state == QuestionState::Withdrawn && e.id == before.id)
+        .unwrap();
+    let reopen = all
+        .iter()
+        .position(|e| e.state == QuestionState::Open && e.id == after.id)
+        .unwrap();
+    assert_ne!(before.id, after.id);
+    assert!(retire < reopen);
+    drop(all);
+    assert!(broker::answer_connect(&env2, &before.id, ConnectAnswer::Deny).is_err());
+    EVENT_HOOK.with(|hook| *hook.borrow_mut() = None);
+}
+
 /// A question opens and is answered on the launcher event stream, with
 /// the profile, the host, the process and the answer.
 #[test]
@@ -508,22 +710,27 @@ fn questions_are_lines_on_the_event_stream() {
     use crate::eventstream::schema::{Event, QuestionState};
     let t = tempfile::tempdir().unwrap();
     let (env, a) = asker(t.path(), Duration::from_secs(10));
-    let bus = crate::eventstream::Bus::of(&env);
-    let f = crate::eventstream::bus::Follower::bind(&bus, std::process::id()).unwrap();
-    let (tx, rx) = crate::eventstream::bus::queue();
-    f.serve(tx).unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
     let fw = firewall(t.path(), a);
     let id = identity();
     let w = {
         let fw = fw.clone();
-        std::thread::spawn(move || ask(&fw, &triple(), Some(&id), 1000))
+        std::thread::spawn(move || {
+            EVENT_HOOK.with(|hook| {
+                *hook.borrow_mut() = Some(Box::new(move |event| {
+                    tx.send(event).unwrap();
+                }))
+            });
+            ask(&fw, &triple(), Some(&id), 1000)
+        })
     };
     let q = wait_for_question(&env);
     broker::answer_connect(&env, &q.id, ConnectAnswer::AllowAlways).unwrap();
     w.join().unwrap().unwrap();
     let mut got = Vec::new();
     while got.len() < 2 {
-        let line = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        let event = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+        let line = crate::eventstream::Line::at(1, Event::Question(event)).to_text();
         let l: crate::eventstream::Line = serde_json::from_str(&line).unwrap();
         if let Event::Question(q) = l.event {
             got.push(q);
@@ -544,37 +751,5 @@ fn questions_are_lines_on_the_event_stream() {
     assert_eq!(got[1].by.as_deref(), Some("user"));
 }
 
-#[test]
-fn site_answer_settles_five_waiting_hosts() {
-    let t = tempfile::tempdir().unwrap();
-    let (env, a) = asker(t.path(), Duration::from_secs(10));
-    let fw = firewall(t.path(), a);
-    let waiters: Vec<_> = [
-        "accounts.google.com",
-        "www.google.com",
-        "google.com",
-        "mail.google.com",
-        "docs.google.com",
-    ]
-    .into_iter()
-    .map(|h| {
-        let fw = fw.clone();
-        std::thread::spawn(move || ask(&fw, &host(h), None, crate::state::now()))
-    })
-    .collect();
-    let q = wait_for_question(&env);
-    for _ in 0..1000 {
-        if fw.asker().unwrap().waiting() == 5 {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
-    assert_eq!(fw.asker().unwrap().waiting(), 5);
-    broker::answer_connect(&env, &q.id, ConnectAnswer::AllowSite).unwrap();
-    for w in waiters {
-        assert!(w.join().unwrap().unwrap().answer.allows());
-    }
-    assert_eq!(fw.asker().unwrap().waiting(), 0);
-    assert!(questions(&env).is_empty());
-    assert_eq!(fw.rules().file.len(), 2);
-}
+#[path = "approvals_tests/site.rs"]
+mod site;

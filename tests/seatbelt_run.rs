@@ -12,26 +12,8 @@ use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 
 struct World {
-    _tmp: tempfile::TempDir,
+    _tmp: common::TestDir,
     root: PathBuf,
-}
-
-/// A one-shot run starts a tmux server for `paddock view`. On macOS its
-/// socket lives in `/tmp/paddock-<uid>`, outside the test folder, so stop it.
-impl Drop for World {
-    fn drop(&mut self) {
-        let uid = unsafe { libc::getuid() };
-        let sock = paddock::sockpath::socket_dir(&self.root.join("run/paddock"), uid, "")
-            .join("view.sock");
-        if sock.exists() {
-            let _ = Command::new("tmux")
-                .arg("-S")
-                .arg(&sock)
-                .arg("kill-server")
-                .stderr(Stdio::null())
-                .status();
-        }
-    }
 }
 
 impl World {
@@ -224,12 +206,7 @@ fn paddock_host_done_ends_a_detached_run() {
         .args(["wait", &id, "--timeout", "60"])
         .output()
         .unwrap();
-    let sock = w.root.join("run/paddock/view.sock");
-    let _ = Command::new("tmux")
-        .arg("-S")
-        .arg(&sock)
-        .arg("kill-server")
-        .status();
+    paddock::view::guard::kill_server(&w.root.join("run/paddock/view.sock"));
     assert_eq!(wait.status.code(), Some(0), "{}", say(&wait));
     assert_eq!(
         String::from_utf8_lossy(&wait.stdout).trim(),

@@ -30,7 +30,7 @@ fn install(t: &Path, cfg: &str, name: &str, fake: &str, profile: &str) {
 
 /// The test folder: the fake dsh of the walk and the fake claude child in
 /// `cfg`, the fake claude TUI in `cfg-tui`. Both share the store.
-fn setup() -> tempfile::TempDir {
+fn setup() -> common::TestDir {
     let tmp = test_folder();
     let t = tmp.path();
     install(t, "cfg", "dsh", "dsh-e2e", "[launch]\nargs = [\"web\"]\n");

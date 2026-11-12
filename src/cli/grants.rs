@@ -11,8 +11,11 @@ use std::path::PathBuf;
 #[derive(Subcommand)]
 pub(crate) enum GrantsCmd {
     /// The folders that an app of paddock's macOS guest sees: add, remove,
-    /// change the mode, list. While the app runs, each change applies at
-    /// once; every change is kept in the profile for the next start.
+    /// change the mode, list. paddock saves each change in the profile for
+    /// the next start. While the app runs, the change also applies at once.
+    /// A change that paddock cannot save does not apply. If the save fails
+    /// after the change applied, paddock undoes it. If the undo fails too,
+    /// the error says so, and the app keeps the change until it stops.
     Share {
         name: String,
         #[command(subcommand)]
@@ -20,8 +23,9 @@ pub(crate) enum GrantsCmd {
     },
     /// The network mode of an app of paddock's macOS guest: ask (each new
     /// host asks you), allowlist (only the hosts of the profile and
-    /// [network] allow) or none. Live while the app runs; none closes the
-    /// open connections.
+    /// [network] allow) or none. Saved for the next start, and live while
+    /// the app runs. none closes the open connections. A save that fails
+    /// is handled as for share.
     Network {
         name: String,
         #[arg(value_parser = ["ask", "allowlist", "none"])]
@@ -30,7 +34,9 @@ pub(crate) enum GrantsCmd {
         json: bool,
     },
     /// The clipboard of an app of paddock's macOS guest, per direction.
-    /// Live while the app runs. Without a flag: print the two directions.
+    /// Saved for the next start, and live while the app runs. A save that
+    /// fails is handled as for share. Without a flag: print the two
+    /// directions.
     Clipboard {
         name: String,
         /// Paste from this Mac into the app.

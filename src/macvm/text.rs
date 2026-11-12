@@ -16,7 +16,7 @@
 //! `apps` (the host bundle, the copy into the guest, the shim bundle),
 //! `network` (the stub network and the proxy), `login` (the links and the login callbacks), `files` (the shares, the
 //! drops and the clipboard), `panel` (the guided window of the setup)
-//! and `upgrade` (`macvm update`, `rollback`, the agent self-update). Every child is re-exported here, so a caller
+//! and `upgrade` (`macvm update`, `rollback`, the agent self-update), `view` (`paddock mac view`). Every child is re-exported here, so a caller
 //! writes `text::name` whatever the file.
 
 use std::fmt::Write as _;
@@ -36,6 +36,7 @@ mod tests;
 pub mod apps;
 pub mod asks;
 pub mod bench;
+pub mod computer;
 pub mod configure;
 pub mod datadisk;
 pub mod du;
@@ -57,11 +58,13 @@ pub mod setup;
 pub mod status;
 pub mod suspend;
 pub mod upgrade;
+pub mod view;
 pub mod windows;
 
 pub use apps::*;
 pub use asks::*;
 pub use bench::*;
+pub use computer::*;
 pub use configure::*;
 pub use datadisk::*;
 pub use du::*;
@@ -83,6 +86,7 @@ pub use setup::*;
 pub use status::*;
 pub use suspend::*;
 pub use upgrade::*;
+pub use view::*;
 pub use windows::*;
 
 /// The longest badge, in characters. A badge sits on the title bar of a

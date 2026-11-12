@@ -8,6 +8,10 @@
 //! Two scenarios of one kind share nothing but the host: each makes its
 //! own home, state and runtime folder, its own unit name, its own mount.
 //! A scenario that the host cannot run says so and counts as skipped.
+//!
+//! Both tests are load and memory measurements, so they are ignored. Run
+//! them on purpose with
+//! `cargo test --test devices_stress -- --ignored --nocapture`.
 
 mod common;
 
@@ -27,6 +31,7 @@ const STREAM_TEST: &str = "a_64_mib_stream_holds_little_memory_in_a_process_of_i
 /// starts itself again in a process of its own, and that process
 /// measures.
 #[test]
+#[ignore = "measurement: resident memory, duration and MiB/s of a 64 MiB stream; run it on purpose with --ignored"]
 fn a_64_mib_stream_holds_little_memory_in_a_process_of_its_own() {
     if std::env::var_os(MEASURE_CHILD).is_some() {
         measure_big_stream();
@@ -42,6 +47,7 @@ fn a_64_mib_stream_holds_little_memory_in_a_process_of_its_own() {
 /// Each scenario twice at once. Every failure is reported, with the
 /// scenario that failed, after all of them ended.
 #[test]
+#[ignore = "load test: every device scenario twice at once, with the 64 MiB memory measurement; run it on purpose with --ignored"]
 fn the_device_scenarios_run_twice_at_once() {
     if !can_run() {
         return;

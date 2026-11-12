@@ -79,6 +79,39 @@ pub fn asks_resumed(deny_all: bool, open: usize) -> String {
     }
 }
 
+/// The result of an unapplied connect selection.
+pub const UNAPPLIED_DENIED: &str = "denied once";
+/// The target of an unapplied pause selection.
+pub const UNAPPLIED_NOTICE: &str = "pause notice";
+/// The result of an unapplied pause selection.
+pub const UNAPPLIED_RESUMED: &str = "asking goes on";
+
+/// The line of a connect card while no wake fence orders an allow.
+pub fn ask_allow_unfenced(name: &str, host: &str, port: u16) -> String {
+    format!(
+        "An allow answer denies this connection once and changes no rule, because paddock cannot prove that it comes after the last sleep of the Mac. To allow the host, run paddock app rules {name} add {host} --port {port}"
+    )
+}
+
+/// The line of the session log when a connect selection does not apply.
+pub fn answer_unapplied(name: &str, host: &str, port: u16, selected: &str, reason: &str) -> String {
+    let why = if reason == crate::broker::UNVERIFIED_RULE {
+        "paddock cannot prove that it came after the last sleep of the Mac"
+    } else {
+        "paddock cannot read it"
+    };
+    format!(
+        "the answer {selected} for {host}:{port} did not apply: {why}. The connection was denied once and no rule changed. To allow the host, run paddock app rules {name} add {host} --port {port}"
+    )
+}
+
+/// The line of the session log when an answered pause notice cannot apply.
+pub fn notice_unapplied(name: &str, open: usize) -> String {
+    format!(
+        "the answer of the pause notice did not apply, because paddock cannot read it or it changed. Asking goes on, one question at a time ({open} open). paddock app status {name} lists them"
+    )
+}
+
 // ---- `paddock app status` --------------------------------------------------
 
 /// The value of the `questions` row.
@@ -108,6 +141,11 @@ pub fn status_question_line(app: &str, host: &str, port: u16, waiting: u64, show
         s.push_str(&format!(", {waiting} connections wait"));
     }
     s
+}
+
+/// One selection that did not apply.
+pub fn status_unapplied_line(target: &str, selected: &str, reason: &str, result: &str) -> String {
+    format!("  not applied: {selected} for {target} ({reason}), {result}")
 }
 
 /// One host of the guest system that was denied without asking.

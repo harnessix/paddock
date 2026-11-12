@@ -9,8 +9,10 @@
 //! session asks the user on an approval card. "Allow for this session" is
 //! kept in the run folder, which ends with the user's session.
 
-use super::{audit_file, kv_root, KvCfg, Request, Response, Service, Status, WRITE_OPS};
-use crate::broker::{Answer, Approver, Pending};
+use super::{
+    approval_failure, audit_file, kv_root, KvCfg, Request, Response, Service, Status, WRITE_OPS,
+};
+use crate::broker::{Answer, ApprovalOutcome, Approver, Pending};
 use crate::env::HostEnv;
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
@@ -166,30 +168,32 @@ impl Call<'_> {
             started_by: Vec::new(),
             connect: None,
         };
-        let verdict = self.approver.ask_verdict(env, &p, self.wait);
-        let note = verdict.as_ref().and_then(|v| v.note.clone());
+        let outcome = self.approver.ask_outcome(env, &p, self.wait);
+        let note = match &outcome {
+            ApprovalOutcome::Answered(v) => v.note.clone(),
+            _ => None,
+        };
         let denied = || {
             Response::new(
                 Status::Denied,
                 crate::broker::denied_message("the user denied the write", note.as_deref()),
             )
         };
-        let (decision, resp) = match verdict.map(|v| v.answer) {
-            Some(Answer::Once) => ("allowed once", None),
-            Some(Answer::Session) => {
-                if let Err(e) = grant(env, self.name, self.pasture, self.project) {
-                    log::warn!("cannot record the principal grant: {e:#}");
+        let (decision, resp) = match outcome {
+            ApprovalOutcome::Answered(v) => match v.answer {
+                Answer::Once => ("allowed once", None),
+                Answer::Session => {
+                    if let Err(e) = grant(env, self.name, self.pasture, self.project) {
+                        log::warn!("cannot record the principal grant: {e:#}");
+                    }
+                    ("allowed for this session", None)
                 }
-                ("allowed for this session", None)
+                Answer::Deny | Answer::DenySession => ("denied", Some(denied())),
+            },
+            other => {
+                let (decision, response) = approval_failure(&other, self.wait).expect("non-answer");
+                (decision, Some(response))
             }
-            Some(Answer::Deny) | Some(Answer::DenySession) => ("denied", Some(denied())),
-            None => (
-                "timed out",
-                Some(Response::new(
-                    Status::Timeout,
-                    format!("nobody answered within {} seconds", self.wait.as_secs()),
-                )),
-            ),
         };
         let status = resp.as_ref().map_or(Status::Done, |r| r.status);
         self.audit(env, req, decision, status);

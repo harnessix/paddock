@@ -1,6 +1,7 @@
-use super::tests::{ctl, env_in, quiet_session, record, until, Server};
+use super::tests::{ctl, env_in, quiet_session, record, until};
 use super::*;
 use crate::mail::{self, Dir, Kind, Message, Starter, FROM_AGENT};
+use crate::view::guard::TmuxGuard;
 use crate::view::Tmux;
 use std::process::{Command, Stdio};
 
@@ -9,7 +10,7 @@ fn a_view_keeps_a_done_run_open_until_it_closes() {
     let t = tempfile::tempdir().unwrap();
     let env = env_in(t.path());
     let Some(tmux) = Tmux::find(&env) else { return };
-    let _server = Server(tmux.clone());
+    let _server = TmuxGuard::of(&tmux);
     std::fs::create_dir_all(env.paddock_config()).unwrap();
     std::fs::write(
         env.paddock_config().join("config.toml"),

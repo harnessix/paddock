@@ -15,6 +15,8 @@ pub struct ServeConfig {
     pub allow_shared_disk: bool,
     pub gpu: bool,
     pub ro_paths: Vec<std::path::PathBuf>,
+    /// Expose the peer user's `~/.rustup` and `~/.cargo/bin` read-only.
+    pub rustup: bool,
 }
 
 impl ServeConfig {
@@ -38,6 +40,7 @@ impl ServeConfig {
             allow_shared_disk: false,
             gpu: false,
             ro_paths: Vec::new(),
+            rustup: true,
         };
         let Some(serve) = doc.get("exclave").and_then(|v| v.get("serve")) else {
             return Ok(result);
@@ -81,6 +84,9 @@ impl ServeConfig {
                         .and_then(|n| u64::try_from(n).ok())
                         .filter(|n| *n > 0)
                         .context("invalid exclave cache size")?;
+                }
+                "rustup" => {
+                    result.rustup = value.as_bool().context("invalid exclave rustup setting")?;
                 }
                 "allow_shared_disk" => {
                     result.allow_shared_disk =
@@ -276,5 +282,20 @@ mod tests {
         let credentials = root.path().join("credentials");
         std::fs::create_dir(&credentials).unwrap();
         assert!(validate_ro_path(&env, &credentials).is_err());
+    }
+
+    #[test]
+    fn the_rustup_binds_are_on_by_default_and_the_owner_can_turn_them_off() {
+        let root = tempfile::tempdir().unwrap();
+        let env = HostEnv::from_parts(root.path().into(), "test".into(), 1, 1, Default::default());
+        assert!(ServeConfig::load(&env).unwrap().rustup);
+        std::fs::create_dir_all(env.paddock_config()).unwrap();
+        let file = env.paddock_config().join("config.toml");
+        std::fs::write(&file, "[exclave.serve]\nrustup = false\n").unwrap();
+        assert!(!ServeConfig::load(&env).unwrap().rustup);
+        std::fs::write(&file, "[exclave.serve]\nrustup = true\n").unwrap();
+        assert!(ServeConfig::load(&env).unwrap().rustup);
+        std::fs::write(&file, "[exclave.serve]\nrustup = \"no\"\n").unwrap();
+        assert!(ServeConfig::load(&env).is_err());
     }
 }

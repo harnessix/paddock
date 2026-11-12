@@ -1,0 +1,1 @@
+- Fixed: the `paddock.toml` that `paddock init` writes now loads. A project can request devices of the user configuration with `[devices] use = [...]`. A project file that defines a device or turns one on is still refused.

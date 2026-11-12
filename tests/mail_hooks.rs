@@ -19,7 +19,7 @@ use std::process::{Command, Stdio};
 use std::sync::Arc;
 
 struct World {
-    _tmp: tempfile::TempDir,
+    _tmp: common::TestDir,
     root: PathBuf,
     env: HostEnv,
     id: String,

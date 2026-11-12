@@ -23,6 +23,29 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+mod asking;
+mod decision;
+#[path = "gate_held.rs"]
+mod held;
+mod recheck;
+use held::Held;
+pub use held::Opened;
+#[cfg(test)]
+type GrantEventHook = Box<dyn Fn(crate::eventstream::Event)>;
+
+#[cfg(test)]
+thread_local! {
+    static RECHECK_HOOK: std::cell::RefCell<Option<Box<dyn Fn()>>> = std::cell::RefCell::new(None);
+    static RECHECK_BEFORE_MODE_HOOK: std::cell::RefCell<Option<Box<dyn Fn()>>> = std::cell::RefCell::new(None);
+    static RECHECK_REVALIDATE_HOOK: std::cell::RefCell<Option<Box<dyn Fn()>>> = std::cell::RefCell::new(None);
+    static RECHECK_BEFORE_FILE_LOCK_HOOK: std::cell::RefCell<Option<Box<dyn Fn()>>> = std::cell::RefCell::new(None);
+    static AFTER_POLL_HOOK: std::cell::RefCell<Option<Box<dyn Fn()>>> = std::cell::RefCell::new(None);
+    static HOOK_SELECTION_RECORDED: std::cell::RefCell<Option<Box<dyn Fn()>>> = std::cell::RefCell::new(None);
+    static RULE_EFFECTS_HOOK: std::cell::RefCell<Option<Box<dyn Fn()>>> = std::cell::RefCell::new(None);
+    static GRANT_EVENT_HOOK: std::cell::RefCell<Option<GrantEventHook>> = std::cell::RefCell::new(None);
+    static MODE_STARTED_HOOK: std::cell::RefCell<Option<Box<dyn Fn()>>> = std::cell::RefCell::new(None);
+}
+
 /// The rule words of the log for a decision without a rule id.
 pub const RULE_MODE: &str = "mode";
 pub const RULE_EGRESS: &str = "egress";
@@ -37,16 +60,51 @@ pub const RULE_SYSTEM: &str = "system";
 /// connection waits.
 pub const TICK: Duration = Duration::from_secs(1);
 
+fn firewall_bus() -> Option<&'static crate::eventstream::Bus> {
+    #[cfg(test)]
+    {
+        None
+    }
+    #[cfg(not(test))]
+    {
+        crate::eventstream::default_bus()
+    }
+}
+
+fn question_key(t: &Triple, who: &Who, id: Option<&Identity>) -> Triple {
+    Triple {
+        identity: Some(super::approvals::QuestionIdentity {
+            who: who.clone(),
+            pid: id.and_then(|i| i.pid),
+            path: id.and_then(|i| i.path.clone()),
+            // A PID does not identify a process generation. Bind this key
+            // to this connection, even when the guest supplied a PID.
+            connection: crate::broker::new_request_id(),
+        }),
+        ..t.clone()
+    }
+}
+
 pub struct Firewall {
     /// The mode now: `paddock app network` changes it while the session
     /// runs, and every new connection reads it.
     mode: Arc<std::sync::RwLock<Mode>>,
+    // A delayed earlier mode change must not undo a later switch to none.
+    mode_revision: std::sync::atomic::AtomicU64,
     api: Option<Allowlist>,
     rules: Mutex<Rules>,
+    // A connection can refresh the file between two periodic rechecks.
+    rules_dirty: std::sync::atomic::AtomicBool,
+    // Serialize diagnostic session snapshots without holding the rules lock
+    // while the file is written.
+    session_write_lock: Mutex<()>,
     asker: Option<Asker>,
     /// The app of the session. `None`: every process may ask (tests).
     owner: Option<AppOwner>,
     system: Mutex<Vec<SystemHost>>,
+    // Serialize snapshots and writes so an older snapshot cannot land last.
+    status_lock: Mutex<()>,
+    status_retry: std::sync::atomic::AtomicBool,
     /// The apps of the guest that showed a window in this session besides
     /// the app: a browser or a sign-in window that the app opened. Their
     /// connections ask like the app's.
@@ -61,28 +119,6 @@ pub struct Firewall {
     next_open: std::sync::atomic::AtomicU64,
     /// The profile whose `changes[]` gets the rules of the answers.
     changes: Option<(PathBuf, PathBuf)>,
-}
-
-struct Held {
-    stream: std::os::unix::net::UnixStream,
-    host: String,
-    port: u16,
-    id: Option<Identity>,
-}
-
-impl Held {
-    fn denied(&self, mode: Mode, api: Option<&Allowlist>, rules: &[Rule]) -> bool {
-        let name = self
-            .id
-            .as_ref()
-            .map(Identity::app_name)
-            .unwrap_or_else(|| "unknown".into());
-        let conn = match &self.id {
-            Some(id) => Conn::of(id, &name, &self.host, self.port),
-            None => Conn::new(&name, &self.host, self.port),
-        };
-        matches!(firewall::decide(mode, api, rules, &conn), Decision::Deny(_))
-    }
 }
 
 impl Firewall {
@@ -111,24 +147,6 @@ impl Firewall {
     }
 }
 
-/// An allowed connection: its log line waits for the close.
-#[derive(Debug)]
-pub struct Opened {
-    entry: Entry,
-    log: PathBuf,
-    started: Instant,
-}
-
-impl Opened {
-    pub fn close(self, up: u64, down: u64) {
-        let secs = self.started.elapsed().as_secs();
-        let e = self.entry.closed(up, down, secs);
-        if let Err(err) = connlog::record_at(&self.log, e) {
-            log::debug!("macvm: cannot write the connection log: {err}");
-        }
-    }
-}
-
 impl Firewall {
     pub fn new(
         mode: Mode,
@@ -139,11 +157,16 @@ impl Firewall {
     ) -> Self {
         Self {
             mode: Arc::new(std::sync::RwLock::new(mode)),
+            mode_revision: std::sync::atomic::AtomicU64::new(0),
             api,
             rules: Mutex::new(rules),
+            rules_dirty: std::sync::atomic::AtomicBool::new(false),
+            session_write_lock: Mutex::new(()),
             asker,
             owner: None,
             system: Mutex::new(Vec::new()),
+            status_lock: Mutex::new(()),
+            status_retry: std::sync::atomic::AtomicBool::new(false),
             windowed: Mutex::new(Default::default()),
             unknown_said: std::sync::atomic::AtomicBool::new(false),
             log,
@@ -160,8 +183,8 @@ impl Firewall {
         self
     }
 
-    /// A rule that an answer made, into the grant changes of the profile.
-    fn note_rule(&self, r: &Rule, by: &str, now: u64) {
+    /// A rule an answer added or replaced, into the profile grant changes.
+    fn note_rule(&self, r: &Rule, action: &str, by: &str, now: u64) {
         let Some((dir, home)) = &self.changes else {
             return;
         };
@@ -173,15 +196,15 @@ impl Firewall {
         } else {
             Source::QuestionPanel
         };
-        let value = format!("{} {}", r.verdict.word(), r.scope.word()); // not user text
+        let value = super::text::grant_historical(&[r.verdict.word(), r.scope.word()].join(" "));
         let target = format!("{}:{}", r.host, r.port.text()); // not user text
         let c = Change::new(
             now,
             What::Rule,
-            "add",
+            action,
             &target,
             &value,
-            Applies::Live,
+            Applies::Unknown,
             source,
         );
         grants::note_bounded(&super::session::Profile::new(dir.clone()), c, home);
@@ -194,10 +217,36 @@ impl Firewall {
 
     /// Switch the mode and close connections that the new mode denies.
     pub fn set_mode(&self, mode: Mode) -> u64 {
+        let revision = self
+            .mode_revision
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1;
+        #[cfg(test)]
+        MODE_STARTED_HOOK.with(|hook| {
+            if let Some(hook) = hook.borrow().as_ref() {
+                hook();
+            }
+        });
+        if mode == Mode::None {
+            // None denies every connection without consulting rules or the
+            // approval queue, either of which may be waiting on external I/O.
+            let mut current = self.mode.write().unwrap_or_else(|e| e.into_inner());
+            *current = mode;
+            let mut open = self.open.lock().unwrap_or_else(|e| e.into_inner());
+            let closed = open.len() as u64;
+            for (_, held) in std::mem::take(&mut *open) {
+                let _ = held.stream.shutdown(std::net::Shutdown::Both);
+            }
+            return closed;
+        }
         let _ = self.current_rules(crate::state::now());
+        let rules = self.rules();
         let mut current = self.mode.write().unwrap_or_else(|e| e.into_inner());
+        if self.mode_revision.load(std::sync::atomic::Ordering::SeqCst) != revision {
+            return 0;
+        }
         *current = mode;
-        let rules = self.rules().all();
+        let rules = rules.all();
         let mut open = self.open.lock().unwrap_or_else(|e| e.into_inner());
         let mut closed = 0;
         open.retain(|_, held| {
@@ -229,7 +278,13 @@ impl Firewall {
     }
 
     fn write_status(&self) {
+        let _status = self.status_lock.lock().unwrap_or_else(|e| e.into_inner());
         let (paused, open) = self.asker.as_ref().map(Asker::snapshot).unwrap_or_default();
+        let unapplied = self
+            .asker
+            .as_ref()
+            .map(Asker::unapplied)
+            .unwrap_or_default();
         let system = self
             .system
             .lock()
@@ -239,13 +294,17 @@ impl Firewall {
             paused,
             open,
             system,
+            unapplied,
         };
-        ask_status::write(&self.status_path(), &s);
+        self.status_retry.store(
+            !ask_status::write(&self.status_path(), &s),
+            std::sync::atomic::Ordering::SeqCst,
+        );
     }
 
-    /// The rules of a decision. When the file changed, every open
-    /// question that a rule now decides ends with that rule.
-    fn current_rules(&self, now: u64) -> Vec<Rule> {
+    /// Read the rules for a decision. A later settle rechecks open questions
+    /// if this refresh observed a change.
+    fn current_rules(&self, _now: u64) -> Vec<Rule> {
         let (all, changed) = {
             let mut r = self.rules();
             let changed = r.reload_if_changed().unwrap_or_else(|e| {
@@ -255,213 +314,10 @@ impl Firewall {
             (r.all(), changed)
         };
         if changed {
-            self.recheck(&all, now);
+            self.rules_dirty
+                .store(true, std::sync::atomic::Ordering::SeqCst);
         }
         all
-    }
-
-    fn recheck(&self, all: &[Rule], now: u64) {
-        let Some(asker) = &self.asker else {
-            return;
-        };
-        let mut any = false;
-        for (t, q) in asker.open() {
-            let (answer, word) =
-                match firewall::decide(self.mode(), self.api.as_ref(), all, &q.who.conn(&t)) {
-                    Decision::Allow(r) => (
-                        ConnectAnswer::AllowOnce,
-                        r.unwrap_or_else(|| RULE_LISTED.into()),
-                    ),
-                    Decision::Deny(r) => {
-                        (ConnectAnswer::Deny, r.unwrap_or_else(|| RULE_MODE.into()))
-                    }
-                    Decision::Ask => continue,
-                };
-            any = true;
-            let s = Settled {
-                answer,
-                who: BY_RULE,
-                word,
-            };
-            asker.finish(&t, &q, s, now);
-        }
-        if any {
-            self.write_status();
-        }
-    }
-
-    /// Apply the answers that came in: their rules into the session or
-    /// the file, and the result to every waiter. Any thread may call it;
-    /// each answer is applied once.
-    pub fn settle(&self, now: u64) {
-        let Some(asker) = &self.asker else {
-            return;
-        };
-        let _ = self.current_rules(now);
-        let answered = asker.poll(now);
-        let any = !answered.is_empty();
-        for a in answered {
-            let by = if a.who == "approver" {
-                BY_APPROVER
-            } else if a.who == "cli" {
-                "cli"
-            } else {
-                BY_USER
-            };
-            let word = self.apply(a.answer, &a.question.who, &a.triple, by, now);
-            let s = Settled {
-                answer: a.answer,
-                who: a.who,
-                word,
-            };
-            asker.finish(&a.triple, &a.question, s, now);
-            self.recheck(&self.rules().all(), now);
-        }
-        if any {
-            self.write_status();
-        }
-    }
-
-    /// The rule of an answer into the session or the file. The rule word
-    /// of the log: the id of the new rule, or `once`.
-    fn apply(&self, answer: ConnectAnswer, who: &Who, t: &Triple, by: &str, now: u64) -> String {
-        self.apply_with_bus(answer, who, t, by, now, crate::eventstream::default_bus())
-    }
-
-    fn apply_with_bus(
-        &self,
-        answer: ConnectAnswer,
-        who: &Who,
-        t: &Triple,
-        by: &str,
-        now: u64,
-        bus: Option<&crate::eventstream::Bus>,
-    ) -> String {
-        match firewall::rule_of_answer(answer, &who.conn(t), by, now) {
-            Some(r) => {
-                let id = r.id.clone();
-                let scope = r.scope;
-                let mut rules = self.rules();
-                let wildcard = (answer == ConnectAnswer::AllowSite
-                    && firewall::site::registrable_site(&t.host).is_some())
-                .then(|| {
-                    let mut w = r.clone();
-                    w.id.push_str("-subdomains");
-                    w.host = format!("*.{}", r.host);
-                    w
-                });
-                match rules.add(r.clone(), answer == ConnectAnswer::AllowEverything) {
-                    Ok(added) => {
-                        self.note_rule(&r, by, now);
-                        if let (Some(bus), Some(asker)) = (bus, &self.asker) {
-                            let source = if by == BY_APPROVER {
-                                GrantSource::Approver
-                            } else {
-                                GrantSource::QuestionPanel
-                            };
-                            bus.publish(super::events_stream::rule_grant(
-                                asker.profile(),
-                                added,
-                                "add",
-                                source,
-                            ));
-                        }
-                        if let Some(w) = wildcard {
-                            if let Err(e) = rules.add(w, false) {
-                                log::warn!("macvm: {e:#}");
-                            }
-                        }
-                        if scope == Scope::Always {
-                            if let Err(e) = rules.save() {
-                                log::warn!("macvm: {e:#}");
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        log::warn!("macvm: {e:#}");
-                        return RULE_ONCE.into();
-                    }
-                }
-                let session = rules.session.clone();
-                if scope == Scope::Session {
-                    let path = self.log.with_file_name("session-rules.json");
-                    if let Ok(data) = serde_json::to_vec(&session) {
-                        if let Err(e) = crate::privfs::write_atomic(&path, data) {
-                            log::warn!("macvm: cannot write session rules: {e}");
-                        }
-                    }
-                }
-                id
-            }
-            None => RULE_ONCE.into(),
-        }
-    }
-
-    /// Ask about `t` and wait for the answer: `Err` is the rule word of a
-    /// refusal without an answer (`timeout`, `stale`).
-    pub fn ask(
-        &self,
-        asker: &Asker,
-        t: &Triple,
-        who: Who,
-        id: Option<&Identity>,
-        now: u64,
-    ) -> Result<Settled, String> {
-        let (q, hook) = match asker.join(t, who, id, now) {
-            Join::Once(s) => return Ok(s),
-            Join::Stale => {
-                self.write_status();
-                return Err(RULE_STALE.into());
-            }
-            Join::Wait(q, hook) => (q, hook),
-        };
-        if hook {
-            if let Some(a) = asker.run_hook(t, &q) {
-                let word = self.apply(a, &q.who, t, BY_APPROVER, now);
-                let s = Settled {
-                    answer: a,
-                    who: "approver",
-                    word,
-                };
-                asker.finish(t, &q, s.clone(), now);
-                self.recheck(&self.rules().all(), now);
-                return Ok(s);
-            }
-            asker.enqueue(t, now);
-        }
-        self.write_status();
-        self.recheck(&self.rules().all(), now);
-        self.wait_on(asker, t, &q)
-    }
-
-    fn wait_on(&self, asker: &Asker, t: &Triple, q: &Arc<Question>) -> Result<Settled, String> {
-        let start = Instant::now();
-        let mut nudged = Instant::now();
-        asker.nudge();
-        loop {
-            self.settle(crate::state::now());
-            if let Some(s) = q.result() {
-                return Ok(s);
-            }
-            if start.elapsed() >= asker.wait() {
-                if let Some(s) = asker.timeout(t, q, crate::state::now()) {
-                    return Ok(s);
-                }
-                log::info!(
-                    "macvm: connection to {}:{} gave up after the maximum wait of {} seconds",
-                    t.host,
-                    t.port,
-                    asker.wait().as_secs()
-                );
-                self.write_status();
-                return Err(RULE_TIMEOUT.into());
-            }
-            if nudged.elapsed() >= ON_WAIT_EVERY {
-                nudged = Instant::now();
-                asker.nudge();
-            }
-            std::thread::sleep(asker.poll_every());
-        }
     }
 
     /// A connection of the guest system: counted per host.
@@ -515,16 +371,47 @@ impl Firewall {
         let entry = |verdict: &str, rule: &str| {
             Entry::new(now, &name, team.as_deref(), host, port, verdict, rule)
         };
-        let all = self.current_rules(now);
-        let mode = self.mode();
-        let decision = firewall::decide(mode, self.api.as_ref(), &all, &conn);
+        if self.mode() == Mode::None {
+            self.record(entry(connlog::DENY, RULE_MODE));
+            return Err(RULE_MODE.into());
+        }
+        let _ = self.current_rules(now);
+        let (mode, decision) = {
+            let mut rules = self.rules();
+            let _file_lock = match rules.decision_lock() {
+                Ok(lock) => lock,
+                Err(e) => {
+                    log::warn!("macvm: cannot lock firewall rules: {e}");
+                    self.record(entry(connlog::DENY, RULE_STALE));
+                    return Err(RULE_STALE.into());
+                }
+            };
+            match rules.reload_if_changed() {
+                Ok(changed) => {
+                    if changed {
+                        self.rules_dirty
+                            .store(true, std::sync::atomic::Ordering::SeqCst);
+                    }
+                }
+                Err(e) => {
+                    log::warn!("macvm: {e:#}");
+                    self.record(entry(connlog::DENY, RULE_STALE));
+                    return Err(RULE_STALE.into());
+                }
+            }
+            let mode = self.mode.read().unwrap_or_else(|e| e.into_inner());
+            (
+                *mode,
+                firewall::decide(*mode, self.api.as_ref(), &rules.all(), &conn),
+            )
+        };
         match decision {
             Decision::Allow(rule) => {
                 let word = rule.unwrap_or_else(|| match mode {
                     Mode::Api | Mode::Allowlist => RULE_LISTED.into(),
                     _ => RULE_EGRESS.into(),
                 });
-                Ok(self.opened(entry(connlog::ALLOW, &word)))
+                Ok(self.opened(entry(connlog::ALLOW, &word), true))
             }
             Decision::Deny(rule) => {
                 let word = rule.unwrap_or_else(|| RULE_MODE.into());
@@ -553,6 +440,7 @@ impl Firewall {
                 };
                 self.record(entry(connlog::ASK, RULE_ASK));
                 let triple = Triple {
+                    identity: None,
                     app: conn.parent_app.unwrap_or(conn.app).to_string(),
                     host: host.to_string(),
                     port,
@@ -562,11 +450,16 @@ impl Firewall {
                     parent_app: conn.parent_app.map(str::to_string),
                     team: conn.team.map(str::to_string),
                 };
-                match self.ask(asker, &triple, who, id, now) {
-                    Ok(s) if s.answer.allows() => Ok(self.opened(entry(connlog::ALLOW, &s.word))),
-                    Ok(s) => {
-                        self.record(entry(connlog::DENY, &s.word));
-                        Err(s.word)
+                match self.ask_with_receipt(asker, &triple, who, id, now) {
+                    Ok((s, q)) => {
+                        let decision = if s.allowed {
+                            Ok(self.opened(entry(connlog::ALLOW, &s.word), s.who == BY_RULE))
+                        } else {
+                            self.record(entry(connlog::DENY, &s.word));
+                            Err(s.word)
+                        };
+                        asker.acknowledge_waiter(&q);
+                        decision
                     }
                     Err(word) => {
                         self.record(entry(connlog::DENY, &word));
@@ -577,11 +470,12 @@ impl Firewall {
         }
     }
 
-    fn opened(&self, entry: Entry) -> Opened {
+    fn opened(&self, entry: Entry, require_allow: bool) -> Opened {
         Opened {
             entry,
             log: self.log.clone(),
             started: Instant::now(),
+            require_allow,
         }
     }
 
@@ -590,6 +484,10 @@ impl Firewall {
         crate::proxy::Gate(Arc::new(
             move |host: &str, port: u16, id: Option<&Identity>| {
                 let opened = self.connection(host, port, id)?;
+                let require_allow = opened.require_allow;
+                let mut stale = opened.entry.clone();
+                stale.verdict = connlog::DENY.into();
+                stale.rule = RULE_STALE.into();
                 let n = self
                     .next_open
                     .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -608,18 +506,41 @@ impl Firewall {
                             host,
                             port,
                             id,
+                            require_allow,
+                        };
+                        let _ = fw.current_rules(crate::state::now());
+                        let mut rules = fw.rules();
+                        let file_lock = rules.decision_lock();
+                        let invalid = if file_lock.is_err() {
+                            true
+                        } else {
+                            match rules.reload_if_changed() {
+                                Ok(changed) => {
+                                    if changed {
+                                        fw.rules_dirty
+                                            .store(true, std::sync::atomic::Ordering::SeqCst);
+                                    }
+                                    false
+                                }
+                                Err(_) => true,
+                            }
                         };
                         let mode = fw.mode.read().unwrap_or_else(|e| e.into_inner());
-                        let rules = fw.rules().all();
-                        if entry.denied(*mode, fw.api.as_ref(), &rules) {
+                        if invalid || entry.rejected_at_hold(*mode, fw.api.as_ref(), &rules.all()) {
                             let _ = entry.stream.shutdown(std::net::Shutdown::Both);
+                            drop((file_lock, rules, mode));
+                            fw.record(stale);
+                            Err(RULE_STALE.into())
                         } else {
                             held.lock()
                                 .unwrap_or_else(|e| e.into_inner())
                                 .insert(n, entry);
+                            Ok(())
                         }
                     } else {
                         let _ = client.shutdown(std::net::Shutdown::Both);
+                        fw.record(stale);
+                        Err(RULE_STALE.into())
                     }
                 }))
             },
@@ -630,6 +551,12 @@ impl Firewall {
 /// The answer word of a `ConnectAnswer` for a log line or a test.
 pub fn answer_word(a: ConnectAnswer) -> &'static str {
     a.word()
+}
+
+/// The mode used when a session's firewall starts. A word that is no
+/// mode fails closed: rules never allow traffic under `none`.
+pub(crate) fn startup_mode(mode_word: &str) -> Mode {
+    Mode::parse(mode_word).unwrap_or(Mode::None)
 }
 
 /// The firewall of a session at its start: the mode word of the session,
@@ -650,7 +577,7 @@ pub fn build(
     pid: u32,
     side: AppSide,
 ) -> Arc<Firewall> {
-    let mode = Mode::parse(mode_word).unwrap_or(Mode::Ask);
+    let mode = startup_mode(mode_word);
     // Keep the allowlist available for live network mode changes.
     let api = Some(Allowlist::parse(allow).0);
     let rules_key = super::instance::key(app, super::instance::of_profile(profile_dir));
@@ -679,6 +606,7 @@ pub fn build(
     connlog::rotate_for_session(&log);
     ask_status::clear(&ask_status::path_next_to(&log));
     let _ = std::fs::remove_file(log.with_file_name("session-rules.json"));
+    let _ = std::fs::remove_file(log.with_file_name("session-rules.meta.json"));
     let fw = Arc::new(
         Firewall::new(mode, api, rules, asker, log)
             .with_owner(owner)
@@ -735,42 +663,14 @@ fn start_ticks(fw: &Arc<Firewall>) {
     }
 }
 
-/// The host slept when the wall clock moved this much further than the
-/// clock that stops in sleep.
-pub const SLEEP_MIN_SECS: u64 = 30;
-
-/// A watch for a sleep of the host, from the two clocks: the wall clock
-/// runs through a sleep, `Instant` does not (`CLOCK_UPTIME_RAW` on macOS).
-/// The session loop asks it every few seconds and tells the asker about a
-/// wake, so a question from before the sleep is asked again.
-pub struct SleepWatch {
-    wall: u64,
-    mono: Instant,
-}
-
-impl SleepWatch {
-    pub fn new(now_wall: u64) -> Self {
-        Self {
-            wall: now_wall,
-            mono: Instant::now(),
-        }
-    }
-
-    /// Whether the two elapsed times show a sleep.
-    pub fn slept(wall_elapsed: u64, mono_elapsed: u64) -> bool {
-        wall_elapsed > mono_elapsed + SLEEP_MIN_SECS
-    }
-
-    /// The wake time, when the host slept since the last check.
-    pub fn check(&mut self, now_wall: u64) -> Option<u64> {
-        let wall = now_wall.saturating_sub(self.wall);
-        let mono = self.mono.elapsed().as_secs();
-        self.wall = now_wall;
-        self.mono = Instant::now();
-        Self::slept(wall, mono).then_some(now_wall)
-    }
-}
+#[path = "gate_sleep.rs"]
+mod sleep;
+pub use sleep::{SleepWatch, SLEEP_MIN_SECS};
 
 #[cfg(test)]
 #[path = "gate_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "gate_recovery_tests.rs"]
+mod recovery_tests;

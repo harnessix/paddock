@@ -77,6 +77,11 @@ impl Queue {
         self.paused
     }
 
+    #[cfg(test)]
+    pub(super) fn force_pause(&mut self) {
+        self.paused = true;
+    }
+
     /// Every open question, the one on the screen first.
     pub fn all(&self) -> Vec<Triple> {
         self.shown
@@ -117,6 +122,14 @@ impl Queue {
     pub fn resume(&mut self) {
         self.paused = false;
         self.base = self.open();
+    }
+
+    /// Restore the displayed question if closing its card failed. The next
+    /// pump retries the transition before showing the pause notice.
+    pub fn undo_pause(&mut self, t: &Triple) {
+        self.waiting.retain(|w| w != t);
+        self.shown = Some(t.clone());
+        self.paused = false;
     }
 
     /// Bring the screen up to date at `now`: pause on too many questions,
@@ -160,6 +173,7 @@ mod tests {
 
     fn t(host: &str) -> Triple {
         Triple {
+            identity: None,
             app: "com.example.notes".into(),
             host: host.into(),
             port: 443,

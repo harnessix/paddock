@@ -495,7 +495,7 @@ fn a_run_changes_only_its_snapshot_and_the_run_folder_goes() {
     let b = built(&env, t.path(), fake_profile()).unwrap();
     let dir = b.spec.shadow.as_ref().unwrap().dir.clone();
     let proj = b.spec.project.clone();
-    let _server = crate::view::tests::Server(crate::view::Tmux::find(&env));
+    let _server = crate::view::guard::TmuxGuard::socket(crate::view::socket(&env));
     let out = crate::run::run(&env, b, &FakeOverlay, true, true).unwrap();
     // The run started a tmux server for `paddock view`. Stop it.
     if let Some(tmux) = crate::view::Tmux::find(&env) {

@@ -432,7 +432,7 @@ pub fn run_app_mode(env: &HostEnv, o: &crate::app::AppOptions, wait: Wait) -> Re
             unprotected: false,
         })
         .collect();
-    let (roots, saved_network) = super::grants::for_start(&profile, &roots);
+    let (roots, saved) = super::grants::for_start(&profile, &roots);
     let built = super::shares::build(
         &o.name,
         &roots,
@@ -484,15 +484,16 @@ pub fn run_app_mode(env: &HostEnv, o: &crate::app::AppOptions, wait: Wait) -> Re
         &helper,
         super::version::paddock_version(),
     )?;
+    // An explicit network wins; the saved one is read under the lock below.
     let network = match o.network {
-        None => saved_network.unwrap_or_else(|| "ask".to_string()),
+        None => None,
         Some(crate::spec::Network::Host) => bail!(text::network_host_refused()),
-        Some(crate::spec::Network::None) => "none".to_string(),
-        Some(crate::spec::Network::Egress) => "egress".to_string(),
-        Some(crate::spec::Network::Allowlist) => "allowlist".to_string(),
-        Some(crate::spec::Network::Api) => "api".to_string(),
+        Some(crate::spec::Network::None) => Some("none".to_string()),
+        Some(crate::spec::Network::Egress) => Some("egress".to_string()),
+        Some(crate::spec::Network::Allowlist) => Some("allowlist".to_string()),
+        Some(crate::spec::Network::Api) => Some("api".to_string()),
     };
-    let args = StartArgs {
+    let mut args = StartArgs {
         app: o.name.clone(),
         home: home.into(),
         shares,
@@ -509,7 +510,7 @@ pub fn run_app_mode(env: &HostEnv, o: &crate::app::AppOptions, wait: Wait) -> Re
             .as_ref()
             .is_some_and(|b| !super::appcopy::quarantined_unapproved(&b.path)),
         app_args: super::host_app::app_args(app_profile.as_ref(), &built.shares),
-        network,
+        network: String::new(),
         allow: {
             let mut v: Vec<String> = app_profile
                 .as_ref()
@@ -572,6 +573,11 @@ pub fn run_app_mode(env: &HostEnv, o: &crate::app::AppOptions, wait: Wait) -> Re
             }
         }
     }
+    // The grants lock until the record exists: no change falls between.
+    let Some((policy, word)) = super::grants::start_network(&profile, &saved, network) else {
+        return Ok(EXIT_REFUSED);
+    };
+    args.network = word;
     let mut child = start(&layout, &shim, &args, &control, &record)?;
     // The window marks and the firewall panel of mode ask.
     crate::mark::spawn(env);
@@ -608,6 +614,7 @@ pub fn run_app_mode(env: &HostEnv, o: &crate::app::AppOptions, wait: Wait) -> Re
     };
     crate::privfs::write_atomic(&record, serde_json::to_vec_pretty(&session)?)?;
     super::host_running::register(env, &session, &o.roots, &args.network);
+    drop(policy);
     if env.var(PRINT_SECRETS_VAR).is_some_and(|v| v == "1") {
         // The Mac check scripts read the secrets from this stderr to
         // prove that no log holds them. Nothing else prints them.

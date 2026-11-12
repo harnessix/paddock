@@ -126,6 +126,10 @@ pub fn describe(req: &Request, project: &Path) -> (String, String) {
                 .join(" ");
             (line.chars().take(80).collect(), line)
         }
+        "mac" => {
+            let s = crate::macvm::computer_broker::summary(&req.args);
+            (s.clone(), s)
+        }
         other => (other.to_string(), other.to_string()),
     }
 }
@@ -203,6 +207,7 @@ pub(in crate::broker) fn validate(req: &Request) -> Result<()> {
             arg_str(req, "title").context("notify needs a title")?;
         }
         "clipboard-read" => {}
+        "mac" => crate::macvm::computer_broker::validate(&req.args).map_err(anyhow::Error::msg)?,
         "git-push" => git::validate(&req.args)?,
         "forge" => {
             let t = arg_str(req, "tool").unwrap_or("gh");

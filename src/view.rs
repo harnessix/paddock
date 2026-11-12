@@ -8,13 +8,12 @@
 //! server or configuration) shows that log with `tail -f`. The caller sees
 //! the same bytes, the same exit code and the same stdin as without the view.
 //! The runtime folder is hidden in every sandbox, so no sandbox reaches the
-//! socket or the logs.
+//! socket or the logs. `paddock split` uses the same server (split.rs).
 use crate::env::HostEnv;
 use anyhow::{bail, Context, Result};
 use std::ffi::{OsStr, OsString};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
-use std::os::unix::process::CommandExt;
+use std::os::unix::{fs::MetadataExt, fs::OpenOptionsExt, process::CommandExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -162,6 +161,21 @@ impl Tmux {
         })
     }
 
+    /// The server on socket `sock`, with tmux `exe`: the layout hook of the
+    /// split, which runs without the caller's runtime folder.
+    pub fn at(exe: PathBuf, sock: PathBuf) -> Tmux {
+        let vars = ["PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE"]
+            .iter()
+            .filter_map(|k| std::env::var(k).ok().map(|v| (k.to_string(), v)))
+            .collect();
+        Tmux {
+            exe,
+            sock,
+            vars,
+            scope: None,
+        }
+    }
+
     fn cmd(&self) -> Command {
         let mut c = Command::new(&self.exe);
         c.arg("-S")
@@ -229,10 +243,6 @@ impl Tmux {
         }
     }
 
-    pub fn kill(&self, id: &str) -> bool {
-        valid_id(id) && self.run(&["kill-session", "-t", &format!("={id}")])
-    }
-
     /// The last lines of pane `id`. A detached run has no view log. Its
     /// output is this pane.
     pub fn pane_tail(&self, id: &str) -> Option<String> {
@@ -267,12 +277,31 @@ impl Tmux {
     /// Start the session `id` with one pane that runs `cmd` (no shell in
     /// between). The pane stays after `cmd` ends.
     pub fn new_session(&self, id: &str, cmd: &[OsString]) -> Result<()> {
+        self.new_session_sized(id, cmd, None)
+    }
+
+    /// new_session, `size` columns and lines large (default 160x48).
+    ///
+    /// A session has no status line: tmux's default one shows the pane
+    /// title, which the program in the pane sets (a sandbox among them),
+    /// the host name and a clock. Messages (`Tmux::message`) show without
+    /// it. The split sets a status line of its own.
+    pub fn new_session_sized(
+        &self,
+        id: &str,
+        cmd: &[OsString],
+        size: Option<(u32, u32)>,
+    ) -> Result<()> {
         if !valid_id(id) {
             bail!("{id} is not a sandbox id");
         }
         if let Some(d) = self.sock.parent() {
             crate::privfs::dir(d)?;
         }
+        let (x, y) = size
+            .filter(|(x, y)| *x >= 20 && *y >= 5 && *x <= 2000 && *y <= 1000)
+            .unwrap_or((160, 48));
+        let (x, y) = (x.to_string(), y.to_string());
         let mut args: Vec<OsString> = [
             "start-server",
             ";",
@@ -286,6 +315,16 @@ impl Tmux {
             "remain-on-exit",
             "on",
             ";",
+            "set-option",
+            "-g",
+            "status",
+            "off",
+            ";",
+            "set-option",
+            "-g",
+            "set-titles",
+            "off",
+            ";",
             "new-session",
             "-d",
             "-c",
@@ -293,9 +332,9 @@ impl Tmux {
             "-s",
             id,
             "-x",
-            "160",
+            &x,
             "-y",
-            "48",
+            &y,
         ]
         .iter()
         .map(OsString::from)
@@ -770,13 +809,13 @@ fn keep_ended(env: &HostEnv) -> u64 {
 }
 
 /// The views whose sandbox ended more than `[view] keep_ended` before
-/// `now`: the sessions and the logs. `running` are the ids of the running
-/// sandboxes. A detached run with no view log uses the end time in its
-/// run record. A record that is still open stays.
+/// `now`: the sessions, not the split, and the logs. `running` are the ids
+/// of the running sandboxes. A detached run with no view log uses the end
+/// time in its run record. A record that is still open stays.
 pub fn stale(env: &HostEnv, sessions: &[String], running: &[String], now: u64) -> Vec<String> {
     let keep = keep_ended(env);
-    let mut ids: std::collections::BTreeSet<String> =
-        sessions.iter().filter(|s| valid_id(s)).cloned().collect();
+    let view = |s: &&String| valid_id(s) && s.as_str() != split::SESSION;
+    let mut ids: std::collections::BTreeSet<_> = sessions.iter().filter(view).cloned().collect();
     if let Ok(rd) = std::fs::read_dir(dir(env)) {
         for e in rd.flatten() {
             let name = e.file_name().to_string_lossy().into_owned();
@@ -873,8 +912,8 @@ pub fn activity(env: &HostEnv, id: &str) -> Option<String> {
 pub fn plain_limit(text: &str, max: usize) -> String {
     take_chars(strip_controls(text).trim(), max)
 }
-
-fn read_tail(path: &Path) -> Option<String> {
+/// The last ACTIVITY_TAIL bytes of a file, from the start of a line.
+pub fn read_tail(path: &Path) -> Option<String> {
     let mut f = std::fs::File::open(path).ok()?;
     let len = f.metadata().ok()?.len();
     if len == 0 {
@@ -928,7 +967,7 @@ fn take_chars(text: &str, n: usize) -> String {
 }
 
 /// ANSI escape sequences and other control characters, removed.
-fn strip_controls(text: &str) -> String {
+pub fn strip_controls(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut chars = text.chars().peekable();
     while let Some(c) = chars.next() {
@@ -1081,6 +1120,10 @@ pub fn open(env: &HostEnv, id: &str, write: bool) -> Result<()> {
         .with_context(|| format!("cannot start {}", argv[0].to_string_lossy()))
 }
 
+mod end;
+#[doc(hidden)]
+pub mod guard;
 mod pane;
+pub mod split;
 #[cfg(test)]
 pub(crate) mod tests;

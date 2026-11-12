@@ -113,7 +113,14 @@ pub(crate) fn start_detached(env: &HostEnv, a: &RunArgs) -> Result<i32> {
     };
     // The mailbox exists before the pane starts, so a watch can begin now.
     paddock::mail::create(env, &id, &paddock::mail::Starter::host())?;
+    // `paddock board` maps the run to its ticket file.
+    let file = a
+        .prompt_file
+        .as_ref()
+        .map(|f| std::path::absolute(f).unwrap_or_else(|_| f.clone()));
+    paddock::board::origin::note(env, &id, file.as_deref(), &prompt, None);
     if let Err(e) = paddock::detach::launch(env, &tmux, &job, &opts.harness, &project, &prompt) {
+        paddock::board::origin::forget(env, &id);
         let _ = std::fs::remove_dir_all(paddock::mail::dir(env, &id)?);
         return Err(e);
     }
@@ -143,12 +150,14 @@ pub(crate) fn detach_run(job: &std::path::Path) -> Result<i32> {
             2
         }
     };
+    // The run writes its end itself; this covers a run that never started.
+    // The end event goes first: `paddock wait` reads an ended record
+    // without an end event as a run that lost its end.
+    paddock::mail::events::ended(&env, &id, Some(code));
     let _ = paddock::detach::Record::update(&env, &id, |r| {
         r.ended = Some(state::now());
         r.exit_code = Some(code);
     });
-    // The run writes its end itself; this covers a run that never started.
-    paddock::mail::events::ended(&env, &id, Some(code));
     let _ = writeln!(
         std::io::stderr(),
         "\npaddock: the sandbox ended at {} with exit code {code}.",
@@ -420,7 +429,7 @@ pub(crate) fn explain(env: &HostEnv, a: &RunArgs, json: bool) -> Result<()> {
     let screens = paddock::screens::explain(&built.profile);
     if !screens.is_empty() {
         println!(
-            "\nstart screens that paddock answers, and errors it names (README \"Start screens\"):"
+            "\nstart screens that paddock answers, and errors it names (`paddock help host-requests`):"
         );
         for l in screens {
             println!("{l}");

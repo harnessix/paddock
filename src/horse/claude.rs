@@ -340,7 +340,7 @@ pub fn ingest_locked(
     version: &str,
     horse: Option<&str>,
 ) -> Result<Ingest> {
-    ingest_impl(locked, path, version, horse, false)
+    ingest_impl(locked, path, version, super::target::Target::Any(horse))
 }
 
 pub(crate) fn ingest_run_locked(
@@ -349,38 +349,38 @@ pub(crate) fn ingest_run_locked(
     version: &str,
     horse: &str,
 ) -> Result<Ingest> {
-    ingest_impl(locked, path, version, Some(horse), true)
+    ingest_impl(locked, path, version, super::target::Target::Run(horse))
+}
+
+/// Ingest a private copy of a host session file into its host session,
+/// or into a new host session in `horse`.
+pub(crate) fn ingest_host_locked(
+    locked: &super::store::Lock<'_>,
+    path: &Path,
+    version: &str,
+    horse: &str,
+    origin: &super::HostOrigin,
+) -> Result<Ingest> {
+    ingest_impl(
+        locked,
+        path,
+        version,
+        super::target::Target::Host { horse, origin },
+    )
 }
 
 fn ingest_impl(
     locked: &super::store::Lock<'_>,
     path: &Path,
     version: &str,
-    horse: Option<&str>,
-    scoped: bool,
+    target: super::target::Target<'_>,
 ) -> Result<Ingest> {
     let store = locked.store;
     check_version(version)?;
     let log = read_file(path)?;
-    let existing = if scoped {
-        store.sessions()?.into_iter().find(|s| {
-            s.horse == horse.unwrap_or_default()
-                && s.binding.harness == HARNESS
-                && s.binding.native_id.as_deref() == Some(&log.session_id)
-        })
-    } else {
-        store.session_by_native(HARNESS, &log.session_id)?
-    };
-    let session = match existing {
-        Some(s) => s,
-        None => {
-            let h = match horse {
-                Some(h) => store.horse(h)?,
-                None => super::dna::new_default_horse_locked(locked)?,
-            };
-            locked.new_session(&h.id, binding(Some(log.session_id.clone())))?
-        }
-    };
+    let session = target.session(locked, HARNESS, &log.session_id, || {
+        binding(Some(log.session_id.clone()))
+    })?;
     let old = store.session_nodes(&session)?;
     let cursor = read_cursor(store, &session.id)?;
     // An append keeps the rows of the last read as a prefix. Anything else

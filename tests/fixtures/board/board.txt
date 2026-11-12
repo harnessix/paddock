@@ -1,0 +1,14 @@
+◆ 1 approval waits for you: paddock approvals
+compile slots: 1 claude-alpha-71c3ac
+
+alpha (6)  /TMP/src/alpha
+  ◆ waiting  MAIL2   mail hooks           0b0b0b,0c0c0c  git push to origin/main
+  ■ blocked  CR1     corral               0d0d0d         blocked: needs the signing key
+  ▲ stuck    0e0e0e  claude (no ticket)                  idle with unread mail
+  ● working  KV2     named kv namespaces  71c3ac         KV2: code and 14 tests pass
+  ○ idle     0f0f0f  grok (no ticket)
+  ◇ open     AUTH1   login refresh                       open, needs a design.
+
+beta (2)  /TMP/src/beta
+  ◆ waiting  LF1     change ledger      202020  Which ledger format?
+  ▲ stuck    303030  codex (no ticket)          the screen does not change

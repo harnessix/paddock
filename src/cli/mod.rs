@@ -1,5 +1,7 @@
+mod help_render;
+pub(crate) mod help_topics;
 mod run_args;
-use clap::{Args, Parser, Subcommand};
+use clap::{Parser, Subcommand};
 use paddock::spec::Network;
 pub(crate) use run_args::{RunArgs, RunArgsCli};
 use std::path::PathBuf;
@@ -8,6 +10,7 @@ pub(crate) mod app;
 pub(crate) mod app_guest;
 pub(crate) mod approver;
 pub(crate) mod auth;
+pub(crate) mod board;
 pub(crate) mod catalog;
 pub(crate) mod credentials;
 pub(crate) mod device;
@@ -24,6 +27,7 @@ pub(crate) mod horse;
 pub(crate) mod kv;
 pub(crate) mod loft;
 pub(crate) mod logins;
+pub(crate) mod mac;
 pub(crate) mod macvm;
 pub(crate) mod mail;
 pub(crate) mod monitor;
@@ -34,12 +38,14 @@ pub(crate) mod setup;
 pub(crate) mod shims;
 pub(crate) mod skill;
 pub(crate) mod spec;
+pub(crate) mod split;
 pub(crate) mod status;
 pub(crate) mod storage;
 pub(crate) mod tack;
 pub(crate) mod timer;
 pub(crate) mod tools;
 pub(crate) mod train;
+pub(crate) mod tui;
 pub(crate) mod turnout;
 pub(crate) mod update;
 pub(crate) mod vm;
@@ -51,7 +57,7 @@ pub(crate) mod worktree;
 #[derive(Parser)]
 #[command(
     name = "paddock",
-    version,
+    version = paddock::VERSION_LONG,
     about = "Run a coding-agent harness with full auto-approval inside an isolated sandbox",
     long_about = None,
     after_help = "Examples:\n  paddock claude              start Claude Code in the current project\n  paddock codex ~/src/app     start Codex in another project\n  paddock explain claude      show every mount, variable and rule, and why\n  paddock doctor --escape     try to escape the sandbox and report the result"
@@ -144,11 +150,33 @@ pub(crate) enum Cmd {
         #[arg(long)]
         display: bool,
     },
-    /// Show the MCP servers of a harness and whether each one runs in the sandbox.
+    /// Show the MCP servers of a harness and whether each one runs in the
+    /// sandbox, or run paddock's own MCP server: `paddock mcp mac`.
+    #[command(args_conflicts_with_subcommands = true)]
     Mcp {
-        harness: String,
+        #[command(subcommand)]
+        serve: Option<McpServe>,
+        harness: Option<String>,
         path: Option<PathBuf>,
     },
+    /// Every project, ticket and agent run at a glance (see `paddock help board`).
+    Board(board::BoardArgs),
+    /// Several terminals in one window: sandbox runs, views, host shells
+    /// and the board, each pane labeled sandbox or host by paddock.
+    #[command(after_long_help = split::HELP)]
+    Split(split::SplitArgs),
+    /// The terminal interface: runs, approvals, mail and the board, with the
+    /// keyboard or the mouse. `paddock tui --help` lists its options.
+    #[command(disable_help_flag = true)]
+    Tui {
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<String>,
+    },
+    /// Computer use of a macOS guest session: screenshots, clicks, keys,
+    /// text and its accessibility elements, as JSON. Never the host.
+    /// `paddock mac view` shows the guest inline in the terminal.
+    #[command(after_help = mac::MAC_HELP)]
+    Mac(mac::MacArgs),
     /// List running sandboxes.
     Ps {
         #[arg(long)]
@@ -184,6 +212,15 @@ pub(crate) enum Cmd {
         /// they only scroll the view.
         #[arg(long)]
         write: bool,
+        /// Print the last LINES lines of its output instead (default 40, at
+        /// most 120: the tmux pane keeps 120 lines, the view log is read
+        /// from its last 8 KiB), without control characters and without
+        /// the empty lines of the screen. No window opens.
+        #[arg(long, value_name = "LINES", num_args = 0..=1, default_missing_value = "40", conflicts_with = "write")]
+        tail: Option<usize>,
+        /// With --tail: print JSON (api_version paddock.view-tail/v1).
+        #[arg(long, requires = "tail")]
+        json: bool,
     },
     /// Freeze a running sandbox: it uses no CPU and keeps its memory until
     /// you thaw it.
@@ -560,6 +597,13 @@ pub(crate) enum Cmd {
     /// this in its tmux session.
     #[command(hide = true)]
     DetachRun { job: PathBuf },
+    /// The helper in each pane of `paddock split`. paddock starts this.
+    #[command(hide = true)]
+    SplitPane { job: PathBuf },
+    /// The layout hook of `paddock split`: tmux starts this when a
+    /// terminal attaches to the split or changes its size.
+    #[command(hide = true)]
+    SplitLayout { tmux: PathBuf, sock: PathBuf },
     /// After a sandbox ends: share the data of identical files of its home
     /// with the other homes, within a time limit. paddock starts this.
     #[command(hide = true)]
@@ -681,45 +725,12 @@ pub(crate) enum Cmd {
     External(Vec<String>),
 }
 
-/// Which scope a `paddock kv` command reads. Without a flag: the pastures
-/// of the project of the current folder.
-#[derive(Args)]
-pub(crate) struct KvScope {
-    /// The project folder (default: the current folder).
-    #[arg(long, conflicts_with_all = ["user", "sandbox", "tree"])]
-    project: Option<PathBuf>,
-    /// A pasture of the project: a name from [pastures] of the user
-    /// configuration, or solo-<sandbox id> for a sandbox started without one.
-    #[arg(long, conflicts_with_all = ["user", "sandbox", "tree", "legacy"])]
-    pasture: Option<String>,
-    /// The project scope that all sandboxes of the project shared in older
-    /// paddock versions. Sandboxes no longer read it.
-    #[arg(long, conflicts_with_all = ["user", "sandbox", "tree"])]
-    legacy: bool,
-    /// The scope that all projects share.
-    #[arg(long, conflicts_with_all = ["sandbox", "tree"])]
-    user: bool,
-    /// The self scope of one sandbox, by its id or short id.
-    #[arg(long, conflicts_with = "tree")]
-    sandbox: Option<String>,
-    /// The tree scope of a spawn tree, by the id or short id of its root sandbox.
-    #[arg(long)]
-    tree: Option<String>,
-}
-
-/// `--as NAME`: a principal from [kv.principals] of the user configuration.
-#[derive(Args)]
-pub(crate) struct KvAs {
-    /// Act as this principal of [kv.principals]; needs --pasture.
-    #[arg(long = "as", id = "as_", value_name = "NAME", requires = "pasture")]
-    as_: Option<String>,
-}
-
-#[derive(Args)]
-pub(crate) struct KvAsRequired {
-    /// The principal of [kv.principals] to act as; needs --pasture.
-    #[arg(long = "as", id = "as_", value_name = "NAME", requires = "pasture")]
-    as_: String,
+/// The MCP servers of paddock itself.
+#[derive(Subcommand, Debug, Clone)]
+pub(crate) enum McpServe {
+    /// Computer use of a macOS guest session on stdio: the tools of
+    /// `paddock mac` (screenshot, click, type, key, elements, ...).
+    Mac(mac::PickArgs),
 }
 
 #[cfg(test)]

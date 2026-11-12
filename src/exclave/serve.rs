@@ -325,6 +325,7 @@ pub fn serve(
                             &config.env,
                             gpu,
                             &config.ro_paths,
+                            config.rustup.then_some(env.home.as_path()),
                         )?,
                         "registries" => sandbox::registries(
                             &project,
@@ -338,6 +339,7 @@ pub fn serve(
                             &config.env,
                             gpu,
                             &config.ro_paths,
+                            config.rustup.then_some(env.home.as_path()),
                         )?,
                         "egress" if config.allow_egress => sandbox::egress(
                             env,
@@ -351,6 +353,7 @@ pub fn serve(
                             &config.env,
                             gpu,
                             &config.ro_paths,
+                            config.rustup,
                         )?,
                         _ => bail!("peer network mode is not allowed"),
                     };

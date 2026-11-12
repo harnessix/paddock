@@ -17,7 +17,7 @@ use std::process::Command;
 use std::sync::Arc;
 
 struct Setup {
-    _tmp: tempfile::TempDir,
+    _tmp: common::TestDir,
     root: PathBuf,
     env: HostEnv,
     /// The sandbox home, as paddock wrote it.

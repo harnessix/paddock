@@ -18,6 +18,75 @@ fn id() -> Identity {
 }
 
 #[test]
+fn a_stale_rule_snapshot_cannot_finish_an_answer_already_claimed_by_poll() {
+    use std::sync::mpsc;
+    let t = tempfile::tempdir().unwrap();
+    let env = crate::privfs::tests::env_in(t.path());
+    let asker = Asker::new(
+        env.clone(),
+        "app",
+        "App",
+        t.path().into(),
+        std::process::id(),
+    );
+    let fw = Arc::new(firewall(t.path(), Mode::None, Some(asker)));
+    let key = Triple {
+        identity: None,
+        app: "com.example.notes".into(),
+        host: "race.example".into(),
+        port: 443,
+    };
+    let who = Who {
+        app: key.app.clone(),
+        ..Default::default()
+    };
+    let q = match fw.asker().unwrap().join(&key, who, None, 100) {
+        Join::Wait(q, false) => q,
+        _ => panic!("expected a question"),
+    };
+    let id = broker::pending(&env).into_iter().next().unwrap().id;
+    let (ready_tx, ready_rx) = mpsc::channel();
+    let (go_tx, go_rx) = mpsc::channel();
+    let fw2 = fw.clone();
+    let rechecker = std::thread::spawn(move || {
+        RECHECK_HOOK.with(|hook| {
+            *hook.borrow_mut() = Some(Box::new(move || {
+                ready_tx.send(()).unwrap();
+                go_rx.recv().unwrap();
+            }))
+        });
+        fw2.recheck_current_rules(101);
+    });
+    ready_rx.recv().unwrap(); // recheck has a denying snapshot, but has not claimed it
+    broker::answer_connect(&env, &id, ConnectAnswer::AllowAlways).unwrap();
+    let answers = fw.asker().unwrap().poll(102).answers;
+    assert_eq!(answers.len(), 1);
+    go_tx.send(()).unwrap();
+    rechecker.join().unwrap();
+    assert!(
+        q.result().is_none(),
+        "the losing rule must not finish the claimed question"
+    );
+    assert!(fw.rules().file.is_empty());
+    let a = &answers[0];
+    let word = fw.apply_with_bus(a.answer, &a.question.who, &a.triple, BY_USER, 102, None);
+    fw.asker().unwrap().finish(
+        &key,
+        &q,
+        Settled {
+            answer: a.answer,
+            allowed: a.answer.allows() && word != RULE_STALE,
+            who: a.who,
+            word,
+        },
+        102,
+    );
+    assert_eq!(q.result().unwrap().answer, ConnectAnswer::AllowAlways);
+    assert_eq!(fw.rules().file.len(), 1);
+    assert_eq!(fw.rules().file[0].verdict, firewall::Verdict::Allow);
+}
+
+#[test]
 fn build_reads_the_profile_and_starts_a_fresh_log() {
     let t = tempfile::tempdir().unwrap();
     let env = crate::privfs::tests::env_in(t.path());
@@ -64,7 +133,7 @@ fn build_reads_the_profile_and_starts_a_fresh_log() {
             .unwrap_err(),
         "mode"
     );
-    // An unknown mode word is ask; a broken rules file is kept as it is.
+    // An unknown mode word fails closed; a broken rules file is kept as it is.
     let path = Rules::path(&env, "vscode");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, "[[rule]]\nid = 1\n").unwrap();
@@ -78,7 +147,7 @@ fn build_reads_the_profile_and_starts_a_fresh_log() {
         1,
         AppSide::default(),
     );
-    assert_eq!(fw.mode(), Mode::Ask);
+    assert_eq!(fw.mode(), Mode::None);
     assert!(
         fw.rules().save().is_err(),
         "a broken file is never overwritten"
@@ -170,7 +239,8 @@ fn an_answer_makes_its_rule_and_the_log_names_it() {
         std::process::id(),
     )
     .timing(Duration::from_secs(5), Duration::from_millis(20))
-    .rate(100);
+    .rate(100)
+    .wake_fenced_for_test(); // Models a platform wake fence.
     let fw = Arc::new(firewall(t.path(), Mode::Ask, Some(asker)));
     // allow-always: the file gets the rule, the connection passes, the
     // next one is silent.
@@ -471,7 +541,7 @@ fn a_switch_to_none_shuts_the_open_connections_and_denies_new_ones() {
     let gate = fw.clone().gate();
     let (client, mut peer) = UnixStream::pair().unwrap();
     let mut o = (gate.0)("x.example", 443, Some(&id())).ok().unwrap();
-    o.hold(&client);
+    o.hold(&client).unwrap();
     assert_eq!(fw.open_count(), 1);
     // Another mode leaves the connection open.
     assert_eq!(fw.set_mode(Mode::Ask), 0);
@@ -490,7 +560,7 @@ fn a_switch_to_none_shuts_the_open_connections_and_denies_new_ones() {
     fw.set_mode(Mode::Egress);
     let (c2, _p2) = UnixStream::pair().unwrap();
     let mut o2 = (gate.0)("x.example", 443, Some(&id())).ok().unwrap();
-    o2.hold(&c2);
+    o2.hold(&c2).unwrap();
     assert_eq!(fw.open_count(), 1);
     o2.close(0, 0);
     assert_eq!(fw.open_count(), 0);
@@ -507,7 +577,7 @@ fn a_connection_held_after_a_switch_to_none_is_shut_at_once() {
     // The switch comes between the decision and the hold.
     fw.set_mode(Mode::None);
     let (client, mut peer) = UnixStream::pair().unwrap();
-    o.hold(&client);
+    assert!(o.hold(&client).is_err());
     let mut buf = [0u8; 1];
     assert_eq!(peer.read(&mut buf).unwrap(), 0);
 }
@@ -524,6 +594,7 @@ fn a_rule_of_an_answer_goes_to_the_grant_changes() {
         team: None,
     };
     let triple = Triple {
+        identity: None,
         app: "com.example.notes".into(),
         host: "api.example.com".into(),
         port: 443,
@@ -536,7 +607,7 @@ fn a_rule_of_an_answer_goes_to_the_grant_changes() {
     let g =
         super::super::grants::load(&super::super::session::Profile::new(profile.clone())).unwrap();
     let got: Vec<(String, String, super::super::grants::Source)> = g
-        .changes
+        .history_changes
         .iter()
         .map(|c| (c.target.clone(), c.value.clone(), c.source))
         .collect();
@@ -545,25 +616,30 @@ fn a_rule_of_an_answer_goes_to_the_grant_changes() {
         [
             (
                 "api.example.com:443".to_string(),
-                "allow always".to_string(),
+                "allow always (historical; order unknown)".to_string(),
                 super::super::grants::Source::QuestionPanel
             ),
             (
                 "api.example.com:443".to_string(),
-                "deny always".to_string(),
+                "allow always (historical; order unknown)".to_string(),
+                super::super::grants::Source::Approver
+            ),
+            (
+                "api.example.com:443".to_string(),
+                "deny always (historical; order unknown)".to_string(),
                 super::super::grants::Source::Approver
             ),
         ]
     );
     let events = std::fs::read_to_string(profile.join("logs").join("events.jsonl")).unwrap();
-    assert_eq!(events.lines().count(), 2);
+    assert_eq!(events.lines().count(), 3);
     let first: serde_json::Value = serde_json::from_str(events.lines().next().unwrap()).unwrap();
-    assert_eq!(first["kind"], "grant");
-    assert_eq!(first["grant"]["what"], "rule");
-    assert_eq!(first["grant"]["source"], "question-panel");
+    assert_eq!(first["kind"], "grant_history");
+    assert_eq!(first["grant_history"]["what"], "rule");
+    assert_eq!(first["grant_history"]["source"], "question-panel");
     assert_eq!(
         first["text"],
-        "grant rule add api.example.com:443 allow always live"
+        "grant rule add api.example.com:443 allow always (historical; order unknown) unknown"
     );
 }
 
@@ -583,8 +659,8 @@ fn switching_to_allowlist_closes_only_unlisted_connections() {
     let (b, _bp) = UnixStream::pair().unwrap();
     let mut allowed = (gate.0)("allowed.example", 443, None).ok().unwrap();
     let mut denied = (gate.0)("other.example", 443, None).ok().unwrap();
-    allowed.hold(&a);
-    denied.hold(&b);
+    allowed.hold(&a).unwrap();
+    denied.hold(&b).unwrap();
     assert_eq!(fw.set_mode(Mode::Allowlist), 1);
     assert_eq!(fw.open_count(), 1);
 }
@@ -600,6 +676,7 @@ fn rejected_rule_is_not_recorded() {
         team: None,
     };
     let triple = Triple {
+        identity: None,
         app: "app".into(),
         host: "bad host".into(),
         port: 443,
@@ -608,7 +685,7 @@ fn rejected_rule_is_not_recorded() {
     assert!(
         super::super::grants::load(&super::super::session::Profile::new(profile))
             .unwrap()
-            .changes
+            .history_changes
             .is_empty()
     );
 }
@@ -625,6 +702,7 @@ fn grant_note_does_not_block_on_another_writer() {
         team: None,
     };
     let triple = Triple {
+        identity: None,
         app: "app".into(),
         host: "example.com".into(),
         port: 443,
@@ -636,12 +714,15 @@ fn grant_note_does_not_block_on_another_writer() {
 
 #[test]
 fn a_rejected_rule_does_not_publish_a_grant() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
     let t = tempfile::tempdir().unwrap();
     let env = crate::privfs::tests::env_in(t.path());
-    let bus = crate::eventstream::Bus::of(&env);
-    let follower = crate::eventstream::bus::Follower::bind(&bus, std::process::id()).unwrap();
-    let (tx, rx) = crate::eventstream::bus::queue();
-    follower.serve(tx).unwrap();
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let sink = events.clone();
+    GRANT_EVENT_HOOK.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(move |event| sink.borrow_mut().push(event)))
+    });
     let asker = Asker::new(
         env,
         "grant-rejection-test",
@@ -657,6 +738,7 @@ fn a_rejected_rule_does_not_publish_a_grant() {
         ..Default::default()
     };
     let mut triple = Triple {
+        identity: None,
         app: "app".into(),
         host: "valid.example".into(),
         port: 443,
@@ -667,14 +749,19 @@ fn a_rejected_rule_does_not_publish_a_grant() {
         &triple,
         BY_APPROVER,
         1,
-        Some(&bus),
+        None,
     );
-    let first = rx.recv_timeout(Duration::from_secs(2)).unwrap();
-    assert!(first.contains("grant-rejection-test"));
-    assert_eq!(
-        super::super::grants::load(&profile).unwrap().changes.len(),
-        1
-    );
+    assert_eq!(events.borrow().len(), 1);
+    assert!(matches!(
+        &events.borrow()[0],
+        crate::eventstream::Event::Stream(_)
+    ));
+    let history = || {
+        super::super::grants::load(&profile)
+            .unwrap()
+            .history_changes
+    };
+    assert_eq!(history().len(), 1);
     triple.host = "bad host".into();
     fw.apply_with_bus(
         ConnectAnswer::AllowAlways,
@@ -682,13 +769,11 @@ fn a_rejected_rule_does_not_publish_a_grant() {
         &triple,
         BY_APPROVER,
         2,
-        Some(&bus),
+        None,
     );
-    assert!(rx.recv_timeout(Duration::from_millis(200)).is_err());
-    assert_eq!(
-        super::super::grants::load(&profile).unwrap().changes.len(),
-        1
-    );
+    assert_eq!(events.borrow().len(), 1);
+    assert_eq!(history().len(), 1);
+    GRANT_EVENT_HOOK.with(|hook| *hook.borrow_mut() = None);
 }
 
 #[test]

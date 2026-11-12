@@ -47,7 +47,7 @@ fn write_exec(p: &Path, text: &str) {
 }
 
 struct World {
-    _tmp: tempfile::TempDir,
+    _tmp: common::TestDir,
     root: PathBuf,
     tools: PathBuf,
 }

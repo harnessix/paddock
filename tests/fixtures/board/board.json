@@ -1,0 +1,140 @@
+{
+  "version": 1,
+  "approvals_waiting": 1,
+  "compile_slots": [
+    {
+      "slot": 1,
+      "holder": "claude-alpha-71c3ac"
+    }
+  ],
+  "projects": [
+    {
+      "name": "alpha",
+      "path": "/TMP/src/alpha",
+      "tickets": [
+        {
+          "id": "MAIL2",
+          "title": "mail hooks",
+          "file": ".paddock/tickets/MAIL2-worker.md",
+          "state": "waiting",
+          "runs": [
+            {
+              "id": "0b0b0b",
+              "harness": "codex",
+              "model": "",
+              "state": "waiting",
+              "last": "git push to origin/main",
+              "since": "2026-11-11T15:58:00Z",
+              "card": true
+            },
+            {
+              "id": "0c0c0c",
+              "harness": "codex",
+              "model": "",
+              "state": "done",
+              "last": "done: hooks merged",
+              "since": "2026-11-11T12:00:00Z",
+              "card": false
+            }
+          ]
+        },
+        {
+          "id": "CR1",
+          "title": "corral",
+          "file": ".paddock/tickets/CR1-corral.md",
+          "state": "blocked",
+          "runs": [
+            {
+              "id": "0d0d0d",
+              "harness": "claude",
+              "model": "",
+              "state": "blocked",
+              "last": "blocked: needs the signing key",
+              "since": "2026-11-11T15:55:00Z",
+              "card": false
+            }
+          ]
+        },
+        {
+          "id": "KV2",
+          "title": "named kv namespaces",
+          "file": ".paddock/tickets/KV2-worker.md",
+          "state": "working",
+          "runs": [
+            {
+              "id": "71c3ac",
+              "harness": "claude",
+              "model": "claude-opus-5-5",
+              "state": "working",
+              "last": "KV2: code and 14 tests pass",
+              "since": "2026-11-11T15:45:00Z",
+              "card": false
+            }
+          ]
+        },
+        {
+          "id": "AUTH1",
+          "title": "login refresh",
+          "file": ".paddock/tickets/AUTH1-login.md",
+          "state": "open",
+          "runs": []
+        }
+      ],
+      "runs_without_ticket": [
+        {
+          "id": "0e0e0e",
+          "harness": "claude",
+          "model": "",
+          "state": "stuck",
+          "last": "idle with unread mail",
+          "since": "2026-11-11T15:40:00Z",
+          "card": false
+        },
+        {
+          "id": "0f0f0f",
+          "harness": "grok",
+          "model": "",
+          "state": "idle",
+          "last": "",
+          "since": "2026-11-11T15:48:20Z",
+          "card": false
+        }
+      ]
+    },
+    {
+      "name": "beta",
+      "path": "/TMP/src/beta",
+      "loft": "/TMP/data/paddock/loft/KEY/tree/.paddock",
+      "tickets": [
+        {
+          "id": "LF1",
+          "title": "change ledger",
+          "file": ".paddock/tickets/LF1-change-ledger.md",
+          "state": "waiting",
+          "runs": [
+            {
+              "id": "202020",
+              "harness": "claude",
+              "model": "",
+              "state": "waiting",
+              "last": "Which ledger format?",
+              "since": "2026-11-11T15:51:40Z",
+              "card": false
+            }
+          ]
+        }
+      ],
+      "runs_without_ticket": [
+        {
+          "id": "303030",
+          "harness": "codex",
+          "model": "",
+          "state": "stuck",
+          "last": "the screen does not change",
+          "since": "2026-11-11T15:56:00Z",
+          "card": false
+        }
+      ]
+    }
+  ]
+}

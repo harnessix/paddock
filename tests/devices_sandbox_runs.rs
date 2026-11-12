@@ -60,8 +60,7 @@ fn two_runs_get_their_own_instances_and_a_killed_run_leaves_none() {
     unsafe { libc::kill(a.id() as i32, libc::SIGKILL) };
     let _ = a.wait();
     let both_gone = || pids.iter().filter(|p| !alive(**p)).count() == 1;
-    let took = wait_for("one instance to die", Duration::from_secs(2), both_gone);
-    eprintln!("kill -9 of paddock to instance gone: {took:?}");
+    wait_for("one instance to die", Duration::from_secs(2), both_gone);
     std::fs::write(w.root.join("project/flags/go"), "").unwrap();
     let out = b.wait_with_output().unwrap();
     assert!(

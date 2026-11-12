@@ -6,7 +6,8 @@
 #      (docs/DESIGN.md, CLAUDE.md, CLAUDE.local.md, AGENTS.md, .claude/).
 #   2. A tracked file contains a blocked internal name.
 #   3. A tracked file contains a home path such as /home/<user>/.
-#      Use /home/demo/ in examples.
+#      Use /home/demo/ in examples, and /home/USER for the home of
+#      another user (a real user name is lowercase).
 #   4. A commit in the range (first argument, for example origin/main..HEAD)
 #      has an author or committer email that is not a noreply address.
 #   5. A tracked file is a document that is not on the public list below.
@@ -33,7 +34,7 @@ fi
 
 # The only documents this repository publishes. Anything else under docs/
 # (except images in docs/assets/), and any other text document, fails.
-public_docs='^(README\.md|mac/launcher/README\.md|CHANGELOG\.md|CONTRIBUTING\.md|SECURITY\.md|\.github/pull_request_template\.md|changes/[^/]+\.md|skills/[^/]+/SKILL\.md|skills/[^/]+/references/[^/]+\.md|docs/assets/[^/]+\.(png|gif|svg|jpg|jpeg|webp))$'
+public_docs='^(README\.md|mac/launcher/README\.md|tui/README\.md|CHANGELOG\.md|CONTRIBUTING\.md|SECURITY\.md|\.github/pull_request_template\.md|changes/[^/]+\.md|skills/[^/]+/SKILL\.md|skills/[^/]+/references/[^/]+\.md|src/help/[^/]+\.md|tests/fixtures/(readme|board)/[^/]+\.txt|docs/assets/[^/]+\.(png|gif|svg|jpg|jpeg|webp))$'
 docs=$(git ls-files | grep -iE '\.(md|markdown|txt|rst|adoc|org)$|^docs/' | grep -vE "$public_docs" || true)
 if [ -n "$docs" ]; then
   echo "leak guard: these documents must not be published (only code and the user docs):"; echo "$docs"; status=1
@@ -46,7 +47,10 @@ if [ -n "$hits" ]; then
   echo "leak guard: blocked internal name found:"; echo "$hits"; status=1
 fi
 
-hits=$(git grep -noIE '/home/[A-Za-z0-9_.-]+' -- . ":!$self" | grep -vE ':/home/demo$' || true)
+# A user name cannot start with a dot, so /home/.NAME is not a user's home:
+# the sandbox of an exclave peer has its home at /home (/home/.cargo).
+# /home/USER is the placeholder for the home of another user.
+hits=$(git grep -noIE '/home/[A-Za-z0-9_.-]+' -- . ":!$self" | grep -vE ':/home/(demo|USER|\.[A-Za-z0-9_.-]*)$' || true)
 if [ -n "$hits" ]; then
   echo "leak guard: private home path found (use /home/demo/):"; echo "$hits"; status=1
 fi

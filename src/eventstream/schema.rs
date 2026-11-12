@@ -121,9 +121,16 @@ pub struct Session {
 #[serde(rename_all = "snake_case")]
 pub enum QuestionState {
     Open,
+    /// A selection was recorded, or a rule resolved the question when
+    /// `by` is `rule`. This does not acknowledge persistence or a
+    /// completed connection.
     Answered,
+    /// This presentation was hidden without deciding the question.
+    Withdrawn,
     /// Too many questions: the session stopped asking one by one.
     Paused,
+    /// The pause notice was answered and the queue can move again.
+    Resumed,
 }
 
 /// A firewall question of a session in network mode `ask`.
@@ -131,7 +138,8 @@ pub enum QuestionState {
 pub struct Question {
     pub state: QuestionState,
     /// The id that `paddock approvals answer ID` takes. For `paused`, the
-    /// id of the notice.
+    /// id of the notice. `withdrawn` retires one presentation without an
+    /// answer; a later `open` uses a new id.
     pub id: String,
     /// The app profile.
     pub app: String,
@@ -142,11 +150,11 @@ pub struct Question {
     /// The executable in the guest that connects, when the guest told it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub process: Option<String>,
-    /// For `answered`: `allow-once`, `allow-session`, `allow-always`,
-    /// `deny` or `deny-always`.
+    /// For `answered`: the selected answer, or the synthetic decision when
+    /// `by` is `rule`, not an applied-rule or persistence acknowledgement.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub answer: Option<String>,
-    /// For `answered`: `user`, `approver` or `rule`.
+    /// For `answered`: `user`, `cli`, `approver` or `rule`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub by: Option<String>,
     /// For `paused`: the open questions.
@@ -187,6 +195,8 @@ pub enum Applies {
     NextStart,
     /// Live, but the app holds a file of the old grant open.
     ReopenFiles,
+    /// The effect is historical and may have been superseded.
+    Unknown,
 }
 
 /// A change of what an app may do.

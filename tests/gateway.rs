@@ -24,7 +24,7 @@ echo "EXEC_OUT $out"
 "#;
 
 struct World {
-    _tmp: tempfile::TempDir,
+    _tmp: common::TestDir,
     root: PathBuf,
 }
 

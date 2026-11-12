@@ -141,7 +141,7 @@ fn a_damaged_or_newer_file_is_never_written_over() {
     assert!(e.contains("is damaged"), "{e}");
     assert!(update(&p, |_| Ok(())).is_err());
     assert_eq!(std::fs::read_to_string(path(&p)).unwrap(), "{not json");
-    // A start goes on with the defaults and one line.
+    // A start disables saved capabilities and warns.
     let (g, line) = load_for_start(&p);
     assert_eq!(
         g.clipboard,
@@ -151,6 +151,7 @@ fn a_damaged_or_newer_file_is_never_written_over() {
         }
     );
     assert!(g.shares.is_empty());
+    assert_eq!(g.network.as_deref(), Some("none"));
     assert!(line
         .unwrap()
         .contains("This start uses none of its folders"));
@@ -286,8 +287,8 @@ fn the_grants_join_the_roots_of_a_start() {
         Ok(())
     })
     .unwrap();
-    let (merged, network) = for_start(&p, &roots);
-    assert_eq!(network.as_deref(), Some("allowlist"));
+    let (merged, saved) = for_start(&p, &roots);
+    assert_eq!(saved.network.as_deref(), Some("allowlist"));
     assert_eq!(
         merged,
         [
@@ -378,4 +379,129 @@ fn save_syncs_the_parent_directory_and_reports_failure() {
     })
     .unwrap_err();
     assert!(format!("{error:#}").contains("directory sync failed"));
+}
+
+#[test]
+fn a_missing_policy_of_a_profile_that_saved_one_starts_closed() {
+    let t = tempfile::tempdir().unwrap();
+    let p = profile(t.path());
+    // A new profile: the defaults, no warning.
+    let (g, line) = load_for_start(&p);
+    assert_eq!((g.network, line), (None, None));
+    update(&p, |g| {
+        g.network = Some("none".into());
+        Ok(())
+    })
+    .unwrap();
+    std::fs::remove_file(path(&p)).unwrap();
+    let (g, line) = load_for_start(&p);
+    assert_eq!(g.network.as_deref(), Some("none"));
+    assert!(!g.clipboard.to_app && !g.clipboard.from_app);
+    let line = line.expect("a missing saved policy warns");
+    assert!(line.contains("is missing"), "{line}");
+    // Following the damaged-file text: move it away, then start.
+    std::fs::write(path(&p), "{not json").unwrap();
+    std::fs::remove_file(p.dir.join("grants.saved")).ok();
+    assert!(load_for_start(&p).1.unwrap().contains("move it away"));
+    std::fs::rename(path(&p), t.path().join("moved.json")).unwrap();
+    let (g, line) = load_for_start(&p);
+    assert_eq!(g.network.as_deref(), Some("none"));
+    assert!(line.unwrap().contains("paddock app network NAME"));
+    // The way back: set the network again.
+    update(&p, |g| {
+        g.network = Some("ask".into());
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(load_for_start(&p), (load(&p).unwrap(), None));
+}
+
+#[test]
+fn a_start_reads_the_network_again_under_the_lock() {
+    let t = tempfile::tempdir().unwrap();
+    let p = profile(t.path());
+    update(&p, |g| {
+        g.network = Some("ask".into());
+        Ok(())
+    })
+    .unwrap();
+    let (_, earlier) = for_start(&p, &[]);
+    assert_eq!(earlier.network.as_deref(), Some("ask"));
+    // A restrictive change between the first read and the session.
+    update(&p, |g| {
+        g.network = Some("none".into());
+        Ok(())
+    })
+    .unwrap();
+    let policy = confirm_start(&p, &earlier).unwrap();
+    assert_eq!(policy.network.as_deref(), Some("none"));
+    // Until the record exists, no grants command gets the lock.
+    assert!(Lock::take_with(&p, true).is_err());
+    let e = confirm_start_within(&p, &earlier, std::time::Duration::ZERO)
+        .err()
+        .unwrap();
+    assert!(format!("{e:#}").contains("holds"), "{e:#}");
+    drop(policy);
+    // Changed saved folders refuse the start.
+    update(&p, |g| {
+        g.shares.clear();
+        g.shares.push(FolderGrant {
+            path: "/h/me/src".into(),
+            read_only: true,
+            unprotected: false,
+            added: 1,
+        });
+        Ok(())
+    })
+    .unwrap();
+    let e = confirm_start(&p, &earlier).err().unwrap();
+    assert!(e.to_string().contains("Nothing started"), "{e}");
+}
+
+#[test]
+fn a_save_while_the_saved_policy_is_missing_does_not_reopen_the_start() {
+    let t = tempfile::tempdir().unwrap();
+    let p = profile(t.path());
+    update(&p, |g| {
+        g.network = Some("none".into());
+        Ok(())
+    })
+    .unwrap();
+    std::fs::remove_file(path(&p)).unwrap();
+    // A clipboard change, a rule note: neither writes a policy without a network word.
+    let e = update(&p, |g| {
+        g.clipboard.to_app = false;
+        Ok(())
+    })
+    .unwrap_err();
+    assert!(
+        format!("{e:#}").contains("saves no other grant change"),
+        "{e:#}"
+    );
+    note(&p, change(1), t.path());
+    note_bounded(&p, change(2), t.path());
+    assert!(!path(&p).exists());
+    let (g, line) = load_for_start(&p);
+    assert_eq!(g.network.as_deref(), Some("none"));
+    assert!(line.unwrap().contains("is missing"));
+    // Setting the network is the way back.
+    update(&p, |g| {
+        g.network = Some("allowlist".into());
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(load_for_start(&p).0.network.as_deref(), Some("allowlist"));
+}
+
+#[test]
+fn a_start_does_not_wait_on_a_lock_error_that_is_not_busy() {
+    let t = tempfile::tempdir().unwrap();
+    std::fs::write(t.path().join("file"), "").unwrap();
+    // The profile folder cannot be made: ENOTDIR, not another command.
+    let p = Profile::new(t.path().join("file/profile"));
+    let e = confirm_start_within(&p, &Grants::default(), std::time::Duration::from_secs(2))
+        .err()
+        .unwrap();
+    assert!(!format!("{e:#}").contains("holds"), "{e:#}");
+    assert!(format!("{e:#}").contains("cannot read or make"), "{e:#}");
 }

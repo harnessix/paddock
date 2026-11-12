@@ -4,6 +4,14 @@ on:
   pull_request:
   push:
     branches: [main]
+  # The release workflow runs these checks on the commit of its tag and
+  # publishes nothing when one fails.
+  workflow_call:
+    inputs:
+      ref:
+        description: The commit to check
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -15,15 +23,41 @@ jobs:
   rust:
     name: fmt, clippy, test
     runs-on: ubuntu-24.04
+    # test-limit.sh stops a hung test binary after 15 minutes. This limit
+    # is for a hang outside the tests, for example in the build.
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
+          # Empty outside a workflow_call: the commit of the event.
+          ref: ${{ inputs.ref }}
+      - uses: ./.github/actions/rust
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
+      # tests/split.rs runs paddock split on a real tmux server.
+      - name: Install tmux
+        run: command -v tmux || (sudo apt-get update && sudo apt-get install -y tmux)
+      # Cargo starts each test binary through test-limit.sh. A binary that
+      # runs longer than 15 minutes fails with the names of its running tests.
       - run: cargo test --locked
+        env:
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: ${{ github.workspace }}/.github/scripts/test-limit.sh
+      # The sandbox pane of paddock split needs bwrap. Ubuntu 24.04 blocks
+      # unprivileged user namespaces through AppArmor, so allow them on this
+      # throwaway runner. PADDOCK_TEST_BWRAP makes a skip fail.
+      - name: Install bubblewrap, allow unprivileged user namespaces
+        run: |
+          command -v bwrap || (sudo apt-get update && sudo apt-get install -y bubblewrap)
+          if sysctl -n kernel.apparmor_restrict_unprivileged_userns >/dev/null 2>&1; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
+          bwrap --unshare-all --ro-bind / / true
+      - name: Split, sandbox pane
+        run: cargo test --locked --test split a_sandbox_pane
+        env:
+          PADDOCK_TEST_BWRAP: "1"
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: ${{ github.workspace }}/.github/scripts/test-limit.sh
 
   # No Linux step checks the macOS target: ring and the bundled SQLite
   # compile C code that needs the headers of the Apple SDK. This job covers
@@ -31,15 +65,19 @@ jobs:
   rust-macos:
     name: fmt, clippy, test (macOS)
     runs-on: macos-15
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
+          # Empty outside a workflow_call: the commit of the event.
+          ref: ${{ inputs.ref }}
+      - uses: ./.github/actions/rust
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test --locked
+        env:
+          CARGO_TARGET_AARCH64_APPLE_DARWIN_RUNNER: ${{ github.workspace }}/.github/scripts/test-limit.sh
       # The release signs paddock-vm the same way. This step finds a broken
       # entitlements file before a release does.
       - name: Sign paddock-vm
@@ -52,9 +90,12 @@ jobs:
     name: escape probe (bwrap)
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # Empty outside a workflow_call: the commit of the event.
+          ref: ${{ inputs.ref }}
+      - uses: ./.github/actions/rust
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Install bubblewrap, passt, iproute2
         run: sudo apt-get update && sudo apt-get install -y bubblewrap passt iproute2
       # Ubuntu 24.04 blocks unprivileged user namespaces through AppArmor.
@@ -67,7 +108,7 @@ jobs:
           bwrap --unshare-all --ro-bind / / true
       # With mise, the probe also checks that a project's mise config cannot
       # write the shared tool installs.
-      - uses: jdx/mise-action@v2
+      - uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac # v2.4.4
         with:
           install: false
       - run: cargo build --locked
@@ -82,19 +123,49 @@ jobs:
           echo "::notice::Skipped --gui and --app probes: the runner has no Wayland compositor."
           echo "::notice::Skipped docker, podman and srt probes: run bin/test on a workstation for these."
 
+  # The terminal UI (tui/): typecheck, lint, the Ink tests, the PTY tests
+  # with node, and the same PTY tests against the bun single binary.
+  tui:
+    name: terminal UI
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: tui
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # Empty outside a workflow_call: the commit of the event.
+          ref: ${{ inputs.ref }}
+      - uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac # v2.4.4
+        with:
+          working_directory: tui
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - run: node scripts/compile.mjs linux-x64
+      - run: npx vitest run test/pty.test.ts
+        env:
+          PADDOCK_TUI_UNDER_TEST: ${{ github.workspace }}/tui/bin/paddock-tui-linux-x64
+
   file-size:
     name: file size
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # Empty outside a workflow_call: the commit of the event.
+          ref: ${{ inputs.ref }}
       - run: .github/scripts/file-size.sh
 
   leak-guard:
     name: leak guard
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
+          ref: ${{ inputs.ref }}
           fetch-depth: 0
       - name: Check files and commit emails
         env:

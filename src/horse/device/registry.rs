@@ -31,6 +31,8 @@ pub enum Answer {
     Denied,
     /// Nobody answered in this many seconds.
     TimedOut(u64),
+    /// The approval store could not establish the outcome.
+    Unknown,
 }
 
 /// What the broker gives this module: the approval card, the ledger, and
@@ -89,6 +91,13 @@ fn not_approved(
     subject: &str,
 ) -> Response {
     match answer {
+        Answer::Unknown => {
+            host.record(&format!("{kind} approval outcome unknown {subject}"));
+            fail(
+                Status::Failed,
+                format!("{what} was not approved: the approval outcome is unknown"),
+            )
+        }
         Answer::TimedOut(secs) => {
             host.record(&format!("{kind} timed out {subject}"));
             fail(

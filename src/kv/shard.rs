@@ -9,6 +9,7 @@
 //! | `pasture/<project hash>/<name>.db` | one named pasture |
 //! | `sandbox/<id>.db` | the `self` scope of one run, and its own pasture |
 //! | `tree/<root id>.db` | the `tree` scope of one spawn tree |
+//! | `ns/<name>.db` | one namespace of `[kv.namespaces]` (namespace.rs) |
 //! | `store.db` | the `project` scope of older paddock versions: only the host reads it |
 //!
 //! The service of a sandbox opens only the files of the scopes that it can
@@ -73,6 +74,8 @@ pub enum Ns {
     /// The `tree` scope of a spawn tree, by its root.
     Tree(String),
     User,
+    /// A namespace of `[kv.namespaces]`, by name.
+    Named(String),
     /// The `project` scope of older paddock versions.
     Legacy(PathBuf),
 }
@@ -90,6 +93,7 @@ impl Ns {
             ),
             Ns::Tree(root) => format!("tree:{root}"),
             Ns::User => "user".into(),
+            Ns::Named(name) => format!("ns:{name}"),
             Ns::Legacy(project) => format!("project:{}", project.display()),
         }
     }
@@ -111,6 +115,10 @@ impl Ns {
                 root.join("tree").join(format!("{id}.db"))
             }
             Ns::User => root.join("user.db"),
+            Ns::Named(name) => {
+                super::namespace::check_name(name)?;
+                root.join("ns").join(format!("{name}.db"))
+            }
             Ns::Legacy(_) => legacy(root),
         })
     }
@@ -145,6 +153,22 @@ pub fn pastures_of(root: &Path, project: &Path) -> Vec<String> {
             n.strip_suffix(".db").map(str::to_string)
         })
         .filter(|n| crate::pasture::check_name(n).is_ok())
+        .collect();
+    out.sort();
+    out
+}
+
+/// The namespaces of `[kv.namespaces]` that have a file, by name.
+pub fn named(root: &Path) -> Vec<String> {
+    let mut out: Vec<String> = std::fs::read_dir(root.join("ns"))
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| {
+            let n = e.file_name().to_string_lossy().into_owned();
+            n.strip_suffix(".db").map(str::to_string)
+        })
+        .filter(|n| super::namespace::check_name(n).is_ok())
         .collect();
     out.sort();
     out
@@ -225,6 +249,9 @@ mod tests {
         assert_eq!(Ns::User.file(r).unwrap(), r.join("user.db"));
         assert_eq!(Ns::Tree("a1".into()).file(r).unwrap(), r.join("tree/a1.db"));
         assert_eq!(Ns::Legacy(p.into()).file(r).unwrap(), r.join("store.db"));
+        let hb = Ns::Named("host-build".into());
+        assert_eq!(hb.file(r).unwrap(), r.join("ns/host-build.db"));
+        assert_eq!(hb.key(), "ns:host-build");
     }
 
     #[test]
@@ -234,5 +261,11 @@ mod tests {
             assert!(Ns::pasture(Path::new("/p"), &format!("solo-{bad}")).is_err());
         }
         assert!(Ns::pasture(Path::new("/p"), "../x").is_err());
+        for bad in ["", "../x", "a/b", "-x", "Upper", "a b", ".x"] {
+            assert!(
+                Ns::Named(bad.into()).file(Path::new("/k")).is_err(),
+                "{bad}"
+            );
+        }
     }
 }

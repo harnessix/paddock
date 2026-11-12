@@ -309,7 +309,13 @@ impl Broker {
             ) => match task {
                 Some((spot, want)) => self.start_task(sp, harness, opts.clone(), spot, want),
                 None => match sp.start(harness, prompt, opts.clone()) {
-                    Ok(s) => Response::done(to_json(&s)),
+                    Ok(s) => {
+                        // `paddock board` maps the child to its ticket file.
+                        let file = arg_str(req, "prompt_file").map(std::path::Path::new);
+                        let model = s.pick.model.as_deref();
+                        crate::board::origin::note(&self.env, &s.sandbox, file, prompt, model);
+                        Response::done(to_json(&s))
+                    }
                     Err(e) => Response::new(Status::Failed, format!("{e:#}")),
                 },
             },

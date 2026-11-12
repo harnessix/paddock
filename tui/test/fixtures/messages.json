@@ -1,0 +1,5 @@
+[
+  {"seq": 1, "ts": 1000, "from": "user", "kind": "say", "text": "start with the tests", "dir": "down", "state": "read"},
+  {"seq": 2, "ts": 1100, "from": "agent", "kind": "status", "text": "working", "dir": "up"},
+  {"seq": 3, "ts": 1200, "from": "agent", "kind": "ask", "text": "Which ledger \u001b[31mformat\u001b[0m?", "dir": "up"}
+]

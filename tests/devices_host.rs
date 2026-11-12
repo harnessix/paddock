@@ -25,7 +25,7 @@ const MARK: &str = "marker-7f3a";
 /// A temporary home with a marker file, a marker variable and a bin
 /// folder on the PATH.
 struct World {
-    _tmp: tempfile::TempDir,
+    _tmp: common::TestDir,
     root: PathBuf,
     env: HostEnv,
 }
@@ -209,12 +209,7 @@ fn a_host_exec_device_sees_the_home_and_the_environment_and_runs_in_cwd() {
         "cwd = \"~/notes\"\nenv = { EDITOR = \"vi\" }\n",
     );
     let (dev, rec) = w.device(d, "box1", Answer::Session);
-    let t = Instant::now();
     let out = dev.call(&call(), b"--evil; rm -rf /\n$(id)").unwrap();
-    eprintln!(
-        "first host request, supervisor start included: {:?}",
-        t.elapsed()
-    );
     let out = text(&out);
     let (head, body) = out.split_once("\n\n").unwrap();
     assert_eq!(head, "status: exit 0\nstderr: oops");

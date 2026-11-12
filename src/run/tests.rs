@@ -174,6 +174,8 @@ mod cleanup_tests {
         let mut vars = BTreeMap::new();
         vars.insert("PATH".into(), std::env::var("PATH").unwrap_or_default());
         let env = HostEnv::from_parts(home, "t".into(), 1000, 1000, vars);
+        // The run starts the view server of this HOME. Stop it at the end.
+        let _server = crate::view::guard::TmuxGuard::socket(crate::view::socket(&env));
         let profile: Profile = toml::from_str("name = \"t\"\n").unwrap();
         let h = Harness {
             profile,
@@ -211,5 +213,85 @@ mod cleanup_tests {
             "borrow folder left behind: {}",
             borrow_dir.display()
         );
+    }
+
+    /// srt's home rule with a harness that ends at once.
+    struct SrtHome;
+
+    impl Backend for SrtHome {
+        fn name(&self) -> &'static str {
+            "test"
+        }
+        fn check(&self, _: &HostEnv, _: &crate::spec::SandboxSpec) -> Result<()> {
+            Ok(())
+        }
+        fn harness_home(&self, spec: &crate::spec::SandboxSpec) -> PathBuf {
+            crate::backend::srt::Srt.harness_home(spec)
+        }
+        fn render(
+            &self,
+            env: &HostEnv,
+            spec: &crate::spec::SandboxSpec,
+            _: bool,
+        ) -> Result<Launch> {
+            // `true` is /bin/true on Linux and /usr/bin/true on macOS.
+            Ok(Launch {
+                program: env.which("true").expect("true on PATH"),
+                args: vec![],
+                env: crate::backend::base_env(env, spec),
+                files: vec![],
+            })
+        }
+    }
+
+    /// Review of HOOK1, item a: `run` gives the spec the home that the
+    /// backend's harness sees before it writes the sandbox home, so on srt
+    /// the Codex hook trust names the sandbox home at its host path. After
+    /// the write, the run records delivery through the mail hooks.
+    #[test]
+    fn a_codex_run_on_srt_trusts_its_hooks_under_the_home_that_codex_sees() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let project = tmp.path().join("proj");
+        std::fs::create_dir_all(home.join(".config/paddock")).unwrap();
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(
+            home.join(".config/paddock/config.toml"),
+            "[devices]\nmount = false\n[kv]\nenabled = false\n",
+        )
+        .unwrap();
+        let mut vars = BTreeMap::new();
+        vars.insert("PATH".into(), std::env::var("PATH").unwrap_or_default());
+        let env = HostEnv::from_parts(home.clone(), "t".into(), 1000, 1000, vars);
+        // The run starts the view server of this HOME. Stop it at the end.
+        let _server = crate::view::guard::TmuxGuard::socket(crate::view::socket(&env));
+        let h = Harness {
+            profile: crate::profile::builtin("codex").unwrap(),
+            exe: PathBuf::from("/usr/bin/true"),
+            install_mounts: vec![],
+            path_dirs: vec![],
+            source: "test".into(),
+        };
+        let opts = Options {
+            harness: "codex".into(),
+            project: Some(project),
+            assume_yes: true,
+            inherit_env: Some(false),
+            ..Default::default()
+        };
+        let built = build_with(&env, &opts, h).unwrap();
+        let id = built.spec.id.clone();
+        let home_src = built.spec.home_src.clone();
+        assert_ne!(home_src, home);
+        let out = run(&env, built, &SrtHome, true, true).unwrap();
+        assert_eq!(out.code, 0);
+        let cfg = std::fs::read_to_string(home_src.join(".codex/config.toml")).unwrap();
+        let doc: toml::Table = toml::from_str(&cfg).unwrap();
+        let keys: Vec<&String> = doc["hooks"]["state"].as_table().unwrap().keys().collect();
+        let seen = format!("{}/.codex/hooks.json:", home_src.display());
+        assert_eq!(keys.len(), 3, "{keys:?}");
+        assert!(keys.iter().all(|k| k.starts_with(&seen)), "{keys:?}");
+        let info = crate::mail::run_info(&env, &id).expect("the run's mailbox");
+        assert_eq!(info.delivery.as_deref(), Some(crate::mail::deliver::HOOKS));
     }
 }

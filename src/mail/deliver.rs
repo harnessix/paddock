@@ -1,7 +1,9 @@
 //! Delivery of down mail to an agent that does not read its mailbox.
 //!
 //! A Claude Code run gets two hooks from paddock (hostcli/status.rs
-//! `harness_args`, hostcli/mail_hook.rs):
+//! `harness_args`, hostcli/mail_hook.rs). A Codex run gets the same two in
+//! the sandbox copy of `~/.codex/hooks.json` (profiles/codex.toml), trusted
+//! by their hash (hooks/write.rs):
 //!
 //! - Stop: when the agent ends its turn with unread down mail, the hook
 //!   blocks the stop and gives the messages as the reason, so the agent
@@ -385,6 +387,45 @@ pub fn of_command(command: &[String]) -> Option<&'static str> {
         .iter()
         .any(|a| a.contains(STOP_COMMAND))
         .then_some(HOOKS)
+}
+
+/// `hooks` when the run gives the harness the mail hooks: in its command
+/// (Claude Code `--settings`) or in a settings file that paddock writes
+/// into the sandbox home (Codex `hooks.json`). Codex runs a hook of that
+/// file only with its trust, so for a run with a Codex trust file the
+/// sandbox home must hold the trust of each of paddock's hooks
+/// (`hooks::codex_paddock_trusted`). Before the home is written it does
+/// not, and `record_hooks` checks again after the write.
+pub fn of_spec(spec: &crate::spec::SandboxSpec) -> Option<&'static str> {
+    of_command(&spec.command).or_else(|| {
+        let in_file = spec
+            .home_settings
+            .iter()
+            .any(|s| s.value.to_string().contains(STOP_COMMAND));
+        let needs_trust = spec.hooks.iter().any(|t| t.codex_trust.is_some());
+        let runs = !needs_trust || crate::hooks::codex_paddock_trusted(spec).unwrap_or(false);
+        (in_file && runs).then_some(HOOKS)
+    })
+}
+
+/// Record in the run whether its harness runs the mail hooks, so that
+/// `paddock mail send` does not promise a delivery that never comes. A
+/// horse relay (`RELAY`) stays as it is.
+pub fn record_hooks(env: &HostEnv, id: &str, hooks: bool) -> Result<()> {
+    let d = super::dir(env, id)?;
+    let _lock = super::lock(&d)?;
+    let Some(mut info) = super::run_info(env, id) else {
+        return Ok(());
+    };
+    if info.delivery.as_deref() == Some(RELAY) {
+        return Ok(());
+    }
+    let want = hooks.then(|| HOOKS.to_string());
+    if info.delivery != want {
+        info.delivery = want;
+        super::set_run_info(env, &info)?;
+    }
+    Ok(())
 }
 
 /// Queue unread mail in order for the pty custody. The mailbox lock also

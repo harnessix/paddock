@@ -41,6 +41,11 @@ struct Harness {
         if start {
             let service = self.service
             await store.start(locate: { "/fake/paddock" }, makeService: { _ in service })
+            if store.binary.isUsable {
+                await waitUntil { runner.feed(PaddockArgs.events).isOpen }
+                runner.feed(PaddockArgs.events).send(#"{"v":1,"kind":"stream","state":"started"}"#)
+                await waitUntil { runner.calls(startingWith: PaddockArgs.approvals).count >= 2 && !store.questionSnapshotPending }
+            }
         }
     }
 

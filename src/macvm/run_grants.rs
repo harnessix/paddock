@@ -8,7 +8,6 @@
 //! folder is shared, the shim asks the guest for the open file handles
 //! every few seconds and writes them into the session record.
 
-use super::firewall::Mode;
 use super::grants_live::{Op, Planned, HANDLES_EVERY};
 use super::proto::{ErrorCode, Outcome, ReplyData, Request};
 use super::run::{Session, Why};
@@ -217,7 +216,7 @@ impl Session<'_> {
         let mut answer = planned.answer;
         match &op {
             Op::Network { mode } => {
-                let m = Mode::parse(mode).unwrap_or(Mode::Ask);
+                let m = super::gate::startup_mode(mode);
                 answer.closed = Some(self.firewall.set_mode(m));
                 let word = mode.clone();
                 self.update_record(|v| v["network_mode"] = serde_json::json!(word));

@@ -7,6 +7,12 @@ cd "$root"
 
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
+# A host with bwrap and a user bus can run the exclave peer tests, so a
+# skip there is a failure (tests/common/mod.rs, peer_host_ready).
+if [ "$(uname -s)" = Linux ] && command -v bwrap >/dev/null &&
+   [ -S "/run/user/$(id -u)/bus" ]; then
+  export PADDOCK_REQUIRE_PEER="${PADDOCK_REQUIRE_PEER:-1}"
+fi
 cargo test
 
 .github/scripts/leak-guard.sh

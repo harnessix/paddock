@@ -107,11 +107,9 @@ fn the_view_of_a_device_program_under_seatbelt() {
     let out = w.check("up", "abc");
     assert_eq!(body(&out), "ABC", "{out}");
     assert!(out.contains("status exit 0, http 200"), "{out}");
-    eprintln!("exec device start (seatbelt): {} ms", started_ms(&out));
     if python().is_some() {
         let out = w.check("ups", "abc");
         assert_eq!(response(&out), "ABC", "{out}");
-        eprintln!("serve device start (seatbelt): {} ms", started_ms(&out));
     }
     // caller = ["project:ro"]: the project at its host path, read-only.
     // Seatbelt refuses the write with EPERM.
@@ -299,8 +297,10 @@ fn an_ssh_agent_credential_gives_a_filtering_agent_and_no_key_file() {
     );
 }
 
-#[test]
-fn an_instance_dies_with_its_paddock_process_and_logs_show_the_program() {
+/// A world with the exec device `up`, whose program writes LOGLINE-77
+/// to its log and answers in capitals, or sleeps for `sleep`. Its table
+/// has `mem` and `cpus`, which macOS ignores.
+fn up_world() -> World {
     let w = World::new("");
     let dev = w.root.join("dev").display().to_string();
     std::fs::write(
@@ -314,25 +314,39 @@ fn an_instance_dies_with_its_paddock_process_and_logs_show_the_program() {
         "up.sh",
         "echo LOGLINE-77 >&2\nread -r line\ncase \"$line\" in sleep) sleep 60 ;; *) echo \"$line\" | tr a-z A-Z ;; esac",
     );
-    // Ten starts: the p50 and p95 for the record. mem and cpus are
-    // ignored, the instance starts.
+    w
+}
+
+/// The p50 and p95 of ten device sandbox starts, on purpose only.
+#[test]
+#[ignore = "measurement: p50 and p95 of ten device sandbox starts; run it on purpose with --ignored"]
+fn the_device_sandbox_start_p50_and_p95() {
+    let w = up_world();
     let mut times = Vec::new();
     for _ in 0..10 {
-        let out = w.check("up", "abc");
-        // up.sh ends with `echo`: the body ends with its newline.
-        assert_eq!(body(&out), "ABC\n", "{out}");
-        times.push(started_ms(&out));
+        times.push(started_ms(&w.check("up", "abc")));
     }
     times.sort_unstable();
     eprintln!(
         "device sandbox start (seatbelt, exec, health answered): p50 {} ms, p95 {} ms",
         times[4], times[9]
     );
+}
+
+#[test]
+fn an_instance_dies_with_its_paddock_process_and_logs_show_the_program() {
+    let w = up_world();
+    // Two starts. mem and cpus are ignored, the instance starts.
+    for _ in 0..2 {
+        let out = w.check("up", "abc");
+        // up.sh ends with `echo`: the body ends with its newline.
+        assert_eq!(body(&out), "ABC\n", "{out}");
+    }
     // The log of a check stays, with the program's stderr.
     let logs = w.root.join("state/paddock/devices/log/up");
     assert_eq!(
         std::fs::read_dir(&logs).unwrap().count(),
-        10,
+        2,
         "one log per check"
     );
     let one = std::fs::read_dir(&logs)
@@ -380,10 +394,9 @@ fn an_instance_dies_with_its_paddock_process_and_logs_show_the_program() {
     // SAFETY: SIGKILL to our own child.
     unsafe { libc::kill(child.id() as i32, libc::SIGKILL) };
     let _ = child.wait();
-    let gone = wait_for("the instance to die", Duration::from_secs(2), || {
+    wait_for("the instance to die", Duration::from_secs(2), || {
         !alive(pid)
     });
-    eprintln!("paddock killed to instance gone: {gone:?}");
     // The state file is stale now; the next start clears it and the
     // socket folders of the dead instance.
     assert_eq!(w.state_files("up").len(), 1);

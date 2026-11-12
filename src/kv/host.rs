@@ -22,7 +22,7 @@ impl Target {
         match self {
             Target::One(ns) => Ok(ns),
             Target::Project(_) => bail!(
-                "name the pasture with --pasture NAME (`paddock kv list` shows the pastures of this project), or use --sandbox, --tree, --user or --legacy"
+                "name the pasture with --pasture NAME (`paddock kv list` shows the pastures of this project), or use --sandbox, --tree, --user, --ns NAME or --legacy"
             ),
         }
     }
@@ -37,6 +37,7 @@ impl Target {
             }
             Target::One(Ns::Tree(root)) => format!("spawn tree of sandbox {root}"),
             Target::One(Ns::User) => "user scope".into(),
+            Target::One(Ns::Named(name)) => format!("namespace ns:{name}"),
             Target::One(Ns::Legacy(p)) => {
                 format!("project scope of an older paddock for {}", p.display())
             }
@@ -387,6 +388,44 @@ fn quota(env: &HostEnv) -> Result<Quota> {
     })
 }
 
+/// `paddock kv put|watch|claim --ns NAME`: the user on the host uses a
+/// namespace through the same service as a sandbox, so versions, leases,
+/// limits and the audit log are the same. The writer is `user`.
+pub fn in_namespace(env: &HostEnv, name: &str, mut req: super::Request) -> Result<i32> {
+    super::namespace::check_name(name)?;
+    let cfg = KvCfg::load(env)?;
+    req.scope = Some(super::Scope::Ns);
+    req.namespace = Some(name.into());
+    let id = super::Identity {
+        sandbox: HOST.sandbox.into(),
+        harness: HOST.harness.into(),
+        project: PathBuf::new(),
+        pasture: None,
+        parent: None,
+        chain: Vec::new(),
+        tree: None,
+    };
+    let svc = super::Service::new(
+        env.clone(),
+        id,
+        cfg,
+        std::sync::Arc::new(crate::broker::HostApprover),
+        std::time::Duration::from_secs(1),
+    )
+    .with_live_namespaces()
+    .as_host_user();
+    let resp = svc.handle(&req, None);
+    if resp.status == super::Status::Done {
+        println!("{}", serde_json::to_string_pretty(&resp.result)?);
+    } else {
+        if !resp.result.is_null() {
+            println!("{}", serde_json::to_string_pretty(&resp.result)?);
+        }
+        eprintln!("paddock: {}", resp.message);
+    }
+    Ok(resp.status.exit_code())
+}
+
 /// The project of a folder, as paddock names it at a sandbox start.
 pub fn project_of(dir: Option<&Path>) -> Result<PathBuf> {
     crate::build::resolve_project(dir)
@@ -467,10 +506,33 @@ pub fn overview(env: &HostEnv) -> Result<serde_json::Value> {
             }
         }
     }
+    let mut names = shard::named(&root);
+    if let Ok(cfg) = KvCfg::load(env) {
+        names.extend(cfg.namespaces.into_keys());
+    }
+    names.sort();
+    names.dedup();
+    let mut namespaces = Vec::new();
+    for name in names {
+        let ns = Ns::Named(name.clone());
+        let (keys, leases) = match open(env, &ns)? {
+            Some(st) => {
+                let (items, _) = st.list(&ns.key(), "", usize::MAX, now)?;
+                let leases = items
+                    .iter()
+                    .filter(|m| m.key.starts_with(LEASE_PREFIX))
+                    .count();
+                (items.len(), leases)
+            }
+            None => (0, 0),
+        };
+        namespaces.push(serde_json::json!({ "name": name, "keys": keys, "leases": leases }));
+    }
     Ok(serde_json::json!({
         "api_version": "paddock.kv/v1",
         "pastures": rows,
         "user": user,
+        "namespaces": namespaces,
         "legacy": legacy,
     }))
 }
@@ -481,4 +543,18 @@ fn pasture_project(ns: &str) -> Option<PathBuf> {
     let rest = ns.strip_prefix("pasture:")?;
     let (project, _name) = rest.rsplit_once(':')?;
     Some(PathBuf::from(project))
+}
+
+/// The live leases of the user scope whose names start with `prefix`, as
+/// (name without `lease:`, holder), for `paddock board`.
+pub fn user_leases(env: &HostEnv, prefix: &str, now: u64) -> Result<Vec<(String, String)>> {
+    let Some(st) = open(env, &Ns::User)? else {
+        return Ok(Vec::new());
+    };
+    let want = format!("{LEASE_PREFIX}{prefix}");
+    let (items, _) = st.list(&Ns::User.key(), &want, usize::MAX, now)?;
+    Ok(items
+        .into_iter()
+        .map(|m| (m.key[LEASE_PREFIX.len()..].to_string(), m.writer))
+        .collect())
 }

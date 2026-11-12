@@ -32,6 +32,10 @@ pub mod sshd;
 
 const PARENT_VAR: &str = "PADDOCK_TEST_PARENT";
 
+/// A test folder whose tmux servers stop at the end of the test.
+#[allow(unused_imports)]
+pub use paddock::view::guard::{guarded, TestDir};
+
 fn passwd_home() -> io::Result<PathBuf> {
     // SAFETY: getpwuid_r writes only to the supplied record and buffer. The
     // home is copied while that buffer is still alive.
@@ -125,7 +129,8 @@ pub fn fits_socket_paths(parent: &Path) -> bool {
 }
 
 /// A new, test-owned folder for one test. No other test folder is removed.
-pub fn tempdir() -> tempfile::TempDir {
+/// Its tmux servers stop at the end of the test.
+pub fn tempdir() -> TestDir {
     let env_home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .expect("HOME is needed to protect the user's folders");
@@ -161,9 +166,65 @@ pub fn tempdir() -> tempfile::TempDir {
     } else {
         Err(io::Error::other("test parent is too long for Unix sockets"))
     };
-    result.unwrap_or_else(|e| {
+    guarded(result.unwrap_or_else(|e| {
         panic!("cannot create a safe test folder ({}: {e}). Set {PARENT_VAR} to a short private directory or root-owned sticky temporary directory outside HOME and caches", parent.display())
-    })
+    }))
+}
+
+/// The address of the user's D-Bus session bus, read before a test points
+/// XDG_RUNTIME_DIR at a scratch folder. `systemd-run --user` finds the user
+/// manager through DBUS_SESSION_BUS_ADDRESS, or else through
+/// `$XDG_RUNTIME_DIR/bus`, so a process with a scratch runtime folder needs
+/// this address to reach the manager. None: no bus socket on this host.
+#[allow(dead_code)]
+pub fn user_bus_address() -> Option<String> {
+    if let Some(a) = std::env::var_os("DBUS_SESSION_BUS_ADDRESS").filter(|a| !a.is_empty()) {
+        return a.into_string().ok();
+    }
+    let runtime = std::env::var_os("XDG_RUNTIME_DIR")
+        .filter(|r| !r.is_empty())
+        .map(PathBuf::from)
+        // SAFETY: getuid has no failure case.
+        .unwrap_or_else(|| PathBuf::from(format!("/run/user/{}", unsafe { libc::getuid() })));
+    let bus = runtime.join("bus");
+    bus.exists().then(|| format!("unix:path={}", bus.display()))
+}
+
+/// This host can run an exclave peer: bwrap starts a sandbox with a user
+/// namespace, and `systemd-run --user --scope` reaches the user manager in
+/// the environment of this test, the one a user has. The peer itself gets a
+/// scratch XDG_RUNTIME_DIR; the product finds the manager from there.
+///
+/// false: the test skips, because the feature cannot work here (no bwrap,
+/// or no user manager, as in a container or a CI runner). With
+/// PADDOCK_REQUIRE_PEER=1, which the host gate sets, a skip is a failure:
+/// a host with bwrap and a user bus must run the test.
+#[allow(dead_code)]
+pub fn peer_host_ready(test: &str) -> bool {
+    let bwrap = bwrap_works();
+    let scope = std::process::Command::new("systemd-run")
+        .args(["--user", "--scope", "--quiet", "true"])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .output();
+    let scope_error = match &scope {
+        Ok(o) if o.status.success() => None,
+        Ok(o) => Some(String::from_utf8_lossy(&o.stderr).trim().to_string()),
+        Err(e) => Some(e.to_string()),
+    };
+    if bwrap && scope_error.is_none() {
+        return true;
+    }
+    let why = format!(
+        "{test} needs bwrap and a systemd user manager: bwrap {}, systemd-run --user --scope {}",
+        if bwrap { "works" } else { "fails" },
+        scope_error.map_or("works".to_string(), |e| format!("fails: {e}")),
+    );
+    if std::env::var_os("PADDOCK_REQUIRE_PEER").is_some_and(|v| v == "1") {
+        panic!("PADDOCK_REQUIRE_PEER=1, but {why}");
+    }
+    eprintln!("skipped: {why}");
+    false
 }
 
 /// bubblewrap is on PATH and can start a sandbox with a user namespace. It
