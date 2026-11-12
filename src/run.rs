@@ -5,7 +5,7 @@ use crate::env::HostEnv;
 use crate::gui::{self, WindowCompositor};
 use crate::manifest::hex;
 use crate::spec::{GuiMode, Network, SandboxSpec};
-use crate::state::{self, AuthSync, Running, SyncStep};
+use crate::state::{self, AuthSync, Running};
 use anyhow::{bail, Context, Result};
 use sha2::{Digest, Sha256};
 use std::io::IsTerminal;
@@ -17,12 +17,14 @@ pub mod memory_scope;
 use capped::read_capped;
 use end::{EndOfRun, ShadowRun};
 mod help;
+mod live_sync;
+use live_sync::{HistorySync, LoginSync, HISTORY_EVERY};
 mod sshagent;
 use help::help_text;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 pub fn write_files(launch: &Launch) -> Result<()> {
     for (path, text, mode) in &launch.files {
         gui::write_file(path, text, *mode)?;
@@ -1374,105 +1376,6 @@ fn provision(
         .status()
         .with_context(|| format!("cannot start {}", l.program.display()))?;
     Ok(status.success())
-}
-
-/// How often a running sandbox and the host bring its login files in line.
-const LOGIN_EVERY: Duration = Duration::from_secs(2);
-
-/// Keeps the login files of a running sandbox and the host in line, both
-/// ways (`AuthSync::sync_now`), so a refreshed token reaches the host and
-/// every other sandbox on the same login within seconds, not at the end.
-struct LoginSync {
-    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    thread: Option<std::thread::JoinHandle<AuthSync>>,
-}
-
-impl LoginSync {
-    fn start(mut auth: AuthSync, quiet: bool) -> Self {
-        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let s = stop.clone();
-        let thread = std::thread::spawn(move || {
-            while !s.load(std::sync::atomic::Ordering::SeqCst) {
-                for step in auth.sync_now() {
-                    match step {
-                        SyncStep::ToStore(f) if !quiet => {
-                            log::info!("saved a refreshed login to {}", f.display())
-                        }
-                        SyncStep::ToSandbox(f) if !quiet => {
-                            log::info!("the sandbox got the newer login of {}", f.display())
-                        }
-                        _ => {}
-                    }
-                }
-                let start = std::time::Instant::now();
-                while start.elapsed() < LOGIN_EVERY && !s.load(std::sync::atomic::Ordering::SeqCst)
-                {
-                    std::thread::sleep(Duration::from_millis(100));
-                }
-            }
-            // One last look before the copy back at the end.
-            auth.sync_now();
-            auth
-        });
-        Self {
-            stop,
-            thread: Some(thread),
-        }
-    }
-
-    fn finish(mut self) -> AuthSync {
-        self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
-        self.thread
-            .take()
-            .expect("started")
-            .join()
-            .expect("login sync thread")
-    }
-}
-
-/// History copied to the host while the sandbox runs, so the Omarchy agents
-/// panel counts new sessions before the sandbox exits. Logins are not synced
-/// here: a login goes back to its store only at exit.
-struct HistorySync {
-    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    thread: std::thread::JoinHandle<(Option<crate::history::CopyBack>, usize)>,
-}
-
-/// How often history is copied.
-const HISTORY_EVERY: Duration = Duration::from_secs(300);
-
-impl HistorySync {
-    fn start(history: Option<crate::history::CopyBack>, every: Duration) -> Self {
-        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let flag = stop.clone();
-        let thread = std::thread::spawn(move || {
-            let mut copied = 0;
-            let mut at = Instant::now();
-            while history.is_some() && !flag.load(std::sync::atomic::Ordering::SeqCst) {
-                std::thread::sleep(Duration::from_millis(200));
-                if at.elapsed() < every {
-                    continue;
-                }
-                at = Instant::now();
-                if let Some(h) = &history {
-                    match h.copy_out() {
-                        Ok(files) => copied += files.len(),
-                        Err(e) => log::debug!("cannot copy the session history: {e:#}"),
-                    }
-                }
-            }
-            (history, copied)
-        });
-        Self { stop, thread }
-    }
-
-    /// Stop the thread and return the history and the files it copied.
-    fn finish(self) -> (Option<crate::history::CopyBack>, usize) {
-        self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
-        self.thread
-            .join()
-            .expect("the history thread does not panic")
-    }
 }
 
 /// The sandbox process that SIGTERM and SIGHUP are passed to (0 before it

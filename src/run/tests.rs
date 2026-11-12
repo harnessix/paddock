@@ -53,6 +53,7 @@ mod history_sync_tests {
     use super::super::*;
     use crate::profile::Profile;
     use std::collections::BTreeMap;
+    use std::time::Instant;
 
     #[test]
     fn new_history_reaches_the_host_before_the_sandbox_exits() {
