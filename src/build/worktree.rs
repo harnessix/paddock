@@ -16,12 +16,6 @@ pub struct Worktree {
     pub base: String,
 }
 
-/// A git call on a repository that a sandbox can write. It never runs what
-/// the repository's own configuration names (see hostgit.rs).
-fn git(dir: &Path, args: &[&str]) -> Result<String> {
-    crate::hostgit::Checkout::open(dir)?.run(args)
-}
-
 /// A worktree for one run. `app` names the branch after an app:
 /// `paddock/<app>-<date>-<id>`. Terminal runs get `paddock/<id>`.
 pub fn create_worktree(env: &HostEnv, repo: &Path, app: Option<&str>) -> Result<Worktree> {
@@ -53,8 +47,12 @@ pub fn create_worktree(env: &HostEnv, repo: &Path, app: Option<&str>) -> Result<
         .join(state::slug(repo))
         .join(&id);
     crate::privfs::dir(path.parent().unwrap())?;
-    git(
-        repo,
+    // Two runs that start together must not run into each other's git lock
+    // files: one worktree change per repository at a time.
+    let co = crate::hostgit::Checkout::open(repo)?;
+    let lock = co.layout.lock_worktrees(env)?;
+    co.run_worktree(
+        &lock,
         &[
             "worktree",
             "add",

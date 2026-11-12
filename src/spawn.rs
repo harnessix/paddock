@@ -1488,15 +1488,22 @@ pub fn create_worktree(
         .join(state::slug(repo))
         .join(&plan.id);
     crate::privfs::dir(path.parent().unwrap())?;
-    crate::hostgit::Checkout::open(repo)?.run(&[
-        "worktree",
-        "add",
-        "-q",
-        "-b",
-        &plan.branch,
-        &path.display().to_string(),
-        &base,
-    ])?;
+    // Two children that start together must not run into each other's git
+    // lock files: one worktree change per repository at a time.
+    let co = crate::hostgit::Checkout::open(repo)?;
+    let lock = co.layout.lock_worktrees(env)?;
+    co.run_worktree(
+        &lock,
+        &[
+            "worktree",
+            "add",
+            "-q",
+            "-b",
+            &plan.branch,
+            &path.display().to_string(),
+            &base,
+        ],
+    )?;
     crate::storage::record_worktree_branch(env, &path, &plan.branch);
     Ok(crate::build::Worktree {
         repo: repo.to_path_buf(),

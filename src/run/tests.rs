@@ -174,6 +174,8 @@ mod cleanup_tests {
         let mut vars = BTreeMap::new();
         vars.insert("PATH".into(), std::env::var("PATH").unwrap_or_default());
         let env = HostEnv::from_parts(home, "t".into(), 1000, 1000, vars);
+        // The run starts the view server of this HOME. Stop it at the end.
+        let _server = crate::view::guard::TmuxGuard::socket(crate::view::socket(&env));
         let profile: Profile = toml::from_str("name = \"t\"\n").unwrap();
         let h = Harness {
             profile,
@@ -232,8 +234,9 @@ mod cleanup_tests {
             spec: &crate::spec::SandboxSpec,
             _: bool,
         ) -> Result<Launch> {
+            // `true` is /bin/true on Linux and /usr/bin/true on macOS.
             Ok(Launch {
-                program: PathBuf::from("/bin/true"),
+                program: env.which("true").expect("true on PATH"),
                 args: vec![],
                 env: crate::backend::base_env(env, spec),
                 files: vec![],
@@ -260,6 +263,8 @@ mod cleanup_tests {
         let mut vars = BTreeMap::new();
         vars.insert("PATH".into(), std::env::var("PATH").unwrap_or_default());
         let env = HostEnv::from_parts(home.clone(), "t".into(), 1000, 1000, vars);
+        // The run starts the view server of this HOME. Stop it at the end.
+        let _server = crate::view::guard::TmuxGuard::socket(crate::view::socket(&env));
         let h = Harness {
             profile: crate::profile::builtin("codex").unwrap(),
             exe: PathBuf::from("/usr/bin/true"),

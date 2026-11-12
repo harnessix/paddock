@@ -67,7 +67,7 @@ fn an_import_reads_a_copy_and_the_host_files_do_not_change() {
     let s = h.store.session(&a.session).unwrap();
     let origin = s.host.clone().unwrap();
     assert_eq!(origin.via, "import");
-    assert_eq!(origin.home, h.home);
+    assert_eq!(origin.home, canon_home(&h.home));
     assert_eq!(
         raw(&h.store, &s.id),
         claude_rows(CLAUDE_A, 3)
@@ -207,6 +207,38 @@ fn an_import_reads_only_what_is_really_in_the_transcript_folder() {
         "import"
     )
     .is_err());
+}
+
+#[test]
+fn an_absolute_path_by_a_link_of_the_home_is_inside_the_home() {
+    let h = host();
+    write_claude(&h.home, "p", CLAUDE_A, &claude_rows(CLAUDE_A, 1));
+    let alias = h.t.path().join("alias");
+    std::os::unix::fs::symlink(&h.home, &alias).unwrap();
+    let real = canon_home(&h.home);
+    // The home by its real path, the path by the link, and the reverse.
+    for (home, base) in [(&real, &alias), (&alias, &real), (&h.home, &h.home)] {
+        let p = base.join(".claude/projects/p");
+        let (found, missing) =
+            choose(home, claude::HARNESS, &Select::Under(vec![p.clone()])).unwrap();
+        assert!(missing.is_empty());
+        assert_eq!(found.len(), 1, "{} under {}", p.display(), home.display());
+        assert_eq!(found[0].rel, claude_rel("p", CLAUDE_A));
+    }
+    // A link inside the home that leads out of it reads nothing.
+    let out = h.t.path().join("out");
+    write_claude(&out, "p", CLAUDE_B, &claude_rows(CLAUDE_B, 1));
+    std::os::unix::fs::symlink(
+        out.join(".claude/projects/p"),
+        h.home.join(".claude/projects/o"),
+    )
+    .unwrap();
+    let r = choose(
+        &h.home,
+        claude::HARNESS,
+        &Select::Under(vec![h.home.join(".claude/projects/o")]),
+    );
+    assert!(r.map_or(true, |(found, _)| found.is_empty()));
 }
 
 #[test]

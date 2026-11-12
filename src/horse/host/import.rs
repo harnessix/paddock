@@ -82,12 +82,16 @@ pub fn choose(home: &Path, harness: &str, select: &Select) -> Result<(Vec<Found>
 /// The sessions at or below `p`: a session file or folder, or a folder
 /// with sessions. `p` is relative to the home, or absolute inside it.
 fn under(home: &Path, harness: &str, p: &Path) -> Result<Vec<Found>> {
-    let rel = match p.strip_prefix(home) {
-        Ok(r) => r.to_path_buf(),
-        Err(_) if p.is_absolute() => {
-            bail!("{} is not inside the home {}", p.display(), home.display())
+    // An absolute path and the home can name the same folder by another
+    // path (a symlink): compare the resolved paths, as adopt does.
+    let rel = if p.is_absolute() {
+        let real = super::canon_home(home);
+        match super::canon_home(p).strip_prefix(&real) {
+            Ok(r) => r.to_path_buf(),
+            Err(_) => bail!("{} is not inside the home {}", p.display(), real.display()),
         }
-        Err(_) => p.to_path_buf(),
+    } else {
+        p.to_path_buf()
     };
     super::check_rel(&rel)?;
     let root = Path::new(super::root(harness)?);

@@ -1211,7 +1211,7 @@ fn from_head_commits_the_parents_files_without_touching_its_checkout() {
     assert!(!index.exists());
 
     // A configuration that can start a program is refused.
-    git(&repo, &["config", "core.fsmonitor", "/bin/false"]);
+    git(&repo, &["config", "core.fsmonitor", "/usr/bin/false"]);
     assert!(snapshot_commit(&repo, &index, "x").is_err());
 }
 

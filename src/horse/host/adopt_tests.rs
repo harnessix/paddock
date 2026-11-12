@@ -34,7 +34,7 @@ fn adoption_converts_then_reads_new_and_changed_sessions() {
     assert_eq!(tree(&h.home), before);
     let a = adopt::load(&h.state).unwrap().harnesses[claude::HARNESS].clone();
     assert_eq!(a.locations, vec![PathBuf::from(".claude/projects")]);
-    assert_eq!(a.home, h.home);
+    assert_eq!(a.home, canon_home(&h.home));
     assert_eq!(a.seen.len(), 1);
     assert_eq!(
         h.store.horse(&a.horse).unwrap().sessions,

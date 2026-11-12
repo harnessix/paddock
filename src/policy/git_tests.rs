@@ -173,3 +173,128 @@ fn the_main_checkout_cannot_change_the_worktrees_of_its_children() {
         .to_string();
     assert!(e.contains(".git/worktrees is writable"), "{e}");
 }
+
+/// Eight children of one project start at the same moment, many times,
+/// while the eight children of the round before end and their worktrees go.
+/// No `git worktree add` or `remove` may fail on another one: on its lock
+/// files, or on a worktree that another removes half-way.
+#[test]
+fn eight_worktrees_that_start_together_all_succeed() {
+    let w = world();
+    // Git waits up to `core.packedRefsTimeout` (1 s) for the lock of the
+    // shared `packed-refs`; a loaded machine runs out of it. No wait at all
+    // makes every overlap a lock error, as on such a machine.
+    git(&w.repo, &["config", "core.packedRefsTimeout", "0"]);
+    let w = std::sync::Arc::new(w);
+    let mut before: Vec<(PathBuf, String)> = Vec::new();
+    for round in 0..10 {
+        let gate = std::sync::Arc::new(std::sync::Barrier::new(16));
+        let adds = (0..8).map(|n| {
+            let (w, gate) = (w.clone(), gate.clone());
+            std::thread::spawn(move || {
+                let id = format!("r{round:03}n{n}");
+                let plan = ChildPlan {
+                    id: id.clone(),
+                    manifest: Default::default(),
+                    branch: format!("paddock/spawn-claude-{id}"),
+                    base_from: w.repo.clone(),
+                    base: None,
+                    role: Role::Implementer,
+                    trainer: false,
+                };
+                gate.wait();
+                create_worktree(&w.env, &w.repo, &plan)
+                    .map(|t| (t.path, t.branch))
+                    .map_err(|e| format!("add {id}: {e:#}"))
+            })
+        });
+        let adds: Vec<_> = adds.collect();
+        let removes: Vec<_> = std::mem::take(&mut before)
+            .into_iter()
+            .chain(std::iter::repeat_with(|| (PathBuf::new(), String::new())))
+            .take(8)
+            .map(|(path, branch)| {
+                let (w, gate) = (w.clone(), gate.clone());
+                std::thread::spawn(move || {
+                    gate.wait();
+                    if path.as_os_str().is_empty() {
+                        return Ok(());
+                    }
+                    crate::storage::remove_worktree(
+                        &w.env,
+                        &path,
+                        Some(&w.repo),
+                        Some(&branch),
+                        true,
+                        true,
+                    )
+                    .map(|_| ())
+                    .map_err(|e| format!("remove {}: {e:#}", path.display()))
+                })
+            })
+            .collect();
+        for t in removes {
+            t.join()
+                .unwrap()
+                .unwrap_or_else(|e| panic!("round {round}: {e}"));
+        }
+        for t in adds {
+            let (path, branch) = t
+                .join()
+                .unwrap()
+                .unwrap_or_else(|e| panic!("round {round}: {e}"));
+            assert!(path.join(".git").is_file(), "{}", path.display());
+            before.push((path, branch));
+        }
+    }
+}
+
+/// A lock file of a git process outside paddock is waited out for a short
+/// while; one that stays gives an error that names it.
+#[test]
+fn a_lock_file_of_another_git_process_is_waited_out_or_named() {
+    let w = world();
+    let lock = w.repo.join(".git/packed-refs.lock");
+    let a = spawn(&w, "dddd0004");
+    // Released after a moment: the removal waits and succeeds.
+    std::fs::write(&lock, "").unwrap();
+    let release = {
+        let lock = lock.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            std::fs::remove_file(lock).unwrap();
+        })
+    };
+    let branch = "paddock/spawn-claude-dddd0004";
+    crate::storage::remove_worktree(&w.env, &a, Some(&w.repo), Some(branch), true, true).unwrap();
+    release.join().unwrap();
+    assert!(!a.exists());
+    // Left behind for good: the error names the lock file.
+    let b = spawn(&w, "eeee0005");
+    std::fs::write(&lock, "").unwrap();
+    let branch = "paddock/spawn-claude-eeee0005";
+    let e = crate::storage::remove_worktree(&w.env, &b, Some(&w.repo), Some(branch), true, true)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        e.contains(&format!("the lock file {}", lock.display())),
+        "{e}"
+    );
+}
+
+#[test]
+fn the_lock_file_is_read_from_the_git_error() {
+    use crate::hostgit::lock_file_in;
+    assert_eq!(
+        lock_file_in(
+            "git failed: error: cannot delete ref: Unable to create '/r/.git/packed-refs.lock': File exists.\n\nAnother git process"
+        )
+        .as_deref(),
+        Some("/r/.git/packed-refs.lock")
+    );
+    assert_eq!(
+        lock_file_in("error: could not lock config file /r/.git/config: File exists").as_deref(),
+        Some("/r/.git/config.lock")
+    );
+    assert_eq!(lock_file_in("fatal: '/x' already exists"), None);
+}

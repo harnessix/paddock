@@ -241,7 +241,11 @@ fn exec_a_cancelled_call_kills_the_child() {
     let s = script(
         dir.path(),
         "tool",
-        &format!("echo $$ > {}\nsleep 30", pidfile.display()),
+        // The pid comes by a rename: the file is never there but empty.
+        &format!(
+            "echo $$ > {p}.tmp && mv {p}.tmp {p}\nsleep 30",
+            p = pidfile.display()
+        ),
     );
     let r = start(dir.path(), opts(dir.path(), Shape::Exec, &[s]));
     // The broker drops the connection: a raw client that hangs up.
