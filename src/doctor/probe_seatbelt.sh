@@ -148,7 +148,10 @@ fi
 # Apple's /usr/bin shims (python3, git) start xcrun, which keeps its cache
 # in the user temp folder of the host. The sandbox must not write there:
 # the host's xcrun trusts that cache. paddock puts the developer tools
-# before /usr/bin on PATH, so a command found by PATH skips the shim.
+# before /usr/bin on PATH, so a command found by PATH skips the shim. A
+# login shell runs path_helper, which puts the /usr/bin shims first again:
+# there xcrun_db, which path_helper leaves alone, moves the cache into the
+# private TMPDIR.
 xcrun_check() {
   name=$1; shift
   out=$("$@" 2>&1); rc=$?
@@ -160,12 +163,12 @@ xcrun_check() {
 if [ -n "$PADDOCK_PROBE_XCRUN" ]; then
   xcrun_check xcrun-python3 python3 -c pass
   xcrun_check xcrun-git git --version
-  # A login shell runs path_helper, which puts /usr/bin first again.
-  out=$(/bin/zsh -lc 'python3 -c pass' 2>&1)
-  case "$out" in
-    *"couldn't create cache file"*) skip xcrun-login-shell "path_helper puts the /usr/bin shims first in a login shell: python3 there prints the xcrun cache error" ;;
-    *) ok xcrun-login-shell ;;
+  db=$(/bin/zsh -lc 'printf %s "$xcrun_db"' 2>/dev/null)
+  case "$db" in
+    "$TMPDIR"/*) ok xcrun-cache-private ;;
+    *) fail xcrun-cache-private "xcrun_db in a login shell is '$db', not in TMPDIR $TMPDIR" ;;
   esac
+  xcrun_check xcrun-login-shell /bin/zsh -lc 'python3 -c pass && git --version'
 else
   skip xcrun-python3 "no developer tools on this Mac (xcode-select -p)"
 fi

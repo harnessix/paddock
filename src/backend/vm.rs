@@ -209,6 +209,7 @@ impl Backend for Vm {
             args: vec!["vm-attach".into(), file.display().to_string()],
             env: vars,
             files: vec![(file, serde_json::to_string(&job)?, 0o600)],
+            cwd: None,
         })
     }
 }

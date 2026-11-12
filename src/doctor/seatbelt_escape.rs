@@ -343,10 +343,59 @@ mod tests {
             "host-loopback-unreachable",
             "direct-egress-blocked",
             "proxy-refuses-host",
-            "xcrun-",
+            "xcrun-python3",
+            "xcrun-git",
+            "xcrun-cache-private",
+            "xcrun-login-shell",
         ] {
             assert!(PROBE.contains(name), "{name}");
         }
+    }
+
+    /// MACRUN1-F2: the login shell check is a real check, never a skip.
+    #[test]
+    fn the_login_shell_xcrun_check_can_fail_and_never_skips() {
+        assert!(!PROBE.contains("skip xcrun-login-shell"));
+        assert!(PROBE.contains("xcrun_check xcrun-login-shell /bin/zsh -lc"));
+    }
+
+    /// MACRUN1-F2: the probe variables reach the Seatbelt run as host paths,
+    /// so the real home it checks is the host home, not the sandbox home.
+    #[test]
+    fn the_seatbelt_run_gets_the_host_home_as_the_real_home() {
+        let env = HostEnv::from_parts(
+            PathBuf::from("/Users/me"),
+            "me".into(),
+            501,
+            20,
+            Default::default(),
+        );
+        let mut s = crate::spec::SandboxSpec::new(
+            "id".into(),
+            "doctor",
+            Path::new("/Users/me/Library/Caches/paddock/doctor/project"),
+            env.paddock_data().join("homes/doctor/shared/project-1"),
+            &env.home,
+            501,
+            20,
+            "me",
+        );
+        let project = s.project.clone();
+        for (k, v) in probe_vars(&env, &project, &[], Network::Egress) {
+            assert!(
+                k.starts_with(crate::backend::seatbelt::run::HOST_PATH_VAR_PREFIX),
+                "{k}"
+            );
+            s.set_env(k, v, "doctor");
+        }
+        let tmp = crate::backend::seatbelt::run::private_tmp(&s);
+        let vars = crate::backend::seatbelt::run::run_env(&env, &s, &tmp);
+        assert_eq!(vars["PADDOCK_PROBE_REALHOME"], "/Users/me");
+        assert!(vars["PADDOCK_PROBE_DENIED"]
+            .split(':')
+            .all(|p| p.starts_with("/Users/me/") && !p.contains("/homes/")));
+        assert_eq!(vars["PADDOCK_PROBE_PROJECT"], project.display().to_string());
+        assert_ne!(vars["HOME"], "/Users/me");
     }
 
     /// The probe is valid sh.

@@ -757,3 +757,66 @@ fn the_developer_tools_come_before_the_xcrun_shims() {
     );
     assert_eq!(with_developer_bins("/a:/usr/bin", &[]), "/a:/usr/bin");
 }
+
+/// MACRUN1-F2: codex runs commands with `zsh -lc`, and path_helper puts the
+/// /usr/bin shims first again. xcrun then writes its cache where `xcrun_db`
+/// says: an absolute file in the private temporary folder, which the
+/// profile lets the sandbox write. A host value of the variable does not win.
+#[test]
+fn the_xcrun_cache_is_in_the_private_temporary_folder() {
+    let (env, mut s) = spec();
+    s.set_env(XCRUN_DB, "/private/var/folders/ab/T/xcrun_db", "inherit");
+    let tmp = private_tmp(&s);
+    let vars = run_env(&env, &s, &tmp);
+    let db = Path::new(&vars[XCRUN_DB]);
+    assert!(db.is_absolute(), "{}", db.display());
+    assert!(db.starts_with(&tmp), "{}", db.display());
+    assert!(db.starts_with(&vars["TMPDIR"]), "{}", db.display());
+    assert_ne!(db.parent(), Some(tmp.parent().unwrap()));
+    let sb = profile(&env, &s);
+    assert!(
+        sb.contains(&format!(
+            "(allow file-read* file-write* (subpath \"{}\"))",
+            tmp.display()
+        )),
+        "{sb}"
+    );
+}
+
+/// MACRUN1-F2: the escape probe gets the host paths it checks as they are.
+/// Moved into the sandbox home, the real home would be the sandbox's own,
+/// and the probe would report it as an escape.
+#[test]
+fn the_probe_variables_keep_their_host_paths() {
+    let (env, mut s) = spec();
+    let real_home = s.home.display().to_string();
+    s.set_env("PADDOCK_PROBE_REALHOME", real_home.clone(), "doctor");
+    s.set_env(
+        "PADDOCK_PROBE_DENIED",
+        format!("{real_home}/.ssh:{real_home}/.aws"),
+        "doctor",
+    );
+    s.set_env("OTHER_IN_HOME", format!("{real_home}/.npmrc"), "profile");
+    let vars = run_env(&env, &s, &private_tmp(&s));
+    assert_eq!(vars["PADDOCK_PROBE_REALHOME"], real_home);
+    assert_eq!(
+        vars["PADDOCK_PROBE_DENIED"],
+        format!("{real_home}/.ssh:{real_home}/.aws")
+    );
+    // Other variables still move into the sandbox home.
+    assert_eq!(Path::new(&vars["OTHER_IN_HOME"]), s.home_src.join(".npmrc"));
+}
+
+/// MACRUN1-F2: the shell of the run starts in a folder that the sandbox
+/// can read, not in the caller's folder (the real home, say), where
+/// getcwd fails.
+#[test]
+fn the_run_starts_in_its_private_temporary_folder() {
+    let (_t, env, s) = temp_spec("");
+    std::fs::create_dir_all(&s.home_src).unwrap();
+    let l = SeatbeltRun.render(&env, &s, false).unwrap();
+    let tmp = private_tmp(&s);
+    assert_eq!(l.cwd.as_deref(), Some(tmp.as_path()));
+    assert!(tmp.is_dir());
+    assert_eq!(l.env["TMPDIR"], tmp.display().to_string());
+}

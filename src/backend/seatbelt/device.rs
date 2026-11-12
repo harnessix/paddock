@@ -307,6 +307,7 @@ pub fn launch(
         args,
         env: run_env(env, spec, ctx, plan, sockets),
         files: vec![(places.profile, crate::seatbelt::render(&pol)?, 0o600)],
+        cwd: None,
     })
 }
 

@@ -814,6 +814,9 @@ pub fn run(
             cmd.stdin(Stdio::piped());
         }
     }
+    if let Some(dir) = &launch.cwd {
+        cmd.current_dir(dir);
+    }
     if forwarding.stop_requested() {
         bail!("paddock was asked to stop before the sandbox started");
     }
@@ -1322,6 +1325,9 @@ fn provision(
         .env_clear()
         .envs(&l.env)
         .stdin(Stdio::null());
+    if let Some(dir) = &l.cwd {
+        cmd.current_dir(dir);
+    }
     if quiet {
         cmd.stdout(Stdio::null()).stderr(Stdio::null());
     } else {

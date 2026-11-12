@@ -653,6 +653,7 @@ impl Backend for Docker {
                 identity_files,
             ]
             .concat(),
+            cwd: None,
         })
     }
 }

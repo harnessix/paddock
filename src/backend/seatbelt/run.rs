@@ -143,6 +143,8 @@ pub fn developer_dir() -> Option<PathBuf> {
 /// into the user temp folder of the host. The sandbox cannot write there,
 /// and must not: the host's xcrun trusts that cache. With these folders
 /// before `/usr/bin`, a command found by PATH skips the shim and its cache.
+/// A login shell puts the shims first again: for it, `xcrun_db` moves the
+/// cache into the private temporary folder (`run_env`).
 pub fn developer_bins(dev: &Path, is_dir: impl Fn(&Path) -> bool) -> Vec<PathBuf> {
     let readable = crate::seatbelt::SYSTEM_READ
         .iter()
@@ -176,6 +178,19 @@ pub fn with_developer_bins(path: &str, bins: &[PathBuf]) -> String {
     }
     out.join(":")
 }
+
+/// The variable that names the cache file of xcrun. xcrun ignores a
+/// relative path.
+pub const XCRUN_DB: &str = "xcrun_db";
+
+/// The cache file of xcrun in a run: in its private temporary folder.
+pub fn xcrun_db(tmp: &Path) -> PathBuf {
+    tmp.join("xcrun_db")
+}
+
+/// Variables with this prefix hold host paths that a run gets as they are,
+/// not moved into the sandbox home: those of paddock doctor's escape probe.
+pub const HOST_PATH_VAR_PREFIX: &str = "PADDOCK_PROBE_";
 
 /// The private temporary folder of a run, in the sandbox home.
 pub fn private_tmp(spec: &SandboxSpec) -> PathBuf {
@@ -416,6 +431,20 @@ pub fn run_env(env: &HostEnv, spec: &SandboxSpec, tmp: &Path) -> BTreeMap<String
             vars.insert(k.into(), v.value.clone());
         }
     }
+    // The escape probe of paddock doctor names host paths (the real home,
+    // its secrets, paddock's state) to check that the sandbox cannot reach
+    // them. Moved into the sandbox home, they would name the sandbox's own.
+    for (k, v) in &spec.env {
+        if k.starts_with(HOST_PATH_VAR_PREFIX) {
+            vars.insert(k.clone(), v.value.clone());
+        }
+    }
+    // xcrun (behind Apple's /usr/bin shims) keeps its lookup cache in the
+    // file that `xcrun_db` names, else in the user temp folder of the host,
+    // which the sandbox cannot write. A login shell (`zsh -lc`, as codex
+    // runs commands) puts the shims first again with path_helper, but
+    // path_helper changes only PATH: this variable stays.
+    vars.insert(XCRUN_DB.into(), xcrun_db(tmp).display().to_string());
     // The host commands stay in their own folders. paddock's wrappers in the
     // run folder come first, other folders last, as for srt.
     let run = env.paddock_run().join(&spec.id);
@@ -655,6 +684,10 @@ impl Backend for SeatbeltRun {
             args: command(spec, &profile),
             env: run_env(env, spec, &tmp),
             files: vec![(profile, crate::seatbelt::render(&pol)?, 0o600)],
+            // The shell of the run starts here, before it enters the work
+            // folder. In the folder of the caller (the real home, say) the
+            // sandbox cannot read its own current folder.
+            cwd: Some(tmp),
         })
     }
 }

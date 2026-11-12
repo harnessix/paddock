@@ -155,6 +155,7 @@ mod cleanup_tests {
                 args: vec![],
                 env: crate::backend::base_env(env, spec),
                 files: vec![],
+                cwd: None,
             })
         }
     }
@@ -240,6 +241,7 @@ mod cleanup_tests {
                 args: vec![],
                 env: crate::backend::base_env(env, spec),
                 files: vec![],
+                cwd: None,
             })
         }
     }
