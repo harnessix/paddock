@@ -116,6 +116,8 @@ yolo_only = true
 file = ".claude.json"
 path = ["projects", "{project}", "hasTrustDialogAccepted"]
 value = true
+# The trust question is the user's in manual approvals mode.
+trust = true
 
 # After a context compaction, Claude Code runs the SessionStart hooks with
 # the source "compact" (the matcher selects it). The hook prints JSON, and

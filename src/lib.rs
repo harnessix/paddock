@@ -5,6 +5,7 @@
 compile_error!("exclave-fake-registry-test is for debug test builds only");
 
 pub mod app;
+pub mod approvals;
 pub mod approver;
 pub mod backend;
 pub mod board;

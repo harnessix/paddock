@@ -331,7 +331,7 @@ fn folder_trust_fake_terminals_answer_only_the_project() {
             "test",
         );
         crate::mail::create(&env, &spec.id, &crate::mail::Starter::host()).unwrap();
-        let w = crate::screens::prepare(&env, &profile, &spec, true, true, false).unwrap();
+        let w = crate::screens::prepare(&env, &profile, &spec, true, true, false, false).unwrap();
         let (caller_m, caller_s) = caller_pty();
         set_size(caller_m, 30, 100);
         let mut relay = Relay::start(
@@ -412,6 +412,15 @@ fn a_detached_run_in_a_tmux_pane_still_answers_the_start_screen() {
     assert!(crate::screens::rules_for(&profile, false)
         .iter()
         .all(|r| r.kind == crate::screens::RuleKind::FolderTrust));
+    // Manual approvals: the folder trust screens are the user's.
+    let manual = crate::screens::for_approvals(rules.clone(), true);
+    assert!(manual.iter().any(|r| r.id == "codex-hooks-review-many"));
+    assert!(manual
+        .iter()
+        .all(|r| r.kind != crate::screens::RuleKind::FolderTrust));
+    assert!(
+        crate::screens::for_approvals(crate::screens::rules_for(&profile, false), true).is_empty()
+    );
     let (caller_m, caller_s) = caller_pty();
     set_size(caller_m, 24, 100);
     let w = crate::screens::live::Watcher::new(rules, || false, |_| {});

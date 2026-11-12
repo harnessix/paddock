@@ -784,6 +784,7 @@ fn start_flatpak(
         pid: child.id(),
         started: crate::state::now(),
         auth: String::new(),
+        approvals: crate::approvals::shown(None).into(),
         warnings: if warning.is_some() {
             vec!["secret files visible (unprotected_workspaces)".to_string()]
         } else {

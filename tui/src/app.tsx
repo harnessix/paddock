@@ -20,7 +20,7 @@ import { RunDetail, RunsPane } from './views/runs.js';
 import { ApprovalCard, ApprovalsView, cardHeight, type CardState } from './views/approvals.js';
 import { BoardPane, boardLines } from './views/board.js';
 import { MailListPane, MessagePane, mailBoxRow, messageRow } from './views/mail.js';
-import { FORM_FIELDS, HelpOverlay, helpLines, NewRunForm, PaletteOverlay, type FormState } from './views/overlays.js';
+import { FORM_FIELDS, HelpOverlay, helpLines, NewRunForm, nextApprovals, PaletteOverlay, type FormState } from './views/overlays.js';
 
 export type Tab = 'runs' | 'board' | 'approvals' | 'mail';
 const TABS: { id: Tab; label: string }[] = [
@@ -354,9 +354,9 @@ export function App(props: AppProps): React.JSX.Element {
     if (error) return setOverlay({ kind: 'form', form: { ...form, error } });
     setOverlay({ kind: 'form', form: { ...form, error: '', busy: true } });
     try {
-      const out = await api.run(h, project, file);
+      const out = await api.run(h, project, file, form.approvals ?? '');
       setOverlay(null);
-      say(out || `Started ${h} in ${project}`);
+      say(out || `Started ${h} in ${project}${form.approvals ? ` (${form.approvals} approvals)` : ''}`);
     } catch (e) {
       setOverlay({ kind: 'form', form: { ...form, busy: false, error: e instanceof Error ? e.message : String(e) } });
     }
@@ -624,6 +624,7 @@ export function App(props: AppProps): React.JSX.Element {
       const f = overlay.form;
       if (f.busy) return;
       if (key.escape) return setOverlay(null);
+      if (key.ctrl && input === 'a') return setOverlay({ kind: 'form', form: { ...f, approvals: nextApprovals(f.approvals), error: '' } });
       if (key.tab || key.downArrow || key.upArrow) {
         const d = key.upArrow || (key.tab && key.shift) ? -1 : 1;
         return setOverlay({ kind: 'form', form: { ...f, field: (f.field + d + FORM_FIELDS.length) % FORM_FIELDS.length } });

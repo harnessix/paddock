@@ -12,11 +12,19 @@ import { useTheme, type Role } from '../theme.js';
 const BACKENDS = ['bwrap', 'docker', 'podman', 'srt', 'seatbelt', 'vm'];
 export const PLACE_WIDTH = Math.max(...BACKENDS.map((b) => cells(`sandbox ${b}`))) + 1;
 
+/** The approvals mode of a run in plain words. */
+export function approvalsLabel(a: string): string {
+  if (a === 'manual') return 'manual: you approve each step in the agent';
+  if (a === 'auto') return 'auto: the agent approves its own steps';
+  if (a === 'command') return "the command's own flags";
+  return a;
+}
+
 export function runRow(r: RunRow, width: number, marked: boolean): ListRow {
   const s = STATE[r.state];
   const t = now();
   const ago = r.since ? age(t - r.since) : '';
-  const extra = [r.frozen ? 'frozen' : '', r.cards > 0 ? `${r.cards} card${r.cards > 1 ? 's' : ''}` : '', r.unreadMail > 0 ? `✉ ${r.unreadMail}` : '']
+  const extra = [r.approvals === 'manual' ? 'manual' : '', r.frozen ? 'frozen' : '', r.cards > 0 ? `${r.cards} card${r.cards > 1 ? 's' : ''}` : '', r.unreadMail > 0 ? `✉ ${r.unreadMail}` : '']
     .filter((x) => x.length > 0)
     .join(' ');
   const what = [r.ticket || r.projectName, extra, r.last].filter((x) => x.length > 0).join(' · ');
@@ -104,6 +112,7 @@ export function RunDetail(props: {
     ['state', stateLabel(r.state), s.role],
     ['where', `${placeLabel(r)}${r.network ? ` · network ${r.network}` : ''}${r.detached ? ' · detached' : ''}${r.frozen ? ' · frozen' : ''}`],
     ['project', r.project || '?'],
+    ...(r.approvals ? [['approve', approvalsLabel(r.approvals)] as [string, string]] : []),
     ['ticket', r.ticket || '(none)'],
     ['model', r.model || '(paddock did not choose one)'],
     [r.live ? 'started' : 'ended', r.since ? `${age(t - r.since)} ago` : '?'],

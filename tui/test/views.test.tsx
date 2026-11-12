@@ -44,6 +44,29 @@ describe.each(SIZES)('%ix%i', (columns, rows) => {
     fits(r, columns, rows);
   });
 
+  test('a run in manual approvals mode says so: a "manual" tag on its row, or its detail in the wide layout', async () => {
+    fakeWorld();
+    const r = await renderApp({ columns, rows });
+    await r.waitFor('✖ failed');
+    const lines = r.lines();
+    // No other run has the tag.
+    for (const id of ['71c3ac', '0f0f0f', '0e0e0e', '0c0c0c', '0d0d0d', '0a0a0a']) {
+      expect(lines.filter((l) => l.includes(id) && /\bmanual\b/.test(l))).toEqual([]);
+    }
+    if (columns < 120) {
+      // One pane: the row of the run has the tag.
+      expect(lines.filter((l) => /\bmanual\b/.test(l) && l.includes('0b0b0b')).length, r.frame()).toBe(1);
+    } else {
+      // The narrow runs pane cuts the text; the detail of the selected
+      // run names the mode. The codex run is the second row.
+      expect(r.frame()).not.toMatch(/approve +manual/);
+      await r.press('j');
+      const f = await r.waitFor('Run · codex-0b0b0b');
+      expect(f).toMatch(/approve +manual: you approve each step/);
+    }
+    fits(r, columns, rows);
+  });
+
   test('a working run says running', async () => {
     fakeWorld((dir) => {
       // Without the approval card, the board's "working" shows.
@@ -175,6 +198,8 @@ describe.each(SIZES)('%ix%i', (columns, rows) => {
     await r.press('n');
     f = await r.waitFor('New run');
     expect(f).toContain('Prompt file');
+    expect(f).toContain('Approvals');
+    expect(f).toContain('Ctrl+A');
     fits(r, columns, rows);
   });
 
