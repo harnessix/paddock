@@ -47,6 +47,8 @@ fn the_agent_runs_one_request_end_to_end() {
     for d in [&ports, &project] {
         std::fs::create_dir_all(d).unwrap();
     }
+    // The guest refuses a harness whose program it does not have, so the
+    // profile names one that every guest has.
     // The fake paddock in the guest: it prints what it got, echoes one
     // line of input and exits with 9.
     let fake = root.join("fake-paddock");
@@ -77,7 +79,7 @@ fn the_agent_runs_one_request_end_to_end() {
 
     let token = "0123456789abcdef0123456789abcdef";
     let req = format!(
-        r#"{{"op":"run","v":3,"token":"{token}","id":"fake-x-1","harness":"fake","project":"{}","network":"none","args":["hi"],"tty":false,"profile":"name = \"fake\"\n"}}"#,
+        r#"{{"op":"run","v":3,"token":"{token}","id":"fake-x-1","harness":"fake","project":"{}","network":"none","args":["hi"],"tty":false,"profile":"name = \"fake\"\ncommands = [\"sh\"]\n"}}"#,
         project.display()
     );
     let mut control = UnixStream::connect(ports.join("1024.sock")).unwrap();
@@ -91,7 +93,7 @@ fn the_agent_runs_one_request_end_to_end() {
     assert_eq!(
         out,
         format!(
-            "argv: run fake {p} --backend bwrap --network none --yes -- hi\ncwd: {p}\nname = \"fake\"\nin: typed\n",
+            "argv: run fake {p} --backend bwrap --network none --yes -- hi\ncwd: {p}\nname = \"fake\"\ncommands = [\"sh\"]\nin: typed\n",
             p = project.display()
         )
     );
