@@ -1,0 +1,4 @@
+{
+  "fps": 8,
+  "frames": { "idle": 8, "work": 8, "wait": 8, "sleep": 4, "blocked": 4 }
+}

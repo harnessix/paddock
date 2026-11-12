@@ -109,7 +109,7 @@ of the test with a fake clock.
 ### Sprites
 
 The characters are the toon sprites of the launch video
-(`sprites/README.txt`). A sprite is `sprites/character-COLOR-STATE.json`:
+(`sprites/frames.json`). A sprite is `sprites/character-COLOR-STATE.json`:
 COLOR is `orange` (claude), `blue` (codex), `purple` (gemini), `green`
 (copilot), `pink` (grok), `teal` (opencode) or `gray` (any other agent),
 STATE is `idle`, `work` or `wait` (8 frames each), `sleep` or `blocked`

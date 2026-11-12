@@ -1,6 +1,6 @@
 // The characters of the rooms: which sprite a run gets, and the loader of
 // the sprite files. A sprite file is sprites/character-COLOR-STATE.json,
-// the toon art of the launch video (sprites/README.txt):
+// the toon art of the launch video (sprites/frames.json):
 // {"w":24,"h":24,"fps":8,"frames":[[[r,g,b] or null per pixel, row by row]]}.
 // The build puts the 35 files of the 7 colours and 5 states into the
 // program (src/sprite-files.ts).
@@ -29,7 +29,7 @@ export const SPRITE_H = 24;
 export const ART_COLORS: readonly ArtColor[] = ['orange', 'blue', 'purple', 'green', 'pink', 'teal', 'gray'];
 export const ART_STATES: readonly ArtState[] = ['idle', 'work', 'wait', 'sleep', 'blocked'];
 
-/** The frames of each state's loop, as in sprites/README.txt. All loops play at 8 fps. */
+/** The frames of each state's loop, as in sprites/frames.json. All loops play at 8 fps. */
 export const STATE_FRAMES: Record<ArtState, number> = { idle: 8, work: 8, wait: 8, sleep: 4, blocked: 4 };
 export const SPRITE_FPS = 8;
 

@@ -175,11 +175,10 @@ describe('sprite files', () => {
     expect(want).toHaveLength(35);
   });
 
-  test('the frame counts and the rate are those of sprites/README.txt', () => {
-    const readme = readFileSync(join(SPRITES, 'README.txt'), 'utf8');
-    expect(readme).toMatch(/Animation rate for all loops: 8 fps/);
-    const table: Record<string, number> = {};
-    for (const m of readme.matchAll(/^ {2}(idle|work|wait|sleep|blocked) +(\d+) /gm)) table[m[1] as string] = Number(m[2]);
+  test('the frame counts and the rate are those of sprites/frames.json', () => {
+    const spec = JSON.parse(readFileSync(join(SPRITES, 'frames.json'), 'utf8')) as { fps: number; frames: Record<string, number> };
+    expect(spec.fps).toBe(8);
+    const table: Record<string, number> = spec.frames;
     expect(table).toEqual({ idle: 8, work: 8, wait: 8, sleep: 4, blocked: 4 });
     expect(STATE_FRAMES).toEqual(table);
     expect(SPRITE_FPS).toBe(8);

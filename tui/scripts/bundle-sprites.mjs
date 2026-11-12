@@ -2,9 +2,9 @@
 // Puts the sprite files that the interface uses into src/sprite-files.ts,
 // so tsc puts them in dist and bun build --compile puts them in the single
 // binary: sprites/character-COLOR-STATE.json for the 7 colours and the 5
-// states, nothing else (not rooms.json, not README.txt). The build runs
+// states, nothing else (not frames.json). The build runs
 // this first. It stops on a missing file or a frame count that is not the
-// one of sprites/README.txt, so a release never ships a gap.
+// one of sprites/frames.json, so a release never ships a gap.
 // Usage: node scripts/bundle-sprites.mjs
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
