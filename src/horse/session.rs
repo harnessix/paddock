@@ -6,6 +6,9 @@
 //! store) and a namespace with its sessions. A new paddock run gets a new
 //! horse by default.
 
+mod host_index;
+#[cfg(test)]
+pub(crate) use host_index::{CRASH_AFTER_INDEX, FAIL_INDEX_WRITE};
 mod locked;
 
 use super::store::{Hash, Node, Store};
@@ -42,6 +45,21 @@ pub struct ForkOf {
     pub node: Hash,
 }
 
+/// Where a host session comes from: a session that runs or ran on the
+/// host, outside a sandbox. paddock reads it from a private copy and
+/// never writes the host file.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HostOrigin {
+    /// How the session came in: `import`, `adopt` or `shadow`.
+    pub via: String,
+    /// The host home of the session file.
+    pub home: std::path::PathBuf,
+    /// The session file or folder, relative to that home.
+    pub path: std::path::PathBuf,
+    /// When paddock last read it, in ms since the epoch.
+    pub read_ms: u64,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Session {
     pub id: String,
@@ -59,6 +77,15 @@ pub struct Session {
     pub fork_of: Option<ForkOf>,
     pub lineage: Vec<LineageStep>,
     pub created_ms: u64,
+    /// A host session: the copy of a session of the host. Run code never
+    /// finds it by its native id ([`Store::host_session`] does).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<HostOrigin>,
+    /// The run (sandbox id) that wrote the rows of this session after its
+    /// fork node: a `--profile default` run that continued a host session
+    /// (host/shadow.rs). The rows up to the fork node are the host's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_run: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -138,10 +165,14 @@ impl Store {
             .collect()
     }
 
-    /// The session bound to this native id of a harness.
+    /// The session bound to this native id of a harness. A host session
+    /// is never the answer: it has the native id of the host file, and a
+    /// run that continues that file keeps its rows in a session of its own.
     pub fn session_by_native(&self, harness: &str, native_id: &str) -> Result<Option<Session>> {
         let mut matches = self.sessions()?.into_iter().filter(|s| {
-            s.binding.harness == harness && s.binding.native_id.as_deref() == Some(native_id)
+            s.host.is_none()
+                && s.binding.harness == harness
+                && s.binding.native_id.as_deref() == Some(native_id)
         });
         let first = matches.next();
         anyhow::ensure!(
@@ -227,6 +258,8 @@ impl Store {
             }),
             lineage,
             created_ms: super::now_ms(),
+            host: None,
+            origin_run: None,
         };
         self.save_session(&s)?;
         h.sessions.push(s.id.clone());

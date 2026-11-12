@@ -50,12 +50,22 @@ impl Host for FuseHost<'_> {
             choices: Vec::new(),
             connect: None,
         };
-        let verdict = ctx
+        let outcome = ctx
             .approver
-            .ask_verdict(&ctx.env, &p, Duration::from_secs(wait));
+            .ask_outcome(&ctx.env, &p, Duration::from_secs(wait));
+        // This interface does not yet have a separate unavailable result.
+        let unknown = matches!(
+            &outcome,
+            broker::ApprovalOutcome::Unknown | broker::ApprovalOutcome::Unavailable
+        );
+        let verdict = match outcome {
+            broker::ApprovalOutcome::Answered(v) => Some(v),
+            _ => None,
+        };
         let answer = match verdict.map(|v| v.answer) {
             Some(CardAnswer::Once | CardAnswer::Session) => Answer::Approved,
             Some(_) => Answer::Denied,
+            None if unknown => Answer::Unknown,
             None => Answer::TimedOut(wait),
         };
         log::info!(

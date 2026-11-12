@@ -237,6 +237,16 @@ pub fn build(env: &HostEnv) -> String {
     build_with(env, false)
 }
 
+/// The first section: which paddock ran, as a release or a development
+/// build with its commit, and on which system.
+fn paddock_header(os: &str, kernel: &str, omarchy: &str, session: &str) -> String {
+    format!(
+        "Version: {}\nBuild: {}\nOS: {os}\nKernel: {kernel}Omarchy: {omarchy}Session: {session}",
+        crate::VERSION_LONG,
+        crate::BUILD,
+    )
+}
+
 /// Build the report. `no_hosts` replaces every host name of the macOS
 /// guest's rules files and connection logs with `host-N`.
 pub fn build_with(env: &HostEnv, no_hosts: bool) -> String {
@@ -259,20 +269,16 @@ pub fn build_with(env: &HostEnv, no_hosts: bool) -> String {
             "pacman -Q omarchy-dev 2>/dev/null || pacman -Q omarchy 2>/dev/null || echo unknown",
         ],
     );
+    let session = env
+        .vars
+        .get("XDG_SESSION_TYPE")
+        .map(String::as_str)
+        .unwrap_or("unknown");
     let mut out = String::new();
     section(
         &mut out,
         "PADDOCK",
-        &format!(
-            "Version: {}\nOS: {os}\nKernel: {}Omarchy: {}Session: {}",
-            env!("CARGO_PKG_VERSION"),
-            kernel,
-            omarchy,
-            env.vars
-                .get("XDG_SESSION_TYPE")
-                .map(String::as_str)
-                .unwrap_or("unknown"),
-        ),
+        &paddock_header(&os, &kernel, &omarchy, session),
     );
     section(&mut out, "DOCTOR", &capture(&me, &["doctor"]));
     section(&mut out, "RUNNING SANDBOXES", &capture(&me, &["ps"]));
@@ -332,6 +338,25 @@ mod tests {
             ("SHORT".to_string(), "ab".to_string()),
         ]);
         Redactor::new("/home/demo", "alice", "alicebox", &vars)
+    }
+
+    #[test]
+    fn the_header_names_the_build_kind_and_the_commit() {
+        let h = paddock_header("Arch", "Linux 6\n", "omarchy 3\n", "wayland");
+        let build = h
+            .lines()
+            .find_map(|l| l.strip_prefix("Build: "))
+            .expect("a Build line");
+        assert!(
+            build.starts_with("release (commit ")
+                || build.starts_with("development build (commit "),
+            "{build}"
+        );
+        assert!(h.contains(&format!("Version: {}\n", crate::VERSION_LONG)));
+        // This test builds from a git checkout, so the commit is known.
+        if std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/.git")).exists() {
+            assert!(!build.contains("commit unknown"), "{build}");
+        }
     }
 
     #[test]

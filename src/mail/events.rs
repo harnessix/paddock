@@ -8,7 +8,7 @@
 //!   it (`watch`, `ls`), so it does not need the dead process.
 //! - `idle`: a detached run shows no output for `[mail] idle_after` and has
 //!   unread mail (detach.rs polls its pane).
-//! - `card`: an approval card waits for the user, with what it asks.
+//! - `card`: an approval card was opened, with what it asked.
 //! - `child-started`, `child-ended`: in the parent's box, for a child of
 //!   `paddock-host spawn`.
 //!
@@ -55,20 +55,37 @@ impl Cfg {
     }
 }
 
+/// The state letter and the start time (clock ticks after boot) of a
+/// process, from `/proc/PID/stat`. None where `/proc` does not have it.
+fn proc_stat(pid: u32) -> Option<(String, Option<u64>)> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let mut fields = stat.rsplit_once(')')?.1.split_whitespace();
+    let state = fields.next()?.to_string();
+    Some((state, fields.nth(18).and_then(|s| s.parse().ok())))
+}
+
 /// The start time of a process, in clock ticks after boot. None where
 /// `/proc` does not have it.
 pub fn proc_start(pid: u32) -> Option<u64> {
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
-    let rest = stat.rsplit_once(')')?.1;
-    rest.split_whitespace().nth(19)?.parse().ok()
+    proc_stat(pid)?.1
 }
 
-/// The process runs, and it is the same process (not a reused pid).
+/// The process runs, and it is the same process (not a reused pid). A
+/// zombie (killed, not yet reaped by its parent) does not run: signal 0
+/// finds it, but it never writes an end, and its parent can wait for
+/// whoever waits for that end.
 pub fn alive(pid: u32, start: Option<u64>) -> bool {
     // SAFETY: signal 0 only checks that the process exists.
     let r = unsafe { libc::kill(pid as i32, 0) };
     let exists = r == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM);
-    exists && (start.is_none() || proc_start(pid).is_none() || proc_start(pid) == start)
+    if !exists {
+        return false;
+    }
+    match proc_stat(pid) {
+        None => true,
+        Some((state, _)) if matches!(state.as_str(), "Z" | "X") => false,
+        Some((_, now)) => start.is_none() || now.is_none() || now == start,
+    }
 }
 
 /// A child's event for its parent's box.
@@ -214,20 +231,25 @@ pub fn check_gone(env: &HostEnv, id: &str) -> Option<Message> {
     Some(m)
 }
 
-/// An approval card waits for the user: tell the run's starter what it asks.
-pub fn card(env: &HostEnv, p: &crate::broker::Pending) {
-    if !super::exists(env, &p.sandbox) {
-        return;
-    }
+/// Describe an actual card publication. A later reader must list current cards.
+pub(crate) fn card_opened(p: &crate::broker::Pending) -> String {
     let mut what = format!("{}: {}", p.capability, p.summary);
     if !p.reason.trim().is_empty() {
         what.push_str(&format!(" (reason: {})", p.reason.trim()));
     }
     let what: String = super::text::clean(&what).chars().take(1000).collect();
-    let text = format!(
-        "an approval card waits for the user: {what}. The run waits until someone answers it in the bar panel or with `paddock approvals`"
-    );
-    let _ = super::append(env, &p.sandbox, Dir::Up, Message::event("card", text));
+    format!(
+        "approval card {} opened: {what}. It may have been answered or closed; run `paddock approvals` for the current list",
+        p.id
+    )
+}
+
+pub(crate) fn try_card(
+    env: &HostEnv,
+    sandbox: &str,
+    text: String,
+) -> Result<bool, super::SendError> {
+    super::try_append(env, sandbox, Dir::Up, Message::event("card", text))
 }
 
 /// A detached run's pane showed no output for `quiet` seconds. With unread

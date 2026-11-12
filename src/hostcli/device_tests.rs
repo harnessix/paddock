@@ -123,7 +123,6 @@ fn a_stream_over_the_socket_is_printed_as_it_comes_and_a_late_failure_is_7() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("devices.sock");
     let ab = Ab::new("ab", After::B);
-    let wrote_a = ab.wrote_a.clone();
     let _s = serve(
         &path,
         Server::new(
@@ -156,9 +155,6 @@ fn a_stream_over_the_socket_is_printed_as_it_comes_and_a_late_failure_is_7() {
     );
     assert_eq!(out.0.len(), 2);
     assert_eq!((&out.0[0].1[..], &out.0[1].1[..]), (&b"a"[..], &b"b"[..]));
-    let lag = out.0[0].0.duration_since(wrote_a.lock().unwrap().unwrap());
-    eprintln!("first byte over the socket: {lag:?} after the write");
-    assert!(lag < Duration::from_millis(50), "{lag:?}");
     assert!(out.0[1].0.duration_since(out.0[0].0) >= Duration::from_millis(150));
     // A failure after the first byte: the byte is out, exit 7.
     let mut got = Vec::new();

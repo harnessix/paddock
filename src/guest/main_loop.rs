@@ -369,6 +369,12 @@ impl<'a, P: Platform> Session<'a, P> {
             self.writer.send(&Event::Windows(ev))?;
         }
         self.st.snapshot = snap;
+        // Computer use reads the same windows from its own threads.
+        super::computer::publish(super::computer::scene_of(
+            self.st.app.as_ref(),
+            &self.st.follow,
+            &self.st.snapshot.windows,
+        ));
         // The windows go first, the exit after them.
         self.exits()?;
         let app = match front {
@@ -533,6 +539,10 @@ impl<'a, P: Platform> Session<'a, P> {
                     match self.p.launch(&path, &args, &env) {
                         Ok(pid) => {
                             self.st.follow.root = Some(pid);
+                            // The table of the last poll lacks the new pid. Without
+                            // it, `app_alive` is false until the next poll, and a
+                            // password request queued behind this one passes the guard.
+                            self.st.follow.procs.entry(pid).or_insert(0);
                             self.st.exit = None;
                             self.st.app = Some(
                                 path.file_stem()
@@ -759,6 +769,9 @@ mod screen;
 #[path = "main_loop_shares.rs"]
 mod shares;
 
+#[cfg(test)]
+#[path = "main_loop_guard_tests.rs"]
+mod guard_tests;
 #[cfg(test)]
 #[path = "main_loop_shares_tests.rs"]
 mod shares_tests;

@@ -323,9 +323,21 @@ pub(crate) fn approvals(env: &HostEnv, json: bool, cmd: Option<ApprovalsCmd>) ->
             (deny, broker::ConnectAnswer::Deny),
             (deny_always, broker::ConnectAnswer::DenyAlways),
         ];
+        // The card says whether its session applies an allow; read it
+        // before the answer hides it.
+        let card = broker::pending(env).into_iter().find(|p| p.id == id);
+        let note = |a: broker::ConnectAnswer| {
+            if let Some(n) = card
+                .as_ref()
+                .and_then(|c| paddock::macvm::approvals::cli_answer_note(c, a))
+            {
+                println!("{n}");
+            }
+        };
         if let Some((_, a)) = flags.iter().find(|(set, _)| *set) {
             broker::answer_connect_cli(env, &id, *a)?;
             println!("{}", paddock::macvm::text::connect_answered(&id, a.word()));
+            note(*a);
             return Ok(0);
         }
         match (answer, text) {
@@ -348,11 +360,11 @@ pub(crate) fn approvals(env: &HostEnv, json: bool, cmd: Option<ApprovalsCmd>) ->
                 broker::answer_with_note_cli(env, &id, a, note.as_deref())?;
                 match note {
                     Some(n) => println!(
-                        "Answered {id}: {} with a note of {} characters.",
+                        "Recorded selection for {id}: {} with a note of {} characters. Delivery and completion are not confirmed.",
                         serde_json::to_value(a)?.as_str().unwrap_or("deny"),
                         n.chars().count()
                     ),
-                    None => println!("Answered {id}: deny"),
+                    None => println!("Recorded selection for {id}: deny. Delivery and completion are not confirmed."),
                 }
             }
             (None, Some(t)) => {
@@ -370,20 +382,42 @@ pub(crate) fn approvals(env: &HostEnv, json: bool, cmd: Option<ApprovalsCmd>) ->
                     bail!("the answer is empty");
                 }
                 broker::answer_reply_cli(env, &id, &t)?;
-                println!("Answered {id} with {} characters.", t.chars().count());
+                println!("Recorded answer for {id} with {} characters. Delivery and completion are not confirmed.", t.chars().count());
             }
             (Some(a), None) => {
-                broker::answer_with_note_cli(env, &id, a.parse()?, None)?;
-                println!("Answered {id}: {a}");
+                let parsed: broker::Answer = a.parse()?;
+                broker::answer_with_note_cli(env, &id, parsed, None)?;
+                println!(
+                    "Recorded selection for {id}: {a}. Delivery and completion are not confirmed."
+                );
+                if card
+                    .as_ref()
+                    .is_some_and(|c| c.capability == broker::CONNECT_CAPABILITY)
+                {
+                    if let Ok(connect) = broker::ConnectAnswer::from_answer(parsed) {
+                        note(connect);
+                    }
+                }
             }
             (None, None) => bail!("give an answer, or --text TEXT for a question"),
         }
         return Ok(0);
     }
-    let list = broker::pending(env);
+    let report = broker::pending_report(env)?;
+    let list = report.pending;
+    let complete = report.diagnostics.is_empty();
     if json {
-        println!("{}", approvals_json(&list, paddock::state::now()));
-    } else if list.is_empty() {
+        println!(
+            "{}",
+            approvals_json(
+                &list,
+                &report.diagnostics,
+                &report.outcomes,
+                &report.unresolved,
+                paddock::state::now()
+            )
+        );
+    } else if list.is_empty() && complete {
         println!("No requests wait for an answer.");
     } else {
         for p in list {
@@ -430,10 +464,31 @@ pub(crate) fn approvals(env: &HostEnv, json: bool, cmd: Option<ApprovalsCmd>) ->
             );
         }
     }
-    Ok(0)
+    if !json {
+        for outcome in &report.outcomes {
+            println!("Local application {}: {:?}, scope {:?}, selection {}, rule {} (not a delivery or admission confirmation).",
+                outcome.id, outcome.state, outcome.scope, outcome.selected, outcome.rule);
+            for affected in &outcome.affected {
+                println!(
+                    "    affected decision {}: {} {}:{}; settlement unconfirmed",
+                    affected.id, affected.app, affected.host, affected.port
+                );
+            }
+        }
+        for diagnostic in &report.diagnostics {
+            eprintln!("Incomplete approval listing: {diagnostic}");
+        }
+    }
+    Ok(if complete { 0 } else { 2 })
 }
 
-fn approvals_json(list: &[paddock::broker::Pending], now: u64) -> serde_json::Value {
+fn approvals_json(
+    list: &[paddock::broker::Pending],
+    diagnostics: &[String],
+    outcomes: &[paddock::broker::ConnectOutcome],
+    unresolved: &[paddock::broker::ApprovalUnresolved],
+    now: u64,
+) -> serde_json::Value {
     let pending: Vec<_> = list
         .iter()
         .map(|p| {
@@ -446,7 +501,9 @@ fn approvals_json(list: &[paddock::broker::Pending], now: u64) -> serde_json::Va
             value
         })
         .collect();
-    serde_json::json!({ "v": 1, "api_version": "paddock.approvals/v1", "pending": pending })
+    serde_json::json!({ "v": 1, "api_version": "paddock.approvals/v1", "pending": pending,
+        "complete": diagnostics.is_empty(), "diagnostics": diagnostics,
+        "local_outcomes": outcomes, "unresolved": unresolved })
 }
 
 pub(crate) fn log(env: &HostEnv, json: bool, lines: usize) -> Result<i32> {
@@ -477,6 +534,27 @@ pub(crate) fn log(env: &HostEnv, json: bool, lines: usize) -> Result<i32> {
 #[cfg(test)]
 mod launcher_approval_tests {
     #[test]
+    fn json_listing_returns_an_error_for_a_malformed_card() {
+        let t = tempfile::tempdir().unwrap();
+        let mut vars = std::collections::BTreeMap::new();
+        vars.insert(
+            "XDG_RUNTIME_DIR".to_string(),
+            t.path().join("run").display().to_string(),
+        );
+        let env = paddock::env::HostEnv::from_parts(
+            t.path().join("home"),
+            "test".into(),
+            1000,
+            1000,
+            vars,
+        );
+        let dir = paddock::broker::approvals_dir(&env);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("bad.json"), "{broken").unwrap();
+        assert_eq!(super::approvals(&env, true, None).unwrap(), 2);
+    }
+
+    #[test]
     fn json_has_version_process_and_saturating_age() {
         let p = paddock::broker::Pending {
             created: 20,
@@ -487,10 +565,53 @@ mod launcher_approval_tests {
             }),
             ..Default::default()
         };
-        let encoded = super::approvals_json(&[p], 25).to_string();
+        let encoded = super::approvals_json(&[p], &[], &[], &[], 25).to_string();
         let v: serde_json::Value = serde_json::from_str(&encoded).unwrap();
         assert_eq!(v["v"], 1);
         assert_eq!(v["pending"][0]["age_s"], 0);
         assert_eq!(v["pending"][0]["process"], "/Applications/App");
+    }
+
+    #[test]
+    fn json_exposes_local_failure_and_unresolved_selection() {
+        use paddock::broker::{
+            ApplicationScope, ApprovalUnresolved, ConnectOutcome, LocalApplication, Pending,
+        };
+        let request = Pending {
+            id: "r-example".into(),
+            capability: "connect".into(),
+            ..Default::default()
+        };
+        let outcome = ConnectOutcome {
+            id: request.id.clone(),
+            request: request.clone(),
+            selected: "deny-always".into(),
+            local_allowed: None,
+            rule: "stale".into(),
+            by: "cli".into(),
+            state: LocalApplication::Failed,
+            scope: ApplicationScope::Unknown,
+            reason: Some("application failed".into()),
+            recorded_at: Some(1),
+            affected: vec![],
+        };
+        let unresolved = ApprovalUnresolved {
+            id: request.id.clone(),
+            reason: "application failed".into(),
+            selected: Some("deny-always".into()),
+            request: Some(request),
+        };
+        let json = super::approvals_json(
+            &[],
+            &["application failed".into()],
+            &[outcome],
+            &[unresolved],
+            2,
+        );
+        assert_eq!(json["complete"], false);
+        assert_eq!(json["local_outcomes"][0]["state"], "failed");
+        assert!(json["local_outcomes"][0]["local_allowed"].is_null());
+        assert_eq!(json["unresolved"][0]["selected"], "deny-always");
+        assert_eq!(json["unresolved"][0]["request"]["id"], "r-example");
     }
 }

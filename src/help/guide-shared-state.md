@@ -139,6 +139,7 @@ Each key belongs to a scope:
 | `parent` | Read-only: the `self` scope of the sandbox that started this one with `spawn` | only in a spawned sandbox |
 | `tree` | The sandbox that you started and every sandbox that it started with `spawn`, and theirs. Each entry records its writer. | on as soon as a sandbox can use `spawn` |
 | `user` | Every sandbox of every project | asks you at the first use |
+| `ns:NAME` | The projects and harnesses that `[kv.namespaces.NAME]` of your configuration names, and nothing else | off until you define it |
 
 An agent with a prompt injection can write a false tip into the `pasture` scope, and the other members read it. So paddock records the writer of every entry, and the client marks what another sandbox wrote as untrusted.
 
@@ -150,7 +151,25 @@ A spawned sandbox never gets more than its parent here either:
 
 A write can depend on the current version of a key (`--if-version`). A key can expire (`--ttl`). `mget` and `mset` read and write several keys at once. `history` shows the last versions of a key. `watch` waits for a change of one key or of a prefix. A lease (`claim NAME --ttl SECONDS`) makes sure that only one agent does a task. paddock sets the owner of a lease from the socket. Only the owner releases it, or with `--force` a sandbox above the owner in its spawn tree (its parent, or the parent of that one), or you on the host. A sibling cannot. A lease expires at the end of its time. Keep values small: put diffs, files and logs in a git branch or a file, and store the reference. `paddock-host kv --help` in the sandbox lists the key names that agents share: `task:`, `lease:`, `result:`, `heartbeat:` and `note:`.
 
-On the host, `paddock kv list` shows the pastures of the current folder and their keys. `paddock kv list --pasture NAME`, `paddock kv get KEY --pasture NAME`, `paddock kv delete KEY --pasture NAME` and `paddock kv release NAME --pasture NAME` read one of them. The pasture of a sandbox without one is `solo-<sandbox id>`. `--user`, `--sandbox ID` and `--tree ROOT-ID` choose another scope.
+On the host, `paddock kv list` shows the pastures of the current folder and their keys. `paddock kv list --pasture NAME`, `paddock kv get KEY --pasture NAME`, `paddock kv delete KEY --pasture NAME` and `paddock kv release NAME --pasture NAME` read one of them. The pasture of a sandbox without one is `solo-<sandbox id>`. `--user`, `--sandbox ID`, `--tree ROOT-ID` and `--ns NAME` choose another scope.
+
+### Namespaces for a few projects
+
+The `user` scope is open to every sandbox of every project after one approval. To share state between two projects only, define a namespace in `~/.config/paddock/config.toml`:
+
+```toml
+[kv.namespaces.host-build]
+projects = ["~/src/paddock", "~/src/loft"]   # absolute paths or ~/; a worktree counts as its repository
+harnesses = ["claude", "codex"]              # optional; without it, every harness
+```
+
+- In a sandbox of a member project and harness, `paddock-host kv ... --scope ns:host-build` reads and writes the namespace. No approval card appears, because the table is your approval.
+- A sandbox outside the namespace gets exit code 3 and a message that names the namespace and the key (`projects` or `harnesses`) to change. A namespace that does not exist gets exit code 4.
+- A spawned sandbox is a member only if every sandbox above it is a member.
+- Running sandboxes read the table again at each request. If you remove a project, its next request is refused.
+- Only the user configuration defines namespaces. A project `paddock.toml` with `[kv]` is invalid, because an agent can edit the project.
+- Leases, versions, `watch`, the audit log and the limits work as in a pasture. The size limit is `project_bytes`. Timers do not work in a namespace.
+- On the host, `--ns NAME` chooses the namespace: `paddock kv list|get|delete|release ... --ns host-build`. `paddock kv put|watch|claim ... --ns host-build` acts as you, with the writer `user`, and needs no `--as`. `paddock kv overview` and `paddock doctor` list the namespaces.
 
 ### Host scripts as principals
 
@@ -185,4 +204,4 @@ keep_days = 30         # paddock gc removes the files of a run, and the tree of 
 enabled = true
 ```
 
-`paddock gc` removes the file of each run (its `self` scope and its own pasture), and the `tree` scope of spawn trees whose root ended, more than `keep_days` ago, and keys whose time to live passed. A named pasture keeps its data until you delete it. The audit log `~/.local/state/paddock/kv-audit.jsonl` records each write with its key name and size. It never records a value.
+`paddock gc` removes the file of each run (its `self` scope and its own pasture), and the `tree` scope of spawn trees whose root ended, more than `keep_days` ago, and keys whose time to live passed. A named pasture keeps its data until you delete it. The audit log `~/.local/state/paddock/kv-audit.jsonl` records each write with its key name and size. It never records a value. The `gate` and `action` fields identify user-scope decisions, user-scope policy refusals and timer approvals. A user-scope refusal does not create a timer approval row when no timer question was asked. The approval interface does not carry a separate cancellation outcome for these requests. It cannot distinguish cancellation from the outcome that the interface reports.

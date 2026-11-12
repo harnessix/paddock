@@ -15,7 +15,7 @@ mod host_tools;
 mod mcp;
 mod memory_scope;
 use capped::read_capped;
-use end::EndOfRun;
+use end::{EndOfRun, ShadowRun};
 mod help;
 mod sshagent;
 use help::help_text;
@@ -484,6 +484,8 @@ pub fn run(
 ) -> Result<Outcome> {
     let _package_cache_lease = crate::storage::package_cache::RunCache::start(env, &built.spec)?;
     mcp::validate(env, &built)?;
+    // The Codex hook trust names the home that the harness sees.
+    built.spec.harness_home = backend.harness_home(&built.spec);
     // SIGTERM and SIGHUP must leave time for the device mount, login and
     // history copies, and session record to finish.
     // Before launch, paddock notes the signal and stops. After launch it
@@ -539,8 +541,7 @@ pub fn run(
     if let (Some(b), Some(access)) = (&broker, &horse_access) {
         let _ = b.horse.set(access.clone());
     }
-    // paddock kv and the devices. Each one is optional: when it cannot start,
-    // the sandbox starts without it and a notice says why.
+    // kv and the devices are optional: without one the sandbox starts, and a notice says why.
     let kv_approver: std::sync::Arc<dyn crate::broker::Approver> = built
         .approver
         .clone()
@@ -705,6 +706,7 @@ pub fn run(
             log::warn!("{w}");
         }
     }
+    end.home_written(spec);
     mcp::apply(env, &built, backend.name())?;
     let auth = AuthSync::copy_in(env, &built.profile, &built.auth, &spec.home_src)?;
     // The keeper refreshes the logins that the sandbox got without their
@@ -1162,17 +1164,6 @@ pub fn run(
         crate::recover::notice(env, &spec.id, &spec.home_src, running.started);
     }
     Ok(Outcome { code, stdout: out })
-}
-
-/// The run folder of a shadow run: removed when the run ends or fails.
-struct ShadowRun(crate::shadow::Plan);
-
-impl Drop for ShadowRun {
-    fn drop(&mut self) {
-        if let Err(e) = self.0.remove() {
-            log::warn!("{e:#}");
-        }
-    }
 }
 
 pub fn select_backend(env: &HostEnv, built: &Built) -> Result<Box<dyn Backend>> {

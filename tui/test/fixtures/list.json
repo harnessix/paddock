@@ -1,0 +1,1 @@
+{"api_version": "paddock.list/v1", "harnesses": [{"name": "claude", "installed": true, "app": false}, {"name": "codex", "installed": true, "app": false}, {"name": "amp", "installed": false, "app": false}]}

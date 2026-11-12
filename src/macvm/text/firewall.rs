@@ -130,7 +130,13 @@ pub fn connect_answers() -> String {
 
 /// `paddock approvals answer ID --allow-always` and the others.
 pub fn connect_answered(id: &str, answer: &str) -> String {
-    format!("Answered {id}: {answer}")
+    format!("Recorded selection for {id}: {answer}. Delivery, application, and persistence are not confirmed.")
+}
+
+/// The note after `paddock approvals answer` recorded an allow that its
+/// session closes as a once denial.
+pub fn connect_allow_unapplied(name: &str, host: &str, port: u16) -> String {
+    format!("This allow will not apply: paddock cannot prove that it comes after the last sleep of the Mac. The connection is denied once and no rule changes. To allow the host, run paddock app rules {name} add {host} --port {port}")
 }
 
 // ---- The connection log --------------------------------------------------

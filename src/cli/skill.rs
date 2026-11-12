@@ -5,7 +5,8 @@ use std::path::Path;
 
 #[derive(Subcommand)]
 pub(crate) enum SkillCmd {
-    /// Copy the skill into ~/.claude/skills and ~/.agents/skills on the host.
+    /// Copy the paddock-host and paddock-mac skills into ~/.claude/skills and
+    /// ~/.agents/skills on the host.
     Install,
 }
 
@@ -42,16 +43,28 @@ pub(crate) const HOST_SKILL: &[(&str, &str)] = &[
     ),
 ];
 
+/// The paddock-mac skill: computer use of the macOS guest, on the host and
+/// in a sandbox.
+pub(crate) const MAC_SKILL: &[(&str, &str)] = &[(
+    "SKILL.md",
+    include_str!("../../skills/paddock-mac/SKILL.md"),
+)];
+
 /// Write the whole paddock-host skill folder into `dir`. The reference files
 /// of an older install go first, so that none of them stays behind.
 pub(crate) fn install_skill(dir: &Path) -> Result<()> {
+    install_files(dir, HOST_SKILL)
+}
+
+/// Write the files of one skill into `dir`, the old references first out.
+fn install_files(dir: &Path, files: &[(&str, &str)]) -> Result<()> {
     let refs = dir.join("references");
     if refs.is_symlink() {
         std::fs::remove_file(&refs)?;
     } else if refs.is_dir() {
         std::fs::remove_dir_all(&refs)?;
     }
-    for (rel, text) in HOST_SKILL {
+    for (rel, text) in files {
         let file = dir.join(rel);
         if let Some(parent) = file.parent() {
             std::fs::create_dir_all(parent)?;
@@ -68,6 +81,9 @@ pub(crate) fn run(env: &HostEnv, cmd: Option<SkillCmd>) -> Result<i32> {
             for base in [".claude/skills", ".agents/skills"] {
                 let dir = env.home.join(base).join("paddock-host");
                 install_skill(&dir)?;
+                println!("Installed {}", dir.display());
+                let dir = env.home.join(base).join("paddock-mac");
+                install_files(&dir, MAC_SKILL)?;
                 println!("Installed {}", dir.display());
             }
         }
@@ -105,6 +121,17 @@ mod tests {
         for (rel, text) in HOST_SKILL {
             assert_eq!(*text, std::fs::read_to_string(root.join(rel)).unwrap());
         }
+    }
+
+    #[test]
+    fn the_mac_skill_is_the_file_of_its_folder() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("skills/paddock-mac");
+        let on_disk: Vec<_> = std::fs::read_dir(&root).unwrap().collect();
+        assert_eq!(on_disk.len(), MAC_SKILL.len());
+        for (rel, text) in MAC_SKILL {
+            assert_eq!(*text, std::fs::read_to_string(root.join(rel)).unwrap());
+        }
+        assert!(MAC_SKILL[0].1.contains("observe, act, verify"));
     }
 
     #[test]

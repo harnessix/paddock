@@ -356,6 +356,10 @@ pub fn run(access: &Access, sandbox: &str, line: &str, host: &dyn Host) -> Resul
                     host.record(&format!("ctl {name} {session} timed out"));
                     return Err(failure(Kind::TimedOut, not_approved(&cmd, &v, Some(secs))));
                 }
+                Answer::Unknown => {
+                    host.record(&format!("ctl {name} {session} approval outcome unknown"));
+                    return Err(failure(Kind::Failed, "the approval outcome is unknown"));
+                }
             }
             (v.ok(), tokens, format!("approved lost {tokens} tokens"))
         }

@@ -36,6 +36,7 @@ pub(in crate::broker) fn perform(
             return crate::borrow::borrow(env, &ctx.id, b, max, seen);
         }
         Work::Return(r) => return r.apply(env, &ctx.id),
+        Work::Mac(_) => bail!("computer use runs in Broker::respond_mac"),
         Work::Plain => {}
     }
     // Every other capability runs in the executor (Broker::run_elsewhere).
@@ -61,6 +62,9 @@ pub(in crate::broker) enum Work {
     Fetch(FetchPlan),
     Borrow(crate::borrow::BorrowPlan),
     Return(crate::borrow::ReturnPlan),
+    /// Computer use of the macOS guest (`macvm::computer_broker`), on the
+    /// session that the card names.
+    Mac(Box<crate::macvm::computer_broker::Planned>),
 }
 
 /// What the user sees and what a session grant covers.
@@ -225,6 +229,23 @@ pub(in crate::broker) fn prepare(
                 always_ask: false,
                 read_only: false,
                 work: Work::Return(plan),
+            })
+        }
+        crate::macvm::computer_broker::CAP => {
+            use crate::macvm::computer_broker as cb;
+            // The session is chosen now: the card names it, the grant
+            // holds it, and the tool runs on it or not at all.
+            let planned = cb::plan_host(env, &req.args).map_err(|f| anyhow::anyhow!(f.text))?;
+            let (summary, detail) = cb::card(&req.args, &planned);
+            Ok(Prepared {
+                summary,
+                detail,
+                keys: vec![cb::session_grant_key(&req.args, &planned)],
+                session_allowed: true,
+                always_ask: false,
+                read_only: false,
+                audit: Some(cb::audit_on(&req.args, &planned)),
+                work: Work::Mac(Box::new(planned)),
             })
         }
         _ => {

@@ -215,3 +215,81 @@ pub fn trust(home: &crate::safefs::Root, s: &crate::spec::HomeSetting) -> Result
         .with_context(|| format!("~/{}", t.config.display()))?;
     home.write(&t.config, out.as_bytes(), 0o600)
 }
+
+/// What Codex makes of one handler of a hooks file (`HookTrustStatus` of
+/// codex-rs `protocol`), for a handler from a user file: neither managed
+/// nor from a plugin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Trust {
+    /// `[hooks.state]` has the hash of the handler as it is now. It runs.
+    Trusted,
+    /// `[hooks.state]` has another hash: the handler changed. It does not
+    /// run, and the hooks review counts it.
+    Modified,
+    /// No trusted hash. It does not run, and the hooks review counts it.
+    Untrusted,
+}
+
+/// One handler of a hooks file and what Codex makes of it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Judged {
+    pub event: String,
+    pub group: usize,
+    pub handler: usize,
+    pub handler_value: Value,
+    pub trust: Trust,
+}
+
+/// Every handler of the `hooks` object of a Codex hooks file `doc` at
+/// `source` (the path that Codex sees), judged against the `[hooks.state]`
+/// of `config` (the text of `config.toml`), as Codex 0.167.0 does it
+/// (codex-rs hooks/src/engine/discovery.rs, `append_matcher_groups` and
+/// `hook_trust_status`). A handler that paddock cannot hash counts as
+/// untrusted.
+pub fn judge(source: &str, hooks: &Value, config: &str) -> Result<Vec<Judged>> {
+    let cfg: toml::Value = if config.trim().is_empty() {
+        toml::Value::Table(Default::default())
+    } else {
+        toml::from_str(config).context("config.toml is not valid TOML")?
+    };
+    let state = cfg.get("hooks").and_then(|h| h.get("state"));
+    let mut out = Vec::new();
+    let Some(events) = hooks.as_object() else {
+        return Ok(out);
+    };
+    for (event, groups) in events {
+        if event_key(event).is_none() {
+            continue;
+        }
+        for (g, group) in groups.as_array().into_iter().flatten().enumerate() {
+            let matcher = group.get("matcher").and_then(Value::as_str);
+            for (h, handler) in group
+                .get("hooks")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .enumerate()
+            {
+                let key = hook_key(source, event, g, h)?;
+                let trusted = state
+                    .and_then(|s| s.get(&key))
+                    .and_then(|s| s.get("trusted_hash"))
+                    .and_then(toml::Value::as_str);
+                let trust = match (trusted, hook_hash(event, matcher, handler)) {
+                    (None, _) => Trust::Untrusted,
+                    (Some(t), Ok(now)) if t == now => Trust::Trusted,
+                    (Some(_), Ok(_)) => Trust::Modified,
+                    (Some(_), Err(_)) => Trust::Untrusted,
+                };
+                out.push(Judged {
+                    event: event.clone(),
+                    group: g,
+                    handler: h,
+                    handler_value: handler.clone(),
+                    trust,
+                });
+            }
+        }
+    }
+    Ok(out)
+}

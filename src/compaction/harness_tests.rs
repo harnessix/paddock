@@ -14,6 +14,14 @@ use std::path::Path;
 /// `{"event_name":"session_start","hooks":[{"async":false,"command":"paddock-host compacted --harness codex","timeout":20,"type":"command"}],"matcher":"compact"}`.
 const PADDOCK_CODEX_HASH: &str =
     "sha256:371c933067cb6d5d4494380817fdb03cab5047e30dc69e36721fd913c6ec44e1";
+/// The same for paddock's mail hooks, from `printf '%s' JSON | sha256sum`.
+/// Stop ignores the matcher, and PostToolUse has none:
+/// `{"event_name":"stop","hooks":[{"async":false,"command":"paddock-host mail hook stop","timeout":20,"type":"command"}]}`
+/// and the same with `post_tool_use` and `paddock-host mail hook tool`.
+const PADDOCK_CODEX_STOP_HASH: &str =
+    "sha256:0834e5f1126ad29b7f15e6533d44c41a50e879ff89a236ea94924f8100b09a21";
+const PADDOCK_CODEX_TOOL_HASH: &str =
+    "sha256:f09950ac0a169b1c80bb633caa2b483788790172806ef831fd445511ddfe418c";
 
 #[test]
 fn the_codex_trust_hash_matches_the_pairs_in_codex_own_tests() {
@@ -88,20 +96,32 @@ fn codex_gets_its_hook_and_only_its_trust_in_the_sandbox_home() {
     assert_eq!(cfg["model"].as_str(), Some("m"));
     // The sandbox home has the host home's path.
     let state = cfg["hooks"]["state"].as_table().unwrap();
-    assert_eq!(state.len(), 1, "{state:?}");
+    assert_eq!(state.len(), 3, "{state:?}");
     assert_eq!(
         state[&format!("{src}:session_start:0:0")]["trusted_hash"].as_str(),
         Some(PADDOCK_CODEX_HASH)
     );
+    // The mail hooks have their trust too.
+    assert_eq!(
+        state[&format!("{src}:stop:0:0")]["trusted_hash"].as_str(),
+        Some(PADDOCK_CODEX_STOP_HASH)
+    );
+    assert_eq!(
+        state[&format!("{src}:post_tool_use:0:0")]["trusted_hash"].as_str(),
+        Some(PADDOCK_CODEX_TOOL_HASH)
+    );
     // The host home did not change.
     assert_eq!(tree(&w.env.home), before);
 
-    // Without `[compaction]`: no hook and no trust.
+    // Without `[compaction]`: no compaction hook and no trust for it. The
+    // mail hooks stay.
     let w = world("[compaction]\nenabled = false\n");
     let home = sandbox_home(&w, "codex");
-    assert!(!home.join(".codex/hooks.json").exists());
+    let hooks = json(&home.join(".codex/hooks.json"));
+    assert!(hooks["hooks"].get("SessionStart").is_none(), "{hooks}");
     let cfg = std::fs::read_to_string(home.join(".codex/config.toml")).unwrap_or_default();
-    assert!(!cfg.contains("trusted_hash"), "{cfg}");
+    assert!(!cfg.contains("session_start"), "{cfg}");
+    assert_eq!(cfg.matches("trusted_hash").count(), 2, "{cfg}");
 }
 
 #[test]

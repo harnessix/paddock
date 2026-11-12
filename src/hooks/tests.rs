@@ -3,6 +3,8 @@ use super::*;
 use std::collections::BTreeMap;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
+mod codex_trust;
+
 #[test]
 fn the_program_of_a_command_line() {
     let p = |prog: &str, script: Option<&str>| Parsed::Program {
@@ -139,6 +141,16 @@ fn tree(dir: &Path) -> BTreeMap<PathBuf, (Vec<u8>, u32)> {
 /// Build a sandbox of a built-in profile and write its home as a start
 /// does: the seed copies, the settings, then the hooks.
 fn start(w: &World, name: &str) -> anyhow::Result<crate::spec::SandboxSpec> {
+    start_on(w, name, |_| {})
+}
+
+/// `start`, with a change of the spec before the home is written, as the
+/// backend makes it (`harness_home`).
+fn start_on(
+    w: &World,
+    name: &str,
+    backend: impl FnOnce(&mut crate::spec::SandboxSpec),
+) -> anyhow::Result<crate::spec::SandboxSpec> {
     let h = crate::profile::Harness {
         profile: crate::profile::builtin(name).unwrap(),
         exe: "/usr/bin/true".into(),
@@ -152,7 +164,8 @@ fn start(w: &World, name: &str) -> anyhow::Result<crate::spec::SandboxSpec> {
         assume_yes: true,
         ..Default::default()
     };
-    let b = crate::build::build_with(&w.env, &opts, h)?;
+    let mut b = crate::build::build_with(&w.env, &opts, h)?;
+    backend(&mut b.spec);
     for rel in &crate::profile::builtin(name).unwrap().state.seed {
         if let Ok(bytes) = std::fs::read(w.env.home.join(rel)) {
             let dst = b.spec.home_src.join(rel);
@@ -436,9 +449,11 @@ fn codex_trusts_a_listed_program_entry_and_no_other_user_entry() {
     assert_eq!(
         keys,
         [
+            &want("post_tool_use:0:0"),
             &want("session_start:0:0"),
             &want("session_start:1:0"),
-            &want("stop:0:0")
+            &want("stop:0:0"),
+            &want("stop:1:0")
         ],
         "{state:?}"
     );
@@ -456,11 +471,16 @@ fn codex_trusts_a_listed_program_entry_and_no_other_user_entry() {
             .unwrap(),
         hash("SessionStart", &ss[1], 0)
     );
-    // `true` is not trusted, so it is not in the copy.
-    let stop = &hooks["hooks"]["Stop"][0];
+    // paddock's mail hook comes first. `true` is not trusted, so it is
+    // not in the copy.
+    assert_eq!(
+        hooks["hooks"]["Stop"][0]["hooks"][0]["command"],
+        crate::mail::deliver::STOP_COMMAND
+    );
+    let stop = &hooks["hooks"]["Stop"][1];
     assert_eq!(stop["hooks"].as_array().unwrap().len(), 1, "{stop}");
     assert_eq!(
-        state[&want("stop:0:0")]["trusted_hash"].as_str().unwrap(),
+        state[&want("stop:1:0")]["trusted_hash"].as_str().unwrap(),
         hash("Stop", stop, 0)
     );
     assert_eq!(cfg["model"].as_str(), Some("m"));
@@ -578,7 +598,7 @@ fn every_program_of_a_shell_line_must_be_in_the_sandbox() {
             let state = cfg["hooks"]["state"].as_table().unwrap();
             assert_eq!(
                 state.keys().filter(|k| k.contains(":stop:")).count(),
-                2,
+                3,
                 "{state:?}"
             );
         }
@@ -678,4 +698,28 @@ fn grok_gets_no_trust_without_a_hook_to_trust() {
         .notices
         .iter()
         .any(|n| n.contains("paddock does not trust them for grok in the sandbox: true.")));
+}
+
+#[test]
+fn the_entries_of_a_host_adoption_stay_out_of_the_sandbox() {
+    for name in ["claude", "codex", "grok", "agy"] {
+        let w = world("");
+        let exe = Path::new("/usr/bin/true");
+        // A real adoption writes the host file.
+        crate::horse::host::hooks::install(&w.env.home, &w.env.home.join("../bk"), name, exe)
+            .unwrap()
+            .unwrap();
+        let before = tree(&w.env.home);
+        let spec = start(&w, name).unwrap();
+        let cmds = sandbox_commands(&spec);
+        assert!(
+            cmds.iter().all(|c| !c.1.contains("--mark paddock-horse")),
+            "{name}: {cmds:?}"
+        );
+        assert!(
+            !spec.notices.iter().any(|n| n.contains("hooks left out")),
+            "{name}"
+        );
+        assert_eq!(tree(&w.env.home), before, "{name}");
+    }
 }

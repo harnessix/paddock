@@ -1,0 +1,1 @@
+{"seq": 3, "ts": 1200, "from": "agent", "kind": "ask", "text": "Which ledger format?\nOption one: jsonl\nOption two: sqlite\u001b]8;;http://evil\u0007link\u001b]8;;\u0007", "refs": ["notes/ledger.md"]}

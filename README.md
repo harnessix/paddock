@@ -63,6 +63,8 @@ paddock doctor
 For 64-bit Arm, replace `x86_64` with `aarch64`. See
 `paddock help install` for dependencies, updates and other options.
 
+To check that a download came from the release workflow, see `paddock help install`.
+
 ## Install on macOS
 
 On Apple silicon, install with Homebrew:
@@ -85,6 +87,9 @@ app mode, terminal runs and current Mac limitations.
 | `paddock codex` | Start an installed agent in the current project. |
 | `paddock run claude PATH` | Start an agent in a chosen project. |
 | `paddock ps` | List running sandboxes. |
+| `paddock board` | Show every project, ticket and agent run, and what waits for you. |
+| `paddock split` | Show an agent in its sandbox and a host shell in one window, each pane labeled sandbox or host. |
+| `paddock tui` | Open the terminal interface: runs, approvals, mail and the board, with the keyboard or the mouse. |
 | `paddock explain codex` | Show mounts, environment settings and their origins before a run. |
 | `paddock undo` | Restore files from a run's snapshot. |
 | `paddock doctor` | Check the system and its dependencies. |
@@ -117,6 +122,7 @@ The topics are built into the executable and available offline. Run `paddock hel
 - `defaults` — What are the Omarchy defaults?
 - `app-launchers` — How do I set up launchers?
 - `settings` — How do I configure paddock?
+- `split-guide` — How do I see several terminals in one window?
 - `logs` — Where are the logs?
 
 ### Safety and privacy
@@ -138,6 +144,7 @@ The topics are built into the executable and available offline. Run `paddock hel
 - `horse-interface` — How does the experimental horse interface work?
 - `timers` — How do task timers work?
 - `usage-limits` — How do I inspect usage limits?
+- `board-guide` — How do I see every project, ticket and run?
 - `device-guide` — How do agents use devices?
 
 ### Platforms and reference

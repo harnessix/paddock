@@ -36,6 +36,11 @@ use std::net::IpAddr;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
+#[cfg(test)]
+thread_local! {
+    pub(super) static READ_HOOK: std::cell::RefCell<Option<Box<dyn Fn()>>> = std::cell::RefCell::new(None);
+}
+
 pub const BY_USER: &str = "user";
 pub const BY_PROFILE: &str = "profile";
 pub const BY_APPROVER: &str = "approver";
@@ -238,6 +243,37 @@ pub fn host_matches(glob: &str, host: &str) -> bool {
     glob == host
 }
 
+// Whether two supported host patterns can match the same host. Unknown
+// patterns are treated as overlapping: file contents are not necessarily
+// produced by `add`, and an uncertain overlap must not create a grant.
+pub(super) fn hosts_overlap(a: &str, b: &str) -> bool {
+    if check_host_glob(a).is_err() || check_host_glob(b).is_err() {
+        return true;
+    }
+    let a = norm_host(a);
+    let b = norm_host(b);
+    if a == "*" || b == "*" {
+        return true;
+    }
+    match (a.strip_prefix("*."), b.strip_prefix("*.")) {
+        (Some(x), Some(y)) => x == y || host_matches(&a, y) || host_matches(&b, x),
+        (Some(_), None) => host_matches(&a, &b),
+        (None, Some(_)) => host_matches(&b, &a),
+        (None, None) => host_matches(&a, &b),
+    }
+}
+
+// An app rule can match either the process or its parent, so even two
+// differently named apps can overlap. Teams and ports have one value each.
+pub(super) fn rule_scopes_overlap(a: &Rule, b: &Rule) -> bool {
+    let teams_overlap = match (&a.team, &b.team) {
+        (Some(a), Some(b)) => a == b,
+        _ => true,
+    };
+    let ports_overlap = a.port == Port::Any || b.port == Port::Any || a.port == b.port;
+    teams_overlap && ports_overlap && hosts_overlap(&a.host, &b.host)
+}
+
 fn valid_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 253
@@ -414,107 +450,8 @@ fn hash6(parts: &[&str]) -> String {
     crate::manifest::hex(&h.finalize())[..6].to_string()
 }
 
-/// A new rule. The id names the scope: `session-xxxxxx` for a session
-/// rule, `rule-xxxxxx` for one of the file. `now` is Unix seconds.
-#[allow(clippy::too_many_arguments)]
-pub fn new_rule(
-    app: &str,
-    team: Option<&str>,
-    host: &str,
-    port: Port,
-    verdict: Verdict,
-    scope: Scope,
-    by: &str,
-    now: u64,
-) -> Rule {
-    static N: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    let nanos = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map(|d| d.subsec_nanos())
-        .unwrap_or(0);
-    let hash = hash6(&[
-        app,
-        team.unwrap_or(""),
-        host,
-        &port.text(),
-        verdict.word(),
-        &now.to_string(),
-        &nanos.to_string(),
-        &n.to_string(),
-        &std::process::id().to_string(),
-    ]);
-    let prefix = match scope {
-        Scope::Session => "session",
-        Scope::Always => "rule",
-    };
-    Rule {
-        id: format!("{prefix}-{hash}"), // not user text
-        app: app.to_string(),
-        team: team.map(str::to_string),
-        host: norm_host(host),
-        port,
-        verdict,
-        scope,
-        made: crate::waiting::format_rfc3339(now),
-        expires: None,
-        by: by.to_string(),
-    }
-}
-
-/// A seed rule of the profile: every process of the session may reach
-/// the host on port 443. Its id comes from the host, so a seed is the
-/// same across starts and shows the same in `paddock app rules`.
-pub fn seed_rule(host: &str, made: u64) -> Rule {
-    Rule {
-        id: format!("seed-{}", hash6(&[host])), // not user text
-        app: "*".into(),
-        team: None,
-        host: norm_host(host),
-        port: Port::Num(443),
-        verdict: Verdict::Allow,
-        scope: Scope::Always,
-        made: crate::waiting::format_rfc3339(made),
-        expires: None,
-        by: BY_PROFILE.into(),
-    }
-}
-
-/// The rule that an answer of the panel makes, for the exact app, host
-/// and port of the question: `allow-session` a session rule, `allow-always`
-/// and `deny-always` a rule of the file, `allow-once` and `deny` none.
-pub fn rule_of_answer(answer: ConnectAnswer, conn: &Conn, by: &str, now: u64) -> Option<Rule> {
-    let (verdict, scope) = match answer {
-        ConnectAnswer::AllowOnce | ConnectAnswer::Deny => return None,
-        ConnectAnswer::AllowSession | ConnectAnswer::AllowEverything => {
-            (Verdict::Allow, Scope::Session)
-        }
-        ConnectAnswer::AllowSite => (Verdict::Allow, Scope::Always),
-        ConnectAnswer::AllowAlways => (Verdict::Allow, Scope::Always),
-        ConnectAnswer::DenyAlways => (Verdict::Deny, Scope::Always),
-    };
-    // A helper's connection gets the rule of its app, so the next helper
-    // of the same app is covered too.
-    let app = conn.parent_app.unwrap_or(conn.app);
-    let site = site::registrable_site(conn.host);
-    let host = match answer {
-        ConnectAnswer::AllowSite => site.as_deref().unwrap_or(conn.host),
-        ConnectAnswer::AllowEverything => "*",
-        _ => conn.host,
-    };
-    let port = if answer == ConnectAnswer::AllowEverything
-        || (answer == ConnectAnswer::AllowSite && site.is_some())
-    {
-        Port::Any
-    } else {
-        Port::Num(conn.port)
-    };
-    let mut rule = new_rule(app, conn.team, host, port, verdict, scope, by, now);
-    if answer == ConnectAnswer::AllowEverything {
-        rule.expires = Some(now.saturating_add(600));
-    }
-    Some(rule)
-}
+mod rule_creation;
+pub use rule_creation::{new_rule, rule_of_answer, seed_rule};
 
 pub mod site;
 
@@ -537,10 +474,25 @@ pub struct Rules {
     /// The modification time of the file at the last read, for
     /// `reload_if_changed`.
     modified: Option<SystemTime>,
+    /// Exact contents last read or saved, for detecting stale writers.
+    snapshot: Option<String>,
     /// The file did not parse: `save` refuses, so the file stays as the
     /// user left it, and the session runs with the rules it gets.
     broken: bool,
 }
+
+/// A cooperating writer committed after this snapshot was read. This is
+/// different from an I/O failure: the edit must not be applied as-is.
+#[derive(Debug)]
+pub struct SaveConflict;
+
+impl std::fmt::Display for SaveConflict {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("firewall rules changed on disk; reload and retry")
+    }
+}
+
+impl std::error::Error for SaveConflict {}
 
 impl Rules {
     /// The rules file of an app profile:
@@ -570,55 +522,105 @@ impl Rules {
             session: Vec::new(),
             seeds: Vec::new(),
             modified: None,
+            snapshot: None,
             broken: true,
         }
     }
 
     fn read(&mut self) -> Result<()> {
-        let text = match std::fs::read_to_string(&self.path) {
-            Ok(t) => t,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+        #[cfg(test)]
+        READ_HOOK.with(|hook| {
+            if let Some(hook) = hook.borrow().as_ref() {
+                hook();
+            }
+        });
+        let text = match self.read_text()? {
+            Some(text) => text,
+            None => {
                 self.file.clear();
                 self.modified = None;
+                self.snapshot = None;
                 return Ok(());
             }
-            Err(e) => return Err(e).with_context(|| text::cannot_read(&self.path)),
         };
         let f: File = toml::from_str(&text)
             .map_err(|e| anyhow::anyhow!(text::rules_file_invalid(&self.path, &e.to_string())))?;
         self.file = f.rules;
+        self.snapshot = Some(text);
         self.modified = std::fs::metadata(&self.path)
             .and_then(|m| m.modified())
             .ok();
         Ok(())
     }
 
+    // A dangling rules link is uninspectable state, not an absent file.
+    fn read_text(&self) -> Result<Option<String>> {
+        match std::fs::read_to_string(&self.path) {
+            Ok(text) => Ok(Some(text)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                match std::fs::symlink_metadata(&self.path) {
+                    Err(missing) if missing.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                    Ok(_) => Err(e).with_context(|| text::cannot_read(&self.path)),
+                    Err(error) => Err(error).with_context(|| text::cannot_read(&self.path)),
+                }
+            }
+            Err(e) => Err(e).with_context(|| text::cannot_read(&self.path)),
+        }
+    }
+
+    /// Serialize a rule decision with cooperating writers of the rules file.
+    /// The lock inode is permanent; removing it would split the lock domain.
+    pub fn decision_lock(&self) -> std::io::Result<std::fs::File> {
+        use std::os::unix::io::AsRawFd;
+        let mut name = self.path.as_os_str().to_os_string();
+        name.push(".lock");
+        let file = crate::privfs::append(&PathBuf::from(name))?;
+        loop {
+            if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } == 0 {
+                return Ok(file);
+            }
+            let e = std::io::Error::last_os_error();
+            if e.kind() != std::io::ErrorKind::Interrupted {
+                return Err(e);
+            }
+        }
+    }
+
     /// Read the file again when another process wrote it (`paddock app
     /// rules add` while the session runs). `Ok(true)` when it changed.
     pub fn reload_if_changed(&mut self) -> Result<bool> {
-        let now = std::fs::metadata(&self.path)
-            .and_then(|m| m.modified())
-            .ok();
-        if now == self.modified {
-            return Ok(false);
-        }
+        // A replacement can retain the same timestamp. Compare the actual
+        // rules instead of treating metadata equality as proof of identity.
+        let before = self.file.clone();
+        let modified = self.modified;
         self.read()?;
-        Ok(true)
+        Ok(before != self.file || modified != self.modified)
     }
 
     /// Write the file: 0600, whole, renamed into place. The session rules
     /// and the seeds stay out of it.
     pub fn save(&mut self) -> Result<()> {
+        let lock = self.decision_lock()?;
+        self.save_locked(&lock)
+    }
+
+    /// Save while the caller retains the same cooperating decision lock.
+    pub(super) fn save_locked(&mut self, _lock: &std::fs::File) -> Result<()> {
         if self.broken {
             bail!(text::rules_file_invalid(&self.path, "not read"));
+        }
+        let current = self.read_text()?;
+        if current != self.snapshot {
+            return Err(SaveConflict.into());
         }
         let f = File {
             rules: self.file.clone(),
         };
         let body = toml::to_string(&f).context("firewall rules")?; // not user text
         let text = format!("{}\n{body}", text::rules_file_header()); // not user text
-        crate::privfs::write_atomic(&self.path, text)
+        crate::privfs::write_atomic(&self.path, &text)
             .with_context(|| text::cannot_write(&self.path))?;
+        self.snapshot = Some(text);
         self.modified = std::fs::metadata(&self.path)
             .and_then(|m| m.modified())
             .ok();
@@ -693,40 +695,8 @@ impl Rules {
     }
 }
 
-/// The seed hosts of an app profile, or none.
-pub fn seed_hosts(profile: Option<&crate::profile::Profile>) -> Vec<String> {
-    profile
-        .and_then(|p| p.app.as_ref())
-        .and_then(|a| a.macos.as_ref())
-        .map(|m| m.seed_hosts.clone())
-        .unwrap_or_default()
-}
-
-/// The line of a rule for `paddock app rules NAME list`.
-pub fn rule_line(r: &Rule) -> String {
-    let mut line = text::rule_line(
-        &r.id,
-        r.verdict.word(),
-        &r.app,
-        &r.host,
-        &r.port.text(),
-        r.scope.word(),
-        &r.by,
-        &r.made,
-    );
-    if let Some(expires) = r.expires {
-        line.push_str(&text::rule_time_left(
-            expires.saturating_sub(crate::state::now()),
-        ));
-    }
-    line
-}
-
-/// The rules file, when there is one, for the report and the reset.
-pub fn rules_file_if_any(env: &HostEnv, app: &str) -> Option<PathBuf> {
-    let p = Rules::path(env, app);
-    p.is_file().then_some(p)
-}
+mod report;
+pub use report::{rule_line, rules_file_if_any, seed_hosts};
 
 #[cfg(test)]
 #[path = "firewall_tests.rs"]

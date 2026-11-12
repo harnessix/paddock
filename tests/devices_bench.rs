@@ -231,7 +231,7 @@ fn echo() -> u16 {
 }
 
 #[test]
-#[ignore]
+#[ignore = "benchmark: latency, MiB/s, RSS and wakeups of the contract path; run it on purpose with --ignored"]
 fn contract_path_without_a_sandbox() {
     let tmp = common::tempdir();
     let dir = tmp.path().to_path_buf();
@@ -622,7 +622,7 @@ json.dump(r, open("flags/result.json", "w"))
 "#;
 
 #[test]
-#[ignore]
+#[ignore = "benchmark: latency, MiB/s and RSS of the full path through bwrap and FUSE; run it on purpose with --ignored"]
 fn full_path_through_bwrap_and_fuse() {
     if !can_run() {
         return;

@@ -513,11 +513,28 @@ fn report(
         );
     }
     if r.ok && spec.harness == "codex" && r.rule.starts_with("codex-hooks-review") {
+        let own = crate::hooks::codex_paddock_trusted(spec).unwrap_or_else(|e| {
+            log::warn!(
+                "sandbox {}: cannot read the Codex hook trust: {e:#}",
+                spec.id
+            );
+            false
+        });
+        // Without the trust, Codex does not run paddock's mail hooks: a send
+        // must not promise a delivery at the end of the turn.
+        if !own {
+            if let Err(e) = crate::mail::deliver::record_hooks(env, &spec.id, false) {
+                log::warn!(
+                    "sandbox {}: cannot record the mail delivery: {e:#}",
+                    spec.id
+                );
+            }
+        }
         let _ = crate::mail::append(
             env,
             &spec.id,
             crate::mail::Dir::Up,
-            crate::mail::Message::event("hooks-untrusted", "Codex continued without trusting the changed hooks. Those hooks will not run; if paddock's SessionStart compaction hook is among them, its context will not be restored after compaction."),
+            crate::mail::Message::event("hooks-untrusted", hooks_untrusted_text(own)),
         );
     }
     crate::broker::audit_line(
@@ -537,6 +554,17 @@ fn report(
         if let Some(t) = crate::view::Tmux::find(env) {
             t.message(&spec.id, &format!("paddock: {}", r.text));
         }
+    }
+}
+
+/// The text of the `hooks-untrusted` event. `own`: Codex trusts each of
+/// paddock's own hooks in the sandbox (hooks/write.rs
+/// `codex_paddock_trusted`), so only other hooks stay off.
+pub fn hooks_untrusted_text(own: bool) -> &'static str {
+    if own {
+        "Codex continued without trusting hooks that paddock did not write or check, for example plugin hooks, project hooks or hooks in config.toml. Those hooks do not run. paddock's own hooks (mail, compaction) are trusted by their hash and run."
+    } else {
+        "Codex continued without trusting the new or changed hooks. Those hooks do not run. paddock cannot confirm that Codex trusts its own hooks in this sandbox: mail can reach the agent only when it reads its mailbox, and paddock cannot restore the context after a compaction."
     }
 }
 

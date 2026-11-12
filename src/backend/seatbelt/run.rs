@@ -529,6 +529,11 @@ impl Backend for SeatbeltRun {
         NAME
     }
 
+    /// No mount namespace: HOME is the sandbox home at its host path.
+    fn harness_home(&self, spec: &SandboxSpec) -> std::path::PathBuf {
+        spec.home_src.clone()
+    }
+
     fn check(&self, _env: &HostEnv, spec: &SandboxSpec) -> Result<()> {
         if !cfg!(target_os = "macos") {
             bail!("the seatbelt backend runs on macOS only: use bwrap, docker, podman or srt on Linux");

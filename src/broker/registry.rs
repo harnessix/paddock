@@ -2,7 +2,7 @@
 //! `registry.sync`): the approval card, the audit log and the device
 //! ledger of the broker, around `horse::device::registry`.
 
-use super::{audit, Answer, Broker, Pending, Request, Response};
+use super::{audit, Answer, ApprovalOutcome, Broker, Pending, Request, Response};
 use crate::devices::ledger;
 use crate::horse::device::registry::{self as reg, Host};
 use std::cell::RefCell;
@@ -41,9 +41,18 @@ impl Host for BrokerHost<'_> {
             choices: Vec::new(),
             connect: None,
         };
-        let verdict = b
+        let outcome = b
             .approver
-            .ask_verdict(&b.env, &p, Duration::from_secs(b.policy.wait));
+            .ask_outcome(&b.env, &p, Duration::from_secs(b.policy.wait));
+        // These interfaces do not yet have a separate unavailable result.
+        let unknown = matches!(
+            &outcome,
+            ApprovalOutcome::Unknown | ApprovalOutcome::Unavailable
+        );
+        let verdict = match outcome {
+            ApprovalOutcome::Answered(v) => Some(v),
+            _ => None,
+        };
         let (answer, decision) = match verdict.map(|v| (v.answer, v.who)) {
             Some((Answer::Once | Answer::Session, "agent")) => {
                 (reg::Answer::Approved, "allowed once by the agent approver")
@@ -51,6 +60,7 @@ impl Host for BrokerHost<'_> {
             Some((Answer::Once | Answer::Session, _)) => (reg::Answer::Approved, "allowed once"),
             Some((_, "agent")) => (reg::Answer::Denied, "denied by the agent approver"),
             Some(_) => (reg::Answer::Denied, "denied"),
+            None if unknown => (reg::Answer::Unknown, "approval outcome unknown"),
             None => (reg::Answer::TimedOut(b.policy.wait), "timed out"),
         };
         *self.asked.borrow_mut() = Some((p.id, decision));

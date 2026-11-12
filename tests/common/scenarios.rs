@@ -417,7 +417,13 @@ pub fn measure_big_stream() -> bool {
 pub fn big_stream_in_a_child(name: &str) -> bool {
     let me = std::env::current_exe().unwrap();
     let out = std::process::Command::new(&me)
-        .args([name, "--exact", "--nocapture", "--test-threads=1"])
+        .args([
+            name,
+            "--exact",
+            "--include-ignored",
+            "--nocapture",
+            "--test-threads=1",
+        ])
         .env(MEASURE_CHILD, "1")
         .stdin(std::process::Stdio::null())
         .output()

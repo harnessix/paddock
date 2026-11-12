@@ -60,7 +60,15 @@ public final class CLIPaddockService: PaddockService, @unchecked Sendable {
         }
     }
     public func appStatus(_ app: String) async throws -> AppStatusJSON { try await json(PaddockArgs.appStatus(app)) }
-    public func approvals() async throws -> ApprovalsJSON { try await json(PaddockArgs.approvals) }
+    public func approvals() async throws -> ApprovalsJSON {
+        let out = try await runner.run(PaddockArgs.approvals)
+        if let value = try? PaddockJSON.decoder.decode(ApprovalsJSON.self, from: out.stdout),
+           out.status == 0 || (out.status == 2 && !value.complete) {
+            return value
+        }
+        if out.status != 0 { throw CommandError.failed(status: out.status, line: CLIPaddockService.lastLine(out.stderr)) }
+        throw CommandError.badJSON(output: String(out.stdoutText.prefix(200)))
+    }
 
     /// A refused precheck still prints JSON, maybe with a non-zero exit.
     public func precheck(_ path: String) async throws -> PrecheckJSON {

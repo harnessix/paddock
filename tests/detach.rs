@@ -301,6 +301,40 @@ fn detach_needs_a_prompt() {
 }
 
 #[test]
+fn a_run_that_fails_to_launch_leaves_no_board_record() {
+    let w = World::new(true);
+    // A tmux that fails every command: the pane never starts.
+    let bin = w.root.join("bin");
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::write(bin.join("tmux"), "#!/bin/sh\nexit 1\n").unwrap();
+    std::fs::set_permissions(
+        bin.join("tmux"),
+        std::os::unix::fs::PermissionsExt::from_mode(0o755),
+    )
+    .unwrap();
+    let ticket = w.root.join("project/.paddock/tickets/KV2-worker.md");
+    std::fs::create_dir_all(ticket.parent().unwrap()).unwrap();
+    std::fs::write(&ticket, "ok\n").unwrap();
+    let path = std::env::join_paths(
+        std::iter::once(bin).chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+    )
+    .unwrap();
+    let out = w
+        .paddock()
+        .env("PATH", path)
+        .args(["run", "fake", "-y", "--detach", "--prompt-file"])
+        .arg(&ticket)
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "{out:?}");
+    let board = w.root.join("state/paddock/board");
+    let left: Vec<_> = std::fs::read_dir(&board)
+        .map(|rd| rd.flatten().map(|e| e.file_name()).collect())
+        .unwrap_or_default();
+    assert!(left.is_empty(), "records left: {left:?}");
+}
+
+#[test]
 fn detach_starts_a_session_on_the_private_socket_and_returns() {
     if !has_tmux() {
         eprintln!("skipped: needs tmux");
@@ -314,8 +348,8 @@ fn detach_starts_a_session_on_the_private_socket_and_returns() {
     assert!(out.status.success());
     if !common::bwrap_works() {
         // The run in the pane ends; wait sees that and has no `done`.
-        let (code, _) = w.wait(&id, "60s");
-        assert_eq!(code, Some(1));
+        let (code, out) = w.wait(&id, "60s");
+        assert_eq!(code, Some(1), "{out}");
     }
 }
 

@@ -65,6 +65,26 @@ pub struct Moved {
     pub verdict: Option<guard::Verdict>,
 }
 
+/// The checks of a move that the session itself decides: a running
+/// session or a session with hitch edges does not leave horse `from`. Its
+/// run, and the runs hitched to it, belong to that horse. `move_to` and
+/// the join of a host continuation (host/shadow.rs) both call it.
+pub(crate) fn check_movable(store: &Store, from: &super::Horse, session: &str) -> Result<()> {
+    if dna::running_sessions(store, from)?
+        .iter()
+        .any(|x| x == session)
+    {
+        bail!("session {session} runs now; move it when its run ends");
+    }
+    if super::hitch::edges(store, &from.id)?
+        .iter()
+        .any(|e| e.from == session || e.to == session)
+    {
+        bail!("session {session} has hitch edges in horse {}", from.id);
+    }
+    Ok(())
+}
+
 /// Move a session to horse `to`: compatibility check, guard verdict,
 /// graft of the source DNA into the target, lineage step, one `system`
 /// entry and one `session.move` event in each horse. A running session or
@@ -78,15 +98,7 @@ pub fn move_to(store: &Store, session: &str, to: &str) -> Result<Moved> {
     if from.id == target.id {
         bail!("session {session} is in horse {to} already");
     }
-    if dna::running_sessions(store, &from)?.contains(&s.id) {
-        bail!("session {session} runs now; move it when its run ends");
-    }
-    if super::hitch::edges(store, &from.id)?
-        .iter()
-        .any(|e| e.from == s.id || e.to == s.id)
-    {
-        bail!("session {session} has hitch edges in horse {}", from.id);
-    }
+    check_movable(store, &from, &s.id)?;
     let compat = graft::check(
         &dna::get_or_default(store, &target.dna),
         &dna::get_or_default(store, &from.dna),

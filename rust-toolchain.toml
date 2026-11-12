@@ -1,0 +1,7 @@
+# The one Rust version of CI, the release and the VM guest files. The
+# workflows read the channel from this file (.github/actions/rust). Change
+# it in its own commit, together with the fixes the new version needs.
+[toolchain]
+channel = "1.99.1"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

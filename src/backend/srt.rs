@@ -258,6 +258,11 @@ impl Backend for Srt {
         "srt"
     }
 
+    /// No mount namespace: HOME is the sandbox home at its host path.
+    fn harness_home(&self, spec: &SandboxSpec) -> std::path::PathBuf {
+        spec.home_src.clone()
+    }
+
     fn check(&self, env: &HostEnv, spec: &SandboxSpec) -> Result<()> {
         if spec.shadow.is_some() {
             bail!("--profile default runs only on the bwrap backend on Linux and the Seatbelt backend on macOS: it needs a private snapshot at the sandbox home");
@@ -573,6 +578,20 @@ mod tests {
         let v = settings(&env, &s).unwrap();
         for p in ["/etc/machine-id", "/var/lib/dbus/machine-id"] {
             assert!(list(&v, "denyRead").contains(&p), "{p}");
+        }
+    }
+
+    /// HOOK1: srt has no mount namespace, so the harness sees the sandbox
+    /// home at its host path. The Codex hook trust is named after it.
+    #[test]
+    fn the_harness_home_is_the_sandbox_home_at_its_host_path() {
+        let (_, s) = spec();
+        assert_eq!(Srt.harness_home(&s), s.home_src);
+        assert_ne!(Srt.harness_home(&s), s.home);
+        // The backends with a mount namespace keep the default.
+        for name in ["bwrap", "docker", "podman"] {
+            let b = crate::backend::by_name(name).unwrap();
+            assert_eq!(b.harness_home(&s), s.home, "{name}");
         }
     }
 }

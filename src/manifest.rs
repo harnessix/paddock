@@ -15,17 +15,22 @@ use std::path::{Path, PathBuf};
 
 pub const PROJECT_FILE: &str = "paddock.toml";
 
+#[path = "manifest_net.rs"]
+mod net;
+pub use net::{check_max, net_name, net_rank, Base};
+
 /// Tables of `~/.config/paddock/config.toml` that other modules read
-/// themselves: `[devices]` (devices.rs), `[kv]` (kv.rs), `[pastures]`
+/// themselves: `[kv]` (kv.rs), `[pastures]`
 /// (pasture.rs), `[credentials]` (credentials.rs) and `[exec]`
 /// (gatewayd.rs), `[storage]` (storage/dedupe.rs), `[snapshot]`
 /// (snapshot.rs), `[profiles]` (shadow.rs), `[detach]` (detach.rs),
 /// `[compaction]` (compaction.rs), `[hooks]` (hooks.rs), `[speckit]`
 /// (speckit.rs), `[loft]` (loft.rs), `[horse]` (horse/live.rs), and
 /// `[tack]` (tack/config.rs). A project
-/// `paddock.toml` with one of them is invalid.
+/// `paddock.toml` with one of them is invalid. `[devices]` is not in the
+/// list: the user configuration defines devices there (devices.rs), and a
+/// project only requests them with `use` (`check_project_devices`).
 pub const USER_ONLY: &[&str] = &[
-    "devices",
     "memory",
     "kv",
     "exec",
@@ -255,6 +260,11 @@ pub struct NetworkCfg {
     /// Let the sandbox reach private and link-local networks (the LAN).
     /// Off by default: routers, NAS boxes and printers stay unreachable.
     pub lan: Option<bool>,
+    /// The widest network mode of any sandbox: a hard ceiling that no
+    /// project file, no approval and no `--network` flag can exceed. Read
+    /// from the user configuration only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max: Option<Network>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -309,6 +319,8 @@ pub struct SetupCfg {
 pub struct Loaded {
     pub merged: Manifest,
     pub project: Option<(PathBuf, Manifest)>,
+    /// What the project file is compared with to find what it widens.
+    pub base: Base,
 }
 
 impl Manifest {
@@ -327,6 +339,15 @@ impl Manifest {
             // A clear refusal of a table that only the user file may have,
             // before the schema names it an unknown field.
             let v: Option<toml::Value> = toml::from_str(&text).ok();
+            if let Some(v) = &v {
+                check_project_devices(path, v)?;
+                if v.get("network").and_then(|n| n.get("max")).is_some() {
+                    bail!(
+                        "{}: network.max is only read from the user configuration (~/.config/paddock/config.toml); a project paddock.toml cannot set it",
+                        path.display()
+                    );
+                }
+            }
             if let Some(k) = USER_ONLY
                 .iter()
                 .find(|k| v.as_ref().is_some_and(|v| v.get(**k).is_some()))
@@ -353,6 +374,8 @@ impl Manifest {
             for k in USER_ONLY {
                 t.remove(*k);
             }
+            // The device definitions; devices.rs reads them.
+            t.remove("devices");
         }
         Ok(v.try_into()?)
     }
@@ -372,13 +395,26 @@ impl Manifest {
         } else {
             None
         };
+        let max = user.network.max;
+        if let Some(m) = user.network.mode {
+            check_max(max, m, &format!("{}: network.mode =", user_file.display()))?;
+        }
+        if let Some((f, m)) = proj.as_ref().and_then(|(f, p)| Some((f, p.network.mode?))) {
+            check_max(max, m, &format!("{}: network.mode =", f.display()))?;
+        }
+        let base = Base::of_user(&user);
         let mut merged = user;
         if let Some((_, p)) = &proj {
             merged.merge(p.clone());
         }
+        // Without a mode anywhere, the default stays under the ceiling.
+        if merged.network.mode.is_none() && max.is_some() {
+            merged.network.mode = Some(base.mode);
+        }
         Ok(Loaded {
             merged,
             project: proj,
+            base,
         })
     }
 
@@ -467,12 +503,36 @@ impl Manifest {
         self.devices.r#use.extend(o.devices.r#use);
     }
 
-    /// The part of a project file that widens access. Approval covers exactly this.
-    pub fn widening(&self) -> serde_json::Value {
+    /// A network mode of the project file wider than the user's, unless
+    /// the command line names the mode. `host` has its own key.
+    fn wider_mode(&self, base: &Base) -> Option<Network> {
+        self.network.mode.filter(|m| {
+            !base.cli_network && *m != Network::Host && net_rank(*m) > net_rank(base.mode)
+        })
+    }
+
+    fn host_mode(&self, base: &Base) -> bool {
+        !base.cli_network && self.network.mode == Some(Network::Host)
+    }
+
+    /// `network.allow` domains that the user configuration does not allow.
+    fn extra_allow(&self, base: &Base) -> Vec<String> {
+        let mut v: Vec<String> = Vec::new();
+        for d in &self.network.allow {
+            if !base.allow.contains(d) && !v.contains(d) {
+                v.push(d.clone());
+            }
+        }
+        v
+    }
+
+    /// The part of a project file that widens access over `base`. Approval
+    /// covers exactly this.
+    pub fn widening(&self, base: &Base) -> serde_json::Value {
         let mut widening = serde_json::json!({
             "mounts": { "rw": self.mounts.rw, "ro": self.mounts.ro },
             "secrets.reveal": self.secrets.reveal,
-            "network.host": self.network.mode == Some(Network::Host),
+            "network.host": self.host_mode(base),
             "network.publish": self.network.publish,
             "network.host_ports": self.network.host_ports,
             "network.lan": self.network.lan == Some(true),
@@ -495,14 +555,24 @@ impl Manifest {
         if !start.is_empty() {
             widening["mcp.start"] = serde_json::json!(start);
         }
+        // Only when present, so the approvals of other files stay valid.
+        if let Some(m) = self.wider_mode(base) {
+            widening["network.mode"] = serde_json::json!(m);
+        }
+        let allow = self.extra_allow(base);
+        if !allow.is_empty() {
+            widening["network.allow"] = serde_json::json!(allow);
+        }
         widening
     }
 
-    pub fn widens(&self) -> bool {
+    pub fn widens(&self, base: &Base) -> bool {
         !self.mounts.rw.is_empty()
             || !self.mounts.ro.is_empty()
             || !self.secrets.reveal.is_empty()
-            || self.network.mode == Some(Network::Host)
+            || self.host_mode(base)
+            || self.wider_mode(base).is_some()
+            || !self.extra_allow(base).is_empty()
             || !self.network.publish.is_empty()
             || !self.network.host_ports.is_empty()
             || self.network.lan == Some(true)
@@ -524,13 +594,34 @@ impl Manifest {
     }
 }
 
+/// A project may request devices of the user configuration with
+/// `[devices] use = [...]`. It may never define a device (`[devices.NAME]`)
+/// or turn one on (`[devices] NAME = true`): the agent can edit the file.
+fn check_project_devices(path: &Path, v: &toml::Value) -> Result<()> {
+    let Some(t) = v.get("devices").and_then(|d| d.as_table()) else {
+        return Ok(());
+    };
+    if let Some(k) = t.keys().find(|k| *k != "use") {
+        let what = if t[k].is_table() {
+            format!("[devices.{k}]")
+        } else {
+            format!("[devices] {k}")
+        };
+        bail!(
+            "{}: {what} is only read from the user configuration (~/.config/paddock/config.toml); a project paddock.toml can only request devices of the user configuration with [devices] use = [\"NAME\"], because an agent in the sandbox can edit the project",
+            path.display()
+        );
+    }
+    Ok(())
+}
+
 fn approval_file(env: &HostEnv, project_file: &Path) -> PathBuf {
     let key = hex(&Sha256::digest(project_file.to_string_lossy().as_bytes()))[..16].to_string();
     env.paddock_state().join("approved").join(key)
 }
 
-fn widening_hash(m: &Manifest) -> String {
-    hex(&Sha256::digest(m.widening().to_string().as_bytes()))
+fn widening_hash(m: &Manifest, base: &Base) -> String {
+    hex(&Sha256::digest(m.widening(base).to_string().as_bytes()))
 }
 
 /// Bytes from lowercase or uppercase hex. None for odd lengths or other
@@ -549,15 +640,22 @@ pub fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-pub fn is_approved(env: &HostEnv, project_file: &Path, m: &Manifest) -> bool {
-    std::fs::read_to_string(approval_file(env, project_file))
-        .map(|s| s.trim() == widening_hash(m))
-        .unwrap_or(false)
+/// With `--network`, an approval that also covers the mode of the file
+/// counts too.
+pub fn is_approved(env: &HostEnv, project_file: &Path, m: &Manifest, base: &Base) -> bool {
+    let Ok(s) = std::fs::read_to_string(approval_file(env, project_file)) else {
+        return false;
+    };
+    let full = Base {
+        cli_network: false,
+        ..base.clone()
+    };
+    s.trim() == widening_hash(m, base) || s.trim() == widening_hash(m, &full)
 }
 
-pub fn approve(env: &HostEnv, project_file: &Path, m: &Manifest) -> Result<()> {
+pub fn approve(env: &HostEnv, project_file: &Path, m: &Manifest, base: &Base) -> Result<()> {
     let f = approval_file(env, project_file);
-    crate::privfs::write(&f, widening_hash(m))?;
+    crate::privfs::write(&f, widening_hash(m, base))?;
     Ok(())
 }
 
@@ -567,17 +665,18 @@ pub fn require_approval(env: &HostEnv, loaded: &Loaded, assume_yes: bool) -> Res
     let Some((file, m)) = &loaded.project else {
         return Ok(());
     };
-    if !m.widens() || is_approved(env, file, m) {
+    let base = &loaded.base;
+    if !m.widens(base) || is_approved(env, file, m, base) {
         return Ok(());
     }
-    let summary = serde_json::to_string_pretty(&m.widening())?;
+    let summary = serde_json::to_string_pretty(&m.widening(base))?;
     eprintln!(
         "paddock: {} asks for more access than the defaults:\n{summary}\n\
          The project directory is writable from inside the sandbox, so an agent can edit this file.",
         file.display()
     );
     if assume_yes {
-        return approve(env, file, m);
+        return approve(env, file, m, base);
     }
     if !std::io::stdin().is_terminal() {
         bail!(
@@ -590,7 +689,7 @@ pub fn require_approval(env: &HostEnv, loaded: &Loaded, assume_yes: bool) -> Res
     let mut answer = String::new();
     std::io::stdin().read_line(&mut answer)?;
     if matches!(answer.trim(), "y" | "Y" | "yes") {
-        approve(env, file, m)
+        approve(env, file, m, base)
     } else {
         bail!("not approved")
     }
@@ -611,7 +710,7 @@ pub const TEMPLATE: &str = r#"# paddock.toml: sandbox settings for this project.
 # reveal = [".env.test"]      # do not hide these
 
 [network]
-# mode = "egress"             # none | api | egress | allowlist | host
+# mode = "egress"             # none | api | allowlist | egress | host
 # publish = [5173]            # ports reachable from the host
 # allow = ["crates.io"]       # extra domains for modes "api" and "allowlist"
 # lan = true                # reach private networks: routers, NAS, other machines on the LAN
@@ -651,119 +750,5 @@ pub const TEMPLATE: &str = r#"# paddock.toml: sandbox settings for this project.
 "#;
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn starting_a_server_from_project_config_requires_approval() {
-        let never: Manifest = toml::from_str("[mcp.servers.s]\nstart = \"never\"\n").unwrap();
-        assert!(!never.widens());
-        assert!(never.widening().get("mcp.start").is_none());
-        for mode in ["auto", "always", "lazy"] {
-            let m: Manifest =
-                toml::from_str(&format!("[mcp.servers.s]\nstart = \"{mode}\"\n")).unwrap();
-            assert!(m.widens());
-            assert_eq!(m.widening()["mcp.start"]["s"]["start"], mode);
-        }
-    }
-
-    #[test]
-    fn host_tools_in_a_project_file_are_ignored_with_a_warning() {
-        let t = tempfile::tempdir().unwrap();
-        let env = HostEnv::from_parts(t.path().join("home"), "u".into(), 1, 1, Default::default());
-        let cfg = env.paddock_config();
-        std::fs::create_dir_all(&cfg).unwrap();
-        std::fs::write(
-            cfg.join("config.toml"),
-            "[host.tools.mine]\ncommand = [\"true\"]\n",
-        )
-        .unwrap();
-        let project = t.path().join("p");
-        std::fs::create_dir_all(&project).unwrap();
-        std::fs::write(
-            project.join(PROJECT_FILE),
-            "[host.tools.evil]\ncommand = [\"sh\"]\nargs = [\"**\"]\nmode = \"allow\"\n",
-        )
-        .unwrap();
-        let l = Manifest::load(&env, &project).unwrap();
-        let w = l.project.as_ref().unwrap().1.project_warnings();
-        assert!(
-            w[0].contains("[host.tools] in a project paddock.toml is ignored"),
-            "{w:?}"
-        );
-        let host = l.merged.host.unwrap();
-        assert!(host["tools"].get("mine").is_some());
-        assert!(host["tools"].get("evil").is_none());
-    }
-
-    #[test]
-    fn a_project_file_cannot_change_the_training_policy() {
-        use crate::training::{policy, Policy};
-        let t = tempfile::tempdir().unwrap();
-        let env = HostEnv::from_parts(t.path().join("home"), "u".into(), 1, 1, Default::default());
-        let project = t.path().join("p");
-        std::fs::create_dir_all(&project).unwrap();
-        std::fs::write(
-            project.join(PROJECT_FILE),
-            "[privacy]\ntraining = \"vendor\"\n",
-        )
-        .unwrap();
-        let l = Manifest::load(&env, &project).unwrap();
-        assert_eq!(policy(&l.merged), Policy::Deny);
-        let w = l.project.as_ref().unwrap().1.project_warnings();
-        assert!(w.iter().any(|w| w.contains("[privacy]")), "{w:?}");
-        let cfg = env.paddock_config();
-        std::fs::create_dir_all(&cfg).unwrap();
-        std::fs::write(
-            cfg.join("config.toml"),
-            "[privacy]\ntraining = \"manual\"\n",
-        )
-        .unwrap();
-        let l = Manifest::load(&env, &project).unwrap();
-        assert_eq!(policy(&l.merged), Policy::Manual);
-        // Only the three words.
-        assert!(toml::from_str::<Manifest>("[privacy]\ntraining = \"yes\"\n").is_err());
-    }
-
-    #[test]
-    fn user_only_tables_load_from_the_user_file_and_fail_in_a_project_file() {
-        let text = "backend = \"bwrap\"\n[devices]\nwait = true\n[kv]\nenabled = true\n";
-        let m = Manifest::parse_user(text).unwrap();
-        assert_eq!(m.backend.as_deref(), Some("bwrap"));
-        assert!(Manifest::parse_user("[exclave.peers.test]\ntransport = ['canary']\n").is_ok());
-        let err = Manifest::parse_user("[exclave.peers.test]\ntransport = ['CANARY_SECRET'\n")
-            .unwrap_err();
-        assert!(!format!("{err:#}").contains("CANARY_SECRET"));
-        for k in USER_ONLY {
-            let t = format!("[{k}]\nx = 1\n");
-            assert!(
-                toml::from_str::<Manifest>(&t).is_err(),
-                "[{k}] in a project file"
-            );
-        }
-        let t = tempfile::tempdir().unwrap();
-        let p = t.path().join(PROJECT_FILE);
-        std::fs::write(&p, text).unwrap();
-        assert!(Manifest::read(&p).is_err());
-        std::fs::write(&p, "[tack.secrets.GH_TOKEN]\n").unwrap();
-        let e = format!("{:#}", Manifest::read(&p).unwrap_err());
-        assert!(
-            e.contains("[tack] is only read from the user configuration"),
-            "{e}"
-        );
-    }
-
-    #[test]
-    fn a_planted_project_file_is_never_followed_or_opened() {
-        let t = tempfile::tempdir().unwrap();
-        let p = t.path().join("p");
-        std::fs::create_dir_all(&p).unwrap();
-        std::fs::write(t.path().join("other.toml"), "[mounts]\nrw = [\"/\"]\n").unwrap();
-        std::os::unix::fs::symlink(t.path().join("other.toml"), p.join(PROJECT_FILE)).unwrap();
-        assert!(Manifest::read(&p.join(PROJECT_FILE)).is_err());
-        std::fs::remove_file(p.join(PROJECT_FILE)).unwrap();
-        let c = std::ffi::CString::new(p.join(PROJECT_FILE).to_str().unwrap()).unwrap();
-        assert_eq!(unsafe { libc::mkfifo(c.as_ptr(), 0o600) }, 0);
-        assert!(Manifest::read(&p.join(PROJECT_FILE)).is_err());
-    }
-}
+#[path = "manifest_tests.rs"]
+mod tests;

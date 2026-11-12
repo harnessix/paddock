@@ -708,3 +708,12 @@ fn refuse_accepts_a_clone_snapshot_at_the_sandbox_home() {
         "(allow file-read* file-write* (subpath \"/Users/u/.local/share/paddock/shadow/runs/id1/home\"))"
     ));
 }
+
+/// HOOK1: Seatbelt has no mount namespace, so the harness sees the sandbox
+/// home at its host path. The Codex hook trust is named after it.
+#[test]
+fn the_harness_home_is_the_sandbox_home_at_its_host_path() {
+    let (_, s) = spec();
+    assert_eq!(SeatbeltRun.harness_home(&s), s.home_src);
+    assert_ne!(SeatbeltRun.harness_home(&s), s.home);
+}

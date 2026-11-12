@@ -1,0 +1,1 @@
+{"api_version": "paddock.view-tail/v1", "id": "x", "source": "tmux", "lines": ["   Compiling paddock v0.2.1", "    Finished test profile", "running 14 tests", "test result: ok. 14 passed"]}

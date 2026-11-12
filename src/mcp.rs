@@ -16,6 +16,8 @@
 //! another repository's `node_modules`, needs `[mcp] allow`, which a project
 //! `paddock.toml` can only set with the user's approval.
 
+#[cfg(test)]
+mod closure_tests;
 pub mod diet;
 #[cfg(test)]
 mod precedence_tests;

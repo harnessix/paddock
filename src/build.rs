@@ -2,7 +2,13 @@
 //! the manifest and the command line, then run the policy engine on it.
 
 mod cleanup;
+#[cfg(test)]
+mod privacy_tests;
+mod worktree;
 use cleanup::{PendingShadow, PendingWorktree};
+pub use worktree::{
+    create_worktree, discard_worktree, worktree_counts, worktree_report, worktree_status, Worktree,
+};
 
 use crate::detect::{self, git_toplevel, Context};
 use crate::env::HostEnv;
@@ -63,21 +69,6 @@ pub struct Options {
     pub devices: Vec<String>,
 }
 
-/// A worktree that paddock created for one run.
-#[derive(Debug, Clone)]
-pub struct Worktree {
-    pub repo: PathBuf,
-    pub path: PathBuf,
-    pub branch: String,
-    pub base: String,
-}
-
-/// A git call on a repository that a sandbox can write. It never runs what
-/// the repository's own configuration names (see hostgit.rs).
-fn git(dir: &Path, args: &[&str]) -> Result<String> {
-    crate::hostgit::Checkout::open(dir)?.run(args)
-}
-
 /// Today's date in UTC as YYYYMMDD, for branch names.
 fn today() -> String {
     ymd(state::now())
@@ -96,149 +87,6 @@ pub(crate) fn ymd(unix: u64) -> String {
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = yoe + era * 400 + i64::from(m <= 2);
     format!("{y:04}{m:02}{d:02}")
-}
-
-/// A worktree for one run. `app` names the branch after an app:
-/// `paddock/<app>-<date>-<id>`. Terminal runs get `paddock/<id>`.
-pub fn create_worktree(env: &HostEnv, repo: &Path, app: Option<&str>) -> Result<Worktree> {
-    let layout = crate::hostgit::Layout::discover(repo)?;
-    if layout.as_ref().map(|l| l.work_tree.as_path()) != Some(repo) {
-        bail!(
-            "--worktree needs a git repository: {} is not one",
-            repo.display()
-        );
-    }
-    let base = layout
-        .as_ref()
-        .unwrap()
-        .query(&["rev-parse", "HEAD"])
-        .map(|s| s.trim().to_string())
-        .context("--worktree needs at least one commit")?;
-    let id = state::new_id("wt", repo);
-    let branch = match app {
-        Some(a) => format!(
-            "paddock/{a}-{}-{}",
-            today(),
-            id.rsplit('-').next().unwrap_or("0")
-        ),
-        None => format!("paddock/{id}"),
-    };
-    let path = env
-        .paddock_data()
-        .join("worktrees")
-        .join(state::slug(repo))
-        .join(&id);
-    crate::privfs::dir(path.parent().unwrap())?;
-    git(
-        repo,
-        &[
-            "worktree",
-            "add",
-            "-q",
-            "-b",
-            &branch,
-            &path.display().to_string(),
-            &base,
-        ],
-    )?;
-    crate::storage::record_worktree_branch(env, &path, &branch);
-    Ok(Worktree {
-        repo: repo.to_path_buf(),
-        path,
-        branch,
-        base,
-    })
-}
-
-/// Remove a worktree that paddock created, and its branch. Used when the
-/// build or `explain` ends without a run.
-pub fn discard_worktree(env: &HostEnv, w: &Worktree) {
-    if let Err(e) =
-        crate::storage::remove_worktree(env, &w.path, Some(&w.repo), Some(&w.branch), true, true)
-    {
-        log::warn!(
-            "cannot remove leftover worktree {}: {e:#}",
-            w.path.display()
-        );
-    }
-}
-
-/// What the run left in its worktree: commits, uncommitted changes and the
-/// commands to review, merge or remove it. Empty lines are dropped.
-pub fn worktree_report(env: &HostEnv, w: &Worktree) -> String {
-    let repo = crate::hostgit::Layout::discover(&w.repo).ok().flatten();
-    let query = |args: &[&str]| {
-        repo.as_ref()
-            .and_then(|l| l.try_query(args))
-            .map(|s| s.trim_end().to_string())
-            .unwrap_or_default()
-    };
-    let range = format!("{}..{}", w.base, w.branch);
-    let commits = query(&["log", "--oneline", &range]);
-    // `--no-textconv` keeps a textconv program in the repository
-    // configuration from running on the host.
-    let stat = query(&[
-        "diff",
-        "--stat",
-        "--no-textconv",
-        "--no-ext-diff",
-        &format!("{}...{}", w.base, w.branch),
-    ]);
-    // The work tree is read in a sandbox: `git status` runs clean filters,
-    // which no `-c` flag can turn off.
-    let dirty = match worktree_status(env, &w.path) {
-        Ok(Some(lines)) => lines.join("\n"),
-        Ok(None) => String::new(),
-        Err(e) => format!("paddock cannot read the worktree state: {e:#}"),
-    };
-    let mut t = format!(
-        "paddock: the sandbox worked in {} on branch {}.\n",
-        w.path.display(),
-        w.branch
-    );
-    if commits.is_empty() && dirty.is_empty() {
-        t.push_str("paddock: it made no changes.");
-        return t;
-    }
-    if !commits.is_empty() {
-        t.push_str(&format!("commits:\n{commits}\n{stat}\n"));
-    }
-    if !dirty.is_empty() {
-        t.push_str(&format!("uncommitted changes in the worktree:\n{dirty}\n"));
-    }
-    t.push_str(&format!(
-        "review:  git -C {r} diff {b}...{br}\nmerge:   git -C {r} merge {br}\nremove:  git -C {r} worktree remove --force {p} && git -C {r} branch -D {br}",
-        r = w.repo.display(),
-        b = &w.base[..w.base.len().min(12)],
-        br = w.branch,
-        p = w.path.display()
-    ));
-    t
-}
-
-/// The state of a worktree that a sandbox wrote. `Ok(None)` means this host
-/// cannot run the check in a sandbox, so the state stays unknown.
-pub fn worktree_status(env: &HostEnv, path: &Path) -> Result<Option<Vec<String>>> {
-    let Some(layout) = crate::hostgit::Layout::discover(path)? else {
-        return Ok(Some(vec![]));
-    };
-    layout.status(env, "normal")
-}
-
-/// One line for a notification: how many commits and changed files. The
-/// change count is None when the worktree state could not be read.
-pub fn worktree_counts(env: &HostEnv, w: &Worktree) -> (usize, Option<usize>) {
-    let commits = crate::hostgit::Layout::discover(&w.repo)
-        .ok()
-        .flatten()
-        .and_then(|l| l.try_query(&["rev-list", &format!("{}..{}", w.base, w.branch)]))
-        .map(|s| s.lines().count())
-        .unwrap_or(0);
-    let changed = worktree_status(env, &w.path)
-        .ok()
-        .flatten()
-        .map(|lines| lines.iter().filter(|l| !l.trim().is_empty()).count());
-    (commits, changed)
 }
 
 pub struct Built {
@@ -308,7 +156,7 @@ pub fn sandbox_writable(env: &HostEnv, spec: &SandboxSpec) -> Vec<PathBuf> {
 }
 
 /// The harness install mounts come from the executable and the script
-/// headers it leads to (`profile::runtime_closure`). A file in a folder the
+/// headers it leads to (`profile::harness_closure`). A file in a folder the
 /// sandbox can write could name any host path in its header, and paddock
 /// would mount that path. So the harness must not come from such a folder,
 /// for example through a host PATH entry inside the project.
@@ -376,7 +224,9 @@ pub fn build_with(env: &HostEnv, opts: &Options, harness: Harness) -> Result<Bui
     let m = match &opts.child {
         Some(c) => c.manifest.clone(),
         None => {
-            let loaded = Manifest::load(env, &project)?;
+            let mut loaded = Manifest::load(env, &project)?;
+            // `--network` wins over the mode of the project file.
+            loaded.base.cli_network = opts.network.is_some();
             manifest::require_approval(env, &loaded, opts.assume_yes)?;
             loaded.merged
         }
@@ -481,6 +331,7 @@ pub fn build_with(env: &HostEnv, opts: &Options, harness: Harness) -> Result<Bui
     );
     spec.memory_high = memory.high;
     spec.network = opts.network.or(m.network.mode).unwrap_or_default();
+    manifest::check_max(m.network.max, spec.network, "the network mode")?;
     spec.publish = m.network.publish.clone();
     // An isolated login is another machine; a host login keeps the host's
     // identity.
@@ -1043,7 +894,11 @@ mod tests {
 
     /// Build a spec for a built-in profile with a stand-in executable, a
     /// user configuration and a project file.
-    fn privacy_spec(name: &str, user: &str, project: &str) -> (tempfile::TempDir, Built) {
+    pub(super) fn privacy_spec(
+        name: &str,
+        user: &str,
+        project: &str,
+    ) -> (tempfile::TempDir, Built) {
         let tmp = tempfile::tempdir().unwrap();
         let home = tmp.path().join("home");
         let proj = tmp.path().join("proj");
@@ -1283,77 +1138,6 @@ mod tests {
         // The admission check of `build` comes before this: a configured
         // member only.
         assert!(build(&env, &opts).is_err());
-    }
-
-    #[test]
-    fn privacy_defaults_are_in_the_spec_with_their_origin() {
-        let origin = |n: &str| format!("profile {n} privacy (telemetry off)");
-        let (_t, b) = privacy_spec("claude", "", "");
-        for k in ["DISABLE_TELEMETRY", "DISABLE_ERROR_REPORTING"] {
-            let v = &b.spec.env[k];
-            // Set over the empty host value, so the host cannot undo it.
-            assert_eq!(v.value, "1", "{k}");
-            assert_eq!(v.origin, origin("claude"));
-        }
-        let (_t, b) = privacy_spec("grok", "", "");
-        assert_eq!(b.spec.env["DISABLE_ERROR_REPORTING"].origin, origin("grok"));
-        let (_t, b) = privacy_spec("copilot", "", "");
-        assert!(b
-            .spec
-            .command
-            .contains(&"--disable-client-telemetry".to_string()));
-        let (_t, b) = privacy_spec("codex", "", "");
-        let s = b.spec.home_settings.iter().find(|s| !s.no_pty).unwrap();
-        assert_eq!(s.file, PathBuf::from(".codex/config.toml"));
-        assert_eq!(s.path, vec!["analytics", "enabled"]);
-        assert_eq!(s.value, serde_json::json!(false));
-        assert_eq!(s.origin, origin("codex"));
-        let (_t, b) = privacy_spec("vscode", "", "");
-        assert!(b
-            .spec
-            .home_settings
-            .iter()
-            .any(|s| s.path == ["telemetry.telemetryLevel"]
-                && s.value == "off"
-                && s.file == Path::new(".config/Code/User/settings.json")));
-        // Every settings file is relative to the sandbox home.
-        for name in ["codex", "gemini", "vscode"] {
-            let (_t, b) = privacy_spec(name, "", "");
-            assert!(!b.spec.home_settings.is_empty(), "{name}");
-            for s in &b.spec.home_settings {
-                assert!(s.file.is_relative(), "{name}: {}", s.file.display());
-            }
-        }
-    }
-
-    #[test]
-    fn vendor_mode_removes_the_privacy_defaults() {
-        let user = "[privacy]\ntelemetry = \"vendor\"\n";
-        let (_t, b) = privacy_spec("claude", user, "");
-        assert!(!b.spec.env.values().any(|v| v.origin.contains("privacy")));
-        assert_eq!(b.spec.env["DISABLE_TELEMETRY"].value, "");
-        let (_t, b) = privacy_spec("codex", user, "");
-        assert!(b.spec.home_settings.iter().all(|s| s.no_pty));
-        let (_t, b) = privacy_spec("copilot", user, "");
-        assert!(!b
-            .spec
-            .command
-            .contains(&"--disable-client-telemetry".to_string()));
-    }
-
-    #[test]
-    fn a_project_file_cannot_change_the_privacy_mode() {
-        let vendor = "[privacy]\ntelemetry = \"vendor\"\n";
-        let off = "[privacy]\ntelemetry = \"off\"\n";
-        // Turning telemetry on from the project is ignored ...
-        let (_t, b) = privacy_spec("codex", "", vendor);
-        assert_eq!(b.spec.home_settings.iter().filter(|s| !s.no_pty).count(), 1);
-        // ... and so are project variables with the same names.
-        let (_t, b) = privacy_spec("claude", "", "[env.set]\nDISABLE_ERROR_REPORTING = \"\"\n");
-        assert_eq!(b.spec.env["DISABLE_ERROR_REPORTING"].value, "1");
-        // A project cannot turn vendor mode off either.
-        let (_t, b) = privacy_spec("codex", vendor, off);
-        assert!(b.spec.home_settings.iter().all(|s| s.no_pty));
     }
 
     #[test]

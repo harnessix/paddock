@@ -300,6 +300,10 @@ pub struct SandboxSpec {
     /// The path of `$HOME` inside the sandbox. It equals the host home path,
     /// so absolute paths in transcripts and error messages stay valid.
     pub home: PathBuf,
+    /// The `$HOME` that the harness gets. It is `home` on a backend with a
+    /// mount namespace. srt and seatbelt have none and give `home_src`
+    /// (`Backend::harness_home`). Codex names its hook trust after it.
+    pub harness_home: PathBuf,
     pub uid: u32,
     pub gid: u32,
     pub user: String,
@@ -434,6 +438,7 @@ impl SandboxSpec {
             project: project.to_path_buf(),
             home_src,
             home: host_home.to_path_buf(),
+            harness_home: host_home.to_path_buf(),
             uid,
             gid,
             user: user.to_string(),

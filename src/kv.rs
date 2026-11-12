@@ -28,6 +28,9 @@
 //!   `paddock gc` removes it with the root's `self` data.
 //! - `user`: shared across all projects. Off until the user allows it: the
 //!   first use asks through the approval card.
+//! - `ns:NAME`: a namespace of `[kv.namespaces.NAME]` in the user
+//!   configuration, shared by the projects and harnesses it names and by
+//!   nothing else (namespace.rs). The table is the approval: no card.
 //!
 //! A sandbox that another one started never gets more than its parent. It
 //! has no `pasture` scope: what it shares goes to `tree`, and the sandbox
@@ -53,17 +56,24 @@
 
 mod devices;
 pub mod escape;
+mod gc;
 pub mod host;
+pub mod namespace;
+mod outcome;
 pub mod principal;
 mod served;
 pub mod shard;
 pub mod store;
 mod util;
 
-use crate::broker::{Answer, Approver, Mode, Pending};
+use crate::broker::{Answer, ApprovalOutcome, Approver, Mode, Pending};
 use crate::env::HostEnv;
 use anyhow::{Context as _, Result};
 pub use devices::DeviceControl;
+pub use gc::{
+    doctor_lines, gc_apply, gc_items, gc_plan, pause_leases, release_leases, resume_leases, GcPlan,
+};
+use outcome::approval_failure;
 use serde::{Deserialize, Serialize};
 pub use served::Served;
 use shard::Ns;
@@ -124,6 +134,8 @@ pub struct KvCfg {
     pub keep_days: u64,
     /// `[kv.principals.NAME]`: host scripts that write pastures (principal.rs).
     pub principals: std::collections::BTreeMap<String, principal::Principal>,
+    /// `[kv.namespaces.NAME]`: scopes for the projects it names (namespace.rs).
+    pub namespaces: std::collections::BTreeMap<String, namespace::Namespace>,
 }
 
 impl Default for KvCfg {
@@ -138,6 +150,7 @@ impl Default for KvCfg {
             max_keys: 4096,
             keep_days: 30,
             principals: Default::default(),
+            namespaces: Default::default(),
         }
     }
 }
@@ -154,6 +167,7 @@ struct RawCfg {
     max_keys: Option<u64>,
     keep_days: Option<u64>,
     principals: Option<std::collections::BTreeMap<String, principal::Principal>>,
+    namespaces: Option<std::collections::BTreeMap<String, namespace::Namespace>>,
     /// Older versions let spawned sandboxes write the project scope with
     /// it. Spawned sandboxes have no pasture scope now; it is accepted and
     /// has no effect, so that old configurations still load.
@@ -200,13 +214,14 @@ impl KvCfg {
             max_keys: range("max_keys", raw.max_keys, d.max_keys, 1, 1_000_000)?,
             keep_days: range("keep_days", raw.keep_days, d.keep_days, 1, 3650)?,
             principals: principal::check(raw.principals.unwrap_or_default())?,
+            namespaces: namespace::check(raw.namespaces.unwrap_or_default())?,
         })
     }
 
     fn quota(&self, scope: Scope) -> Quota {
         Quota {
             bytes: match scope {
-                Scope::Pasture | Scope::Tree => self.project_bytes,
+                Scope::Pasture | Scope::Tree | Scope::Ns => self.project_bytes,
                 Scope::User => self.user_bytes,
                 _ => self.self_bytes,
             },
@@ -227,6 +242,8 @@ pub enum Scope {
     Parent,
     Tree,
     User,
+    /// A namespace of `[kv.namespaces]`; `Request::namespace` names it.
+    Ns,
 }
 
 impl Scope {
@@ -237,12 +254,22 @@ impl Scope {
             Scope::Parent => "parent",
             Scope::Tree => "tree",
             Scope::User => "user",
+            Scope::Ns => "ns",
         }
     }
     /// Entries that another sandbox can write.
     pub fn shared(self) -> bool {
-        matches!(self, Scope::Pasture | Scope::Tree | Scope::User)
+        matches!(self, Scope::Pasture | Scope::Tree | Scope::User | Scope::Ns)
     }
+}
+
+/// A `--scope` value: a scope name, or `ns:NAME` with the namespace name.
+pub fn parse_scope(s: &str) -> Result<(Scope, Option<String>), String> {
+    if let Some(name) = s.strip_prefix("ns:") {
+        namespace::check_name(name).map_err(|e| format!("{e:#}"))?;
+        return Ok((Scope::Ns, Some(name.to_string())));
+    }
+    Ok((s.parse()?, None))
 }
 
 impl std::str::FromStr for Scope {
@@ -254,8 +281,9 @@ impl std::str::FromStr for Scope {
             "parent" => Ok(Scope::Parent),
             "tree" => Ok(Scope::Tree),
             "user" => Ok(Scope::User),
+            "ns" => Err("the scope ns needs a name: ns:NAME, for a namespace of [kv.namespaces] in the user configuration".into()),
             _ => Err(format!(
-                "unknown scope '{s}': use self, pasture, parent, tree or user"
+                "unknown scope '{s}': use self, pasture, parent, tree, user or ns:NAME"
             )),
         }
     }
@@ -319,6 +347,9 @@ pub struct Request {
     pub op: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<Scope>,
+    /// The namespace of the scope `ns` (`--scope ns:NAME`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -437,6 +468,15 @@ impl Response {
     }
 }
 
+#[derive(Clone, Copy, Default)]
+enum AuditOrigin {
+    #[default]
+    Operation,
+    UserGateRecorded,
+    UserGatePolicy,
+    TimerGate(&'static str),
+}
+
 fn check_key(key: &str, what: &str, empty_ok: bool) -> Result<(), String> {
     if key.is_empty() && !empty_ok {
         return Err(format!("the {what} is empty"));
@@ -473,6 +513,12 @@ pub struct Service {
     /// instances of this run here (devices/sandbox.rs). Set after the
     /// devices started.
     devices: Mutex<Option<DeviceControl>>,
+    /// Read `[kv.namespaces]` from the user configuration at each request,
+    /// so that a change of the user applies to running sandboxes at once.
+    live_namespaces: bool,
+    /// The user on the host (`paddock kv --ns`): every namespace that the
+    /// configuration has, without the member check.
+    host_user: bool,
 }
 
 impl Service {
@@ -497,6 +543,68 @@ impl Service {
             connections: AtomicUsize::new(0),
             bridge: None,
             devices: Mutex::new(None),
+            live_namespaces: false,
+            host_user: false,
+        }
+    }
+
+    /// Read `[kv.namespaces]` again at each request (a sandbox start).
+    pub fn with_live_namespaces(mut self) -> Self {
+        self.live_namespaces = true;
+        self
+    }
+
+    /// The user on the host: the namespaces need no membership.
+    pub fn as_host_user(mut self) -> Self {
+        self.host_user = true;
+        self
+    }
+
+    fn namespaces(
+        &self,
+    ) -> Result<std::collections::BTreeMap<String, namespace::Namespace>, String> {
+        if !self.live_namespaces {
+            return Ok(self.cfg.namespaces.clone());
+        }
+        KvCfg::load(&self.env)
+            .map(|c| c.namespaces)
+            .map_err(|e| format!("{e:#}"))
+    }
+
+    /// The sandboxes above this one, with the harness and the project that
+    /// the registry recorded for each.
+    fn above(&self) -> Vec<namespace::Above> {
+        let reg = self.registry().ok();
+        self.id
+            .chain
+            .iter()
+            .map(|a| namespace::Above {
+                sandbox: a.clone(),
+                record: reg
+                    .as_ref()
+                    .and_then(|r| r.harness_and_project(a).ok().flatten()),
+            })
+            .collect()
+    }
+
+    /// The decision for a namespace: None when this sandbox is a member.
+    fn ns_gate(&self, name: &str) -> Option<Response> {
+        let all = match self.namespaces() {
+            Ok(a) => a,
+            Err(e) => return Some(Response::new(Status::Failed, e)),
+        };
+        if self.host_user {
+            return (!all.contains_key(name)).then(|| {
+                Response::new(
+                    Status::Disabled,
+                    format!("there is no kv namespace '{name}' in [kv.namespaces] of the user configuration"),
+                )
+            });
+        }
+        match namespace::admit(&self.env, &all, name, &self.id, &self.above()) {
+            Ok(()) => None,
+            Err((false, m)) => Some(Response::new(Status::Disabled, m)),
+            Err((true, m)) => Some(Response::new(Status::Denied, m)),
         }
     }
 
@@ -520,7 +628,7 @@ impl Service {
         &self.id
     }
 
-    fn ns(&self, scope: Scope) -> Option<Ns> {
+    fn ns(&self, scope: Scope, name: Option<&str>) -> Option<Ns> {
         Some(match scope {
             Scope::Own => Ns::Own(self.id.sandbox.clone()),
             // A spawned sandbox has no pasture: it shares through `tree`.
@@ -529,10 +637,11 @@ impl Service {
             Scope::Parent => Ns::Own(self.id.parent.clone()?),
             Scope::Tree => Ns::Tree(self.id.tree.clone()?),
             Scope::User => Ns::User,
+            Scope::Ns => Ns::Named(name?.to_string()),
         })
     }
 
-    fn audit(&self, req: &Request, scope: Scope, decision: &str, resp: &Response) {
+    fn audit(&self, req: &Request, scope: Scope, gate: &str, decision: &str, resp: &Response) {
         let line = serde_json::json!({
             "time": crate::state::now(),
             "sandbox": self.id.sandbox,
@@ -541,7 +650,10 @@ impl Service {
             "principal": self.id.sandbox.strip_prefix(principal::WRITER_PREFIX),
             "pasture": self.id.pasture,
             "op": req.op,
+            "action": req.action,
+            "gate": gate,
             "scope": scope.name(),
+            "namespace": req.namespace,
             "key": req.key.as_deref().or(req.prefix.as_deref()).map(|k| k.chars().take(MAX_KEY).collect::<String>()),
             // The size only: values never reach the log.
             "bytes": req.value.as_ref().map(|v| v.len()),
@@ -558,7 +670,7 @@ impl Service {
     }
 
     /// The decision for the `user` scope: None when allowed.
-    fn user_gate(&self, req: &Request) -> Option<Response> {
+    fn user_gate(&self, req: &Request, audited: &mut bool) -> Option<Response> {
         match self.cfg.user {
             Mode::Deny => {
                 return Some(Response::new(
@@ -594,7 +706,14 @@ impl Service {
                 Status::Denied,
                 crate::broker::denied_message("the user denied the user scope", note.as_deref()),
             );
-            self.audit(req, Scope::User, "denied for this session", &resp);
+            self.audit(
+                req,
+                Scope::User,
+                "user_scope",
+                "denied for this session",
+                &resp,
+            );
+            *audited = true;
             return Some(resp);
         }
         let started = crate::spawn::chain_text(&self.id.chain);
@@ -616,44 +735,47 @@ impl Service {
             started_by: self.id.chain.clone(),
             ..Default::default()
         };
-        let verdict = self.approver.ask_verdict(&self.env, &p, self.wait);
-        let note = verdict.as_ref().and_then(|v| v.note.clone());
+        let outcome = self.approver.ask_outcome(&self.env, &p, self.wait);
+        let note = match &outcome {
+            ApprovalOutcome::Answered(v) => v.note.clone(),
+            _ => None,
+        };
         let denied = || {
             Some(Response::new(
                 Status::Denied,
                 crate::broker::denied_message("the user denied the user scope", note.as_deref()),
             ))
         };
-        let (decision, resp) = match verdict.map(|v| v.answer) {
-            Some(Answer::Once) => ("allowed once", None),
-            Some(Answer::Session) => {
-                self.user_granted.store(true, Ordering::SeqCst);
-                // The children of this sandbox inherit it.
-                if let Err(e) = self
-                    .registry()
-                    .and_then(|s| s.grant(&self.id.sandbox, USER_CAPABILITY))
-                {
-                    log::warn!("cannot record the user scope grant: {e:#}");
+        let (decision, resp) = match outcome {
+            ApprovalOutcome::Answered(v) => match v.answer {
+                Answer::Once => ("allowed once", None),
+                Answer::Session => {
+                    self.user_granted.store(true, Ordering::SeqCst);
+                    // The children of this sandbox inherit it.
+                    if let Err(e) = self
+                        .registry()
+                        .and_then(|s| s.grant(&self.id.sandbox, USER_CAPABILITY))
+                    {
+                        log::warn!("cannot record the user scope grant: {e:#}");
+                    }
+                    ("allowed for this session", None)
                 }
-                ("allowed for this session", None)
+                Answer::Deny => ("denied", denied()),
+                Answer::DenySession => {
+                    *self.user_denied.lock().unwrap() = Some(note.clone());
+                    ("denied for this session", denied())
+                }
+            },
+            other => {
+                let (decision, response) = approval_failure(&other, self.wait).expect("non-answer");
+                (decision, Some(response))
             }
-            Some(Answer::Deny) => ("denied", denied()),
-            Some(Answer::DenySession) => {
-                *self.user_denied.lock().unwrap() = Some(note.clone());
-                ("denied for this session", denied())
-            }
-            None => (
-                "timed out",
-                Some(Response::new(
-                    Status::Timeout,
-                    format!("nobody answered within {} seconds", self.wait.as_secs()),
-                )),
-            ),
         };
         let shown = resp
             .clone()
             .unwrap_or_else(|| Response::done(serde_json::Value::Null));
-        self.audit(req, Scope::User, decision, &shown);
+        self.audit(req, Scope::User, "user_scope", decision, &shown);
+        *audited = resp.is_some();
         resp
     }
 
@@ -721,6 +843,11 @@ impl Service {
                     Mode::Ask if self.user_granted.load(Ordering::SeqCst) => "read-write for this session; shared with every project; untrusted".to_string(),
                     Mode::Ask => "asks the user at first use; shared with every project; untrusted".to_string(),
                 },
+                "ns": "ns:NAME: a namespace that the user shares between named projects in [kv.namespaces.NAME] of the user configuration; see namespaces",
+            },
+            "namespaces": match self.namespaces() {
+                Ok(all) => namespace::of(&self.env, &all, &self.id, &self.above()).into(),
+                Err(e) => serde_json::json!({ "error": e }),
             },
             "limits": {
                 "max_key_bytes": MAX_KEY,
@@ -729,6 +856,7 @@ impl Service {
                 "pasture_bytes": self.cfg.project_bytes,
                 "tree_bytes": self.cfg.project_bytes,
                 "user_bytes": self.cfg.user_bytes,
+                "ns_bytes": self.cfg.project_bytes,
                 "max_keys_per_scope": self.cfg.max_keys,
                 "max_ttl_seconds": MAX_TTL,
                 "max_watch_seconds": MAX_WATCH,
@@ -739,16 +867,24 @@ impl Service {
     /// Handle one request. `conn` lets a watch stop when the client goes away.
     pub fn handle(&self, req: &Request, conn: Option<&UnixStream>) -> Response {
         let scope = req.scope.unwrap_or_default();
-        let resp = self.handle_inner(req, scope, conn);
+        let mut origin = AuditOrigin::default();
+        let resp = self.handle_inner(req, scope, conn, &mut origin);
         let write = WRITE_OPS.contains(&req.op.as_str());
         let failed = matches!(
             resp.status,
             Status::Denied | Status::Disabled | Status::Invalid | Status::Failed
         );
-        // The user scope gate and the bridge log their own decisions.
-        let gated = scope == Scope::User && resp.status == Status::Denied;
-        if (write || failed) && !gated && req.op != "ask" && req.op != "workbench" {
-            self.audit(req, scope, "", &resp);
+        if (write || failed || matches!(origin, AuditOrigin::TimerGate(_)))
+            && !matches!(origin, AuditOrigin::UserGateRecorded)
+            && req.op != "ask"
+            && req.op != "workbench"
+        {
+            let (gate, decision) = match origin {
+                AuditOrigin::UserGatePolicy => ("user_scope_policy", ""),
+                AuditOrigin::TimerGate(decision) => ("timer_approval", decision),
+                _ => ("operation", ""),
+            };
+            self.audit(req, scope, gate, decision, &resp);
         }
         log::debug!(
             "sandbox {}: kv {} {} {:?}: {:?}",
@@ -769,7 +905,13 @@ impl Service {
         resp
     }
 
-    fn handle_inner(&self, req: &Request, scope: Scope, conn: Option<&UnixStream>) -> Response {
+    fn handle_inner(
+        &self,
+        req: &Request,
+        scope: Scope,
+        conn: Option<&UnixStream>,
+        origin: &mut AuditOrigin,
+    ) -> Response {
         let invalid = |m: String| Response::new(Status::Invalid, m);
         if req.v != PROTOCOL {
             return invalid(format!(
@@ -809,7 +951,30 @@ impl Service {
             };
         }
         let write = WRITE_OPS.contains(&req.op.as_str());
-        let Some(ns) = self.ns(scope) else {
+        match (scope, req.namespace.as_deref()) {
+            (Scope::Ns, None) => {
+                return invalid("the scope ns needs a namespace: --scope ns:NAME".into())
+            }
+            (Scope::Ns, Some(n)) => {
+                if let Err(e) = namespace::check_name(n) {
+                    return invalid(format!("{e:#}"));
+                }
+                if req.op == "timer" {
+                    return invalid(
+                        "timers live in the self, pasture and tree scopes, not in a namespace"
+                            .into(),
+                    );
+                }
+            }
+            (_, Some(_)) => {
+                return invalid(format!(
+                    "a namespace goes with the scope ns only, not with {}",
+                    scope.name()
+                ))
+            }
+            (_, None) => {}
+        }
+        let Some(ns) = self.ns(scope, req.namespace.as_deref()) else {
             return Response::new(
                 Status::Disabled,
                 match scope {
@@ -827,7 +992,19 @@ impl Service {
             return e;
         }
         if scope == Scope::User {
-            if let Some(r) = self.user_gate(req) {
+            let mut audited = false;
+            if let Some(r) = self.user_gate(req, &mut audited) {
+                *origin = if audited {
+                    AuditOrigin::UserGateRecorded
+                } else {
+                    AuditOrigin::UserGatePolicy
+                };
+                return r;
+            }
+        }
+        // The user configuration is the approval of a namespace: no card.
+        if scope == Scope::Ns {
+            if let Some(r) = self.ns_gate(req.namespace.as_deref().unwrap_or_default()) {
                 return r;
             }
         }
@@ -860,7 +1037,7 @@ impl Service {
                 Err(e) => return Response::new(Status::Failed, format!("{e:#}")),
             }
         }
-        let r = self.run(&mut st, req, scope, &ns.key(), conn);
+        let r = self.run(&mut st, req, scope, &ns.key(), conn, origin);
         r.unwrap_or_else(|e| Response::new(Status::Failed, format!("{e:#}")))
     }
 
@@ -973,6 +1150,7 @@ impl Service {
         scope: Scope,
         ns: &str,
         conn: Option<&UnixStream>,
+        origin: &mut AuditOrigin,
     ) -> Result<Response> {
         let now = crate::state::now();
         let key = req.key.as_deref().unwrap_or("");
@@ -1059,7 +1237,7 @@ impl Service {
             }
             "claim" => self.claim(st, ns, key, req.ttl.unwrap_or(60), quota, now)?,
             "timer" => {
-                let r = self.timer(st, req, ns, quota, now)?;
+                let r = self.timer(st, req, ns, quota, now, origin)?;
                 self.after_timer_op(req, &r);
                 r
             }
@@ -1103,6 +1281,7 @@ impl Service {
         ns: &str,
         quota: Quota,
         now: u64,
+        origin: &mut AuditOrigin,
     ) -> Result<Response> {
         use crate::timer::{self, Timer};
         let action = req.action.as_deref().unwrap_or("status");
@@ -1247,22 +1426,28 @@ impl Service {
                         started_by: self.id.chain.clone(),
                         ..Default::default()
                     };
-                    match self.approver.ask_verdict(&self.env, &p, self.wait) {
-                        Some(v) if v.answer.denies() => {
-                            return Ok(Response::new(
-                                Status::Denied,
-                                crate::broker::denied_message(
-                                    "the user did not give more time",
-                                    v.note.as_deref(),
-                                ),
-                            ))
-                        }
-                        Some(_) => "user".to_string(),
-                        None => {
-                            return Ok(Response::new(
-                                Status::Timeout,
-                                format!("nobody answered within {} seconds", self.wait.as_secs()),
-                            ))
+                    match self.approver.ask_outcome(&self.env, &p, self.wait) {
+                        ApprovalOutcome::Answered(v) => match v.answer {
+                            Answer::Once | Answer::Session => {
+                                *origin = AuditOrigin::TimerGate("allowed");
+                                "user".to_string()
+                            }
+                            Answer::Deny | Answer::DenySession => {
+                                *origin = AuditOrigin::TimerGate("denied");
+                                return Ok(Response::new(
+                                    Status::Denied,
+                                    crate::broker::denied_message(
+                                        "the user did not give more time",
+                                        v.note.as_deref(),
+                                    ),
+                                ));
+                            }
+                        },
+                        other => {
+                            let (decision, response) =
+                                approval_failure(&other, self.wait).expect("non-answer");
+                            *origin = AuditOrigin::TimerGate(decision);
+                            return Ok(response);
                         }
                     }
                 };
@@ -1502,7 +1687,7 @@ impl Service {
                         op: "unparsed".into(),
                         ..Default::default()
                     };
-                    self.audit(&shown, Scope::Own, "", &r);
+                    self.audit(&shown, Scope::Own, "operation", "", &r);
                     r
                 }
             }
@@ -1900,8 +2085,9 @@ pub fn start(
     };
     watch_timers(env.clone(), id.clone(), kv_root(env), cfg.clone());
     let monitor = crate::monitor::watch(env.clone(), id.clone());
-    let svc =
-        Service::new(env.clone(), id, cfg, approver, Duration::from_secs(wait)).with_bridge(bridge);
+    let svc = Service::new(env.clone(), id, cfg, approver, Duration::from_secs(wait))
+        .with_bridge(bridge)
+        .with_live_namespaces();
     let sock = match crate::sockpath::named(env, &spec.id, "kv.sock") {
         Ok(p) => p,
         Err(e) => {
@@ -1922,276 +2108,7 @@ pub fn start(
     }
 }
 
-/// What `paddock gc` can remove from paddock kv.
-#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
-pub struct GcPlan {
-    /// Finished runs whose files (`self` and their own pasture, or the
-    /// `tree` scope of a root) are older than `keep_days`.
-    pub stale: Vec<store::Stale>,
-    pub expired_entries: u64,
-    pub expired_bytes: u64,
-    /// The store of older paddock versions, when nothing changed it for
-    /// `keep_days`: its size.
-    pub legacy_bytes: Option<u64>,
-}
-
-fn mtime(path: &Path) -> u64 {
-    std::fs::metadata(path)
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-}
-
-/// Every store file except the registry and the old store.
-fn shard_files(root: &Path) -> Vec<PathBuf> {
-    let mut out = vec![root.join("user.db")];
-    for dir in ["sandbox", "tree"] {
-        out.extend(
-            shard::ids_in(root, dir)
-                .into_iter()
-                .map(|id| root.join(dir).join(format!("{id}.db"))),
-        );
-    }
-    for p in std::fs::read_dir(root.join("pasture"))
-        .into_iter()
-        .flatten()
-        .flatten()
-    {
-        for f in std::fs::read_dir(p.path()).into_iter().flatten().flatten() {
-            if f.path().extension().is_some_and(|e| e == "db") {
-                out.push(f.path());
-            }
-        }
-    }
-    out.retain(|p| p.is_file());
-    out
-}
-
-/// A frozen sandbox keeps its leases: their time to live stops in every
-/// store file until `resume_leases`. Returns how many leases it paused.
-pub fn pause_leases(root: &Path, sandbox: &str, now: u64) -> Result<u64> {
-    let mut n = 0;
-    for f in shard_files(root) {
-        n += Store::open(&f)?.pause_leases(sandbox, now)?;
-    }
-    Ok(n)
-}
-
-/// A thawed or ended sandbox: its paused leases run again with the time
-/// that they had left. Returns how many.
-pub fn resume_leases(root: &Path, sandbox: &str, now: u64) -> Result<u64> {
-    let mut n = 0;
-    for f in shard_files(root) {
-        n += Store::open(&f)?.resume_leases(sandbox, now)?;
-    }
-    Ok(n)
-}
-
-/// A frozen sandbox frees its leases at once. paddock is the writer of each
-/// release. Returns the kind of each scope (`pasture`, `tree`, `self`,
-/// `user`) and the key: no project path, no value.
-pub fn release_leases(
-    root: &Path,
-    sandbox: &str,
-    cfg: &KvCfg,
-    now: u64,
-) -> Result<Vec<(String, String)>> {
-    let w = Writer {
-        sandbox: "paddock",
-        harness: "paddock",
-    };
-    let q = Quota {
-        bytes: cfg.project_bytes,
-        keys: cfg.max_keys,
-    };
-    let mut out = Vec::new();
-    for f in shard_files(root) {
-        for (ns, key) in Store::open(&f)?.release_leases(sandbox, &w, q, now)? {
-            let kind = ns.split(':').next().unwrap_or_default().to_string();
-            out.push((kind, key));
-        }
-    }
-    Ok(out)
-}
-
-pub fn gc_plan(env: &HostEnv, running: &[String], now: u64) -> Result<GcPlan> {
-    let root = kv_root(env);
-    if !root.is_dir() {
-        return Ok(GcPlan::default());
-    }
-    let cfg = KvCfg::load(env)?;
-    let cutoff = now.saturating_sub(cfg.keep_days * 24 * 3600);
-    let reg_file = shard::registry(&root);
-    let reg = if reg_file.is_file() {
-        Some(Store::open(&reg_file)?)
-    } else {
-        None
-    };
-    // A running child reads its parent and writes the tree of its root, so
-    // the sandboxes above a running one stay too.
-    let mut keep: Vec<String> = running.to_vec();
-    if let Some(r) = &reg {
-        for id in running {
-            keep.extend(r.ancestors(id)?);
-        }
-    }
-    let mut ids = shard::ids_in(&root, "sandbox");
-    ids.extend(shard::ids_in(&root, "tree"));
-    ids.sort();
-    ids.dedup();
-    let mut stale = Vec::new();
-    for id in ids.into_iter().filter(|i| !keep.contains(i)) {
-        let files = [
-            root.join("sandbox").join(format!("{id}.db")),
-            root.join("tree").join(format!("{id}.db")),
-        ];
-        let mut last = files.iter().map(|f| mtime(f)).max().unwrap_or(0);
-        if let Some((started, ended)) = reg.as_ref().map(|r| r.times(&id)).transpose()?.flatten() {
-            last = last.max(started).max(ended.unwrap_or(0));
-        }
-        if last >= cutoff {
-            continue;
-        }
-        let (mut entries, mut bytes) = (0, 0);
-        for f in files.iter().filter(|f| f.is_file()) {
-            entries += Store::open(f)?.totals()?.0;
-            bytes += shard::file_bytes(f);
-        }
-        stale.push(store::Stale {
-            sandbox: id,
-            entries,
-            bytes,
-            last,
-        });
-    }
-    let (mut expired_entries, mut expired_bytes) = (0, 0);
-    for f in shard_files(&root) {
-        let (n, b) = Store::open(&f)?.expired(now)?;
-        expired_entries += n;
-        expired_bytes += b;
-    }
-    let legacy = shard::legacy(&root);
-    let legacy_bytes =
-        (legacy.is_file() && mtime(&legacy) < cutoff).then(|| shard::file_bytes(&legacy));
-    Ok(GcPlan {
-        stale,
-        expired_entries,
-        expired_bytes,
-        legacy_bytes,
-    })
-}
-
-/// The items of `paddock gc`: one for the files of finished runs, expired
-/// keys and the old store. It is paddock's own data, so `--yes` alone
-/// removes it.
-pub fn gc_items(env: &HostEnv, now: u64) -> Result<Vec<crate::storage::Item>> {
-    let running: Vec<String> = crate::state::Running::list(env)
-        .into_iter()
-        .map(|r| r.id)
-        .collect();
-    let plan = gc_plan(env, &running, now)?;
-    if plan.stale.is_empty() && plan.expired_entries == 0 && plan.legacy_bytes.is_none() {
-        return Ok(Vec::new());
-    }
-    let days = KvCfg::load(env)?.keep_days;
-    let entries: u64 = plan.stale.iter().map(|s| s.entries).sum::<u64>() + plan.expired_entries;
-    let mut what = format!(
-        "paddock kv: {entries} keys of {} finished runs and expired keys",
-        plan.stale.len()
-    );
-    if plan.legacy_bytes.is_some() {
-        what.push_str(", and the store of older paddock versions");
-    }
-    Ok(vec![crate::storage::Item {
-        what,
-        tier: crate::storage::Tier::Auto,
-        bytes: plan.stale.iter().map(|s| s.bytes).sum::<u64>()
-            + plan.expired_bytes
-            + plan.legacy_bytes.unwrap_or(0),
-        reason: format!(
-            "the self scope and the own pasture of runs, and the tree scope of spawn trees, that ended more than {days} days ago ([kv] keep_days), keys whose time to live passed, and the project scope of older paddock versions when nothing changed it for {days} days"
-        ),
-        warning: None,
-        needs: vec![],
-        action: crate::storage::Action::Kv {
-            sandboxes: plan.stale.iter().map(|s| s.sandbox.clone()).collect(),
-        },
-    }])
-}
-
-/// Remove what the plan names. Sandboxes that run now are skipped.
-pub fn gc_apply(env: &HostEnv, sandboxes: &[String], now: u64) -> Result<u64> {
-    let running: Vec<String> = crate::state::Running::list(env)
-        .into_iter()
-        .map(|r| r.id)
-        .collect();
-    let root = kv_root(env);
-    let cfg = KvCfg::load(env)?;
-    let cutoff = now.saturating_sub(cfg.keep_days * 24 * 3600);
-    let mut n = 0;
-    let mut reg = Store::open(&shard::registry(&root))?;
-    for id in sandboxes.iter().filter(|s| !running.contains(s)) {
-        shard::check_id(id)?;
-        for dir in ["sandbox", "tree"] {
-            let f = root.join(dir).join(format!("{id}.db"));
-            if f.is_file() {
-                n += Store::open(&f)?.totals()?.0;
-                shard::remove_file(&f)?;
-            }
-        }
-        reg.forget_sandbox(id)?;
-    }
-    for f in shard_files(&root) {
-        n += Store::open(&f)?.purge_expired(now)?;
-    }
-    let legacy = shard::legacy(&root);
-    if legacy.is_file() && mtime(&legacy) < cutoff {
-        n += Store::open(&legacy)?.totals()?.0;
-        shard::remove_file(&legacy)?;
-    }
-    reg.forget_ended(cutoff, &running)?;
-    Ok(n)
-}
-
-/// The lines of `paddock doctor` about paddock kv.
-pub fn doctor_lines(env: &HostEnv) -> Vec<String> {
-    let cfg = match KvCfg::load(env) {
-        Ok(c) => c,
-        Err(e) => return vec![format!("  error    {e:#}")],
-    };
-    if !cfg.enabled {
-        return vec!["  off      paddock kv: [kv] enabled = false".into()];
-    }
-    let root = kv_root(env);
-    let user = match cfg.user {
-        Mode::Ask => "asks at first use",
-        Mode::Allow => "allowed",
-        Mode::Deny => "off",
-    };
-    let reg = shard::registry(&root);
-    let state = if reg.is_file() {
-        match Store::open(&reg) {
-            Ok(_) => format!("files in {}", root.display()),
-            Err(e) => return vec![format!("  error    paddock kv: {e:#}")],
-        }
-    } else {
-        "the files are created at the first start".to_string()
-    };
-    let mut out = vec![format!(
-        "  on       paddock kv: {state}; user scope {user}; self data kept {} days after a run",
-        cfg.keep_days
-    )];
-    if shard::legacy(&root).is_file() {
-        out.push(format!(
-            "  note     paddock kv: {} holds the project scope of an older paddock; sandboxes no longer read it. `paddock kv list --legacy` shows it, and `paddock gc` removes it {} days after its last change",
-            shard::legacy(&root).display(),
-            cfg.keep_days
-        ));
-    }
-    out
-}
-
+#[cfg(test)]
+mod namespace_tests;
 #[cfg(test)]
 mod tests;

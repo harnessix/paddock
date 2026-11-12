@@ -6,10 +6,8 @@
 //! - One panel per session (the session helper pid and the app profile of
 //!   the card). The asker files one card per session anyway; this is the
 //!   second fence, for an old helper or a hand-made card.
-//! - A panel keeps its question while the question is open: the panel of
-//!   a question goes only when its card is gone from the store (answered,
-//!   withdrawn, or its helper died). A card that did not read once (a
-//!   read in the middle of a rename) does not close it.
+//! - A panel keeps its question until its own card is confirmed selected
+//!   or retired. A failed or incomplete read does not close it.
 //! - In a session with no panel: the notice of a paused session first,
 //!   else the oldest question.
 
@@ -50,21 +48,15 @@ pub fn pick<'a>(cards: &'a [Pending], has_panel: &BTreeSet<String>) -> Vec<&'a P
     out
 }
 
-/// The panels to close. `panels`: the id and session of each panel;
-/// `picked`: the cards that get a panel; `card_exists`: the card file of
-/// an id is still in the store.
+/// Close only panels whose exact card has been independently confirmed
+/// selected or retired. An incomplete list is not proof of absence.
 pub fn to_close(
     panels: &[(String, SessionKey)],
-    picked: &[&Pending],
-    card_exists: impl Fn(&str) -> bool,
+    retired: impl Fn(&str, &SessionKey) -> bool,
 ) -> Vec<String> {
-    let picked_ids: BTreeSet<&str> = picked.iter().map(|p| p.id.as_str()).collect();
-    let picked_keys: Vec<SessionKey> = picked.iter().filter_map(|p| session_of(p)).collect();
     panels
         .iter()
-        .filter(|(id, key)| {
-            !picked_ids.contains(id.as_str()) && (!card_exists(id) || picked_keys.contains(key))
-        })
+        .filter(|(id, key)| retired(id, key))
         .map(|(id, _)| id.clone())
         .collect()
 }
@@ -380,9 +372,7 @@ mod tests {
     }
 
     #[test]
-    fn a_panel_closes_only_when_its_card_is_gone() {
-        let cards = [card("a", 10, 1, false)];
-        let picked: Vec<&Pending> = cards.iter().collect();
+    fn a_panel_closes_only_after_its_own_state_is_confirmed() {
         let key = (10, "sample-notes".to_string());
         let other = (20, "sample-editor".to_string());
         let panels = vec![
@@ -391,11 +381,11 @@ mod tests {
             ("unread".to_string(), other.clone()),
             ("second".to_string(), key.clone()),
         ];
-        let exists = |id: &str| id != "gone";
+        let retired = |id: &str, _: &SessionKey| id == "gone" || id == "second";
         assert_eq!(
-            to_close(&panels, &picked, exists),
+            to_close(&panels, retired),
             ["gone", "second"],
-            "an unread card keeps its panel; a second panel of a session goes"
+            "an unread card keeps its panel even when another card was listed"
         );
     }
 

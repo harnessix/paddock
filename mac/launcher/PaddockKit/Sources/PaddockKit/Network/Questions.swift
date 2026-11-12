@@ -84,9 +84,10 @@ extension LauncherStore {
     @discardableResult
     public func answer(_ question: QuestionJSON, panel answer: PanelAnswer) async -> String? {
         guard let service else { return UIText("paddock is not reachable").english }
+        guard confirmedQuestionIDs.contains(question.id) else { return "This question is no longer confirmed. Refresh to check it." }
         do {
             try await service.execute(NetworkArgs.answer(question.id, answer))
-            questions.removeAll { $0.id == question.id }
+            retireQuestion(question.id)
             return nil
         } catch {
             return LauncherStore.line(of: error)

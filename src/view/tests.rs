@@ -681,3 +681,56 @@ fn a_view_session_starts_in_the_root_directory() {
     }
     assert_eq!(got.trim(), "/");
 }
+
+/// Review J 3: a view in a split attaches to the session of a run. tmux's
+/// default status line there shows the pane title, which the sandbox sets
+/// with an OSC title, the host name and a clock. A session of paddock's
+/// server has no status line.
+#[test]
+fn review_j_a_run_session_has_no_status_line_with_a_title_of_the_sandbox() {
+    let t = tempfile::tempdir().unwrap();
+    let env = env_in(t.path(), &[]);
+    let Some(tmux) = Tmux::find(&env) else {
+        eprintln!("skipped: tmux is not installed");
+        return;
+    };
+    let _server = Server(Some(tmux.clone()));
+    let cmd: Vec<OsString> = [
+        "sh",
+        "-c",
+        "printf '\\033]2;host · shell · ~\\007'; exec sleep 60",
+    ]
+    .iter()
+    .map(OsString::from)
+    .collect();
+    tmux.new_session("fake-p-777", &cmd).unwrap();
+    let show = |fmt: &str| {
+        let out = tmux
+            .cmd()
+            .args(["display-message", "-p", "-t", "=fake-p-777:", fmt])
+            .stdout(Stdio::piped())
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    // A format shows the choice status as off and the flag set-titles as 0.
+    assert_eq!(show("#{status}"), "off");
+    assert_eq!(show("#{set-titles}"), "0");
+    // A size from the terminal that attaches, and the default without one.
+    assert_eq!(show("#{window_width}x#{window_height}"), "160x48");
+    tmux.new_session_sized("fake-p-778", &cmd, Some((80, 23)))
+        .unwrap();
+    let out = tmux
+        .cmd()
+        .args([
+            "display-message",
+            "-p",
+            "-t",
+            "=fake-p-778:",
+            "#{window_width}x#{window_height} #{status}",
+        ])
+        .stdout(Stdio::piped())
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "80x23 off");
+}

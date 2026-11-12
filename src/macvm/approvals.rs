@@ -1,4 +1,4 @@
-//! The `ask` of the firewall: one question per (app, host, port), and at
+//! The `ask` of the firewall: one question per process identity, host and port, and at
 //! most one of them per session on the screen. The question on the screen
 //! is a card in the approvals store of the host, which the marker shows as
 //! a panel and `paddock approvals answer` answers from a terminal. The
@@ -6,15 +6,15 @@
 //! helper (`paddock-vm app`) holds each connection while it waits.
 //!
 //! The rules:
-//! - A second connection to the same triple waits on the same question.
-//!   Every waiter gets the answer.
-//! - After the ten-minute maximum wait with no answer the connection is denied once and the
-//!   question stays open, on the screen or in the queue. An answer that
-//!   comes when nobody waits is kept: a rule for the `session` and
-//!   `always` answers, and for `allow-once` and `deny` the next connection
-//!   of the triple gets it.
-//! - A question asked before the last wake of the host is denied once
-//!   and asked again (a fresh `asked_at`).
+//! - Production keys identify one connection, because the guest header has
+//!   no stable process-generation identity. An answer cannot be transferred
+//!   to a later connection on the strength of a reused or missing PID.
+//! - After the ten-minute maximum wait the connection is denied and the
+//!   question stays open. A late session or persistent selection can still
+//!   create its rule; a late once selection has no waiter and is not reused.
+//! - The number of open questions is bounded; excess connections fail closed.
+//! - A question asked before the last wake is retired and fails closed;
+//!   a later connection can ask a fresh question.
 //! - The card is the truth of the question on the screen: a restart of
 //!   the marker loses nothing, because the question is a file.
 //! - The approver hook of `approver.rs` answers first when its
@@ -27,18 +27,37 @@
 //! firewall (`gate.rs`) applies the answers and runs the waits.
 
 use super::ask_queue::{Queue, Step};
-use super::ask_status::OpenQuestion;
+use super::ask_status::{OpenQuestion, UnappliedAnswer};
 use super::firewall::Conn;
 use super::proxy_header::Identity;
 use super::text;
-use crate::broker::{self, Connect, ConnectAnswer, Pending, CONNECT_CAPABILITY};
+use crate::broker::{self, ConnectAnswer, Pending};
 use crate::env::HostEnv;
-use crate::eventstream::schema::{Question as EventQuestion, QuestionState};
+#[cfg(test)]
+use crate::eventstream::schema::Question as EventQuestion;
+use crate::eventstream::schema::QuestionState;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
+
+#[cfg(test)]
+pub(super) type EventHook = Box<dyn Fn(EventQuestion)>;
+#[cfg(test)]
+type WriteHook = Box<dyn Fn(&Pending) -> std::io::Result<()>>;
+#[cfg(test)]
+pub(super) type ConnectHook = Box<dyn Fn() -> Option<ConnectAnswer>>;
+
+#[cfg(test)]
+thread_local! {
+    pub(super) static EVENT_HOOK: std::cell::RefCell<Option<EventHook>> = std::cell::RefCell::new(None);
+    static WRITE_HOOK: std::cell::RefCell<Option<WriteHook>> = std::cell::RefCell::new(None);
+    pub(super) static CLAIM_CLOSE_HOOK: std::cell::RefCell<Option<Box<dyn Fn()>>> = std::cell::RefCell::new(None);
+    pub(super) static POLL_STORE_HOOK: std::cell::RefCell<Option<Box<dyn Fn()>>> = std::cell::RefCell::new(None);
+    pub(super) static TEST_CONNECT_HOOK: std::cell::RefCell<Option<ConnectHook>> = std::cell::RefCell::new(None);
+    pub(super) static PAUSE_RECORDED_HOOK: std::cell::RefCell<Option<Box<dyn Fn()>>> = std::cell::RefCell::new(None);
+}
 
 /// How long a connection waits for the answer.
 pub const WAIT: Duration = Duration::from_secs(600);
@@ -55,11 +74,20 @@ pub struct Triple {
     pub app: String,
     pub host: String,
     pub port: u16,
+    pub identity: Option<QuestionIdentity>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct QuestionIdentity {
+    pub who: Who,
+    pub pid: Option<u32>,
+    pub path: Option<String>,
+    pub connection: String,
 }
 
 /// The guest process of the first connection of a question, for the rule
 /// of its answer.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct Who {
     pub app: String,
     pub parent_app: Option<String>,
@@ -78,11 +106,12 @@ impl Who {
     }
 }
 
-/// The end of a question: the answer, who gave it, and the rule word of
-/// the log (a rule id, or `once`).
+/// The selected answer, its effective access decision, and the log rule.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Settled {
     pub answer: ConnectAnswer,
+    /// A selected allow can fail closed when the rule state is unsafe.
+    pub allowed: bool,
     pub who: &'static str,
     pub word: String,
 }
@@ -96,25 +125,14 @@ pub struct Question {
     count: AtomicU64,
     /// The answer file was read; the firewall applies it.
     taken: AtomicBool,
+    /// Each presentation has a distinct public id; ordinary rewrites keep it.
+    generation: AtomicU64,
+    published: AtomicBool,
+    /// This question has a recorded selection in the approval store.
+    accepted_file: AtomicBool,
+    retirement_ready: AtomicBool,
+    selection: Mutex<Option<(Pending, String)>>,
     result: Mutex<Option<Settled>>,
-}
-
-impl Question {
-    pub fn asked_at(&self) -> u64 {
-        self.asked_at.load(Ordering::SeqCst)
-    }
-
-    /// The connections that wait on it now.
-    pub fn count(&self) -> u64 {
-        self.count.load(Ordering::SeqCst)
-    }
-
-    pub fn result(&self) -> Option<Settled> {
-        self.result
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone()
-    }
 }
 
 /// What a connection gets from [`Asker::join`].
@@ -122,9 +140,7 @@ pub enum Join {
     /// Wait on this question. `true`: it is new and the approver hook
     /// runs first; [`Asker::enqueue`] queues it when the hook abstains.
     Wait(Arc<Question>, bool),
-    /// An answer that came while nobody waited.
-    Once(Settled),
-    /// The question is older than the last wake: deny once, asked again.
+    /// The question is stale or the bounded queue is full: deny this attempt.
     Stale,
 }
 
@@ -134,6 +150,19 @@ pub struct Answered {
     pub question: Arc<Question>,
     pub answer: ConnectAnswer,
     pub who: &'static str,
+    /// `Some`: close the question as a once denial without the effect of
+    /// the selection. The firewall applies no rule for it.
+    pub unapplied: Option<Unapplied>,
+}
+
+pub struct Polled {
+    pub answers: Vec<Answered>,
+    pub status_changed: bool,
+}
+
+pub struct Claim {
+    pub claimed: bool,
+    pub status_changed: bool,
 }
 
 type OnWait = Box<dyn Fn() + Send + Sync>;
@@ -144,9 +173,29 @@ struct Inner {
     queue: Queue,
     /// The id of the notice card while asking is paused.
     notice: Option<String>,
-    /// Answers that came while nobody waited, for the next connection.
-    once: HashMap<Triple, Settled>,
+    notice_root: Option<String>,
+    notice_generation: u64,
+    notice_published: bool,
+    notice_count: Option<usize>,
+    notice_created: u64,
+    notice_targets: Vec<Triple>,
+    notice_snapshot: Option<Pending>,
+    notice_selected: Option<notice::SelectedNotice>,
+    /// A published card could not be updated; retry it on the next poll.
+    rewrite_pending: bool,
+    status_changed: bool,
+    ready: Vec<Answered>,
+    /// Failed polls of an answered notice, per second.
+    notice_failures: streak::Streak,
+    /// Failed claims of the question on the screen, per second.
+    shown_failures: streak::Streak,
+    /// The latest selections that did not apply, for the status.
+    unapplied: std::collections::VecDeque<UnappliedAnswer>,
 }
+
+/// Bound memory and queued questions even when connections have no stable
+/// process identity and their waiters time out before a selection arrives.
+pub(super) const MAX_OPEN_QUESTIONS: usize = 128;
 
 /// The asker of one session.
 pub struct Asker {
@@ -165,6 +214,9 @@ pub struct Asker {
     last_wake: AtomicU64,
     hook: Option<crate::approver::HookConfig>,
     on_wait: Option<OnWait>,
+    /// Models a platform wake fence that production does not have.
+    #[cfg(test)]
+    wake_fence: AtomicBool,
 }
 
 impl Asker {
@@ -182,6 +234,8 @@ impl Asker {
             last_wake: AtomicU64::new(0),
             hook: None,
             on_wait: None,
+            #[cfg(test)]
+            wake_fence: AtomicBool::new(false),
         }
     }
 
@@ -237,7 +291,9 @@ impl Asker {
 
     /// The host woke at `now`: every question asked before it is stale.
     pub fn note_wake(&self, now: u64) {
+        let mut g = self.lock();
         self.last_wake.fetch_max(now, Ordering::SeqCst);
+        self.reconcile_wake(&mut g);
     }
 
     pub fn last_wake(&self) -> u64 {
@@ -262,156 +318,75 @@ impl Asker {
         &self.profile
     }
 
-    /// A `question` line on the launcher event stream.
-    fn publish(
-        &self,
-        state: QuestionState,
-        id: &str,
-        about: Option<(&Triple, Option<String>)>,
-        answer: Option<(&str, &str)>,
-        open: Option<u64>,
-    ) {
-        let (host, port, process) = match about {
-            Some((t, p)) => (t.host.clone(), t.port, p),
-            None => (String::new(), 0, None),
-        };
-        crate::eventstream::publish(
-            &self.env,
-            crate::eventstream::Event::Question(EventQuestion {
-                state,
-                id: id.to_string(),
-                app: self.profile.clone(),
-                host,
-                port,
-                process,
-                answer: answer.map(|a| a.0.to_string()),
-                by: answer.map(|a| a.1.to_string()),
-                open,
-            }),
-        );
-    }
-
-    /// The card of a question on the screen.
-    pub fn card(&self, q: &Question, t: &Triple, more: u64) -> Pending {
-        let why_path = PathBuf::from(q.path.clone().unwrap_or_else(|| t.app.clone()));
-        let mut detail = text::ask_panel(&self.label, &t.host, t.port, &why_path);
-        // One read: the detail text and the count field must agree.
-        let waiting = q.count();
-        for line in [text::ask_count(waiting), text::ask_more(more)] {
-            if !line.is_empty() {
-                detail.push('\n');
-                detail.push_str(&line);
-            }
-        }
-        Pending {
-            id: q.id.clone(),
-            sandbox: format!("macvm-{}", self.profile), // not user text
-            harness: self.profile.clone(),
-            project: self.profile_dir.clone(),
-            capability: CONNECT_CAPABILITY.into(),
-            summary: text::ask_summary(&self.label, &t.host, t.port),
-            detail,
-            created: q.asked_at(),
-            session_allowed: true,
-            choices: ConnectAnswer::ALL
-                .iter()
-                .map(|a| a.word().to_string())
-                .collect(),
-            connect: Some(Connect {
-                app: t.app.clone(),
-                team: q.who.team.clone(),
-                host: t.host.clone(),
-                port: t.port,
-                count: waiting,
-                asked_at: q.asked_at(),
-                pid: self.pid,
-                path: q.path.clone(),
-                profile: self.profile.clone(),
-                label: self.label.clone(),
-                more,
-                notice: false,
-                icon: self.icon.clone(),
-            }),
-            ..Default::default()
-        }
-    }
-
-    /// The notice card of a paused session.
-    fn notice_card(&self, id: &str, open: usize, now: u64) -> Pending {
-        Pending {
-            id: id.to_string(),
-            sandbox: format!("macvm-{}", self.profile), // not user text
-            harness: self.profile.clone(),
-            project: self.profile_dir.clone(),
-            capability: CONNECT_CAPABILITY.into(),
-            summary: text::asks_notice_summary(&self.label, open),
-            detail: text::asks_notice_detail(&self.label, &self.profile, open),
-            created: now,
-            choices: [ConnectAnswer::AllowOnce, ConnectAnswer::Deny]
-                .iter()
-                .map(|a| a.word().to_string())
-                .collect(),
-            connect: Some(Connect {
-                app: self.label.clone(),
-                asked_at: now,
-                pid: self.pid,
-                profile: self.profile.clone(),
-                label: self.label.clone(),
-                more: open as u64,
-                notice: true,
-                icon: self.icon.clone(),
-                ..Default::default()
-            }),
-            ..Default::default()
-        }
-    }
-
-    fn write_card(&self, p: &Pending) {
-        if let Err(e) = broker::write_pending(&self.env, p) {
-            log::warn!("macvm: cannot write the connect question {}: {e}", p.id);
-        }
-    }
-
-    fn remove_files(&self, id: &str) {
-        let dir = broker::approvals_dir(&self.env);
-        let _ = std::fs::remove_file(dir.join(format!("{id}.json")));
-        let _ = std::fs::remove_file(dir.join(format!("{id}.answer")));
-    }
-
-    /// The answer in the store, when there is one. A file that holds no
-    /// answer counts as deny.
-    fn read_answer(&self, id: &str) -> Option<(ConnectAnswer, &'static str)> {
-        let file = broker::approvals_dir(&self.env).join(format!("{id}.answer"));
-        let text = std::fs::read_to_string(file).ok()?;
-        let source = serde_json::from_str::<serde_json::Value>(&text)
-            .ok()
-            .and_then(|v| v.get("source").and_then(|v| v.as_str()).map(str::to_owned));
-        let who = if source.as_deref() == Some("cli") {
-            "cli"
-        } else {
-            "user"
-        };
-        Some((
-            ConnectAnswer::parse_file(&text).unwrap_or(ConnectAnswer::Deny),
-            who,
-        ))
-    }
-
     /// Bring the store up to date with the queue. `rewrite`: the card on
     /// the screen changed (its count or the questions behind it).
     fn pump(&self, g: &mut Inner, now: u64, rewrite: bool) {
+        if !self.reconcile_wake(g) {
+            return;
+        }
         let mut shown_now = false;
         for step in g.queue.pump(now) {
+            g.status_changed = true;
             match step {
                 Step::Show(t) => {
                     shown_now = true;
                     if let Some(q) = g.map.get(&t) {
-                        self.write_card(&self.card(q, &t, g.queue.more() as u64));
+                        let published = q.published.load(Ordering::SeqCst);
+                        if self.write_card(&self.card(q, &t, g.queue.more() as u64), published) {
+                            g.rewrite_pending = false;
+                            q.published.store(true, Ordering::SeqCst);
+                            if !published {
+                                g.status_changed = true;
+                                self.publish(
+                                    QuestionState::Open,
+                                    &q.card_id(),
+                                    Some((&t, q.path.clone())),
+                                    None,
+                                    None,
+                                );
+                            }
+                        } else {
+                            g.rewrite_pending = true;
+                        }
                     }
                 }
                 Step::Withdraw(t) => {
-                    if let Some(q) = g.map.get(&t) {
-                        self.remove_files(&q.id);
+                    if let Some(q) = g.map.get(&t).cloned() {
+                        let published = q.published.load(Ordering::SeqCst);
+                        let result = if published {
+                            broker::claim_connect_question(
+                                &self.env,
+                                &self.card(&q, &t, 0).cleaned(),
+                                true,
+                            )
+                        } else {
+                            Ok(None)
+                        };
+                        match result {
+                            Ok(Some(text)) => {
+                                self.accepted(g, &t, &q, &text);
+                            }
+                            Ok(None) => {
+                                if published {
+                                    self.publish(
+                                        QuestionState::Withdrawn,
+                                        &q.card_id(),
+                                        Some((&t, q.path.clone())),
+                                        None,
+                                        None,
+                                    );
+                                }
+                                q.next_card();
+                            }
+                            Err(e) => {
+                                log::warn!(
+                                    "macvm: cannot hide connect question {}: {e}",
+                                    q.card_id()
+                                );
+                                g.queue.undo_pause(&t);
+                                return;
+                            }
+                        }
                     }
                 }
                 Step::Pause => {
@@ -421,20 +396,65 @@ impl Asker {
                         text::asks_paused(&self.label, &self.profile, open)
                     );
                     let id = broker::new_request_id();
-                    self.write_card(&self.notice_card(&id, open, now));
-                    self.publish(QuestionState::Paused, &id, None, None, Some(open as u64));
+                    g.notice_root = Some(id.clone());
+                    g.notice_generation = 0;
                     g.notice = Some(id);
+                    g.notice_count = None;
+                    g.notice_created = now;
+                    g.notice_targets.clear();
+                    g.notice_snapshot = None;
+                    g.notice_selected = None;
                 }
             }
         }
-        if rewrite && !shown_now {
+        if !shown_now {
             if let Some(t) = g.queue.shown().cloned() {
                 if let Some(q) = g.map.get(&t) {
-                    self.write_card(&self.card(q, &t, g.queue.more() as u64));
+                    let published = q.published.load(Ordering::SeqCst);
+                    if rewrite || g.rewrite_pending || !published {
+                        if self.write_card(&self.card(q, &t, g.queue.more() as u64), published) {
+                            g.rewrite_pending = false;
+                            q.published.store(true, Ordering::SeqCst);
+                            if !published {
+                                g.status_changed = true;
+                                self.publish(
+                                    QuestionState::Open,
+                                    &q.card_id(),
+                                    Some((&t, q.path.clone())),
+                                    None,
+                                    None,
+                                );
+                            }
+                        } else {
+                            g.rewrite_pending = true;
+                        }
+                    }
                 }
             }
-            if let Some(id) = g.notice.clone() {
-                self.write_card(&self.notice_card(&id, g.queue.open(), now));
+            if g.notice.is_some() {
+                if !self.rotate_notice(g) {
+                    return;
+                }
+                let id = g.notice.clone().expect("notice remains present");
+                let open = g.queue.open();
+                if rewrite || g.rewrite_pending || !g.notice_published {
+                    let card = self.notice_card(&id, open, g.notice_created);
+                    if self.write_card(&card, g.notice_published) {
+                        g.notice_targets = g.queue.all();
+                        g.notice_snapshot = Some(card.cleaned());
+                        g.rewrite_pending = false;
+                        if g.notice_count != Some(open) {
+                            self.publish(QuestionState::Paused, &id, None, None, Some(open as u64));
+                        }
+                        if !g.notice_published {
+                            g.status_changed = true;
+                        }
+                        g.notice_published = true;
+                        g.notice_count = Some(open);
+                    } else {
+                        g.rewrite_pending = true;
+                    }
+                }
             }
         }
     }
@@ -443,8 +463,15 @@ impl Asker {
     /// open a new one.
     pub fn join(&self, t: &Triple, who: Who, id: Option<&Identity>, now: u64) -> Join {
         let mut g = self.lock();
-        if let Some(s) = g.once.remove(t) {
-            return Join::Once(s);
+        if !self.reconcile_wake(&mut g) {
+            return Join::Stale;
+        }
+        if self.last_wake() != 0 && now <= self.last_wake() {
+            return Join::Stale;
+        }
+        if !g.map.contains_key(t) && g.map.len() >= MAX_OPEN_QUESTIONS {
+            log::warn!("macvm: {MAX_OPEN_QUESTIONS} firewall questions are open; refusing this connection as stale");
+            return Join::Stale;
         }
         let (q, fresh) = match g.map.get(t) {
             Some(q) => (q.clone(), false),
@@ -456,29 +483,25 @@ impl Asker {
                     asked_at: AtomicU64::new(now),
                     count: AtomicU64::new(0),
                     taken: AtomicBool::new(false),
+                    generation: AtomicU64::new(0),
+                    published: AtomicBool::new(false),
+                    accepted_file: AtomicBool::new(false),
+                    retirement_ready: AtomicBool::new(false),
+                    selection: Mutex::new(None),
                     result: Mutex::new(None),
                 });
                 g.map.insert(t.clone(), q.clone());
                 (q, true)
             }
         };
-        if !fresh && q.asked_at() < self.last_wake() && !q.taken.load(Ordering::SeqCst) {
-            // The user slept through the panel: deny this one, ask anew.
-            q.asked_at.store(now, Ordering::SeqCst);
-            self.pump(&mut g, now, true);
-            return Join::Stale;
-        }
         q.count.fetch_add(1, Ordering::SeqCst);
-        if fresh {
-            self.publish(
-                QuestionState::Open,
-                &q.id,
-                Some((t, q.path.clone())),
-                None,
-                None,
-            );
-        }
-        if fresh && self.hook.is_some() {
+        g.status_changed = true;
+        #[cfg(test)]
+        let hook_enabled =
+            self.hook.is_some() || TEST_CONNECT_HOOK.with(|hook| hook.borrow().is_some());
+        #[cfg(not(test))]
+        let hook_enabled = self.hook.is_some();
+        if fresh && hook_enabled {
             return Join::Wait(q, true);
         }
         if fresh {
@@ -490,6 +513,12 @@ impl Asker {
 
     /// The approver hook on a new question. `None`: it abstains.
     pub fn run_hook(&self, t: &Triple, q: &Question) -> Option<ConnectAnswer> {
+        #[cfg(test)]
+        if let Some(answer) =
+            TEST_CONNECT_HOOK.with(|hook| hook.borrow().as_ref().and_then(|hook| hook()))
+        {
+            return Some(answer);
+        }
         let hook = self.hook.as_ref()?;
         let (answer, note) = crate::approver::run_hook_connect(hook, &self.card(q, t, 0));
         if let Some(a) = answer {
@@ -506,106 +535,178 @@ impl Asker {
     /// The hook abstained: the question joins the queue.
     pub fn enqueue(&self, t: &Triple, now: u64) {
         let mut g = self.lock();
-        if g.map.contains_key(t) {
+        if !self.reconcile_wake(&mut g) {
+            return;
+        }
+        if g.map
+            .get(t)
+            .is_some_and(|q| !q.taken.load(Ordering::SeqCst))
+        {
             g.queue.add(t.clone());
         }
         self.pump(&mut g, now, true);
     }
 
+    /// Claim a rule or hook decision before it performs any side effects.
+    /// An answer already published to the card or notice wins the claim.
+    pub fn claim_decision(&self, t: &Triple, q: &Arc<Question>) -> Claim {
+        self.claim_decision_if(t, q, || Some(())).0
+    }
+
+    pub fn record_hook_selection(
+        &self,
+        t: &Triple,
+        q: &Question,
+        answer: ConnectAnswer,
+    ) -> std::io::Result<()> {
+        let card = self.card(q, t, 0).cleaned();
+        broker::record_hook_connect_selection(&self.env, &card, answer)?;
+        let text = broker::claim_connect_exact(&self.env, &card, false)?
+            .ok_or_else(|| std::io::Error::other("hook selection missing"))?;
+        *q.selection.lock().unwrap_or_else(|e| e.into_inner()) = Some((card, text));
+        q.accepted_file.store(true, Ordering::SeqCst);
+        Ok(())
+    }
+
+    /// Close the presentation before consulting the decision. The returned
+    /// value can hold the decision's guards until the claim is complete.
+    /// No approval-store operation runs while those guards are held.
+    pub fn claim_decision_if<T>(
+        &self,
+        t: &Triple,
+        q: &Arc<Question>,
+        decide: impl FnOnce() -> Option<T>,
+    ) -> (Claim, Option<T>) {
+        let mut g = self.lock();
+        let mut decision = None;
+        let claimed = if !self.reconcile_wake(&mut g)
+            || !self.poll_notice(&mut g, None)
+            || !g.map.get(t).is_some_and(|m| Arc::ptr_eq(m, q))
+            || q.taken.load(Ordering::SeqCst)
+        {
+            false
+        } else {
+            let result = if q.published.load(Ordering::SeqCst) {
+                #[cfg(test)]
+                CLAIM_CLOSE_HOOK.with(|hook| {
+                    if let Some(hook) = hook.borrow().as_ref() {
+                        hook();
+                    }
+                });
+                broker::claim_connect_question(&self.env, &self.card(q, t, 0).cleaned(), true)
+            } else {
+                Ok(None)
+            };
+            match result {
+                Ok(Some(text)) => {
+                    // A selection that cannot be read stays open; the
+                    // poll of the screen gives it up after a few seconds.
+                    self.accepted(&mut g, t, q, &text);
+                    false
+                }
+                Ok(None) => {
+                    let was_published = q.published.swap(false, Ordering::SeqCst);
+                    decision = decide();
+                    if decision.is_some() {
+                        q.taken.store(true, Ordering::SeqCst);
+                        g.queue.remove(t);
+                        g.status_changed = true;
+                        true
+                    } else {
+                        // A withdrawn card must never be reused: a late
+                        // writer may still have its old id.
+                        if was_published {
+                            self.publish(
+                                QuestionState::Withdrawn,
+                                &q.card_id(),
+                                Some((t, q.path.clone())),
+                                None,
+                                None,
+                            );
+                            q.next_card();
+                            g.rewrite_pending = true;
+                            g.status_changed = true;
+                        }
+                        false
+                    }
+                }
+                Err(e) => {
+                    log::warn!("macvm: cannot claim connect question {}: {e}", q.card_id());
+                    false
+                }
+            }
+        };
+        (
+            Claim {
+                claimed,
+                status_changed: std::mem::take(&mut g.status_changed),
+            },
+            decision,
+        )
+    }
+
     /// Look for the answers of the question on the screen and of the
     /// notice, and put the next question up when the rate allows it.
-    pub fn poll(&self, now: u64) -> Vec<Answered> {
+    pub fn poll(&self, now: u64) -> Polled {
         let mut g = self.lock();
-        let mut out = Vec::new();
+        if !self.reconcile_wake(&mut g) {
+            return Polled {
+                answers: std::mem::take(&mut g.ready),
+                status_changed: std::mem::take(&mut g.status_changed),
+            };
+        }
         if let Some(t) = g.queue.shown().cloned() {
             if let Some(q) = g.map.get(&t).cloned() {
-                if let Some((a, who)) = self.read_answer(&q.id) {
-                    q.taken.store(true, Ordering::SeqCst);
-                    self.remove_files(&q.id);
-                    g.queue.remove(&t);
-                    out.push(Answered {
-                        triple: t,
-                        question: q,
-                        answer: a,
-                        who,
-                    });
-                }
-            }
-        }
-        if let Some(id) = g.notice.clone() {
-            if let Some((a, _who)) = self.read_answer(&id) {
-                self.remove_files(&id);
-                g.notice = None;
-                let deny_all = !a.allows();
-                let before = out.len();
-                if deny_all {
-                    for t in g.queue.take_all() {
-                        if let Some(q) = g.map.get(&t).cloned() {
-                            q.taken.store(true, Ordering::SeqCst);
-                            self.remove_files(&q.id);
-                            out.push(Answered {
-                                triple: t,
-                                question: q,
-                                answer: ConnectAnswer::Deny,
-                                who: "user",
-                            });
+                if q.published.load(Ordering::SeqCst) {
+                    #[cfg(test)]
+                    POLL_STORE_HOOK.with(|hook| {
+                        if let Some(hook) = hook.borrow().as_ref() {
+                            hook();
                         }
+                    });
+                    let read = match broker::claim_connect_question(
+                        &self.env,
+                        &self.card(&q, &t, 0).cleaned(),
+                        false,
+                    ) {
+                        Ok(Some(text)) if self.accepted(&mut g, &t, &q, &text) => Claimed::Read,
+                        Ok(Some(_)) => Claimed::Damaged,
+                        Ok(None) => Claimed::Read,
+                        Err(e) => {
+                            log::warn!("macvm: cannot claim connect answer {}: {e}", q.card_id());
+                            if broker::is_store_lock_error(&e) {
+                                Claimed::Unavailable
+                            } else {
+                                Claimed::Damaged
+                            }
+                        }
+                    };
+                    // A damaged, missing or unreadable card or answer must
+                    // not keep every later question behind it. A short
+                    // failure, such as a write that is still going on, is
+                    // retried for a few seconds first. A store that cannot
+                    // be locked says nothing about the answer: it is
+                    // retried and never closes it.
+                    match read {
+                        Claimed::Read => g.shown_failures.clear(),
+                        Claimed::Damaged if g.shown_failures.fail(&q.card_id(), now) => {
+                            g.shown_failures.clear();
+                            self.refuse_selection(&mut g, &t, &q, None, None, Unapplied::Invalid);
+                        }
+                        Claimed::Damaged | Claimed::Unavailable => {}
                     }
-                } else {
-                    g.queue.resume();
                 }
-                let n = if deny_all {
-                    out.len() - before
-                } else {
-                    g.queue.open()
-                };
-                log::info!("macvm: {}", text::asks_resumed(deny_all, n));
             }
         }
-        let changed = !out.is_empty();
-        self.pump(&mut g, now, changed);
-        out
-    }
-
-    /// The question is decided: every waiter gets `s`, the question and
-    /// its files go. An answer of the user or the approver that came when
-    /// nobody waited and makes no rule is kept for the next connection.
-    pub fn finish(&self, t: &Triple, q: &Arc<Question>, s: Settled, now: u64) {
-        let mut g = self.lock();
-        if !g.map.get(t).is_some_and(|m| Arc::ptr_eq(m, q)) {
-            return;
+        let notice_ready = self.poll_notice(&mut g, Some(now));
+        let changed = !g.ready.is_empty();
+        if notice_ready {
+            self.pump(&mut g, now, changed);
         }
-        g.map.remove(t);
-        g.queue.remove(t);
-        self.remove_files(&q.id);
-        let answer = Some((s.answer.word(), s.who));
-        self.publish(
-            QuestionState::Answered,
-            &q.id,
-            Some((t, q.path.clone())),
-            answer,
-            None,
-        );
-        let once = matches!(s.answer, ConnectAnswer::AllowOnce | ConnectAnswer::Deny);
-        if q.count() == 0 && once && s.who != BY_RULE {
-            g.once.insert(t.clone(), s.clone());
+        Polled {
+            answers: std::mem::take(&mut g.ready),
+            status_changed: std::mem::take(&mut g.status_changed),
         }
-        *q.result.lock().unwrap_or_else(|e| e.into_inner()) = Some(s);
-        self.pump(&mut g, now, true);
-    }
-
-    /// `WAIT` passed for one connection. `Some`: the answer came just now.
-    /// Else the connection stops waiting and the question stays open.
-    pub fn timeout(&self, t: &Triple, q: &Question, now: u64) -> Option<Settled> {
-        let mut g = self.lock();
-        if let Some(s) = q.result() {
-            return Some(s);
-        }
-        q.count.fetch_sub(1, Ordering::SeqCst);
-        if g.queue.shown() == Some(t) {
-            self.pump(&mut g, now, true);
-        }
-        None
     }
 
     /// The open questions that wait for an answer of the user.
@@ -634,7 +735,7 @@ impl Asker {
                     port: t.port,
                     waiting: q.count(),
                     asked_at: q.asked_at(),
-                    shown: shown.as_ref() == Some(&t),
+                    shown: shown.as_ref() == Some(&t) && q.published.load(Ordering::SeqCst),
                 })
             })
             .collect();
@@ -642,6 +743,41 @@ impl Asker {
     }
 }
 
+#[path = "approvals_cards.rs"]
+mod cards;
+mod notice;
+mod presentation;
+mod question;
+mod result;
+mod streak;
+
+/// What a poll found for the answer of the question on the screen.
+enum Claimed {
+    /// Read: an accepted answer, or none yet.
+    Read,
+    /// The card or its answer is damaged, missing or cannot be read.
+    Damaged,
+    /// The store could not be locked: nothing is known.
+    Unavailable,
+}
+mod unapplied;
+mod wake;
+
+pub use unapplied::{cli_answer_note, Unapplied};
+
+#[cfg(test)]
+mod fake_state;
+#[cfg(test)]
+mod notice_tests;
+#[cfg(test)]
+mod unapplied_tests;
+#[cfg(test)]
+mod wake_tests;
+
 #[cfg(test)]
 #[path = "approvals_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "approvals_recovery_tests.rs"]
+mod recovery_tests;

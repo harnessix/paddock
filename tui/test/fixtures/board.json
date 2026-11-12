@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "approvals_waiting": 2,
+  "compile_slots": [{"slot": 1, "holder": "claude-alpha-71c3ac"}],
+  "projects": [
+    {"name": "alpha", "path": "/src/alpha", "tickets": [
+      {"id": "T-101", "title": "mail hooks", "file": "tickets/mail-hooks.md", "state": "waiting", "runs": [
+        {"id": "0b0b0b", "harness": "codex", "model": "", "state": "waiting", "last": "git push to origin/main", "since": "2026-11-11T15:58:00Z", "card": true},
+        {"id": "0c0c0c", "harness": "claude", "model": "", "state": "done", "last": "done: hooks merged", "since": "2026-11-11T12:00:00Z", "card": false}]},
+      {"id": "T-102", "title": "named kv namespaces", "file": "tickets/kv-namespaces.md", "state": "working", "runs": [
+        {"id": "71c3ac", "harness": "claude", "model": "claude-opus-5-5", "state": "working", "last": "T-102: code and 14 tests pass", "since": "2026-11-11T15:45:00Z", "card": false}]},
+      {"id": "T-103", "title": "login refresh", "file": "tickets/login-refresh.md", "state": "open", "runs": []}
+    ], "runs_without_ticket": [
+      {"id": "0e0e0e", "harness": "evil", "model": "", "state": "stuck", "last": "idle with unread \u001b[5mmail", "since": "2026-11-11T15:40:00Z", "card": false}
+    ]},
+    {"name": "beta", "path": "/src/beta", "tickets": [], "runs_without_ticket": [
+      {"id": "0f0f0f", "harness": "grok", "model": "", "state": "idle", "last": "", "since": "2026-11-11T15:48:20Z", "card": false}
+    ]}
+  ]
+}

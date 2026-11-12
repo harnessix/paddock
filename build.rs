@@ -9,8 +9,12 @@
 use std::path::PathBuf;
 use std::process::Command;
 
+#[path = "src/buildinfo.rs"]
+mod buildinfo;
+
 fn main() {
     release_repo();
+    build_identity();
     let src = "src/ptyshim/shim.c";
     println!("cargo:rerun-if-changed={src}");
     println!("cargo:rerun-if-env-changed=CC");
@@ -65,4 +69,39 @@ fn release_repo() {
         _ => panic!("PADDOCK_RELEASE_REPO must be OWNER/NAME, not {repo:?}"),
     }
     println!("cargo:rustc-env=PADDOCK_RELEASE_REPO={repo}");
+}
+
+/// Write `PADDOCK_VERSION` and `PADDOCK_BUILD` for src/lib.rs: release or
+/// development build, with the commit and a dirty mark (src/buildinfo.rs).
+/// `PADDOCK_BUILD_NO_GIT=1` builds as from a source tarball, without git:
+/// packaging/vm/build.sh needs a guest binary that does not change with
+/// the commit.
+fn build_identity() {
+    println!("cargo:rerun-if-env-changed=PADDOCK_RELEASE_BUILD");
+    println!("cargo:rerun-if-env-changed=PADDOCK_BUILD_NO_GIT");
+    let dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+    let marker = match std::env::var("PADDOCK_RELEASE_BUILD").as_deref() {
+        Ok("1") => true,
+        Ok("") | Ok("0") | Err(_) => false,
+        Ok(v) => panic!("PADDOCK_RELEASE_BUILD must be 1 or 0, not {v:?}"),
+    };
+    let no_git = std::env::var("PADDOCK_BUILD_NO_GIT").is_ok_and(|v| v == "1");
+    let git = if no_git {
+        None
+    } else {
+        buildinfo::read_git(&dir)
+    };
+    let version = std::env::var("CARGO_PKG_VERSION").unwrap();
+    let id =
+        buildinfo::Identity::new(&version, marker, git.as_ref()).unwrap_or_else(|e| panic!("{e}"));
+    if git.is_some() {
+        // A new commit, a tag or a change of any tracked file runs this
+        // again, so the dirty mark is right also for the files that the
+        // binary embeds (profiles/, skills/, packaging/, docs/, tests/).
+        for p in buildinfo::git_watch(&dir) {
+            println!("cargo:rerun-if-changed={p}");
+        }
+    }
+    println!("cargo:rustc-env=PADDOCK_VERSION={}", id.version_string());
+    println!("cargo:rustc-env=PADDOCK_BUILD={}", id.summary());
 }

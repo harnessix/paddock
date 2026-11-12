@@ -15,6 +15,9 @@ pub mod apps;
 pub mod apps_macos;
 pub mod chrome;
 pub mod clock;
+pub mod computer;
+#[cfg(test)]
+pub(crate) mod computer_fake;
 pub mod configure;
 pub mod console;
 pub mod data;
@@ -28,6 +31,7 @@ pub mod input_fallback;
 pub mod keychain;
 pub mod link;
 pub mod log;
+pub mod main_call;
 pub mod main_loop;
 pub mod pace;
 pub mod platform;
@@ -43,6 +47,10 @@ pub mod ax;
 pub mod ax_tree;
 #[cfg(target_os = "macos")]
 pub mod clipboard;
+#[cfg(target_os = "macos")]
+mod computer_capture;
+#[cfg(target_os = "macos")]
+pub mod computer_macos;
 #[cfg(target_os = "macos")]
 pub mod dialog_ax;
 #[cfg(target_os = "macos")]

@@ -1,0 +1,59 @@
+{
+  "v": 1,
+  "api_version": "paddock.approvals/v1",
+  "pending": [
+    {
+      "id": "r-shown-g1",
+      "sandbox": "macvm-sample-notes",
+      "harness": "sample-notes",
+      "project": "/tmp/profile",
+      "capability": "connect",
+      "summary": "A connection",
+      "detail": "A connection",
+      "reason": "",
+      "created": 1793962800,
+      "expires": 0,
+      "session_allowed": true,
+      "choices": ["allow-once", "deny"],
+      "connect": {
+        "app": "com.example.notes",
+        "host": "api.example.com",
+        "port": 443,
+        "count": 1,
+        "asked_at": 1793962800,
+        "pid": 123,
+        "path": "/Applications/Sample Notes.app/Contents/MacOS/Sample Notes",
+        "profile": "sample-notes"
+      },
+      "age_s": 1,
+      "process": "/Applications/Sample Notes.app/Contents/MacOS/Sample Notes"
+    },
+    {
+      "id": "r-notice",
+      "sandbox": "macvm-sample-mail",
+      "harness": "sample-mail",
+      "project": "/tmp/profile-mail",
+      "capability": "connect",
+      "summary": "Asking paused",
+      "detail": "Asking paused",
+      "reason": "",
+      "created": 1793962801,
+      "expires": 0,
+      "session_allowed": false,
+      "choices": ["allow-once", "deny"],
+      "connect": {
+        "app": "Sample Mail",
+        "host": "",
+        "port": 0,
+        "count": 0,
+        "asked_at": 1793962801,
+        "pid": 124,
+        "profile": "sample-mail",
+        "more": 21,
+        "notice": true
+      },
+      "age_s": 0,
+      "process": null
+    }
+  ]
+}

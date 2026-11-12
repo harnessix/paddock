@@ -36,12 +36,22 @@ mod serve;
 pub use serve::serve;
 mod spawn;
 mod spec;
+#[cfg(test)]
+pub(crate) use approval::{CARD_MAIL_HOOK, OUTCOME_TIME, OWNER_PUBLISHED_HOOK, PID_LIVENESS_HOOK};
 
+pub(crate) use approval::{
+    abandon_owner, claim_connect, claim_connect_exact, claim_connect_question, close_pending,
+    confirm_pause_resume, is_store_lock_error, record_connect_outcome_bound,
+    record_hook_connect_selection, record_pause_outcome, record_wake_selection,
+    retire_connect_outcome, take_answer, update_pending, withdraw_unanswered, UNVERIFIED_RULE,
+};
 pub use approval::{
     answer, answer_connect, answer_connect_cli, answer_reply, answer_reply_cli, answer_with_note,
     answer_with_note_cli, approval_note, approval_ui_active, approval_ui_file, approvals_dir,
-    ask_choice, clean_note, clean_text, denied_message, pending, write_pending, Answer, Approver,
-    Connect, ConnectAnswer, DenyAll, HostApprover, Pending, Verdict, ASK_CAPABILITY,
+    ask_choice, clean_note, clean_text, connect_card_retired, denied_message, pending,
+    pending_checked, pending_report, write_pending, AffectedDecision, Answer, ApplicationScope,
+    ApprovalOutcome, ApprovalUnresolved, Approver, Connect, ConnectAnswer, ConnectOutcome, DenyAll,
+    HostApprover, LocalApplication, Pending, PendingReport, Verdict, ASK_CAPABILITY,
     BUDGET_CAPABILITY, CONNECT_CAPABILITY, MAX_NOTE, MAX_REPLY, TIMEOUT_CAPABILITY,
 };
 pub use audit::{audit_detail, audit_file, audit_line};
@@ -108,6 +118,10 @@ pub const CAPABILITIES: &[(&str, &str)] = &[
     (
         "connect",
         "allow or deny one connection of a desktop app in paddock's macOS guest, by app, host and port (network mode ask)",
+    ),
+    (
+        "mac",
+        "computer use of an app session in paddock's macOS guest: screenshots, clicks, keys, text and its accessibility elements, never the host",
     ),
 ];
 
@@ -593,9 +607,12 @@ impl Broker {
                 started_by: self.ctx.chain.clone(),
                 connect: None,
             };
-            let verdict =
+            let outcome =
                 self.approver
-                    .ask_verdict(&self.env, &p, Duration::from_secs(self.policy.wait));
+                    .ask_outcome(&self.env, &p, Duration::from_secs(self.policy.wait));
+            let unknown = matches!(&outcome, ApprovalOutcome::Unknown);
+            let unavailable = matches!(&outcome, ApprovalOutcome::Unavailable);
+            let verdict = outcome.into_verdict();
             note = verdict.as_ref().and_then(|v| v.note.clone());
             match verdict.map(|v| (v.answer, v.who)) {
                 Some((Answer::Once, "agent")) => ("allowed once by the agent approver", Some(true)),
@@ -634,10 +651,20 @@ impl Broker {
                         ("denied for this session", Some(false))
                     }
                 }
+                None if unknown => ("approval outcome unknown", None),
+                None if unavailable => ("approval unavailable", None),
                 None => ("timed out", None),
             }
         };
         let resp = match (decision, allowed) {
+            ("approval unavailable", _) => Response::new(
+                Status::Failed,
+                "the approval card could not be published; nobody could answer",
+            ),
+            ("approval outcome unknown", _) => Response::new(
+                Status::Failed,
+                "the approval outcome is unknown because the store could not be read or closed",
+            ),
             ("timed out", _) => Response::new(
                 Status::Timeout,
                 format!("nobody answered within {} seconds", self.policy.wait),
@@ -663,6 +690,18 @@ impl Broker {
             _ if req.cap == "exec" || req.cap == "tool" => self.respond_exec(req),
             // The push runs in the executor too, from the plan of the card.
             _ if matches!(prep.work, prepare::Work::Push(_)) => self.respond_push(req, &prep.work),
+            _ if matches!(prep.work, prepare::Work::Mac(_)) => {
+                let prepare::Work::Mac(planned) = &prep.work else {
+                    unreachable!()
+                };
+                crate::macvm::computer_broker::respond(
+                    &self.env,
+                    &self.ctx.project,
+                    &self.ctx.id,
+                    &req.args,
+                    planned,
+                )
+            }
             _ => self.respond_local(req, &prep.work),
         };
         // Status and wait calls are reads of this sandbox's own children.
@@ -757,33 +796,8 @@ impl Broker {
     }
 }
 
-/// Read a prompt file that the sandbox names. The project is
-/// sandbox-writable: the path must stay inside it, no symlink is followed, a
-/// FIFO or a device is never opened, and the size is limited.
-pub fn read_prompt(project: &Path, raw: &str) -> Result<Vec<u8>> {
-    let p = Path::new(raw);
-    let rel = if p.is_absolute() {
-        p.strip_prefix(project)
-            .with_context(|| {
-                format!(
-                    "the prompt file must be inside the project {}",
-                    project.display()
-                )
-            })?
-            .to_path_buf()
-    } else {
-        p.to_path_buf()
-    };
-    let root = crate::safefs::Root::open(project)?;
-    let bytes = root
-        .read(&rel, crate::spawn::MAX_PROMPT)
-        .with_context(|| format!("cannot read the prompt file {raw}"))?
-        .with_context(|| format!("the prompt file {raw} does not exist"))?;
-    if bytes.iter().all(u8::is_ascii_whitespace) {
-        bail!("the prompt file {raw} is empty");
-    }
-    Ok(bytes)
-}
+mod prompt;
+pub use prompt::read_prompt;
 
 #[cfg(test)]
 mod tests;

@@ -212,6 +212,8 @@ impl Broker {
         let prompt = crate::speckit::prompt::worker(&spot.layout, &rec, spot.layout.external);
         match sp.start_with_id(id.clone(), harness, prompt.as_bytes(), opts) {
             Ok(s) => {
+                let model = s.pick.model.as_deref();
+                crate::board::origin::note(&self.env, &s.sandbox, None, prompt.as_bytes(), model);
                 if let Err(e) = flow::started(&self.env, spot, &rec.id, crate::state::now()) {
                     log::debug!("task {}: {e:#}", rec.id);
                 }

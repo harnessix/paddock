@@ -17,6 +17,8 @@ struct Fake {
     refuse: AtomicBool,
     lines: Mutex<Vec<String>>,
     sabotage_save: Mutex<Option<PathBuf>>,
+    /// A line that the fake refuses once, as a session that cannot take it.
+    refuse_line: Mutex<Option<String>>,
     fresh_count: Mutex<Option<Option<u32>>>,
 }
 
@@ -30,6 +32,12 @@ impl bridge::Guest for Fake {
         if self.refuse.swap(false, Ordering::SeqCst) {
             bail!("the VM did not take the folder change (test)");
         }
+        let mut refuse_line = self.refuse_line.lock().unwrap();
+        if refuse_line.as_deref() == Some(args) {
+            *refuse_line = None;
+            bail!("the VM did not take the change (test)");
+        }
+        drop(refuse_line);
         let op = Op::parse(args).map_err(|e| anyhow::anyhow!(e))?;
         let mut live = self.live.lock().unwrap();
         if matches!(op, Op::ListFresh) {
@@ -107,6 +115,7 @@ fn run(w: &World) -> Arc<Fake> {
         refuse: AtomicBool::new(false),
         lines: Mutex::new(Vec::new()),
         sabotage_save: Mutex::new(None),
+        refuse_line: Mutex::new(None),
         fresh_count: Mutex::new(None),
     });
     bridge::serve_control(bridge::bind_control(&control).unwrap(), fake.clone());
@@ -411,4 +420,98 @@ fn remove_uses_the_new_count_instead_of_a_stale_zero() {
     *fake.fresh_count.lock().unwrap() = Some(None);
     let error = share_remove(&w.env, APP, &w.web, false, true).unwrap_err();
     assert!(format!("{error:#}").contains("use --force"));
+}
+
+#[test]
+fn a_session_that_starts_during_a_change_is_not_given_a_next_start_change() {
+    let w = world();
+    let t = Target::of(&w.env, APP).unwrap();
+    assert!(t.running.is_none());
+    let fake = run(&w);
+    let error = update_live(&t, |g, _| {
+        g.network = Some("none".into());
+        Ok(())
+    })
+    .unwrap_err();
+    assert!(
+        format!("{error:#}").contains("started or stopped"),
+        "{error:#}"
+    );
+    assert_eq!(saved(&w).network, None);
+    assert_eq!(fake.live.lock().unwrap().network, "ask");
+}
+
+#[test]
+fn a_failed_sync_after_the_rename_keeps_the_live_change() {
+    let w = world();
+    let fake = run(&w);
+    grants::FAIL_FINAL_SYNC.with(|f| f.set(true));
+    let error = network(&w.env, APP, "none", true).unwrap_err();
+    grants::FAIL_FINAL_SYNC.with(|f| f.set(false));
+    assert!(
+        !format!("{error:#}").contains("live change was reverted"),
+        "{error:#}"
+    );
+    assert_eq!(saved(&w).network.as_deref(), Some("none"));
+    assert_eq!(fake.live.lock().unwrap().network, "none");
+    let lines = fake.lines.lock().unwrap().clone();
+    assert_eq!(
+        lines.last().map(String::as_str),
+        Some("network none"),
+        "{lines:?}"
+    );
+}
+
+/// While a saved grants file is missing, a save without a network word is
+/// refused. With a running session the refusal comes before the live
+/// change: the session is not changed and no undo is needed, so a failed
+/// undo cannot leave a live grant that no file holds.
+#[test]
+fn a_refused_save_changes_nothing_live() {
+    let w = world();
+    grants::update(&w.profile, |g| {
+        g.network = Some("none".into());
+        Ok(())
+    })
+    .unwrap();
+    std::fs::remove_file(grants::path(&w.profile)).unwrap();
+    let fake = run(&w);
+    fake.live
+        .lock()
+        .unwrap()
+        .on_handles([("ws-1".into(), 0)].into(), crate::state::now());
+    let before = fake.live.lock().unwrap().clone();
+    let refused = [
+        share_add(&w.env, APP, &w.docs, false, false, true),
+        share_remove(&w.env, APP, &w.web, false, true),
+        share_mode(&w.env, APP, &w.web, true, true),
+        clipboard(&w.env, APP, Some(false), None, true),
+    ];
+    for result in refused {
+        let error = format!("{:#}", result.unwrap_err());
+        assert!(error.contains("saves no other grant change"), "{error}");
+        assert!(!error.contains("reverted"), "{error}");
+    }
+    let lines = fake.lines.lock().unwrap().clone();
+    assert!(lines.iter().all(|l| l.starts_with("list")), "{lines:?}");
+    assert_eq!(*fake.live.lock().unwrap(), before);
+    assert!(!grants::path(&w.profile).exists());
+    // The way back still works live: the network sets a word.
+    network(&w.env, APP, "allowlist", true).unwrap();
+    assert_eq!(saved(&w).network.as_deref(), Some("allowlist"));
+    assert_eq!(fake.live.lock().unwrap().network, "allowlist");
+}
+
+/// A save that the disk fails after the live change undoes it. When the
+/// undo fails too, the error says that the session kept the change.
+#[test]
+fn a_failed_undo_is_reported() {
+    let w = world();
+    let fake = run(&w);
+    *fake.sabotage_save.lock().unwrap() = Some(grants::path(&w.profile));
+    *fake.refuse_line.lock().unwrap() = Some("network ask".into());
+    let error = format!("{:#}", network(&w.env, APP, "none", true).unwrap_err());
+    assert!(error.contains("could not be reverted"), "{error}");
+    assert!(error.contains("until the app stops"), "{error}");
+    assert_eq!(fake.live.lock().unwrap().network, "none");
 }

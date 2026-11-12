@@ -76,6 +76,96 @@ final class FlowTests: XCTestCase {
         XCTAssertNil(h.store.paused)
     }
 
+    func testQuestionPresentationEventsRetireTheOldID() async throws {
+        let h = try await Harness("questions")
+        func apply(_ line: String) throws {
+            h.store.apply(try XCTUnwrap(PaddockEvent.decode(line: line)))
+        }
+        try apply(#"{"v":1,"kind":"question","state":"open","id":"old","app":"Sample Notes","host":"a.example","port":443}"#)
+        let stale = try XCTUnwrap(h.store.questions.first { $0.id == "old" })
+        try apply(#"{"v":1,"kind":"question","state":"withdrawn","id":"old","app":"Sample Notes"}"#)
+        try apply(#"{"v":1,"kind":"question","state":"paused","id":"notice","app":"Sample Notes","open":21}"#)
+        XCTAssertFalse(h.store.questions.contains { $0.id == "old" })
+        XCTAssertEqual(h.store.paused?.count, 21)
+        try apply(#"{"v":1,"kind":"question","state":"resumed","id":"notice","app":"Sample Notes"}"#)
+        XCTAssertNil(h.store.paused)
+        try apply(#"{"v":1,"kind":"question","state":"open","id":"new","app":"Sample Notes","host":"a.example","port":443}"#)
+        // A delayed UI action cannot answer a retired question.
+        let failure = await h.store.answer(stale, panel: .deny)
+        XCTAssertNotNil(failure)
+        XCTAssertTrue(h.calls(["approvals", "answer"]).isEmpty)
+        XCTAssertTrue(h.store.questions.contains { $0.id == "new" })
+        let line = #"{"v":1,"kind":"question","state":"answered","id":"new","app":"Sample Notes","answer":"deny","by":"cli"}"#
+        if case .question(let event) = try XCTUnwrap(PaddockEvent.decode(line: line)) {
+            XCTAssertEqual(event.by, "cli")
+        } else {
+            XCTFail("expected a question event")
+        }
+        try apply(line)
+        XCTAssertFalse(h.store.questions.contains { $0.id == "new" })
+    }
+
+    func testProducerQuestionAndGrantFixturesDecode() async throws {
+        let root = Fixtures.root.deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("tests/fixtures/launcher")
+        let h = try await Harness("questions")
+        let questions = try ReplayRunner.streamLines(root.appendingPathComponent("question.jsonl"))
+        for line in questions {
+            let event = try XCTUnwrap(PaddockEvent.decode(line: line))
+            guard case .question = event else { return XCTFail("expected question event") }
+            h.store.apply(event)
+        }
+        XCTAssertFalse(h.store.questions.contains { $0.id == "r-old" || $0.id == "r-old-g1" })
+        XCTAssertNil(h.store.paused)
+        let before = h.store.questions
+        let future = try XCTUnwrap(PaddockEvent.decode(line: #"{"v":1,"kind":"question","state":"future","id":"q2"}"#))
+        h.store.apply(future)
+        XCTAssertEqual(h.store.questions, before)
+
+        let grants = try ReplayRunner.streamLines(root.appendingPathComponent("grant.jsonl"))
+        for line in grants {
+            guard case .grant(let event) = try XCTUnwrap(PaddockEvent.decode(line: line)) else {
+                return XCTFail("expected grant event")
+            }
+            XCTAssertFalse(event.grant.isEmpty)
+            XCTAssertFalse(event.op.isEmpty)
+            XCTAssertNotNil(event.time)
+        }
+        guard case .grant(let first) = try XCTUnwrap(PaddockEvent.decode(line: grants[0])) else {
+            return XCTFail("expected grant event")
+        }
+        XCTAssertEqual(first.grant, "rule")
+        XCTAssertEqual(first.op, "add")
+        XCTAssertEqual(first.source, "question_panel")
+        XCTAssertEqual(first.time, ISO.date("2026-11-06T12:01:09Z"))
+    }
+
+    func testPauseActionsAnswerTheNoticeAndKeepItOnFailure() async throws {
+        let h = try await Harness("questions")
+        func apply(_ line: String) throws {
+            h.store.apply(try XCTUnwrap(PaddockEvent.decode(line: line)))
+        }
+        try apply(#"{"v":1,"kind":"question","state":"paused","id":"notice-a","app":"Sample Notes","open":21}"#)
+        // A resume event from another session must not clear this notice.
+        try apply(#"{"v":1,"kind":"question","state":"resumed","id":"notice-b","app":"Sample Mail"}"#)
+        XCTAssertEqual(h.store.paused?.id, "notice-a")
+        await h.store.pausedDenyAll()
+        XCTAssertEqual(h.calls(["approvals", "answer"]).last?.args,
+                       ["approvals", "answer", "notice-a", "--deny"])
+        XCTAssertNil(h.store.paused)
+
+        try apply(#"{"v":1,"kind":"question","state":"paused","id":"notice-c","app":"Sample Notes","open":22}"#)
+        h.runner.reset(prefix: "approvals answer")
+        h.runner.on(prefix: "approvals answer",
+                    output: CommandOutput(status: 1, stdout: Data(), stderr: "unavailable\n"))
+        await h.store.pausedOneByOne()
+        XCTAssertEqual(h.calls(["approvals", "answer"]).last?.args,
+                       ["approvals", "answer", "notice-c", "--allow-once"])
+        XCTAssertEqual(h.store.paused?.id, "notice-c")
+        XCTAssertNotNil(h.store.lastError)
+    }
+
     func testEveryAnswerFlag() {
         XCTAssertEqual(Answer.allCases.map(\.flag),
                        ["--deny", "--allow-once", "--allow-session", "--allow-always", "--deny-always"])
@@ -204,13 +294,11 @@ final class FlowTests: XCTestCase {
         h.events.kill()
         await waitUntil { !h.store.streamHealthy }
         XCTAssertEqual(StreamCopy.pausedLine.english, "Live updates paused · Refresh")
-        // The stream comes back: the store reopens it after 5 s and counts it
-        // healthy after it stays open for 2 s.
+        // The stream comes back after 5 s and is confirmed by its first line.
         await waitUntil { h.clock.sleeperCount > 0 }
         h.clock.advance(5)
         await waitUntil { h.events.opened >= 2 }
-        await waitUntil { h.clock.sleeperCount > 0 }
-        h.clock.advance(2)
+        h.events.send(#"{"v":1,"kind":"stream","state":"started"}"#)
         await waitUntil { h.store.streamHealthy }
 
         // Refresh recovers at once.
@@ -242,5 +330,122 @@ final class FlowTests: XCTestCase {
         }
         await settle()
         XCTAssertLessThanOrEqual(h.calls(["app", "status", "Sample Notes"]).count, 3)
+    }
+}
+
+@MainActor
+final class PartialApprovalTests: XCTestCase {
+    private let partial = #"{"v":1,"complete":false,"diagnostics":["approval r-bad: unreadable"],"pending":[{"id":"r-healthy","capability":"connect","connect":{"profile":"Sample Notes","host":"healthy.example","port":443}}]}"#
+
+    func testFirstSubscriptionResnapshotsTheGapAndLossDisablesActions() async throws {
+        let h = try await Harness("ready", start: false)
+        h.runner.reset(prefix: "approvals --json")
+        h.runner.on(PaddockArgs.approvals, json: #"{"v":1,"complete":true,"pending":[]}"#)
+        h.runner.on(PaddockArgs.approvals, json: #"{"v":1,"complete":true,"pending":[{"id":"r-gap","capability":"connect","connect":{"profile":"Sample Notes","host":"gap.example","port":443}}]}"#)
+        let service = h.service
+        await h.store.start(locate: { "/fake/paddock" }, makeService: { _ in service })
+        XCTAssertTrue(h.store.questions.isEmpty)
+        XCTAssertFalse(h.store.questionsComplete)
+        XCTAssertTrue(h.store.confirmedQuestionIDs.isEmpty)
+        h.events.send(#"{"v":1,"kind":"stream","state":"started"}"#)
+        await waitUntil { h.store.confirmedQuestionIDs.contains("r-gap") }
+        XCTAssertTrue(h.store.questionsComplete)
+        XCTAssertEqual(h.calls(["approvals", "--json"]).count, 2)
+        h.events.kill()
+        await waitUntil { !h.store.streamHealthy }
+        XCTAssertFalse(h.store.questionsComplete)
+        XCTAssertTrue(h.store.confirmedQuestionIDs.isEmpty)
+        let question = try XCTUnwrap(h.store.questions.first { $0.id == "r-gap" })
+        let failure = await h.store.answer(question, panel: .deny)
+        XCTAssertNotNil(failure)
+        XCTAssertTrue(h.calls(["approvals", "answer"]).isEmpty)
+    }
+
+    func testFreshPartialResultShowsHealthyCardAndUncertainty() async throws {
+        let h = try await Harness("questions", start: false)
+        h.runner.reset(prefix: "approvals --json")
+        h.runner.on(PaddockArgs.approvals, json: partial, status: 2)
+        await h.store.refreshAll()
+        XCTAssertEqual(h.store.questions.map(\.id), ["r-healthy"])
+        XCTAssertEqual(h.store.confirmedQuestionIDs, ["r-healthy"])
+        XCTAssertFalse(h.store.questionsComplete)
+        XCTAssertEqual(h.store.questionsIssue, "approval r-bad: unreadable")
+    }
+
+    func testPartialResultRetainsOldQuestionsButOnlyHealthyCardsAreActionable() async throws {
+        let h = try await Harness("questions")
+        let previous = h.store.questions
+        h.runner.reset(prefix: "approvals --json")
+        h.runner.on(PaddockArgs.approvals, json: partial, status: 2)
+        h.store.gate.reset()
+        await h.store.refreshAll()
+        XCTAssertTrue(previous.allSatisfy { old in h.store.questions.contains { $0.id == old.id } })
+        XCTAssertEqual(h.store.confirmedQuestionIDs, ["r-healthy"])
+        let failure = await h.store.answer(previous[0], panel: .deny)
+        XCTAssertNotNil(failure)
+        XCTAssertTrue(h.calls(["approvals", "answer"]).isEmpty)
+        let fresh = try XCTUnwrap(h.store.questions.first { $0.id == "r-healthy" })
+        _ = await h.store.answer(fresh, panel: .deny)
+        XCTAssertEqual(h.calls(["approvals", "answer"]).last?.args,
+                       ["approvals", "answer", "r-healthy", "--deny"])
+    }
+
+    func testRetirementDuringPartialSnapshotDoesNotResurrectCard() async throws {
+        let h = try await Harness("questions")
+        h.store.questionSnapshotPending = true
+        let retirement = try XCTUnwrap(PaddockEvent.decode(line:
+            #"{"v":1,"kind":"question","state":"withdrawn","id":"r-healthy"}"#))
+        h.store.apply(retirement)
+        let snapshot = try PaddockJSON.decoder.decode(ApprovalsJSON.self, from: Data(partial.utf8))
+        h.store.reconcileQuestions(snapshot)
+        XCTAssertFalse(h.store.questions.contains { $0.id == "r-healthy" })
+        XCTAssertFalse(h.store.confirmedQuestionIDs.contains("r-healthy"))
+        XCTAssertFalse(h.store.questionsComplete)
+    }
+
+    func testNonJSONExitTwoIsAnErrorAndDoesNotProveAbsence() async throws {
+        let h = try await Harness("questions")
+        let previous = h.store.questions
+        h.runner.reset(prefix: "approvals --json")
+        h.runner.on(PaddockArgs.approvals, json: "not JSON", status: 2, stderr: "store unavailable\n")
+        do {
+            _ = try await h.service.approvals()
+            XCTFail("expected command failure")
+        } catch let error as CommandError {
+            XCTAssertEqual(error, .failed(status: 2, line: "store unavailable"))
+        }
+        h.store.gate.reset()
+        await h.store.refreshAll()
+        XCTAssertEqual(h.store.questions, previous)
+        XCTAssertTrue(h.store.confirmedQuestionIDs.isEmpty)
+        XCTAssertFalse(h.store.questionsComplete)
+        XCTAssertEqual(h.store.questionsIssue, "store unavailable")
+    }
+
+    func testExitTwoWithCompleteJSONIsStillAnError() async throws {
+        let h = try await Harness("questions", start: false)
+        h.runner.reset(prefix: "approvals --json")
+        h.runner.on(PaddockArgs.approvals,
+                    json: #"{"v":1,"complete":true,"pending":[]}"#,
+                    status: 2, stderr: "command failed\n")
+        do {
+            _ = try await h.service.approvals()
+            XCTFail("expected command failure")
+        } catch let error as CommandError {
+            XCTAssertEqual(error, .failed(status: 2, line: "command failed"))
+        }
+    }
+
+    func testResumeDuringPartialSnapshotDoesNotRestorePause() async throws {
+        let h = try await Harness("questions", start: false)
+        h.store.questionSnapshotPending = true
+        let resume = try XCTUnwrap(PaddockEvent.decode(line:
+            #"{"v":1,"kind":"question","state":"resumed","id":"r-pause","app":"Sample Notes"}"#))
+        h.store.apply(resume)
+        let json = #"{"v":1,"complete":false,"diagnostics":["unknown"],"pending":[{"id":"r-pause","capability":"connect","connect":{"profile":"Sample Notes","notice":true,"more":21}}]}"#
+        let snapshot = try PaddockJSON.decoder.decode(ApprovalsJSON.self, from: Data(json.utf8))
+        h.store.reconcileQuestions(snapshot)
+        XCTAssertNil(h.store.paused)
+        XCTAssertFalse(h.store.pausedConfirmed)
     }
 }

@@ -13,7 +13,9 @@
 //!    nobody can produce a valid file. The key exists only while paddock runs:
 //!    the user types the password when a sandbox starts.
 
-use crate::broker::{Answer, Approver, ConnectAnswer, Pending, Verdict, CAPABILITIES};
+use crate::broker::{
+    Answer, ApprovalOutcome, Approver, ConnectAnswer, Pending, Verdict, CAPABILITIES,
+};
 use crate::env::HostEnv;
 use anyhow::{bail, Context as _, Result};
 use hmac::{Hmac, Mac};
@@ -378,11 +380,20 @@ impl Approver for Chain {
     }
 
     fn ask_verdict(&self, env: &HostEnv, p: &Pending, wait: Duration) -> Option<Verdict> {
+        match self.ask_outcome(env, p, wait) {
+            ApprovalOutcome::Answered(v) => Some(v),
+            ApprovalOutcome::NoAnswer | ApprovalOutcome::Unavailable | ApprovalOutcome::Unknown => {
+                None
+            }
+        }
+    }
+
+    fn ask_outcome(&self, env: &HostEnv, p: &Pending, wait: Duration) -> ApprovalOutcome {
         let (answer, note) = run_hook(&self.hook, p);
         if let Some(a) = answer {
             record(env, p, &format!("{a:?}").to_lowercase(), &note);
             // The hook's note is for the decision log, not for the agent.
-            return Some(Verdict {
+            return ApprovalOutcome::Answered(Verdict {
                 answer: a,
                 note: None,
                 who: "agent",
@@ -391,9 +402,10 @@ impl Approver for Chain {
         // The terminal belongs to the harness, so the reason for passing goes
         // to the decision log, not to the screen.
         record(env, p, "passed to the user", &note);
-        self.human
-            .ask_verdict(env, p, wait)
-            .map(|v| Verdict { who: "user", ..v })
+        match self.human.ask_outcome(env, p, wait) {
+            ApprovalOutcome::Answered(v) => ApprovalOutcome::Answered(Verdict { who: "user", ..v }),
+            other => other,
+        }
     }
 }
 

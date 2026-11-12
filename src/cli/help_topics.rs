@@ -101,6 +101,11 @@ const GROUPS: &[Group] = &[
                 text: include_str!("../help/guide-settings.md"),
             },
             Topic {
+                name: "split-guide",
+                description: "How do I see several terminals in one window?",
+                text: include_str!("../help/guide-split.md"),
+            },
+            Topic {
                 name: "logs",
                 description: "Where are the logs?",
                 text: include_str!("../help/guide-logs.md"),
@@ -186,6 +191,11 @@ const GROUPS: &[Group] = &[
                 text: include_str!("../help/guide-forage.md"),
             },
             Topic {
+                name: "board-guide",
+                description: "How do I see every project, ticket and run?",
+                text: include_str!("../help/guide-board.md"),
+            },
+            Topic {
                 name: "device-guide",
                 description: "How do agents use devices?",
                 text: include_str!("../help/guide-devices.md"),
@@ -204,6 +214,16 @@ const GROUPS: &[Group] = &[
                 name: "macos",
                 description: "How does paddock work on a Mac?",
                 text: include_str!("../help/macos.md"),
+            },
+            Topic {
+                name: "mac-view",
+                description: "How do I watch a Mac guest in the terminal?",
+                text: include_str!("../help/mac-view.md"),
+            },
+            Topic {
+                name: "computer-use",
+                description: "How does an agent use an app in the macOS guest?",
+                text: include_str!("../help/guide-computer-use.md"),
             },
             Topic {
                 name: "backends",

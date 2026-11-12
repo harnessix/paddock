@@ -33,6 +33,10 @@ pub trait Backend {
         Ok(())
     }
     fn render(&self, env: &HostEnv, spec: &SandboxSpec, interactive: bool) -> Result<Launch>;
+    /// The `$HOME` that the harness gets (`SandboxSpec::harness_home`).
+    fn harness_home(&self, spec: &SandboxSpec) -> std::path::PathBuf {
+        spec.home.clone()
+    }
 }
 
 pub fn by_name(name: &str) -> Result<Box<dyn Backend>> {

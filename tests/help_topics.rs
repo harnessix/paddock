@@ -34,6 +34,8 @@ fn topic_name(stem: &str) -> String {
         "forage" => "usage-limits",
         "launchers" => "app-launchers",
         "devices" => "device-guide",
+        "board" => "board-guide",
+        "split" => "split-guide",
         _ => name,
     }
     .to_owned()
@@ -147,7 +149,10 @@ fn topic_help_and_command_help() {
         assert!(list.contains(group), "{group}");
     }
     for (name, content) in topics() {
-        assert!(list.contains(&name));
+        assert!(
+            list.contains(&name),
+            "paddock help does not list the topic {name}:\n{list}"
+        );
         let output = run(&["help", &name]);
         assert!(output.status.success(), "{name}");
         let rendered = String::from_utf8(output.stdout).unwrap();

@@ -174,7 +174,15 @@ fn connect_answers() {
 fn connect_answered() {
     assert_eq!(
         t::connect_answered("c-1", "allow-always"),
-        "Answered c-1: allow-always"
+        "Recorded selection for c-1: allow-always. Delivery, application, and persistence are not confirmed."
+    );
+}
+
+#[test]
+fn connect_allow_unapplied() {
+    assert_eq!(
+        t::connect_allow_unapplied("notes", "api.example", 443),
+        "This allow will not apply: paddock cannot prove that it comes after the last sleep of the Mac. The connection is denied once and no rule changes. To allow the host, run paddock app rules notes add api.example --port 443"
     );
 }
 

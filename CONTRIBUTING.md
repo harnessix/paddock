@@ -81,3 +81,7 @@ A release pull request runs `.github/scripts/changelog-assemble.sh` from the rep
 ## Releases
 
 A release PR changes the version in every place that names it: `Cargo.toml`, `Cargo.lock`, `pkgbuild/PKGBUILD`, `.github/ISSUE_TEMPLATE/bug_report.yml`, and the install commands in `README.md` and `skills/paddock/SKILL.md`. It follows the changelog steps above: assemble the fragments, then rename the CHANGELOG section "Unreleased" to the version. `tests/release_version.rs` fails when one place is left behind. After the merge, a maintainer pushes the tag `vX.Y.Z` on the merge commit, and `release.yml` builds the binary for it.
+
+`release.yml` first runs the checks of `ci.yml` on the commit of the tag. If one fails, nothing is published. The build sets `PADDOCK_RELEASE_BUILD=1`. Then build.rs stops unless the checkout is a clean checkout of the tag `vX.Y.Z` of the version in `Cargo.toml`, and `paddock --version` prints only the version. The publish job makes a build provenance attestation for each file. It never replaces a file that is already on the release: `.github/scripts/release-upload.sh` skips a file with the same sha256 and stops at a file with another one. If a file on a release is wrong, delete the asset by hand, then run the workflow again.
+
+CI, the release and the VM guest files use the one Rust version of `rust-toolchain.toml` (`.github/actions/rust`). To move to a new version, change the channel there in its own pull request, with the fixes that the new compiler needs. Also run `rustup toolchain install` once on each machine that builds paddock.

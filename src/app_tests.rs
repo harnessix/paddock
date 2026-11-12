@@ -291,7 +291,7 @@ fn flatpak_needs_approval_for_a_project_reveal() {
     // After approval it loads, with the reveal.
     let loaded = Manifest::load(&env, &ws).unwrap();
     let (file, m) = loaded.project.clone().unwrap();
-    crate::manifest::approve(&env, &file, &m).unwrap();
+    crate::manifest::approve(&env, &file, &m, &loaded.base).unwrap();
     assert!(!approved_manifest(&env, &ws)
         .unwrap()
         .secrets

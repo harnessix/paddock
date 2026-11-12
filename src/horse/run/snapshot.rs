@@ -17,7 +17,7 @@ struct Fingerprint {
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Snapshot(BTreeMap<PathBuf, Fingerprint>);
 
-fn layout(harness: &str) -> Result<&'static str> {
+pub(crate) fn layout(harness: &str) -> Result<&'static str> {
     match harness {
         "dsh" => Ok(".dsh/sessions"),
         "claude" => Ok(".claude/projects"),
@@ -28,7 +28,7 @@ fn layout(harness: &str) -> Result<&'static str> {
     }
 }
 
-fn matches(harness: &str, path: &Path) -> bool {
+pub(crate) fn matches(harness: &str, path: &Path) -> bool {
     let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
         return false;
     };

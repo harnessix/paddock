@@ -95,6 +95,82 @@ paddock also has a channel path for Claude Code 2.1.318. A channel is an MCP ser
 
 On macOS, the relay, the hooks and the host requests are the same. The `run.end` event of each run names its custody: `live`, `pty`, `channel` or `final-only`. It also has the counts, and `error` if the custody failed.
 
+### Host sessions
+
+A host session is a session that a harness keeps on the host, outside a sandbox. paddock can read host sessions into the store, so they get the same keep-every-row store, encryption and forks as the sessions of a run. paddock never writes a host session file. It copies the file into a private folder in the paddock state folder, reads the copy and removes the copy. The copy is a reflink (Linux) or an APFS clone (macOS) where the file system has them, so it takes no extra space on the disk.
+
+The paddock state folder is `$XDG_STATE_HOME/paddock`. Without `XDG_STATE_HOME`, it is `~/.local/state/paddock`, on Linux and on macOS. The paths below name it `<state>`. `paddock horse adopt --status` prints the path of the adoption state.
+
+Import chosen host sessions once:
+
+```sh
+paddock horse import claude --list                         # the sessions that paddock can read
+paddock horse import claude 01934b20-1111-7777-8888-123456789abc
+paddock horse import claude --path .claude/projects/-home-me-src-app   # every session of one project
+paddock horse import codex --all --horse h-1a2b3c4d5e6f
+```
+
+The harnesses are `claude`, `codex`, `grok`, `agy` and `dsh`. An id names a session, never a folder: the file name of the session (`ID.jsonl`, the end of a Codex rollout name, `ID.db`) or its session folder (Grok, dsh). paddock checks that the copy holds that session. A host session is known by its harness, its native id and its home, so `--home` with a copy of a home gives sessions of their own. New sessions go into one new horse, or into the horse of `--horse`. If a session is in the store already, an import adds the new rows of the host file to it. The rows that the store has stay, also when the harness removed or rewrote them. paddock reads only the harness versions of the table above. A session of another version does not come in, and the import says why. The import exits 1 when a chosen session did not come in.
+
+paddock reads only regular files below the transcript folder of the harness, for example `~/.claude/projects`. It does not follow a symlink.
+
+### Adopt the host sessions of a harness
+
+Adoption makes the host sessions of a harness join horse from then on. Nothing happens before you run it:
+
+```sh
+paddock horse adopt claude                                  # the whole transcript folder
+paddock horse adopt codex --path .codex/sessions/2026       # one location
+paddock horse adopt --status
+paddock horse adopt --sync                                  # read new and changed sessions once
+paddock horse adopt --watch --interval 30                   # the same, every 30 seconds
+paddock horse adopt --off claude                            # end it; the sessions stay in the store
+```
+
+The first adopt of a harness makes one horse for its host sessions and reads every session of the locations into it. After that, each sweep reads the sessions that are new or changed since the last sweep. A session that paddock cannot read is read again when it changes. `--status` shows them. The adoption state is in `<state>/horse/adoption.json`. A second `paddock horse adopt HARNESS` adds its locations, and it puts the hook entries in again when the paddock program of the entries moved or went (for example after an upgrade). `--status` says so when the program is gone.
+
+### Live host sessions
+
+An adoption also adds paddock's hook entries to the host configuration of the harness, so each turn of a host session reaches the store when it ends. With `--no-hooks`, paddock changes no configuration, and new sessions come in at `--sync` and `--watch` only.
+
+| Harness | File | Events | What the hook does |
+|---|---|---|---|
+| Claude Code | `~/.claude/settings.json` | `SessionStart`, `UserPromptSubmit`, `Stop` | reads the turn, gives the DNA to a new session, delivers queued messages |
+| Codex | `~/.codex/hooks.json` | `SessionStart`, `Stop` | reads the turn, gives the DNA to a new session |
+| Grok Build | `~/.grok/hooks/paddock-horse.json` (a file of paddock's own) | `Stop` | reads the turn |
+| agy | `~/.gemini/config/hooks.json` (the entry `paddock-horse`) | `Stop` | reads the turn |
+
+dsh has no hooks. Codex asks you to trust the new entries at its next start. Grok Build runs hooks only in a folder that you trust.
+
+For a Claude Code host session, `paddock horse append` works as for a run. paddock delivers the queued messages when the turn of the session ends: the `Stop` hook gives them to Claude Code, and the session goes on with them at once. If you type a prompt first, the messages come with your prompt. A message leaves the queue only after the hook gave its text to Claude Code. If the hook dies before that, the next event gives the message again. A fork and the DNA work for every host session, because they are operations of the store.
+
+A hook must be quick. The `Stop` and `SessionStart` hooks read only the session of the event (the `transcript_path` of the hook input), and the `UserPromptSubmit` hook reads nothing, so your prompt does not wait. A hook waits at most 5 seconds for another sweep, such as a large first adopt or `--sync`, and reads for at most 10 seconds. What it leaves, the next sweep reads. paddock finds the host session of a hook in a small index, not by reading every session of the store. The hook entries name `paddock` by its path on `PATH` when that leads to the running program, so an upgrade that moves the versioned file does not break them.
+
+paddock changes the hook file by these rules:
+
+- Before the first change, paddock copies the file to `<state>/horse/hooks-backup/`. It records the entries in the adoption state before it changes the file, so `--off` knows them even after a crash.
+- Each entry of paddock runs `paddock horse hook ... --mark paddock-horse`. The marker and the exact command identify the entry.
+- paddock adds its entries after your entries of the same event, so each of your entries keeps its position. Codex keys its trust of an entry by that position.
+- paddock refuses a file that is a symlink, that is not a JSON object, or that already has entries with the marker. Then nothing changes, and the adoption does not start.
+- paddock never writes your file again in its own layout. It inserts its entries as text, in the layout around them (the indent of the neighbours, or one line when they are on one line). Every other byte of the file stays: the order of your keys, your spaces and your line breaks. paddock checks that before it writes.
+- `--off` cuts out exactly the text that paddock added, and the lists and objects that paddock made for it. If you moved paddock's entries, `--off` finds and cuts them, and every other byte stays. If you did not edit the file, it is the backup again, byte for byte. If paddock made the file and only its entries are in it, the file goes. If paddock cannot change the file, the adoption stays on, so you can run `--off` again.
+
+A hook never fails the harness. Its errors go to `<state>/horse/hook.log`. A run in a sandbox does not get paddock's host hook entries.
+
+### Runs that continue a host session
+
+A run with `--profile default` starts from a private snapshot of your host data (see `paddock help history`). In horse mode, the run can continue a session of the host. At the end of the run, paddock reads the host session from the snapshot as it was before the run, into a host session in the store. If the store has the host session already, from `paddock horse import` or `paddock horse adopt`, paddock uses that session and does not change it. The session of the run is a fork of the host session at the last row that both have. Its lineage starts with the lineage of the host session. When the host session is in a horse of its own (an import or an adoption), the session of the run joins that horse at the end of the run, so the host session and its continuation are in one horse. The session keeps the run as its origin (`origin_run`): the rows after the fork node are the rows of that run. The DNA of the run's horse does not graft into the host horse.
+
+None of this can stop a run. If paddock cannot make the snapshot copy for the lineage, cannot read the host session, or cannot record the lineage, it logs why, and the run ends as usual without the lineage.
+
+The host session in the store gets none of the rows of the run, and the host file does not change. So the store and the host history agree: the host has the rows up to the fork node, and only the session of the run has the rows after it. The run prints one line for each host session that it continued:
+
+```text
+horse: s-1a2b3c4d5e6f continues the host session s-7e6d5c4b3a21 (claude 01934b20-...) after row 12; its 4 new row(s) are in the store only, the host history has none of them
+```
+
+`paddock horse list` marks a host session with `host session` and the file it came from.
+
 ### Queue a message
 
 On the host:

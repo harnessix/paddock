@@ -266,7 +266,7 @@ pub fn ingest_locked(
     version: &str,
     horse: Option<&str>,
 ) -> Result<Ingest> {
-    ingest_impl(locked, dir, version, horse, false)
+    ingest_impl(locked, dir, version, super::target::Target::Any(horse))
 }
 
 pub(crate) fn ingest_run_locked(
@@ -275,15 +275,31 @@ pub(crate) fn ingest_run_locked(
     version: &str,
     horse: &str,
 ) -> Result<Ingest> {
-    ingest_impl(locked, dir, version, Some(horse), true)
+    ingest_impl(locked, dir, version, super::target::Target::Run(horse))
+}
+
+/// Ingest a private copy of a host session file into its host session,
+/// or into a new host session in `horse`.
+pub(crate) fn ingest_host_locked(
+    locked: &Lock<'_>,
+    dir: &Path,
+    version: &str,
+    horse: &str,
+    origin: &super::HostOrigin,
+) -> Result<Ingest> {
+    ingest_impl(
+        locked,
+        dir,
+        version,
+        super::target::Target::Host { horse, origin },
+    )
 }
 
 fn ingest_impl(
     locked: &Lock<'_>,
     dir: &Path,
     version: &str,
-    horse: Option<&str>,
-    scoped: bool,
+    target: super::target::Target<'_>,
 ) -> Result<Ingest> {
     let store = locked.store;
     check_version(version)?;
@@ -293,27 +309,10 @@ fn ingest_impl(
         .read_ref(&format!("grok/{id}.json"))?
         .map(String::from_utf8)
         .transpose()?;
-    let active = if scoped { None } else { active };
+    let active = if target.scoped() { None } else { active };
     let session = match active {
         Some(s) => store.session(&s)?,
-        None => match if scoped {
-            store.sessions()?.into_iter().find(|s| {
-                s.horse == horse.unwrap_or_default()
-                    && s.binding.harness == HARNESS
-                    && s.binding.native_id.as_deref() == Some(&id)
-            })
-        } else {
-            store.session_by_native(HARNESS, &id)?
-        } {
-            Some(s) => s,
-            None => {
-                let h = match horse {
-                    Some(h) => store.horse(h)?,
-                    None => super::dna::new_default_horse_locked(locked)?,
-                };
-                locked.new_session(&h.id, binding(Some(id.clone())))?
-            }
-        },
+        None => target.session(locked, HARNESS, &id, || binding(Some(id.clone())))?,
     };
     check_version(&session.binding.version)?;
     if session.binding.harness != HARNESS || session.binding.container != CONTAINER {

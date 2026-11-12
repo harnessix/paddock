@@ -1,0 +1,1 @@
+- New: (experimental) `paddock horse adopt HARNESS` converts the host sessions of the chosen locations into one horse, and from then on reads the new and changed sessions there at each sweep: `--sync` once, `--watch` every `--interval` seconds. `--status` shows the adoptions, and `--off` ends one. The sessions stay in the store.

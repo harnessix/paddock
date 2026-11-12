@@ -12,6 +12,9 @@ pub struct Lifecycle {
     sandbox: String,
     home: PathBuf,
     before: run::snapshot::Snapshot,
+    /// `--profile default`: the snapshot before the run, for the lineage of
+    /// the host sessions that the run continues (host/shadow.rs).
+    base: Option<super::host::shadow::Base>,
     /// The exit code of the harness, when the run got that far.
     exit: Option<i32>,
     custody: Custody,
@@ -98,6 +101,11 @@ pub fn start(env: &HostEnv, built: &mut Built) -> Result<Option<Lifecycle>> {
     }
     let home = built.spec.home_src.clone();
     let before = run::snapshot::Snapshot::capture(&home, &built.spec.harness)?;
+    // Never an error: without a base the run has no host lineage (logged).
+    let base =
+        built.spec.shadow.as_ref().and_then(|plan| {
+            super::host::shadow::Base::prepare(plan, &built.spec.harness, &env.home)
+        });
     if built.spec.harness == dsh::HARNESS {
         live::sdk_command(&mut built.spec.command, &built.profile.launch.args)?;
     }
@@ -192,6 +200,7 @@ pub fn start(env: &HostEnv, built: &mut Built) -> Result<Option<Lifecycle>> {
         sandbox: built.spec.id.clone(),
         home,
         before,
+        base,
         exit: None,
         custody,
         output,
@@ -218,7 +227,7 @@ impl Lifecycle {
         };
         let store = Store::open_host(&self.env)?;
         let ok = self.exit == Some(0);
-        run::final_only::end(
+        let linked = run::final_only::end_with(
             &store,
             &self.run,
             &self.sandbox,
@@ -226,7 +235,11 @@ impl Lifecycle {
             &self.before,
             ok,
             report,
+            self.base.as_ref(),
         )?;
+        for l in linked {
+            eprintln!("{}", l.line());
+        }
         custody
     }
 }

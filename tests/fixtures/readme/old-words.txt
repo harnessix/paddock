@@ -1538,7 +1538,7 @@
 1 columns
 28 com
 1 combine
-2 combined
+1 combined
 22 come
 37 comes
 1 comma
@@ -1601,7 +1601,7 @@
 20 content
 2 contents
 14 context
-7 continue
+6 continue
 1 continued
 11 continues
 3 contract
@@ -2035,7 +2035,7 @@
 6 finish
 6 finished
 3 finishes
-21 firewall
+19 firewall
 3 firmware
 156 first
 5 fish
@@ -2105,7 +2105,7 @@
 1 freezer
 9 freezes
 1 frequency
-8 fresh
+7 fresh
 223 from
 8 front
 2 froze
@@ -2318,10 +2318,10 @@
 8 inbox
 1 inboxes
 1 inch
-6 include
+5 include
 1 included
 2 includes
-7 including
+6 including
 1 inclusive
 1 incomplete
 1 increases
@@ -2583,7 +2583,7 @@
 1 major
 6 make
 1 makepkg
-40 makes
+39 makes
 2 malformed
 1 manage
 14 manager
@@ -4046,7 +4046,7 @@
 1 wildcards
 2 will
 1 win
-185 window
+184 window
 56 windows
 8 wins
 669 with

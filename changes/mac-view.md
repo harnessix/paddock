@@ -1,0 +1,9 @@
+- New: `paddock mac view [--app NAME [--instance N] [--desktop]]` draws a macOS guest desktop, or only the windows of one app session, inline in the terminal. It uses the kitty graphics protocol, iTerm2 inline images or sixel, in that order, after it asks the terminal. `--protocol` forces one, and `--probe` prints what the terminal supports.
+- If the picture did not change, the view does not draw the frame. A slow terminal gets the newest frame. The picture fits the terminal, keeps its aspect and never grows past one guest pixel per terminal pixel.
+- Keys, pastes, clicks, double clicks, drags and the wheel go to the target. Ctrl-] opens a menu that sends the next key with Cmd, and it has the way out. If you leave the view, the session keeps running. A SIGTERM, a SIGHUP or a panic also restores the terminal.
+- In tmux the view uses `allow-passthrough`. If tmux does not allow it, the view says so and names the command that turns it on. GNU screen gets a clear message.
+- The view checks every frame before it decodes it: the size per side, the pixel count, the PNG checksums and the inflate output are bounded. Guest text in the status line has no control characters.
+- `--fake-source` shows a moving test picture, so you can try the terminal side without a guest. The guest frame stream (`frames.subscribe`) comes with the computer-use tools. Until then, the view on a Mac says that this build has no stream.
+- In tmux, the probe waits for the kitty answer of the outer terminal, not only for the answer that tmux gives at once. A late terminal reply (APC, DCS, OSC) is dropped and never reaches the guest as keys.
+- The view asks for frames no larger than the terminal, and asks again after a resize. A new stream starts its frame numbers at 1 again, and the view draws it.
+- If no image protocol works, `paddock mac view` and `paddock mac view --probe` exit with code 3. The menu lists Ctrl-D as a way out too.

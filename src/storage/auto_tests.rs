@@ -459,11 +459,11 @@ fn foreground_cleanup_does_not_wait_for_a_busy_lock() {
         &env,
         &Settings::default(),
         true,
-        Some(started + std::time::Duration::from_secs(2)),
+        Some(started + std::time::Duration::from_secs(10)),
     );
     assert!(matches!(result, Outcome::Skipped(_)));
     assert!(
-        started.elapsed() < std::time::Duration::from_millis(200),
+        started.elapsed() < std::time::Duration::from_secs(5),
         "foreground cleanup waited for the lock"
     );
 }

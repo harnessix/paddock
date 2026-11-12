@@ -14,6 +14,11 @@ use std::io::{self, Write};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
+#[cfg(test)]
+thread_local! {
+    pub(crate) static ATOMIC_HOOK: std::cell::RefCell<Option<Box<dyn Fn()>>> = std::cell::RefCell::new(None);
+}
+
 pub const DIR_MODE: u32 = 0o700;
 pub const FILE_MODE: u32 = 0o600;
 
@@ -103,6 +108,14 @@ pub fn write_atomic(path: &Path, bytes: impl AsRef<[u8]>) -> io::Result<()> {
     let mut f = open(&tmp, OpenOptions::new().write(true).create_new(true))?;
     let written = f.write_all(bytes.as_ref()).and_then(|_| f.sync_all());
     drop(f);
+    #[cfg(test)]
+    if written.is_ok() {
+        ATOMIC_HOOK.with(|hook| {
+            if let Some(hook) = hook.borrow().as_ref() {
+                hook();
+            }
+        });
+    }
     if let Err(e) = written.and_then(|_| std::fs::rename(&tmp, path)) {
         let _ = std::fs::remove_file(&tmp);
         return Err(e);

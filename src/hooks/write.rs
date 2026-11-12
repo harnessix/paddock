@@ -155,7 +155,10 @@ fn trust(
     if !had && trusted.is_empty() {
         return Ok(());
     }
-    let source = spec.home.join(&t.into).display().to_string();
+    // Codex names the trust after `$HOME/.codex/hooks.json` as the harness
+    // sees it (codex-rs utils/home-dir `find_codex_home`), not after the
+    // host path of the sandbox home.
+    let source = spec.harness_home.join(&t.into).display().to_string();
     let section = crate::state::json_get(doc, &t.path)
         .cloned()
         .unwrap_or_default();
@@ -189,4 +192,58 @@ fn trust(
     let out = crate::privacy::set_toml(&toml.to_string(), &refs)
         .with_context(|| format!("~/{}", config.display()))?;
     home.write(config, out.as_bytes(), 0o600)
+}
+
+/// Codex: each handler of paddock's own entries is in the sandbox copy of
+/// the hooks file, and Codex trusts it there: `[hooks.state]` of the
+/// sandbox `config.toml` has the hash of the handler as it is now. False
+/// when an entry is missing or changed, when a trust is missing, or when
+/// the run has no such entry.
+pub fn codex_paddock_trusted(spec: &SandboxSpec) -> Result<bool> {
+    let home = crate::safefs::Root::open(&spec.home_src)?;
+    let mut any = false;
+    for t in spec.hooks.iter().filter(|t| t.style == Style::Groups) {
+        let Some(config) = &t.codex_trust else {
+            continue;
+        };
+        let paddock: Vec<&HomeSetting> = super::paddock_entries(spec, t).collect();
+        if paddock.is_empty() {
+            continue;
+        }
+        let Some(doc) = read_json(&home, &t.into)? else {
+            return Ok(false);
+        };
+        let text = home
+            .read(config, crate::safefs::MAX_READ)?
+            .map(|b| String::from_utf8(b).unwrap_or_default())
+            .unwrap_or_default();
+        let source = spec.harness_home.join(&t.into).display().to_string();
+        let section = crate::state::json_get(&doc, &t.path)
+            .cloned()
+            .unwrap_or_default();
+        let judged = crate::compaction::codex::judge(&source, &section, &text)?;
+        for s in paddock {
+            let event = s.path.last().cloned().unwrap_or_default();
+            let groups = section[&event].as_array().cloned().unwrap_or_default();
+            for g in super::groups_of(&s.value) {
+                let Some(gi) = groups.iter().position(|x| x == g) else {
+                    return Ok(false);
+                };
+                let n = g["hooks"].as_array().map_or(0, Vec::len);
+                for hi in 0..n {
+                    let ok = judged.iter().any(|j| {
+                        j.event == event
+                            && j.group == gi
+                            && j.handler == hi
+                            && j.trust == crate::compaction::codex::Trust::Trusted
+                    });
+                    if !ok {
+                        return Ok(false);
+                    }
+                    any = true;
+                }
+            }
+        }
+    }
+    Ok(any)
 }

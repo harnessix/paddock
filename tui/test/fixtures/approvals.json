@@ -1,0 +1,9 @@
+{
+  "v": 1,
+  "api_version": "paddock.approvals/v1",
+  "pending": [
+    {"id": "r-1-net", "sandbox": "codex-alpha-0b0b0b11", "harness": "codex", "project": "/src/alpha", "capability": "exec", "summary": "git push", "detail": "git push origin main\u001b[2J\u001b]0;owned\u0007 --force-with-lease", "reason": "publish the branch", "created": 100, "expires": 0, "session_allowed": true, "age_s": 12},
+    {"id": "r-2-connect", "sandbox": "app-mac-123456", "harness": "app", "project": "/src/beta", "capability": "connect", "summary": "connect api.example.com:443", "detail": "connect api.example.com:443", "reason": "", "created": 100, "expires": 0, "session_allowed": false, "connect": {"app": "com.example", "host": "api.example.com", "port": 443, "count": 1, "asked_at": 100, "pid": 1}, "age_s": 30},
+    {"id": "r-3-ask", "sandbox": "claude-alpha-71c3ac9d", "harness": "claude", "project": "/src/alpha", "capability": "ask", "summary": "Which ledger format?", "detail": "Which ledger format?", "reason": "", "created": 100, "expires": 0, "session_allowed": false, "choices": ["jsonl", "sqlite"], "age_s": 5}
+  ]
+}

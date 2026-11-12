@@ -514,6 +514,15 @@ pub fn questions_block(q: &super::ask_status::AskStatus) -> String {
         ));
         out.push('\n');
     }
+    for u in &q.unapplied {
+        out.push_str(&text::status_unapplied_line(
+            &u.target,
+            &u.selected,
+            &u.reason,
+            &u.result,
+        ));
+        out.push('\n');
+    }
     for h in q.system.iter().take(SYSTEM_LINES) {
         out.push_str(&text::status_system_line(
             &h.host, h.port, &h.process, h.count,

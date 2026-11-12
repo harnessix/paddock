@@ -17,7 +17,52 @@ pub fn grants_unreadable(path: &Path) -> String {
 /// The grants file does not parse.
 pub fn grants_damaged(path: &Path, e: &dyn Display) -> String {
     format!(
-        "the grants file {} is damaged ({e}). paddock does not change it. Move it away to start again with no extra grants",
+        "the grants file {} is damaged ({e}). paddock does not change it. Repair it, or move it away and set the network again with paddock app network; until then a start has no extra grants, network none and the clipboard off",
+        shown(path)
+    )
+}
+
+/// The grants file names a network mode that this paddock does not set.
+pub fn grants_bad_network(path: &Path, word: &str) -> String {
+    format!(
+        "the grants file {} names the network mode {word:?}, which is not ask, allowlist or none. paddock does not change it. Repair it, or move it away and set the network again with paddock app network",
+        shown(path)
+    )
+}
+
+/// The grants file is gone, but the profile kept grants before.
+pub fn grants_missing(path: &Path) -> String {
+    format!(
+        "the grants file {} is missing, but this profile saved grants before. To start again with no extra grants, set the network: paddock app network NAME ask|allowlist|none",
+        shown(path)
+    )
+}
+
+/// A grant change other than the network, while the grants file is missing.
+pub fn grants_missing_unchanged(path: &Path) -> String {
+    format!(
+        "{}. Until then paddock saves no other grant change",
+        grants_missing(path)
+    )
+}
+
+/// The grants changed between the first read of a start and its session.
+pub fn grants_changed_at_start() -> &'static str {
+    "the saved folders changed while the app started. Nothing started; start it again"
+}
+
+/// Another grants command holds the lock for longer than a start waits.
+pub fn grants_busy_at_start(path: &Path) -> String {
+    format!(
+        "another paddock command holds {} too long. Nothing started; start the app again",
+        shown(path)
+    )
+}
+
+/// The policy was renamed into place, but its folder sync failed.
+pub fn grants_unconfirmed(path: &Path) -> String {
+    format!(
+        "the new grants file {} is in place, but paddock cannot confirm that it is on disk",
         shown(path)
     )
 }
@@ -32,13 +77,13 @@ pub fn grants_newer(path: &Path, v: u32) -> String {
 
 /// A start with a grants file that does not load.
 pub fn grants_skipped(e: &str) -> String {
-    format!("{e}. This start uses none of its folders or network mode; both clipboard directions are off")
+    format!("{e}. This start uses none of its folders; network is none unless explicitly overridden, and both clipboard directions are off")
 }
 
 /// The new grants file cannot be written.
 pub fn grants_unwritable(path: &Path) -> String {
     format!(
-        "paddock cannot write {}. The grants stay as they were",
+        "paddock cannot confirm the write to {}. Read the saved grants before trying again",
         shown(path)
     )
 }
@@ -145,6 +190,7 @@ fn when(o: &Outcome) -> String {
     match o.change.applies {
         Applies::NextStart => " It applies from the next start of the app.".into(),
         Applies::Live => String::new(),
+        Applies::Unknown => " Its current state is unknown.".into(),
         Applies::ReopenFiles => {
             let n = o.live.as_ref().and_then(|a| a.open_handles).unwrap_or(0);
             format!(
@@ -256,6 +302,7 @@ pub fn grant_list(l: &Listing) -> String {
             Applies::Live => "live",
             Applies::ReopenFiles => "live, reopen files",
             Applies::NextStart => "on next start",
+            Applies::Unknown => "unknown",
         };
         let open = r
             .open_handles
@@ -319,9 +366,20 @@ pub fn grant_reverted() -> &'static str {
     "The live change was reverted after the grants update failed"
 }
 
-/// An attempted live rollback failed.
+/// The saved file has the change but its sync failed: the live change stays.
+pub fn grant_kept_unconfirmed() -> &'static str {
+    "The live change stays, because the saved grants already have it. Read the saved grants before trying again"
+}
+
+/// The session started or stopped between the check and the lock.
+pub fn grant_session_changed(app: &str) -> String {
+    format!("{app} started or stopped during this change. Nothing changed; run the command again")
+}
+
+/// An attempted live rollback failed: the session keeps a change that the
+/// grants file does not hold.
 pub fn grant_revert_failed(error: &str) -> String {
-    format!("The live change could not be reverted: {error}")
+    format!("The live change could not be reverted: {error}. The app keeps the change until the app stops, but the grants file does not hold it, so the next start does not have it")
 }
 
 /// The guest could not count open files.
@@ -335,4 +393,57 @@ pub fn grant_open_unknown(path: &Path) -> String {
 /// The session did not report a setting required for rollback.
 pub fn grant_missing_live_setting(setting: &str) -> String {
     format!("Session did not report its {setting}")
+}
+
+/// The mark at the end of a rule value from history, whose order paddock
+/// does not know. Readers look for it to keep the uncertainty.
+pub const HISTORICAL_MARK: &str = " (historical; order unknown)";
+
+/// The value of a rule change from history: `allow session (historical;
+/// order unknown)`.
+pub fn grant_historical(value: &str) -> String {
+    format!("{value}{HISTORICAL_MARK}")
+}
+
+/// The start found checkpoint grant history in the grants file.
+pub fn grant_history_found() -> &'static str {
+    "Checkpoint grant history was found. Older readers are safe only after all checkpoint writers have stopped; a running writer can reintroduce incompatible history."
+}
+
+/// The start could not move the history out of the grants file.
+pub fn grant_history_not_moved(path: &Path, e: &anyhow::Error) -> String {
+    format!(
+        "Could not move historical grant changes out of {}: {e:#}. This start uses the saved policy, but older paddock versions may not read it safely.",
+        path.display()
+    )
+}
+
+/// The context of a failed read or plan of the grant history file.
+pub fn grant_history_at(path: &Path) -> String {
+    format!("grant history at {}", path.display())
+}
+
+/// The recovery copy of checkpoint history could not be written.
+pub fn grant_checkpoint_not_kept() -> &'static str {
+    "could not preserve checkpoint grant history"
+}
+
+/// The policy holds checkpoint history that a save cannot keep.
+pub fn grant_checkpoint_unpreservable() -> &'static str {
+    "cannot preserve the original checkpoint grant history"
+}
+
+/// The history sidecar was not written after the policy was saved.
+pub fn grant_history_not_saved(e: &anyhow::Error) -> String {
+    format!("grant history was not saved: {e:#}")
+}
+
+/// The context of a failed write of a history recovery copy.
+pub fn grant_history_writing(path: &Path) -> String {
+    format!("writing {}", path.display())
+}
+
+/// Every name for a history recovery copy is taken.
+pub fn grant_history_no_recovery_name() -> &'static str {
+    "no free grant history recovery name"
 }

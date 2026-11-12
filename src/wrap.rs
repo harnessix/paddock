@@ -366,7 +366,8 @@ fn start(env: &HostEnv, plan: Plan) -> Result<i32> {
                 .context("the profile disappeared")?;
             let exe = std::fs::canonicalize(exe)
                 .with_context(|| format!("cannot resolve {}", exe.display()))?;
-            let (install_mounts, path_dirs) = crate::profile::runtime_closure(env, &exe)?;
+            let (install_mounts, path_dirs) =
+                crate::profile::harness_closure(env, &exe, &profile.locate.helpers)?;
             crate::profile::Harness {
                 profile,
                 exe,

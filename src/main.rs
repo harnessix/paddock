@@ -62,6 +62,12 @@ fn real_main() -> Result<i32> {
     if let Cmd::DetachRun { job } = &cli.cmd {
         return cli::run::detach_run(job);
     }
+    if let Cmd::SplitPane { job } = &cli.cmd {
+        return cli::split::pane_main(job);
+    }
+    if let Cmd::SplitLayout { tmux, sock } = &cli.cmd {
+        return cli::split::layout_main(tmux, sock);
+    }
     // In a device sandbox there is no home and no runtime folder.
     if let Cmd::DeviceServe(a) = &cli.cmd {
         return cli::device_serve::run(a);
@@ -111,7 +117,9 @@ fn real_main() -> Result<i32> {
         | Cmd::Host { .. }
         | Cmd::Inbound
         | Cmd::Portal
-        | Cmd::DetachRun { .. } => unreachable!(),
+        | Cmd::DetachRun { .. }
+        | Cmd::SplitPane { .. }
+        | Cmd::SplitLayout { .. } => unreachable!(),
         Cmd::Train(args) => cli::train::run(&env, args),
         Cmd::Exclave { cmd } => cli::exclave::run(&env, cmd),
         Cmd::SpawnChild { job } => cli::run::spawn_child(&env, job),
@@ -137,7 +145,20 @@ fn real_main() -> Result<i32> {
         Cmd::Shell(a) => cli::run::shell(&env, a),
         Cmd::Explain { run, json } => cli::run::explain(&env, &run, json).map(|_| 0),
         Cmd::External(argv) => cli::run::external(&env, argv),
-        Cmd::Mcp { harness, path } => cli::catalog::mcp(&env, harness, path),
+        Cmd::Mcp {
+            serve: Some(cli::McpServe::Mac(pick)),
+            ..
+        } => cli::mac::mcp(&env, &pick),
+        Cmd::Mcp {
+            harness: Some(harness),
+            path,
+            ..
+        } => cli::catalog::mcp(&env, harness, path),
+        Cmd::Mcp { .. } => {
+            eprintln!("paddock mcp: name a harness (paddock mcp claude), or run paddock mcp mac");
+            Ok(2)
+        }
+        Cmd::Mac(a) => cli::mac::run(&env, a),
         Cmd::Env { cmd } => cli::env::run(&env, cmd),
         Cmd::List { json } => cli::catalog::list(&env, json),
         Cmd::Recent { json } => cli::catalog::recent(&env, json),
@@ -170,6 +191,9 @@ fn real_main() -> Result<i32> {
             cli::status::freeze(&env, paddock::ids::resolve(&env, &id)?, tree, reason)
         }
         Cmd::Thaw { id, tree } => cli::status::thaw(&env, paddock::ids::resolve(&env, &id)?, tree),
+        Cmd::Tui { args } => cli::tui::run(args),
+        Cmd::Board(a) => cli::board::run(&env, a),
+        Cmd::Split(a) => cli::split::run(&env, a),
         Cmd::Ps { json, mem } => cli::status::ps(&env, json, mem),
         Cmd::Files { id, json } => cli::storage::files_cmd(
             &env,
@@ -253,7 +277,13 @@ fn real_main() -> Result<i32> {
         }
         Cmd::Stop { id } => cli::storage::stop(&env, &paddock::ids::resolve(&env, &id)?),
         Cmd::Wait(args) => cli::wait::run(&env, args.ids, args.any, args.status, args.timeout),
-        Cmd::View { id, write } => {
+        Cmd::View {
+            id,
+            tail: Some(n),
+            json,
+            ..
+        } => cli::status::view_tail(&env, &paddock::ids::resolve(&env, &id)?, n, json),
+        Cmd::View { id, write, .. } => {
             cli::status::view(&env, paddock::ids::resolve(&env, &id)?, write)
         }
         Cmd::Doctor { json: true, .. } => cli::doctor_json::run(&env),

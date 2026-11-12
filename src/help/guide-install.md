@@ -45,6 +45,16 @@ paddock doctor
 
 On a 64-bit Arm machine (aarch64), use `aarch64` in place of `x86_64` in these names.
 
+The checksum shows that the download is complete. To make sure that the file also came from the release workflow of this repository, verify its build provenance attestation (a signed statement from GitHub: which workflow run built the file, from which commit). You need the [GitHub CLI](https://cli.github.com/), signed in with `gh auth login`:
+
+```sh
+gh attestation verify paddock-0.2.1-x86_64-linux.tar.gz --repo harnessix/paddock
+```
+
+If the command prints no `Verification succeeded!`, do not install the file. Each file of a release has an attestation: the binaries, the source tarball, `SHA256SUMS`, the Homebrew formula and the VM guest files.
+
+`paddock --version` of a release prints only the version, for example `paddock 0.2.1`. A build from a git checkout that is not a clean checkout of a release tag prints `-dev`, the commit and a dirty mark, for example `paddock 0.2.1-dev (commit 1a2b3c4, dirty)`. `paddock doctor --report` names the build kind and the full commit. Add it to a bug report.
+
 All releases are on the [releases page](https://github.com/harnessix/paddock/releases).
 
 On Arch Linux, the installer installs a package with makepkg. It also knows apt and dnf, and then copies the binary to `~/.local/bin`; that path is best effort and is not tested on every release (see Support scope (`paddock help support`)). Use `bin/install --minimal` to skip the desktop packages.

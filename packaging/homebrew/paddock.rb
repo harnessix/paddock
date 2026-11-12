@@ -30,6 +30,9 @@ class Paddock < Formula
   def install
     # paddock update and paddock doctor read the releases of this repository.
     ENV["PADDOCK_RELEASE_REPO"] = "@REPO@"
+    # The source tarball of the release has no git checkout. This marks the
+    # build as the release, so `paddock --version` prints only the version.
+    ENV["PADDOCK_RELEASE_BUILD"] = "1"
     system "cargo", "install", *std_cargo_args
     return unless OS.mac?
 

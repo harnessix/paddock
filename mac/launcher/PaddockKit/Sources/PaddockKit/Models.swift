@@ -274,12 +274,70 @@ public struct QuestionJSON: Codable, Equatable, Sendable, Identifiable {
 public struct PausedJSON: Codable, Equatable, Sendable {
     public var app: String
     public var count: Int
+    /// The current paddock notice card, absent in older snapshots.
+    public var id: String? = nil
 }
 
 public struct ApprovalsJSON: Codable, Equatable, Sendable {
     public var v: Int
     public var questions: [QuestionJSON]
     public var paused: PausedJSON?
+    public var complete: Bool
+    public var diagnostics: [String]
+
+    private enum CodingKeys: String, CodingKey { case v, questions, paused, pending, complete, diagnostics }
+
+    private struct Pending: Decodable {
+        var id: String
+        var capability: String
+        var connect: Connection?
+    }
+
+    private struct Connection: Decodable {
+        var profile: String?
+        var host: String?
+        var port: Int?
+        var path: String?
+        var askedAt: Double?
+        var notice: Bool?
+        var more: Int?
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        v = try values.decode(Int.self, forKey: .v)
+        complete = try values.decodeIfPresent(Bool.self, forKey: .complete) ?? true
+        diagnostics = try values.decodeIfPresent([String].self, forKey: .diagnostics) ?? []
+        if let legacy = try values.decodeIfPresent([QuestionJSON].self, forKey: .questions) {
+            questions = legacy
+            paused = try values.decodeIfPresent(PausedJSON.self, forKey: .paused)
+            return
+        }
+        let pending = try values.decode([Pending].self, forKey: .pending)
+        questions = []
+        paused = nil
+        for item in pending where item.capability == "connect" {
+            guard let c = item.connect else { continue }
+            let app = c.profile ?? ""
+            if c.notice == true {
+                // The launcher currently presents one pause banner.
+                if paused == nil { paused = PausedJSON(app: app, count: c.more ?? 0, id: item.id) }
+            } else {
+                questions.append(QuestionJSON(id: item.id, app: app, host: c.host ?? "", port: c.port ?? 0,
+                                              process: c.path,
+                                              opened: c.askedAt.map { Date(timeIntervalSince1970: $0) }))
+            }
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(v, forKey: .v)
+        try values.encode(questions, forKey: .questions)
+        try values.encodeIfPresent(paused, forKey: .paused)
+        try values.encode(complete, forKey: .complete)
+        try values.encode(diagnostics, forKey: .diagnostics)
+    }
 }
 
 // MARK: - Doctor and add precheck

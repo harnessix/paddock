@@ -101,8 +101,9 @@ public enum SessionWords {
 }
 
 public struct QuestionEvent: Codable, Equatable, Sendable {
-    /// `open`, `answered`, `paused`, `resumed`.
-    public var op: String
+    /// Current paddock writes `state`; older fixtures used `op`.
+    public var state: String?
+    public var op: String?
     public var id: String?
     public var app: String?
     public var host: String?
@@ -113,6 +114,9 @@ public struct QuestionEvent: Codable, Equatable, Sendable {
     public var answer: String?
     /// For `answered`: `panel`, `launcher`, `cli`.
     public var source: String?
+    /// Current paddock writes `by` and `open`.
+    public var by: String?
+    public var open: Int?
     /// For `paused`: the questions in the last minute.
     public var count: Int?
 }
@@ -130,4 +134,34 @@ public struct GrantEvent: Codable, Equatable, Sendable {
     /// `you`, `question_panel`, `profile`.
     public var source: String
     public var time: Date?
+
+    private enum CodingKeys: String, CodingKey {
+        case app, grant, op, detail, applies, source, time
+        case what, action, t
+    }
+
+    public init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        app = try values.decode(String.self, forKey: .app)
+        grant = try values.decodeIfPresent(String.self, forKey: .grant)
+            ?? values.decode(String.self, forKey: .what)
+        op = try values.decodeIfPresent(String.self, forKey: .op)
+            ?? values.decode(String.self, forKey: .action)
+        detail = try values.decode(String.self, forKey: .detail)
+        applies = try values.decodeIfPresent(String.self, forKey: .applies)
+        source = try values.decode(String.self, forKey: .source)
+        time = try values.decodeIfPresent(Date.self, forKey: .time)
+            ?? values.decodeIfPresent(Date.self, forKey: .t)
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var values = encoder.container(keyedBy: CodingKeys.self)
+        try values.encode(app, forKey: .app)
+        try values.encode(grant, forKey: .grant)
+        try values.encode(op, forKey: .op)
+        try values.encode(detail, forKey: .detail)
+        try values.encodeIfPresent(applies, forKey: .applies)
+        try values.encode(source, forKey: .source)
+        try values.encodeIfPresent(time, forKey: .time)
+    }
 }

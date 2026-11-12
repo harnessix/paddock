@@ -91,6 +91,62 @@ impl Mac {
     }
 }
 
+/// The windows of the window server list on the screen, front first,
+/// without the desktop elements. `bundle` gives the bundle id of a pid.
+pub fn window_list(bundle: &mut dyn FnMut(u32) -> Option<String>) -> Vec<RawWindow> {
+    let opts = CGWindowListOption::OptionOnScreenOnly | CGWindowListOption::ExcludeDesktopElements;
+    let Some(list) = CGWindowListCopyWindowInfo(opts, 0) else {
+        return Vec::new();
+    };
+    // SAFETY: CFArray and NSArray are toll-free bridged. The list
+    // holds dictionaries with the documented keys.
+    let arr: &NSArray<NSDictionary<NSString, AnyObject>> =
+        unsafe { &*(&*list as *const CFArray).cast() };
+    let num = |d: &NSDictionary<NSString, AnyObject>, k: &NSString| -> Option<f64> {
+        let v = d.objectForKey(k)?;
+        Some(unsafe { msg_send![&*v, doubleValue] })
+    };
+    let text = |d: &NSDictionary<NSString, AnyObject>, k: &NSString| -> Option<String> {
+        let v = d.objectForKey(k)?;
+        // SAFETY: the owner name is an NSString.
+        let s: &NSString = unsafe { &*(&*v as *const AnyObject).cast() };
+        Some(s.to_string())
+    };
+    let mut out = Vec::new();
+    for d in arr.iter() {
+        let (Some(id), Some(pid)) = (
+            num(&d, ns_string!("kCGWindowNumber")),
+            num(&d, ns_string!("kCGWindowOwnerPID")),
+        ) else {
+            continue;
+        };
+        let Some(b) = d.objectForKey(ns_string!("kCGWindowBounds")) else {
+            continue;
+        };
+        let field = |k: &NSString| -> f64 {
+            let v: Option<Retained<AnyObject>> = unsafe { msg_send![&*b, objectForKey: k] };
+            v.map(|v| unsafe { msg_send![&*v, doubleValue] })
+                .unwrap_or(0.0)
+        };
+        let pid = pid as u32;
+        out.push(RawWindow {
+            id: id as u32,
+            pid,
+            owner: text(&d, ns_string!("kCGWindowOwnerName")).unwrap_or_default(),
+            bundle: bundle(pid),
+            layer: num(&d, ns_string!("kCGWindowLayer")).unwrap_or(0.0) as i64,
+            bounds: Frame::new(
+                field(ns_string!("X")),
+                field(ns_string!("Y")),
+                field(ns_string!("Width")),
+                field(ns_string!("Height")),
+            ),
+            alpha: num(&d, ns_string!("kCGWindowAlpha")).unwrap_or(1.0),
+        });
+    }
+    out
+}
+
 /// The output of `sw_vers -KEY`, or an empty text.
 fn sw_vers(key: &str) -> String {
     Command::new("/usr/bin/sw_vers")
@@ -231,58 +287,7 @@ impl Platform for Mac {
     }
 
     fn raw_windows(&mut self) -> Vec<RawWindow> {
-        let opts =
-            CGWindowListOption::OptionOnScreenOnly | CGWindowListOption::ExcludeDesktopElements;
-        let Some(list) = CGWindowListCopyWindowInfo(opts, 0) else {
-            return Vec::new();
-        };
-        // SAFETY: CFArray and NSArray are toll-free bridged. The list
-        // holds dictionaries with the documented keys.
-        let arr: &NSArray<NSDictionary<NSString, AnyObject>> =
-            unsafe { &*(&*list as *const CFArray).cast() };
-        let num = |d: &NSDictionary<NSString, AnyObject>, k: &NSString| -> Option<f64> {
-            let v = d.objectForKey(k)?;
-            Some(unsafe { msg_send![&*v, doubleValue] })
-        };
-        let text = |d: &NSDictionary<NSString, AnyObject>, k: &NSString| -> Option<String> {
-            let v = d.objectForKey(k)?;
-            // SAFETY: the owner name is an NSString.
-            let s: &NSString = unsafe { &*(&*v as *const AnyObject).cast() };
-            Some(s.to_string())
-        };
-        let mut out = Vec::new();
-        for d in arr.iter() {
-            let (Some(id), Some(pid)) = (
-                num(&d, ns_string!("kCGWindowNumber")),
-                num(&d, ns_string!("kCGWindowOwnerPID")),
-            ) else {
-                continue;
-            };
-            let Some(b) = d.objectForKey(ns_string!("kCGWindowBounds")) else {
-                continue;
-            };
-            let field = |k: &NSString| -> f64 {
-                let v: Option<Retained<AnyObject>> = unsafe { msg_send![&*b, objectForKey: k] };
-                v.map(|v| unsafe { msg_send![&*v, doubleValue] })
-                    .unwrap_or(0.0)
-            };
-            let pid = pid as u32;
-            out.push(RawWindow {
-                id: id as u32,
-                pid,
-                owner: text(&d, ns_string!("kCGWindowOwnerName")).unwrap_or_default(),
-                bundle: self.bundle(pid),
-                layer: num(&d, ns_string!("kCGWindowLayer")).unwrap_or(0.0) as i64,
-                bounds: Frame::new(
-                    field(ns_string!("X")),
-                    field(ns_string!("Y")),
-                    field(ns_string!("Width")),
-                    field(ns_string!("Height")),
-                ),
-                alpha: num(&d, ns_string!("kCGWindowAlpha")).unwrap_or(1.0),
-            });
-        }
-        out
+        window_list(&mut |pid| self.bundle(pid))
     }
 
     fn procs(&mut self) -> ProcTable {

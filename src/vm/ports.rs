@@ -22,9 +22,13 @@ pub const GUEST_FILES: u32 = 1032;
 /// it after the host asked (`login.forward`), with the token line and the
 /// ticket line, then carries the bytes of one host loopback connection.
 pub const GUEST_LOGIN: u32 = 1033;
+/// Computer use of the macOS guest: the guest agent listens, the host
+/// connects through the control socket (`macvm::computer`). Screenshots,
+/// input, the accessibility snapshot and the frame stream.
+pub const GUEST_COMPUTER: u32 = 1034;
 
 /// Every port with its name, in port order.
-pub const ALL: [(u32, &str); 8] = [
+pub const ALL: [(u32, &str); 9] = [
     (CONTROL, "control"),
     (BROKER, "broker"),
     (PROXY, "proxy"),
@@ -33,6 +37,7 @@ pub const ALL: [(u32, &str); 8] = [
     (GUEST_PROXY, "guest-proxy"),
     (GUEST_FILES, "guest-files"),
     (GUEST_LOGIN, "guest-login"),
+    (GUEST_COMPUTER, "guest-computer"),
 ];
 
 /// The name of a known port.
@@ -60,6 +65,8 @@ mod tests {
             (GUEST_CONTROL, GUEST_PROXY, GUEST_FILES, GUEST_LOGIN),
             (1030, 1031, 1032, 1033)
         );
+        assert_eq!(GUEST_COMPUTER, 1034);
+        assert_eq!(parse("guest-computer"), Some(GUEST_COMPUTER));
     }
 
     #[test]
@@ -81,7 +88,7 @@ mod tests {
     #[test]
     fn parse_refuses_other_ports() {
         for text in [
-            "22", "1023", "1028", "1029", "1034", "-1", "", "Broker", "0x401",
+            "22", "1023", "1028", "1029", "1035", "-1", "", "Broker", "0x401",
         ] {
             assert_eq!(parse(text), None, "{text}");
         }

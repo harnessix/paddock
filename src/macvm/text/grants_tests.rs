@@ -33,7 +33,51 @@ fn grants_damaged() {
         t.starts_with("the grants file /p/grants.json is damaged (bad)."),
         "{t}"
     );
-    assert!(t.contains("Move it away"));
+    assert!(t.contains("move it away and set the network again"));
+    assert!(t.contains("network none"));
+}
+
+#[test]
+fn grants_missing() {
+    let t = super::grants_missing(Path::new("/p/grants.json"));
+    assert!(t.contains("/p/grants.json is missing"), "{t}");
+    assert!(t.contains("paddock app network NAME"), "{t}");
+}
+
+#[test]
+fn grants_missing_unchanged() {
+    let t = super::grants_missing_unchanged(Path::new("/p/grants.json"));
+    assert!(t.starts_with(&super::grants_missing(Path::new("/p/grants.json"))));
+    assert!(t.ends_with("paddock saves no other grant change"), "{t}");
+}
+
+#[test]
+fn grants_bad_network() {
+    let t = super::grants_bad_network(Path::new("/p/grants.json"), "host");
+    assert!(
+        t.starts_with("the grants file /p/grants.json names the network mode \"host\""),
+        "{t}"
+    );
+    assert!(t.contains("paddock does not change it"), "{t}");
+}
+
+#[test]
+fn grants_changed_at_start() {
+    assert!(super::grants_changed_at_start().contains("Nothing started"));
+}
+
+#[test]
+fn grants_busy_at_start() {
+    let t = super::grants_busy_at_start(Path::new("/p/grants.json"));
+    assert!(t.contains("holds /p/grants.json too long"), "{t}");
+    assert!(t.contains("Nothing started"), "{t}");
+}
+
+#[test]
+fn grants_unconfirmed() {
+    let t = super::grants_unconfirmed(Path::new("/p/grants.json"));
+    assert!(t.contains("/p/grants.json is in place"), "{t}");
+    assert!(t.contains("cannot confirm that it is on disk"), "{t}");
 }
 
 #[test]
@@ -48,7 +92,7 @@ fn grants_skipped() {
 
 #[test]
 fn grants_unwritable() {
-    assert!(super::grants_unwritable(Path::new("/g")).ends_with("The grants stay as they were"));
+    assert!(super::grants_unwritable(Path::new("/g")).contains("cannot confirm the write"));
 }
 
 #[test]
@@ -299,6 +343,7 @@ fn grant_reverted() {
 #[test]
 fn grant_revert_failed() {
     assert!(super::grant_revert_failed("offline").contains("offline"));
+    assert!(super::grant_revert_failed("offline").contains("until the app stops"));
 }
 
 #[test]
@@ -309,4 +354,88 @@ fn grant_open_unknown() {
 #[test]
 fn grant_missing_live_setting() {
     assert!(super::grant_missing_live_setting("network").contains("network"));
+}
+
+#[test]
+fn grant_historical() {
+    assert_eq!(
+        super::grant_historical("allow session"),
+        "allow session (historical; order unknown)"
+    );
+    assert!(super::grant_historical("x").ends_with(HISTORICAL_MARK));
+}
+
+#[test]
+fn grant_history_found() {
+    assert!(super::grant_history_found().starts_with("Checkpoint grant history was found."));
+}
+
+#[test]
+fn grant_history_not_moved() {
+    let s = super::grant_history_not_moved(
+        Path::new("/p/grants.json"),
+        &anyhow::anyhow!("disk full").context("move"),
+    );
+    assert!(s.contains("/p/grants.json: move: disk full."), "{s}");
+    assert!(s.contains("older paddock versions"), "{s}");
+}
+
+#[test]
+fn grant_history_at() {
+    assert_eq!(
+        super::grant_history_at(Path::new("/p/h.json")),
+        "grant history at /p/h.json"
+    );
+}
+
+#[test]
+fn grant_checkpoint_not_kept() {
+    assert_eq!(
+        super::grant_checkpoint_not_kept(),
+        "could not preserve checkpoint grant history"
+    );
+}
+
+#[test]
+fn grant_checkpoint_unpreservable() {
+    assert_eq!(
+        super::grant_checkpoint_unpreservable(),
+        "cannot preserve the original checkpoint grant history"
+    );
+}
+
+#[test]
+fn grant_history_not_saved() {
+    assert_eq!(
+        super::grant_history_not_saved(&anyhow::anyhow!("denied").context("sync")),
+        "grant history was not saved: sync: denied"
+    );
+}
+
+#[test]
+fn grant_history_writing() {
+    assert_eq!(
+        super::grant_history_writing(Path::new("/p/r0.json")),
+        "writing /p/r0.json"
+    );
+}
+
+#[test]
+fn grant_history_no_recovery_name() {
+    assert_eq!(
+        super::grant_history_no_recovery_name(),
+        "no free grant history recovery name"
+    );
+}
+
+#[test]
+fn grant_kept_unconfirmed() {
+    assert!(super::grant_kept_unconfirmed().starts_with("The live change stays"));
+}
+
+#[test]
+fn grant_session_changed() {
+    let t = super::grant_session_changed("Notes");
+    assert!(t.starts_with("Notes started or stopped"), "{t}");
+    assert!(t.contains("Nothing changed"), "{t}");
 }

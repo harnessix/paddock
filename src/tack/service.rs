@@ -420,7 +420,9 @@ pub fn setup(
         f.sync_all()?;
         drop(f);
         let got = runner.version(&tmp)?;
-        if !got.split_whitespace().any(|w| w == version) {
+        // A development build prints `paddock 0.2.1-dev (commit ...)`.
+        let dev = format!("{version}-dev");
+        if !got.split_whitespace().any(|w| w == version || w == dev) {
             bail!("the copy reports {got:?}, not version {version}");
         }
         std::fs::rename(&tmp, &p.binary)?;

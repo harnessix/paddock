@@ -46,6 +46,9 @@ fn run() -> i32 {
         return 1;
     };
     paddock::guest::proxy::start();
+    // Computer use: its own port and threads (guest/computer_macos.rs).
+    paddock::guest::computer_macos::approve_capture();
+    paddock::guest::computer_macos::start();
     paddock::guest::link_macos::start(std::sync::Arc::new(main_loop::send_link));
     let _ = std::thread::Builder::new()
         .name("wallpaper".into())

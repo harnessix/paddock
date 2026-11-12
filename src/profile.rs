@@ -6,14 +6,15 @@ use crate::env::{capture, is_executable, HostEnv};
 use anyhow::{anyhow, bail, Context, Result};
 use serde::Deserialize;
 use std::collections::BTreeMap;
-use std::io::Read;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
+mod closure;
 mod mac_app;
 mod paths;
+pub use closure::{harness_closure, runtime_closure};
 pub use mac_app::{MacApp, ProfileMacos};
-pub use paths::is_system_path;
 use paths::{canonical, is_shim};
+pub use paths::{install_root, is_system_path, HOME_BIN_DIRS};
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -160,6 +161,11 @@ pub struct Locate {
     /// Extra candidate paths. `~/` expands to the home directory.
     #[serde(default)]
     pub paths: Vec<String>,
+    /// Helper programs that the harness starts from the folder of its
+    /// binary, named `<exe>-<helper>`. In a system bin folder such as
+    /// `/usr/bin` only these names are mounted (paths.rs, `bin_helpers`).
+    #[serde(default)]
+    pub helpers: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -627,7 +633,7 @@ impl<'a> HarnessFactory<'a> {
             )
         })?;
         let exe = self.locate(profile)?;
-        let (install_mounts, path_dirs) = runtime_closure(self.env, &exe)?;
+        let (install_mounts, path_dirs) = harness_closure(self.env, &exe, &profile.locate.helpers)?;
         Ok(Harness {
             profile: profile.clone(),
             exe,
@@ -641,7 +647,7 @@ impl<'a> HarnessFactory<'a> {
     /// workbench of a pasture.
     pub fn adopt(&self, profile: Profile, source: &str) -> Result<Harness> {
         let exe = self.locate(&profile)?;
-        let (install_mounts, path_dirs) = runtime_closure(self.env, &exe)?;
+        let (install_mounts, path_dirs) = harness_closure(self.env, &exe, &profile.locate.helpers)?;
         Ok(Harness {
             profile,
             exe,
@@ -689,110 +695,6 @@ impl<'a> HarnessFactory<'a> {
             p.name,
             tried.join("; ")
         )
-    }
-}
-
-/// Find what an executable needs from the host: its install directory and, for
-/// scripts, the interpreter named in the shebang line.
-pub fn runtime_closure(env: &HostEnv, exe: &Path) -> Result<(Vec<PathBuf>, Vec<PathBuf>)> {
-    let mut mounts = Vec::new();
-    let mut path_dirs = Vec::new();
-    let mut queue = vec![exe.to_path_buf()];
-    let mut seen = 0;
-    while let Some(file) = queue.pop() {
-        seen += 1;
-        if seen > 4 {
-            break;
-        }
-        mounts.push(install_root(&file));
-        if let Some(interp) = shebang_interpreter(&file) {
-            let resolved = if interp.contains('/') {
-                Some(PathBuf::from(&interp))
-            } else {
-                env.which(&interp)
-            };
-            if let Some(found) = resolved {
-                if let Some(dir) = found.parent() {
-                    if !is_system_path(&found) {
-                        path_dirs.push(dir.to_path_buf());
-                    }
-                }
-                if let Ok(real) = std::fs::canonicalize(&found) {
-                    if let Some(dir) = real.parent() {
-                        path_dirs.push(dir.to_path_buf());
-                    }
-                    queue.push(real);
-                }
-            }
-        }
-    }
-    mounts.sort();
-    mounts.dedup();
-    // Drop mounts that sit inside another mount.
-    let all = mounts.clone();
-    mounts.retain(|m| !all.iter().any(|o| crate::paths::strictly_inside(m, o)));
-    path_dirs.dedup();
-    Ok((mounts, path_dirs))
-}
-
-/// Bin directories in the home that hold single, self-contained executables
-/// next to unrelated ones. The folder above them can hold credentials
-/// (`~/.cargo/credentials.toml`), so only the file is mounted.
-pub const HOME_BIN_DIRS: &[&str] = &[
-    ".local/bin",
-    ".cargo/bin",
-    "go/bin",
-    ".bun/bin",
-    ".deno/bin",
-];
-
-/// The directory to mount for an executable. For npm packages this is the
-/// outermost `node_modules` folder: it holds the package and the packages it
-/// loads, and nothing else of the project or install around it (a `.env`, the
-/// sources). For a binary in a shared bin directory it is the file itself, so
-/// the directory is not shadowed in an image and its neighbours stay hidden.
-pub fn install_root(exe: &Path) -> PathBuf {
-    let comps: Vec<_> = exe.components().collect();
-    if let Some(i) = comps
-        .iter()
-        .position(|c| matches!(c, Component::Normal(s) if *s == "node_modules"))
-    {
-        return comps[..=i].iter().collect();
-    }
-    let parent = exe.parent().unwrap_or(Path::new("/"));
-    let shared = [
-        "/usr/bin",
-        "/usr/sbin",
-        "/bin",
-        "/sbin",
-        "/usr/local/bin",
-        "/usr/local/sbin",
-    ];
-    if shared.iter().any(|d| parent == Path::new(d))
-        || HOME_BIN_DIRS.iter().any(|d| parent.ends_with(d))
-    {
-        return exe.to_path_buf();
-    }
-    // A versioned install directory such as `<tool>/1.2.3/bin/<exe>`.
-    if parent.file_name().is_some_and(|n| n == "bin") {
-        if let Some(gp) = parent.parent() {
-            return gp.to_path_buf();
-        }
-    }
-    parent.to_path_buf()
-}
-
-fn shebang_interpreter(file: &Path) -> Option<String> {
-    let mut buf = [0u8; 256];
-    let n = std::fs::File::open(file).ok()?.read(&mut buf).ok()?;
-    let head = std::str::from_utf8(&buf[..n]).ok()?;
-    let line = head.strip_prefix("#!")?.lines().next()?.trim();
-    let mut parts = line.split_whitespace();
-    let first = parts.next()?;
-    if first.ends_with("/env") {
-        parts.find(|a| !a.starts_with('-')).map(str::to_string)
-    } else {
-        Some(first.to_string())
     }
 }
 

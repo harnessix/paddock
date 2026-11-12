@@ -2,7 +2,7 @@
 //! one request over the kv socket of this sandbox. The request never names
 //! the sandbox: the host knows it from the socket.
 
-use crate::kv::{Request, Response, Scope, Status, PROTOCOL, SOCKET_IN_SANDBOX};
+use crate::kv::{parse_scope, Request, Response, Scope, Status, PROTOCOL, SOCKET_IN_SANDBOX};
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, IsTerminal, Read, Write};
 use std::os::unix::net::UnixStream;
@@ -48,6 +48,15 @@ SCOPES (--scope, default self)
   user      Shared by the sandboxes of all projects. The user must allow it:
             the first use waits for an answer on the host. Untrusted, like
             pasture.
+  ns:NAME   A namespace that the user defined in [kv.namespaces.NAME] of
+            the user configuration. Only the projects and harnesses that it
+            names can use it, and no approval card appears: the user
+            configuration is the approval. A sandbox that is not a member
+            gets exit code 3 and the table to change; a namespace that does
+            not exist gets 4. A spawned sandbox is a member only when every
+            sandbox above it is one. Untrusted, like pasture. Leases,
+            versions, watch and the limits work as in pasture; timers do
+            not. `paddock-host kv info` lists the namespaces of this sandbox.
 
 VALUES
   A value is text (UTF-8). put reads it from standard input when VALUE is
@@ -107,6 +116,10 @@ EXAMPLES
   paddock-host kv put result:review '{"status":"done","ref":"branch review-auth"}' --scope pasture
   paddock-host kv watch --prefix result: --scope pasture --timeout 300
   paddock-host kv list note: --scope pasture
+
+  Two projects share build slots through a namespace of the user:
+  paddock-host kv claim compile-slot-1 --ttl 900 --scope ns:host-build
+  paddock-host kv release compile-slot-1 --scope ns:host-build
 
   In a spawn tree, the parent writes tasks and waits; each child claims one:
   paddock-host kv put task:a '{"title":"fix the parser","status":"todo"}' --scope tree
@@ -203,11 +216,18 @@ pub fn main(args: &[String]) -> i32 {
         return usage("--force applies only to release");
     }
     let built = (|| -> Result<Request, String> {
-        let scope = opts.get("scope").map(|s| s.parse::<Scope>()).transpose()?;
+        let (scope, namespace) = match opts.get("scope") {
+            Some(s) => {
+                let (scope, ns) = parse_scope(s)?;
+                (Some(scope), ns)
+            }
+            None => (None, None),
+        };
         let mut r = Request {
             v: PROTOCOL,
             op: cmd.to_string(),
             scope,
+            namespace,
             ttl: number(opts.get("ttl"), "--ttl")?,
             limit: number(opts.get("limit"), "--limit")?.map(|n| n as usize),
             timeout: number(opts.get("timeout"), "--timeout")?,

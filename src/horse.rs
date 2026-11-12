@@ -20,6 +20,7 @@ pub mod dsh;
 pub mod grok;
 pub mod guard;
 pub mod hitch;
+pub mod host;
 pub mod inbox;
 pub(crate) mod jsonl;
 pub mod keys;
@@ -33,8 +34,9 @@ pub(crate) mod rewrite_check;
 pub mod run;
 pub mod session;
 pub mod store;
+pub(crate) mod target;
 
-pub use session::{Binding, ForkOf, Horse, LineageStep, Session};
+pub use session::{Binding, ForkOf, Horse, HostOrigin, LineageStep, Session};
 pub use store::{Hash, Node, Store};
 
 use crate::env::HostEnv;

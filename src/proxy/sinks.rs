@@ -59,7 +59,7 @@ pub struct Opened {
     hold: Option<HoldFn>,
 }
 
-pub type HoldFn = Box<dyn FnOnce(&UnixStream) + Send>;
+pub type HoldFn = Box<dyn FnOnce(&UnixStream) -> Result<(), String> + Send>;
 
 impl Opened {
     pub fn new(close: impl FnOnce(u64, u64) + Send + 'static) -> Self {
@@ -70,7 +70,10 @@ impl Opened {
     }
 
     /// Give the client stream to `hold` once the gate allowed it.
-    pub fn holding(mut self, hold: impl FnOnce(&UnixStream) + Send + 'static) -> Self {
+    pub fn holding(
+        mut self,
+        hold: impl FnOnce(&UnixStream) -> Result<(), String> + Send + 'static,
+    ) -> Self {
         self.hold = Some(Box::new(hold));
         self
     }
@@ -84,9 +87,11 @@ impl Opened {
         (self.close)(up, down)
     }
 
-    pub fn hold(&mut self, client: &UnixStream) {
+    pub fn hold(&mut self, client: &UnixStream) -> Result<(), String> {
         if let Some(h) = self.hold.take() {
             h(client)
+        } else {
+            Ok(())
         }
     }
 }
@@ -117,10 +122,31 @@ impl HostProxy {
     ) -> Result<Option<Opened>, String> {
         match &self.gate {
             None => Ok(None),
-            Some(g) => (g.0)(host, port, id).map(|mut o| {
-                o.hold(client);
-                Some(o)
-            }),
+            Some(g) => {
+                let mut o = (g.0)(host, port, id)?;
+                o.hold(client)?;
+                Ok(Some(o))
+            }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_hold_refusal_stops_before_the_upstream_connection() {
+        let cfg = HostProxy {
+            gate: Some(Gate(Arc::new(|_, _, _| {
+                Ok(Opened::silent().holding(|_| Err("stale".into())))
+            }))),
+            ..Default::default()
+        };
+        let (client, _peer) = UnixStream::pair().unwrap();
+        assert!(matches!(
+            cfg.gated("example.test", 443, None, &client),
+            Err(ref e) if e == "stale"
+        ));
     }
 }

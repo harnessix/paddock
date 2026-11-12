@@ -16,6 +16,14 @@ pub const CAP: u64 = 2 << 20;
 /// The size after a trim: the newest lines that fit.
 const KEEP: u64 = CAP * 3 / 4;
 
+#[cfg(test)]
+pub(super) type SessionEventHook = Box<dyn Fn(crate::eventstream::Event)>;
+
+#[cfg(test)]
+thread_local! {
+    pub(super) static SESSION_EVENT_HOOK: std::cell::RefCell<Option<SessionEventHook>> = std::cell::RefCell::new(None);
+}
+
 /// One event line.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Event {
@@ -106,16 +114,33 @@ impl Events {
 
     /// The `session` line of a state change, on the bus of the process.
     fn publish(&self, kind: &str, text: &str) {
-        let Some(bus) = crate::eventstream::default_bus() else {
+        #[cfg(test)]
+        let bus: Option<&crate::eventstream::Bus> = None;
+        #[cfg(not(test))]
+        let bus = crate::eventstream::default_bus();
+        #[cfg(test)]
+        let hooked = SESSION_EVENT_HOOK.with(|hook| hook.borrow().is_some());
+        #[cfg(not(test))]
+        let hooked = false;
+        if bus.is_none() && !hooked {
             return;
-        };
+        }
         let mut last = self.last.lock().unwrap_or_else(|e| e.into_inner());
         let Some(next) = events_stream::change(*last, kind, text) else {
             return;
         };
         *last = Some(next);
         if let Some((app, home)) = events_stream::app_of(&self.path) {
-            bus.publish(events_stream::event(&app, &home, next.0, next.1, text));
+            let event = events_stream::event(&app, &home, next.0, next.1, text);
+            #[cfg(test)]
+            SESSION_EVENT_HOOK.with(|hook| {
+                if let Some(hook) = hook.borrow().as_ref() {
+                    hook(event.clone());
+                }
+            });
+            if let Some(bus) = bus {
+                bus.publish(event);
+            }
         }
     }
 

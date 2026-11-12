@@ -109,6 +109,8 @@ fn migrate_cli_preserves_the_plain_copy_until_the_person_drops_it() {
             until_ms: None,
         }],
         created_ms: 1,
+        host: None,
+        origin_run: None,
     };
     std::fs::write(
         store.join("horses/h-test.json"),

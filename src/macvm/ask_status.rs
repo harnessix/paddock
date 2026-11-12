@@ -21,6 +21,23 @@ pub struct AskStatus {
     pub open: Vec<OpenQuestion>,
     #[serde(default)]
     pub system: Vec<SystemHost>,
+    /// The latest selections that closed their question without their
+    /// effect, newest last.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unapplied: Vec<UnappliedAnswer>,
+}
+
+/// A selection that did not apply, and why.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnappliedAnswer {
+    /// `host:port`, or `pause notice`.
+    pub target: String,
+    /// The selected answer word.
+    pub selected: String,
+    /// The reason word: `unverified`, `invalid` or `unreadable`.
+    pub reason: String,
+    /// What paddock did instead.
+    pub result: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -77,17 +94,19 @@ pub fn count_system(hosts: &mut Vec<SystemHost>, host: &str, port: u16, process:
     hosts.truncate(SYSTEM_MAX);
 }
 
-pub fn write(path: &Path, s: &AskStatus) {
+pub fn write(path: &Path, s: &AskStatus) -> bool {
     if let Some(dir) = path.parent() {
         if let Err(e) = crate::privfs::dir(dir) {
             log::debug!("macvm: cannot make {}: {e}", dir.display()); // not user text
-            return;
+            return false;
         }
     }
     let body = serde_json::to_string_pretty(s).unwrap_or_default();
     if let Err(e) = crate::privfs::write_atomic(path, body) {
         log::debug!("macvm: cannot write {}: {e}", path.display()); // not user text
+        return false;
     }
+    true
 }
 
 pub fn read(path: &Path) -> AskStatus {

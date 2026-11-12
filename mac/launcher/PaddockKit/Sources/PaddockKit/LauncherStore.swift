@@ -50,6 +50,7 @@ public struct StatusGate: Sendable {
     }
 
     public mutating func reset() { last = [:] }
+    public mutating func reset(_ key: String) { last[key] = nil }
 }
 
 /// The root state of the launcher. Backend truth comes from paddock: the
@@ -67,8 +68,12 @@ public final class LauncherStore {
     public var apps: [AppItem] = []
     public var questions: [QuestionJSON] = []
     public var paused: PausedJSON?
+    public var questionsComplete = false
+    public var questionsIssue: String?
+    public var confirmedQuestionIDs: Set<String> = []
+    public var pausedConfirmed = false
     /// False while the event stream is down: the UI shows `Live updates paused`.
-    public var streamHealthy = true
+    public var streamHealthy = false
     /// True once `app list --json` answered.
     public var listLoaded = false
     /// paddock's line when `app list --json` failed and no list is shown.
@@ -100,12 +105,15 @@ public final class LauncherStore {
     @ObservationIgnored var buildTask: Task<Void, Never>?
     @ObservationIgnored var toastTask: Task<Void, Never>?
     @ObservationIgnored var streamAttempt = 0
+    @ObservationIgnored var questionSnapshotSerial: UInt64 = 0
+    @ObservationIgnored var questionSnapshotPending = false
+    @ObservationIgnored var questionTouches: Set<String> = []
+    @ObservationIgnored var pauseTouched = false
+    @ObservationIgnored var retiredPauseIDs: Set<String> = []
     /// Per-app detail models, so grant events reach an open Grants tab.
     @ObservationIgnored public var details: [String: AppDetailModel] = [:]
     /// The time before a dead event stream is opened again.
     @ObservationIgnored public var reconnectDelay: Double = 5
-    /// The time a new stream must stay open before it counts as healthy.
-    @ObservationIgnored public var healthyAfter: Double = 2
     @ObservationIgnored public var toastSeconds: Double = 6
 
     public init(service: PaddockService?, clock: LauncherClock = SystemClock()) {
@@ -151,11 +159,67 @@ public final class LauncherStore {
             }
         }
         if gate.allow("approvals", now: clock.now()) {
-            if let approvals = try? await service.approvals() {
-                questions = approvals.questions
-                paused = approvals.paused
+            questionSnapshotSerial += 1
+            let serial = questionSnapshotSerial
+            questionSnapshotPending = true
+            questionTouches.removeAll()
+            pauseTouched = false
+            retiredPauseIDs.removeAll()
+            do {
+                let approvals = try await service.approvals()
+                guard serial == questionSnapshotSerial else { return }
+                reconcileQuestions(approvals)
+            } catch {
+                guard serial == questionSnapshotSerial else { return }
+                questionsComplete = false
+                let line = LauncherStore.line(of: error)
+                questionsIssue = line.isEmpty ? "Could not load questions." : line
+                confirmedQuestionIDs = confirmedQuestionIDs.intersection(questionTouches)
+                if !pauseTouched { pausedConfirmed = false }
             }
+            questionSnapshotPending = false
         }
+    }
+
+    func reconcileQuestions(_ snapshot: ApprovalsJSON) {
+        let ids = Set(snapshot.questions.map(\.id))
+        if snapshot.complete {
+            questions.removeAll { !ids.contains($0.id) && !questionTouches.contains($0.id) }
+        }
+        confirmedQuestionIDs = confirmedQuestionIDs.intersection(questionTouches)
+        for question in snapshot.questions where !questionTouches.contains(question.id) {
+            if let index = questions.firstIndex(where: { $0.id == question.id }) {
+                questions[index] = question
+            } else {
+                questions.append(question)
+            }
+            confirmedQuestionIDs.insert(question.id)
+        }
+        if !pauseTouched {
+            var incoming = snapshot.paused
+            if let id = incoming?.id, retiredPauseIDs.contains(id) { incoming = nil }
+            if snapshot.complete || incoming != nil { paused = incoming }
+            pausedConfirmed = incoming != nil
+        }
+        questionsComplete = snapshot.complete
+        questionsIssue = snapshot.complete ? nil :
+            (snapshot.diagnostics.isEmpty ? "The question list is incomplete." : snapshot.diagnostics.joined(separator: "\n"))
+        if streamAttempt > 0 && !streamHealthy {
+            confirmedQuestionIDs.removeAll()
+            pausedConfirmed = false
+            questionsComplete = false
+            questionsIssue = "Live updates paused; questions are not confirmed."
+        }
+    }
+
+    func touchQuestion(_ id: String) {
+        if questionSnapshotPending { questionTouches.insert(id) }
+    }
+
+    func retireQuestion(_ id: String) {
+        touchQuestion(id)
+        confirmedQuestionIDs.remove(id)
+        questions.removeAll { $0.id == id }
     }
 
     /// The `Refresh` action (⌘R): restarts the stream and reloads.
@@ -226,6 +290,7 @@ public final class LauncherStore {
 
     public func startEvents() {
         eventTask?.cancel()
+        markStreamUncertain()
         streamAttempt += 1
         let attempt = streamAttempt
         eventTask = Task { [weak self] in
@@ -236,18 +301,25 @@ public final class LauncherStore {
     public func stopEvents() {
         eventTask?.cancel()
         eventTask = nil
+        streamAttempt += 1
+        markStreamUncertain()
+    }
+
+    func markStreamUncertain() {
+        streamHealthy = false
+        questionSnapshotSerial += 1
+        questionSnapshotPending = false
+        questionsComplete = false
+        confirmedQuestionIDs.removeAll()
+        pausedConfirmed = false
+        questionsIssue = "Live updates paused; questions are not confirmed."
     }
 
     func runEvents(attempt: Int) async {
         while !Task.isCancelled, attempt == streamAttempt {
             guard let service else { return }
-            // A stream that stays open for `healthyAfter` seconds, or that
-            // sends a line, counts as healthy. One that dies at once does not.
-            let watcher = Task { [weak self] in
-                guard let self else { return }
-                try? await self.clock.sleep(seconds: self.healthyAfter)
-                if !Task.isCancelled { self.markHealthy(attempt: attempt) }
-            }
+            // The first line follows subscription. Time alone does not prove
+            // that the follower was registered before the snapshot.
             do {
                 for try await event in service.events() {
                     if Task.isCancelled { break }
@@ -255,9 +327,8 @@ public final class LauncherStore {
                     apply(event)
                 }
             } catch {}
-            watcher.cancel()
             if Task.isCancelled || attempt != streamAttempt { return }
-            streamHealthy = false
+            markStreamUncertain()
             try? await clock.sleep(seconds: reconnectDelay)
         }
     }
@@ -265,7 +336,8 @@ public final class LauncherStore {
     func markHealthy(attempt: Int) {
         guard attempt == streamAttempt, !streamHealthy else { return }
         streamHealthy = true
-        // Events may have been missed while the stream was down.
+        // Include the gap before subscription even on the first connection.
+        gate.reset("approvals")
         Task { await self.refreshAll() }
     }
 
@@ -291,6 +363,12 @@ public final class LauncherStore {
         case .stream(let state):
             // The follower missed events: read the state again.
             if state == "lost" {
+                questionSnapshotSerial += 1
+                questionSnapshotPending = false
+                questionsComplete = false
+                confirmedQuestionIDs.removeAll()
+                pausedConfirmed = false
+                questionsIssue = "Some live updates were missed; checking questions."
                 gate.reset()
                 Task { await self.refreshAll() }
             }
@@ -341,17 +419,31 @@ public final class LauncherStore {
     }
 
     func applyQuestion(_ e: QuestionEvent) {
-        switch e.op {
+        switch e.state ?? e.op ?? "" {
         case "open":
-            guard let id = e.id, !questions.contains(where: { $0.id == id }) else { return }
+            guard let id = e.id else { return }
+            touchQuestion(id)
+            confirmedQuestionIDs.insert(id)
+            guard !questions.contains(where: { $0.id == id }) else { return }
             questions.append(QuestionJSON(id: id, app: e.app ?? "", host: e.host ?? "", port: e.port ?? 0,
                                           process: e.process, opened: e.opened ?? clock.now()))
-        case "answered":
-            questions.removeAll { $0.id == e.id }
+        case "answered", "withdrawn":
+            if let id = e.id { retireQuestion(id) }
         case "paused":
-            paused = PausedJSON(app: e.app ?? "", count: e.count ?? 0)
+            if questionSnapshotPending { pauseTouched = true }
+            paused = PausedJSON(app: e.app ?? "", count: e.open ?? e.count ?? 0, id: e.id)
+            pausedConfirmed = true
         case "resumed":
-            paused = nil
+            if questionSnapshotPending {
+                if let id = e.id { retiredPauseIDs.insert(id) }
+                else { pauseTouched = true }
+            }
+            if let current = paused, (e.id == nil || current.id == nil || e.id == current.id),
+               (e.app == nil || e.app == current.app) {
+                paused = nil
+                pausedConfirmed = false
+                if questionSnapshotPending { pauseTouched = true }
+            }
         default:
             break
         }

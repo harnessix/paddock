@@ -62,8 +62,17 @@ pub(crate) fn rules(env: &HostEnv, name: &str, cmd: Option<RulesCmd>) -> Result<
             for (app, home, dir) in layout.profile_dirs() {
                 if app == name && paddock::macvm::host::running(&layout, &app, &home).is_some() {
                     let path = dir.join("logs/session-rules.json");
+                    eprintln!("Session rules are a potentially stale, incomplete diagnostic for {app} ({home}).");
                     if let Ok(data) = std::fs::read(path) {
-                        if let Ok(session) = serde_json::from_slice::<Vec<firewall::Rule>>(&data) {
+                        let session = serde_json::from_slice::<serde_json::Value>(&data)
+                            .ok()
+                            .and_then(|v| {
+                                serde_json::from_value::<Vec<firewall::Rule>>(
+                                    v.get("rules").cloned().unwrap_or(v),
+                                )
+                                .ok()
+                            });
+                        if let Some(session) = session {
                             all.extend(
                                 session.into_iter().filter(|r| {
                                     r.expires.is_none_or(|e| e > paddock::state::now())
@@ -152,12 +161,12 @@ pub(crate) fn rules(env: &HostEnv, name: &str, cmd: Option<RulesCmd>) -> Result<
     }
 }
 
-/// The `grant` line of a rule change of the person, for the launcher.
+/// Ask stream consumers to refresh after an unordered rule change.
 fn publish(env: &HostEnv, app: &str, r: &paddock::macvm::firewall::Rule, action: &str) {
     use paddock::eventstream::schema::GrantSource;
     paddock::eventstream::publish(
         env,
-        paddock::macvm::events_stream::rule_grant(app, r, action, GrantSource::You),
+        paddock::macvm::events_stream::historical_rule_grant(app, r, action, GrantSource::You),
     );
 }
 
@@ -300,8 +309,8 @@ mod tests {
     }
 
     #[test]
-    fn rule_changes_are_grant_lines_on_the_stream() {
-        use paddock::eventstream::schema::{Event, GrantSource, GrantWhat};
+    fn rule_changes_invalidate_stream_state() {
+        use paddock::eventstream::schema::{Event, StreamState};
         let t = tempfile::tempdir().unwrap();
         let mut env = env(t.path());
         env = HostEnv::from_parts(
@@ -344,17 +353,13 @@ mod tests {
             .unwrap(),
             0
         );
-        for action in ["add", "remove"] {
+        for _ in 0..2 {
             let line = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
             let l: paddock::eventstream::Line = serde_json::from_str(&line).unwrap();
-            let Event::Grant(g) = l.event else {
+            let Event::Stream(stream) = l.event else {
                 panic!("{line}")
             };
-            assert_eq!(g.action, action);
-            assert_eq!((g.what, g.source), (GrantWhat::Rule, GrantSource::You));
-            assert_eq!(g.app, "sample-notes");
-            assert_eq!(g.id.as_deref(), Some(id.as_str()));
-            assert_eq!(g.detail, "allow api.example.com:443 always");
+            assert_eq!(stream.state, StreamState::Lost);
         }
     }
 }

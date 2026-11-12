@@ -75,6 +75,69 @@ fn glob_cases() {
 }
 
 #[test]
+fn reload_checks_content_even_when_the_recorded_timestamp_matches() {
+    let t = tempfile::tempdir().unwrap();
+    let path = t.path().join("rules.toml");
+    let mut writer = Rules::load_at(path.clone()).unwrap();
+    writer.add(allow("*", "removed.example"), false).unwrap();
+    writer.save().unwrap();
+    let mut live = Rules::load_at(path).unwrap();
+    writer.file.clear();
+    writer.save().unwrap();
+    live.modified = writer.modified;
+    assert!(live.reload_if_changed().unwrap());
+    assert!(live.file.is_empty());
+}
+
+#[test]
+fn a_rule_writer_and_a_decision_use_the_same_lock_inode() {
+    use std::os::unix::io::AsRawFd;
+    let t = tempfile::tempdir().unwrap();
+    let rules = Rules::load_at(t.path().join("rules.toml")).unwrap();
+    let _guard = rules.decision_lock().unwrap();
+    let probe = std::fs::OpenOptions::new()
+        .write(true)
+        .open(t.path().join("rules.toml.lock"))
+        .unwrap();
+    let rc = unsafe { libc::flock(probe.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    assert_ne!(rc, 0);
+    assert_eq!(
+        std::io::Error::last_os_error().kind(),
+        std::io::ErrorKind::WouldBlock
+    );
+}
+
+#[test]
+fn concurrent_stale_writer_cannot_resurrect_a_removed_rule() {
+    use std::sync::mpsc;
+    let t = tempfile::tempdir().unwrap();
+    let path = t.path().join("rules.toml");
+    let mut seed = Rules::load_at(path.clone()).unwrap();
+    let original = allow("*", "removed.example");
+    seed.add(original.clone(), false).unwrap();
+    seed.save().unwrap();
+
+    let (loaded_tx, loaded_rx) = mpsc::channel();
+    let (go_tx, go_rx) = mpsc::channel();
+    let stale_path = path.clone();
+    let writer = std::thread::spawn(move || {
+        let mut stale = Rules::load_at(stale_path).unwrap();
+        stale.add(allow("*", "new.example"), false).unwrap();
+        loaded_tx.send(()).unwrap();
+        go_rx.recv().unwrap();
+        stale.save()
+    });
+    loaded_rx.recv().unwrap();
+    let mut remover = Rules::load_at(path.clone()).unwrap();
+    remover.remove(&original.id, "app").unwrap();
+    remover.save().unwrap();
+    go_tx.send(()).unwrap();
+    assert!(writer.join().unwrap().is_err());
+    let saved = Rules::load_at(path).unwrap();
+    assert!(saved.file.is_empty(), "the removed allow must not return");
+}
+
+#[test]
 fn specificity_order() {
     let exact = allow("com.example.notes", "chat.example");
     let any_port = rule(
@@ -402,11 +465,12 @@ fn save_mode_0600_atomic() {
         & 0o777;
     assert_eq!(dir_mode, 0o700);
     // Whole and renamed: no temporary file stays, and the file parses.
-    let names: Vec<String> = std::fs::read_dir(path.parent().unwrap())
+    let mut names: Vec<String> = std::fs::read_dir(path.parent().unwrap())
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
         .collect();
-    assert_eq!(names, ["app.toml"]);
+    names.sort();
+    assert_eq!(names, ["app.toml", "app.toml.lock"]);
     let text = std::fs::read_to_string(&path).unwrap();
     assert!(text.starts_with("# The firewall rules"), "{text}");
     assert!(text.contains("[[rule]]"));
@@ -423,6 +487,7 @@ fn save_mode_0600_atomic() {
     // `port = "*"` round trips, and a bad file is one clear line.
     let back = Rules::load_at(path.clone()).unwrap();
     assert_eq!(back.file, rules.file);
+    let saved_text = std::fs::read_to_string(&path).unwrap();
     std::fs::write(&path, "[[rule]]\nid = 1\n").unwrap();
     let e = Rules::load_at(path.clone()).unwrap_err().to_string();
     assert!(e.contains("does not parse"), "{e}");
@@ -433,6 +498,11 @@ fn save_mode_0600_atomic() {
     let mut live = Rules::load_at(path.clone())
         .unwrap_or_else(|_| Rules::load_at(t.path().join("none.toml")).unwrap());
     live.path = path.clone();
+    assert!(
+        rules.save().is_err(),
+        "a stale writer cannot overwrite the invalid edit"
+    );
+    std::fs::write(&path, saved_text).unwrap();
     rules.save().unwrap();
     assert!(live.reload_if_changed().unwrap());
     assert_eq!(live.file, rules.file);

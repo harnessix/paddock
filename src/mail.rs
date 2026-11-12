@@ -7,7 +7,7 @@
 //!   of `paddock-host spawn`, its parent sandbox (`Starter`).
 //! - `up`: from the agent to the starter, plus events that paddock itself
 //!   writes (events.rs): the sandbox ended, its process is gone, it is idle
-//!   with unread mail, an approval card waits, a child started or ended.
+//!   with unread mail, an approval card opened, a child started or ended.
 //!
 //! Storage, `$XDG_STATE_HOME/paddock/mail/<run>/`:
 //!
@@ -511,6 +511,20 @@ pub fn append(env: &HostEnv, id: &str, dir: Dir, m: Message) -> Result<Message, 
     }
     let _g = lock(&d).map_err(SendError::Io)?;
     append_locked(env, id, &d, dir, m)
+}
+
+// Approval notices are best effort and never wait for a mailbox lock.
+fn try_append(env: &HostEnv, id: &str, direction: Dir, m: Message) -> Result<bool, SendError> {
+    check(&m)?;
+    let d = self::dir(env, id).map_err(SendError::Io)?;
+    if !exists(env, id) {
+        return Ok(true);
+    }
+    let Some(_guard) = try_lock(&d).map_err(SendError::Io)? else {
+        return Ok(false);
+    };
+    append_locked(env, id, &d, direction, m)?;
+    Ok(true)
 }
 
 fn append_locked(
