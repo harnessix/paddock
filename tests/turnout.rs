@@ -54,7 +54,7 @@ fn ok(output: Output) -> String {
 
 #[test]
 fn branch_checks_report_through_the_cli_without_real_systemd() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = paddock::view::guard::tempdir();
     let root = temp.path();
     for dir in ["home", "bin", "repo", "config/paddock"] {
         std::fs::create_dir_all(root.join(dir)).unwrap();

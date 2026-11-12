@@ -25,7 +25,7 @@ pub fn python() -> Option<&'static str> {
 }
 
 pub struct World {
-    _tmp: tempfile::TempDir,
+    _tmp: super::TestDir,
     pub root: PathBuf,
 }
 

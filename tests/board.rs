@@ -53,7 +53,7 @@ fn fixture(temp: &Path) {
 
 #[test]
 fn json_maps_the_run_to_its_ticket() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = paddock::view::guard::tempdir();
     fixture(temp.path());
     let out = paddock(temp.path())
         .args(["board", "--json"])
@@ -86,7 +86,7 @@ fn json_maps_the_run_to_its_ticket() {
 
 #[test]
 fn text_is_cut_to_columns_and_has_no_color_in_a_pipe() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = paddock::view::guard::tempdir();
     fixture(temp.path());
     let out = paddock(temp.path())
         .arg("board")
@@ -105,7 +105,7 @@ fn text_is_cut_to_columns_and_has_no_color_in_a_pipe() {
 
 #[test]
 fn a_ticket_file_name_cannot_send_escapes_to_the_terminal() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = paddock::view::guard::tempdir();
     fixture(temp.path());
     write(
         &temp
@@ -175,7 +175,7 @@ fn a_ticket_file_name_cannot_send_an_8_bit_csi_or_bidi_characters_to_the_termina
 
 #[test]
 fn an_empty_home_says_so() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = paddock::view::guard::tempdir();
     let out = paddock(temp.path()).arg("board").output().unwrap();
     assert!(out.status.success());
     assert_eq!(
@@ -226,7 +226,7 @@ fn line_within(r: &mut std::io::BufReader<std::process::ChildStdout>, secs: u64)
 #[test]
 fn watch_json_prints_one_line_per_change_and_ends_with_its_reader() {
     use std::io::BufReader;
-    let temp = tempfile::tempdir().unwrap();
+    let temp = paddock::view::guard::tempdir();
     fixture(temp.path());
     let mut child = paddock(temp.path())
         .args(["board", "--watch", "--json"])
@@ -330,7 +330,7 @@ fn loft_of(data: &Path, project: &Path) -> std::path::PathBuf {
 
 #[test]
 fn a_loft_with_a_link_gives_the_loft_notes_folder() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = paddock::view::guard::tempdir();
     let data = temp.path().join("data");
     // `alpha` links to its loft.
     let alpha = run_in(temp.path(), "alpha");
@@ -357,7 +357,7 @@ fn a_loft_with_a_link_gives_the_loft_notes_folder() {
 
 #[test]
 fn a_loft_without_a_link_gives_the_loft_notes_folder() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = paddock::view::guard::tempdir();
     let data = temp.path().join("data");
     // The loft-only case: `alpha` has its own `.paddock` folder, `beta` has
     // none, and a ticket is only in the loft.
@@ -387,7 +387,7 @@ fn a_loft_without_a_link_gives_the_loft_notes_folder() {
 
 #[test]
 fn a_project_without_a_loft_folder_has_no_loft_field() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = paddock::view::guard::tempdir();
     let data = temp.path().join("data");
     // `alpha` links to a folder that is not its loft, `beta` has its own
     // `.paddock` folder, `gamma` has nothing. No loft folder for any.
@@ -412,7 +412,7 @@ fn a_project_without_a_loft_folder_has_no_loft_field() {
 #[test]
 fn a_loft_path_with_invisible_or_control_characters_gives_no_field_and_a_warning() {
     for (i, bad) in ["da\u{200b}ta", "da\u{1b}[2Jta"].into_iter().enumerate() {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = paddock::view::guard::tempdir();
         let data = temp.path().join(bad);
         let project = run_in(temp.path(), &format!("p{i}"));
         let loft = loft_of(&data, &project);

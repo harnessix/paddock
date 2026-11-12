@@ -29,7 +29,7 @@ const SHELL: &str = "#!/bin/sh\n\
      exec sleep 600\n";
 
 struct World {
-    _tmp: tempfile::TempDir,
+    _tmp: common::TestDir,
     root: PathBuf,
 }
 
@@ -65,8 +65,10 @@ impl World {
         write_exe(&root.join("bin/fakeshell"), SHELL);
         write_exe(
             &root.join("bin/xdg-terminal-exec"),
+            // printf, not echo: the echo of dash (/bin/sh on Ubuntu) turns
+            // the `\n` of a window header into a second line.
             &format!(
-                "#!/bin/sh\necho \"$@\" >> '{}'\n",
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\n",
                 root.join("terminal.log").display()
             ),
         );
@@ -565,7 +567,10 @@ fn a_split_never_touches_the_users_tmux() {
     // paddock's socket.
     let out = ok(&run(&[]));
     assert!(out.contains("new terminal window"), "{out}");
-    let log = std::fs::read_to_string(w.root.join("terminal.log")).unwrap();
+    // The fake terminal runs in the background.
+    let read = || std::fs::read_to_string(w.root.join("terminal.log")).unwrap_or_default();
+    wait_for("the terminal window", 10, || !read().is_empty());
+    let log = read();
     assert!(log.contains(&w.sock().display().to_string()), "{log}");
     assert!(!log.contains(&user_sock.display().to_string()), "{log}");
     assert_eq!(w.panes().len(), 2);

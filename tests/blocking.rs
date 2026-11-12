@@ -27,7 +27,7 @@ paddock-host device ask "x" --timeout 1 >/dev/null 2>&1; echo "ASK_OFF_EXIT $?"
 "#;
 
 struct World {
-    _tmp: tempfile::TempDir,
+    _tmp: common::TestDir,
     root: PathBuf,
 }
 
@@ -215,7 +215,7 @@ fn a_question_waits_for_the_answer_of_the_user_across_reads() {
 #[test]
 fn an_answer_comes_from_standard_input() {
     use std::io::Write;
-    let t = tempfile::tempdir().unwrap();
+    let t = paddock::view::guard::tempdir();
     let mut vars = std::collections::BTreeMap::new();
     vars.insert(
         "XDG_STATE_HOME".to_string(),

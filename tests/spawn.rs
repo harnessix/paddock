@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 const TASK: &str = "write-the-note-42";
 
 struct World {
-    _tmp: tempfile::TempDir,
+    _tmp: common::TestDir,
     root: PathBuf,
     repo: PathBuf,
 }

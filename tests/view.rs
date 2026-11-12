@@ -16,7 +16,7 @@ const SCRIPT: &str = "printf 'out one\\n'; printf 'err one\\n' >&2; \
      [ -n \"$SLOW\" ] && sleep 3; printf 'out two'; printf 'err two' >&2; exit 7";
 
 struct World {
-    _tmp: tempfile::TempDir,
+    _tmp: common::TestDir,
     root: PathBuf,
 }
 
@@ -96,12 +96,6 @@ impl World {
             .env_remove("TMUX")
             .output()
             .unwrap()
-    }
-}
-
-impl Drop for World {
-    fn drop(&mut self) {
-        let _ = self.tmux(&["kill-server"]);
     }
 }
 

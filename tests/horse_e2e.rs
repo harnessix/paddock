@@ -45,7 +45,7 @@ fn xdg(t: &Path) -> Vec<(&'static str, PathBuf)> {
 }
 
 /// An empty test folder: project, home, runtime folder, configuration.
-fn test_folder() -> tempfile::TempDir {
+fn test_folder() -> common::TestDir {
     use std::os::unix::fs::PermissionsExt;
     let tmp = common::tempdir();
     let t = tmp.path();

@@ -63,7 +63,7 @@ fn health(sock: &Path) -> bool {
 
 #[test]
 fn the_binary_serves_a_request_and_dies_with_its_parent() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = paddock::view::guard::tempdir();
     std::fs::create_dir_all(dir.path().join("home")).unwrap();
     let sock = dir.path().join("dev.sock");
     let log = dir.path().join("log");
@@ -146,7 +146,7 @@ fn the_binary_serves_a_request_and_dies_with_its_parent() {
 
 #[test]
 fn the_binary_stops_on_sigterm_and_removes_its_socket() {
-    let dir = tempfile::tempdir().unwrap();
+    let dir = paddock::view::guard::tempdir();
     std::fs::create_dir_all(dir.path().join("home")).unwrap();
     let sock = dir.path().join("dev.sock");
     let tool = script(dir.path(), "tool", "cat");

@@ -3,7 +3,7 @@ use std::process::Command;
 
 #[test]
 fn host_reports_peer_error_and_only_falls_back_for_transport_failure() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = paddock::view::guard::tempdir();
     let project = temp.path().join("project");
     let config = temp.path().join("config/paddock");
     std::fs::create_dir_all(&project).unwrap();

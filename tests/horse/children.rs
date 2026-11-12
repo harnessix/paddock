@@ -6,7 +6,7 @@ use super::*;
 /// A test folder whose claude harness is the fake claude: a git project
 /// with a task, spawns allowed, horse mode on.
 #[cfg(target_os = "linux")]
-fn claude_setup() -> tempfile::TempDir {
+fn claude_setup() -> common::TestDir {
     let tmp = test_folder();
     let root = tmp.path();
     install_harness(
@@ -148,7 +148,7 @@ fn codex_rollout(t: &Path, id: &str) -> std::path::PathBuf {
 
 #[test]
 fn swap_a_stopped_codex_session_on_the_command_line() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = paddock::view::guard::tempdir();
     let t = tmp.path();
     let id = "019a5f00-0000-7000-8000-0000000000dd";
     let p = codex_rollout(t, id);
@@ -277,7 +277,7 @@ fn the_fake_app_server_swaps_between_turns_under_custody() {
     use std::process::Stdio;
     use std::time::Duration;
 
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = paddock::view::guard::tempdir();
     let t = tmp.path();
     let home = t.join("home");
     let work = t.join("work");
@@ -375,7 +375,7 @@ fn the_fake_app_server_swaps_between_turns_under_custody() {
 /// A test folder whose dsh parent spawns the fake Codex app-server as a
 /// headless child, in horse mode.
 #[cfg(target_os = "linux")]
-fn codex_spawn_setup() -> tempfile::TempDir {
+fn codex_spawn_setup() -> common::TestDir {
     let tmp = sandbox_setup("dsh-spawn-codex");
     let root = tmp.path();
     install_harness(

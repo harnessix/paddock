@@ -21,7 +21,7 @@ fn paddock(root: &Path) -> Command {
     c
 }
 
-fn world() -> tempfile::TempDir {
+fn world() -> common::TestDir {
     let tmp = common::tempdir();
     let root = tmp.path();
     for d in ["home", "cfg/paddock", "run/paddock/view"] {

@@ -24,7 +24,7 @@ fn local_registry_is_scoped_and_second_build_is_warm() {
         eprintln!("skipped: requires host bwrap and systemd user manager");
         return;
     }
-    let temp = tempfile::tempdir().unwrap();
+    let temp = paddock::view::guard::tempdir();
     let root = temp.path();
     let package = root.join("archive/local-dep-1.0.0");
     std::fs::create_dir_all(package.join("src")).unwrap();

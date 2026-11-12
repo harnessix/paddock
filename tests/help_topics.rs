@@ -134,7 +134,7 @@ fn paddock(temp: &Path) -> Command {
 
 #[test]
 fn topic_help_and_command_help() {
-    let temp = tempfile::tempdir().unwrap();
+    let temp = paddock::view::guard::tempdir();
     let run = |args: &[&str]| paddock(temp.path()).args(args).output().unwrap();
     let list = run(&["help"]);
     assert!(list.status.success());
@@ -250,7 +250,7 @@ fn closed_stdout_is_quiet_for_help_paths() {
         &["--help"][..],
         &["run", "--help"][..],
     ] {
-        let temp = tempfile::tempdir().unwrap();
+        let temp = paddock::view::guard::tempdir();
         let mut child = paddock(temp.path())
             .args(args)
             .stdout(Stdio::piped())

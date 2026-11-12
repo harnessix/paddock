@@ -489,6 +489,7 @@ pub(crate) fn pane_main(file: &Path) -> Result<i32> {
     };
     let labelled = pane.as_ref().is_some_and(|p| {
         tmux_out(split::label_args(p, &job)).is_some()
+            && tmux_out(split::title::title_args(p)).is_some()
             && tmux_out(split::side_args(p)).is_some_and(|o| o.trim() == job.side.word())
     });
     // Without its label, a sandbox pane shows as a host shell: its program

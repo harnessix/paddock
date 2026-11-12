@@ -38,7 +38,7 @@ exec sleep 120
 "#;
 
 struct World {
-    _tmp: tempfile::TempDir,
+    _tmp: common::TestDir,
     root: PathBuf,
 }
 
@@ -253,16 +253,6 @@ impl World {
             String::from_utf8_lossy(&out.stdout),
             String::from_utf8_lossy(&out.stderr)
         )
-    }
-}
-
-impl Drop for World {
-    fn drop(&mut self) {
-        let _ = self
-            .tmux()
-            .arg("kill-server")
-            .stderr(Stdio::null())
-            .status();
     }
 }
 

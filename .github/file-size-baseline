@@ -29,7 +29,7 @@
 1985 src/state.rs
 1202 src/timer.rs
 843 src/update.rs
-1130 src/view.rs
-913 src/view/split.rs
+1129 src/view.rs
+909 src/view/split.rs
 874 src/windows.rs
 953 tests/pasture.rs

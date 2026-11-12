@@ -25,7 +25,7 @@ const MARK: &str = "marker-7f3a";
 /// A temporary home with a marker file, a marker variable and a bin
 /// folder on the PATH.
 struct World {
-    _tmp: tempfile::TempDir,
+    _tmp: common::TestDir,
     root: PathBuf,
     env: HostEnv,
 }

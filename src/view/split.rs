@@ -25,6 +25,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
+use title::on_off;
 
 /// The tmux session of the split. Sandbox ids always have two `-`, so no
 /// sandbox has this name.
@@ -343,6 +344,7 @@ pub fn style_args(layout: Option<&str>) -> Vec<String> {
         "after-new-window".into(),
         hook.join(" ; "),
     ]);
+    cmds.push(title::session_args(&win));
     if let Some(cmd) = layout {
         for h in ["client-attached", "client-resized"] {
             cmds.push(vec![
@@ -386,20 +388,10 @@ pub fn label_args(pane: &str, job: &Job) -> Vec<String> {
         set("@paddock_side", job.side.word()),
         set("@paddock_color", job.side.color()),
         set("@paddock_title", &clean(&job.title)),
-        set(
-            "remain-on-exit",
-            if job.side == Side::Sandbox {
-                "on"
-            } else {
-                "off"
-            },
-        ),
+        set("remain-on-exit", on_off(job.side == Side::Sandbox)),
         set("allow-set-title", "off"),
         set("allow-rename", "off"),
-        set(
-            "allow-passthrough",
-            if job.passthrough { "on" } else { "off" },
-        ),
+        set("allow-passthrough", on_off(job.passthrough)),
     ])
 }
 
@@ -550,6 +542,7 @@ pub fn start(
     if t.has(SESSION) {
         bail!("a split runs already");
     }
+    title::check_version(t)?;
     let file = write_job(env, first)?;
     if let Err(e) = t.new_session_sized(SESSION, &pane_cmd(me, &file), size) {
         let _ = std::fs::remove_file(&file);
@@ -573,6 +566,7 @@ pub fn start(
     if border != Some(border_format())
         || status.as_deref().map(str::trim) != Some(KEYS)
         || titles.as_deref() != Some("off")
+        || !title::took(t, &window)
     {
         let _ = t.output(&s(&["kill-session", "-t", TARGET]));
         bail!(
@@ -911,3 +905,5 @@ fn parent_pid(pid: u32) -> Option<u32> {
 #[cfg(test)]
 #[path = "split_tests.rs"]
 mod tests;
+#[path = "split_tmux.rs"]
+pub mod title;

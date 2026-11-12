@@ -3,7 +3,8 @@
 // (main screen, mouse reports off, cursor on, cooked mode).
 import { afterEach, expect, test } from 'vitest';
 import { execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import pty from 'node-pty';
@@ -20,6 +21,8 @@ interface Session {
   term: xterm.Terminal;
   raw: () => string;
   screen: () => string;
+  /** What the program wrote to stderr: in a file, not on the screen. */
+  stderr: () => string;
   exited: Promise<{ exitCode: number; signal?: number }>;
 }
 
@@ -41,12 +44,14 @@ function start(args: string[], env: Record<string, string> = {}): Session {
   // PADDOCK_TUI_UNDER_TEST: a compiled binary (bun build --compile) instead of node and dist/cli.js.
   const bin = process.env.PADDOCK_TUI_UNDER_TEST;
   const cmd = bin ? `"${bin}"` : `"${process.execPath}" "${CLI}"`;
-  const p = pty.spawn('/bin/sh', ['-c', `${cmd} "$@"; echo "EXIT=$?"; stty -a; echo "${DONE}"`, 'sh', ...args], {
+  const errFile = join(mkdtempSync(join(tmpdir(), 'paddock-tui-stderr-')), 'stderr');
+  const p = pty.spawn('/bin/sh', ['-c', `${cmd} "$@" 2>"$TUI_STDERR"; echo "EXIT=$?"; stty -a; echo "${DONE}"`, 'sh', ...args], {
     name: 'xterm-256color',
     cols: 80,
     rows: 24,
     cwd: root,
-    env: { ...process.env, TERM: 'xterm-256color', PADDOCK_TUI_MOUSE: '1', ...env } as Record<string, string>,
+    // CI as on a CI runner: the program draws in a terminal also then.
+    env: { ...process.env, TERM: 'xterm-256color', CI: 'true', PADDOCK_TUI_MOUSE: '1', TUI_STDERR: errFile, ...env } as Record<string, string>,
   });
   let raw = '';
   p.onData((d) => {
@@ -60,7 +65,14 @@ function start(args: string[], env: Record<string, string> = {}): Session {
     for (let i = 0; i < term.rows; i++) out.push(b.getLine(b.viewportY + i)?.translateToString(true) ?? '');
     return out.join('\n');
   };
-  const s = { p, term, raw: () => raw, screen, exited };
+  const stderr = () => {
+    try {
+      return readFileSync(errFile, 'utf8');
+    } catch {
+      return '';
+    }
+  };
+  const s = { p, term, raw: () => raw, screen, stderr, exited };
   open.push(s);
   return s;
 }
@@ -72,7 +84,9 @@ async function waitScreen(s: Session, text: string, ms = HANG_MS): Promise<strin
     if (s.screen().includes(text)) return s.screen();
     await sleep(50);
   }
-  throw new Error(`no "${text}" on the screen:\n${s.screen()}\n--- raw tail:\n${JSON.stringify(s.raw().slice(-500))}`);
+  throw new Error(
+    `no "${text}" on the screen:\n${s.screen()}\n--- raw tail:\n${JSON.stringify(s.raw().slice(-500))}\n--- stderr of the program:\n${s.stderr().slice(-2000)}`,
+  );
 }
 
 async function restored(s: Session): Promise<void> {

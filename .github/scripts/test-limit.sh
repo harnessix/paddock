@@ -9,6 +9,16 @@
 # "test NAME has been running for over 60 seconds" for each slow test. A
 # slow test without a result line after that is a test that still ran.
 #
+# Each binary gets a folder of its own, new and empty: TMPDIR and
+# PADDOCK_TEST_PARENT point at it, so the test folders of tempfile and of
+# tests/common are in it. After the binary, the script looks for tmux
+# servers that still run with a socket in that folder (tmux-leaks.sh). A
+# tmux server starts a session of its own, so the stop of the process group
+# does not reach it. When there is such a server, the script names it,
+# stops it, and fails the binary. The servers of other test runs, of other
+# tools and of the user have their sockets outside the folder: the script
+# does not count them and does not stop them.
+#
 # Usage: test-limit.sh BINARY [ARGS...]
 set -u
 
@@ -24,8 +34,41 @@ if [ "$#" -eq 0 ]; then
   exit 2
 fi
 
-tmp=$(mktemp -d)
-trap 'rm -rf "$tmp"' EXIT
+here=$(cd -- "$(dirname -- "$0")" && pwd)
+
+# The tmux servers that the binary left running. Prints them, stops them,
+# and returns 1 when there is one.
+tmux_leaks() {
+  local new pid sock text
+  new=$("$here/tmux-leaks.sh" "$root")
+  [ -n "$new" ] || return 0
+  text="$(basename "$1") left tmux servers running with a socket in a test folder. A test must stop its tmux server (TmuxGuard in src/view/guard.rs):"
+  while read -r pid sock; do
+    text="$text $sock (pid $pid);"
+    kill -TERM "$pid" 2>/dev/null
+  done <<<"$new"
+  echo "test-limit: $text" >&2
+  if [ -n "${GITHUB_ACTIONS:-}" ]; then
+    echo "::error title=Leaked tmux server::$text"
+  fi
+  return 1
+}
+
+# A short folder: tests/common puts sockets below PADDOCK_TEST_PARENT and
+# needs at most 32 bytes for its path. On Linux it is in /var/tmp, where
+# tests/common makes its folders without this script.
+# The removal at the end stays on the file system of the folder: a test can
+# leave a mount in it.
+case "$(uname -s)" in
+  Linux) base=/var/tmp rm_opts=--one-file-system ;;
+  *) base=/tmp rm_opts= ;;
+esac
+tmp=$(mktemp -d "$base/tl.XXXXXX") || exit 2
+trap 'rm -rf $rm_opts -- "$tmp"' EXIT
+# The real path, without symlinks (macOS /tmp), as tests/common wants it.
+tmp=$(cd -- "$tmp" && pwd -P)
+root="$tmp/r"
+mkdir -m 700 "$root" || exit 2
 out="$tmp/out"
 status="$tmp/status"
 stopped="$tmp/stopped"
@@ -35,7 +78,7 @@ stopped="$tmp/stopped"
 # started and did not move to a new session, and tee.
 set -m
 {
-  "$@"
+  TMPDIR="$root" PADDOCK_TEST_PARENT="$root" "$@"
   echo "$?" >"$status"
 } 2>&1 | tee "$out" &
 tee_pid=$!
@@ -74,7 +117,11 @@ fi
 wait 2>/dev/null
 
 if [ ! -e "$stopped" ] && [ -s "$status" ]; then
-  exit "$(cat "$status")"
+  code=$(cat "$status")
+  if ! tmux_leaks "$1" && [ "$code" -eq 0 ]; then
+    code=1
+  fi
+  exit "$code"
 fi
 if [ ! -e "$stopped" ]; then
   # A signal from outside ended the binary before it wrote its status.

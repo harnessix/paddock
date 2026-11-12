@@ -35,7 +35,7 @@ fn fuse_works() -> bool {
 }
 
 struct World {
-    _tmp: tempfile::TempDir,
+    _tmp: common::TestDir,
     root: PathBuf,
 }
 

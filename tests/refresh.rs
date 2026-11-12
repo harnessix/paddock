@@ -27,7 +27,7 @@ fn paddock(t: &Path, args: &[&str]) -> std::process::Output {
 
 #[test]
 fn refresh_parses_and_adds_a_new_harness() {
-    let t = tempfile::tempdir().unwrap();
+    let t = paddock::view::guard::tempdir();
     std::fs::create_dir_all(t.path().join("home")).unwrap();
     std::fs::create_dir_all(t.path().join("run")).unwrap();
     std::fs::write(t.path().join("home/.bashrc"), "# mine\n").unwrap();

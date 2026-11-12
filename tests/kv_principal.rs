@@ -35,7 +35,7 @@ fn paddock(root: &Path) -> Command {
 
 #[test]
 fn a_principal_writes_and_a_sandbox_reads_it() {
-    let t = tempfile::tempdir().unwrap();
+    let t = paddock::view::guard::tempdir();
     let root = t.path();
     let project = root.join("project");
     for d in ["cfg/paddock", "run", "home", "project"] {

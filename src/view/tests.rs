@@ -1,9 +1,10 @@
+use super::guard::TmuxGuard;
 use super::*;
 use std::collections::BTreeMap;
 use std::io::Read;
 use std::os::fd::OwnedFd;
 
-fn env_in(t: &Path, extra: &[(&str, &str)]) -> HostEnv {
+pub(crate) fn env_in(t: &Path, extra: &[(&str, &str)]) -> HostEnv {
     let run = t.join("run");
     crate::privfs::dir(&run).unwrap();
     let mut vars = BTreeMap::new();
@@ -22,17 +23,6 @@ fn env_in(t: &Path, extra: &[(&str, &str)]) -> HostEnv {
         vars.insert(k.to_string(), v.to_string());
     }
     HostEnv::from_parts(t.join("home"), "demo".into(), 1000, 1000, vars)
-}
-
-/// The tmux server of a test: a private socket in its folder, killed at
-/// the end.
-pub(crate) struct Server(pub(crate) Option<Tmux>);
-impl Drop for Server {
-    fn drop(&mut self) {
-        if let Some(t) = &self.0 {
-            let _ = t.cmd().arg("kill-server").status();
-        }
-    }
 }
 
 /// A fake harness: output on both streams, bytes that are not text, exit 7.
@@ -118,7 +108,7 @@ fn the_caller_sees_the_same_output_and_exit_code_with_and_without_tmux() {
         "{}",
         tmux.sock.display()
     );
-    let _server = Server(Some(tmux.clone()));
+    let _server = TmuxGuard::of(&tmux);
     let (o, e, code, session) = run_with_view(&on, "sbtmux");
     assert!(session, "the tmux session did not start");
     assert_eq!(o, direct.stdout);
@@ -136,7 +126,7 @@ fn capture(t: &Tmux, id: &str) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
-fn wait_for(what: &str, mut f: impl FnMut() -> bool) {
+pub(crate) fn wait_for(what: &str, mut f: impl FnMut() -> bool) {
     let start = Instant::now();
     while !f() {
         assert!(
@@ -155,7 +145,7 @@ fn the_session_lives_while_the_harness_runs_stays_after_and_gc_removes_it() {
         eprintln!("skipped: tmux is not installed");
         return;
     };
-    let _server = Server(Some(tmux.clone()));
+    let _server = TmuxGuard::of(&tmux);
     let id = "sbabc123";
     // The pane follows the log until this process ends: here a stand-in
     // for the paddock process.
@@ -212,7 +202,7 @@ fn stop_ends_the_session() {
         eprintln!("skipped: tmux is not installed");
         return;
     };
-    let _server = Server(Some(tmux.clone()));
+    let _server = TmuxGuard::of(&tmux);
     let log = log_file(&env, "sbstop");
     Tee::create(&log).unwrap();
     tmux.start(
@@ -238,7 +228,7 @@ fn the_socket_folder_is_private() {
         eprintln!("skipped: tmux is not installed");
         return;
     };
-    let _server = Server(Some(tmux.clone()));
+    let _server = TmuxGuard::of(&tmux);
     let log = log_file(&env, "sbmode");
     Tee::create(&log).unwrap();
     tmux.start("sbmode", "h", &log, std::process::id(), Path::new("/x"))
@@ -310,7 +300,7 @@ fn view_opens_tmux_or_the_log_in_the_right_terminal() {
         return;
     };
     let tmux = Tmux::find(&env).unwrap();
-    let _server = Server(Some(tmux.clone()));
+    let _server = TmuxGuard::of(&tmux);
     tmux.start(
         "sbview",
         "h",
@@ -396,7 +386,7 @@ fn reap_removes_views_older_than_keep_ended_and_keeps_newer_ones() {
         eprintln!("skipped: tmux is not installed");
         return;
     };
-    let _server = Server(Some(tmux.clone()));
+    let _server = TmuxGuard::of(&tmux);
     let cfg = t.path().join("cfg/paddock");
     std::fs::create_dir_all(&cfg).unwrap();
     std::fs::write(cfg.join("config.toml"), "[view]\nkeep_ended = \"1h\"\n").unwrap();
@@ -555,7 +545,7 @@ fn review_e_l2_drop_before_finish_ends_the_tmux_session() {
         eprintln!("skipped: tmux is not installed");
         return;
     };
-    let _server = Server(Some(tmux.clone()));
+    let _server = TmuxGuard::of(&tmux);
     let id = "sbearly";
     let live = Live::start(&env, id, "fake", true, true, true).expect("a view");
     assert!(live.session, "the tmux session did not start");
@@ -666,7 +656,7 @@ fn a_view_session_starts_in_the_root_directory() {
         eprintln!("skipped: tmux is not installed");
         return;
     };
-    let _server = Server(Some(tmux.clone()));
+    let _server = TmuxGuard::of(&tmux);
     let out = t.path().join("pwd.txt");
     let script = format!("pwd > {}; sleep 60", out.display());
     let cmd = ["sh", "-c", &script].map(std::ffi::OsString::from);
@@ -694,7 +684,7 @@ fn review_j_a_run_session_has_no_status_line_with_a_title_of_the_sandbox() {
         eprintln!("skipped: tmux is not installed");
         return;
     };
-    let _server = Server(Some(tmux.clone()));
+    let _server = TmuxGuard::of(&tmux);
     let cmd: Vec<OsString> = [
         "sh",
         "-c",

@@ -8,7 +8,7 @@ use paddock::horse::{run, Store};
 
 /// A test folder whose dsh parent is the fake `parent` and whose claude
 /// children are the fake claude. `horse` is the `[horse] enabled` value.
-fn hitch_setup(parent: &str, horse: bool) -> tempfile::TempDir {
+fn hitch_setup(parent: &str, horse: bool) -> common::TestDir {
     let tmp = sandbox_setup(parent);
     let root = tmp.path();
     install_harness(

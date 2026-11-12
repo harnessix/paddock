@@ -79,7 +79,9 @@ async function main(): Promise<number> {
     <ThemeContext.Provider value={theme}>
       <App api={paddock} readonly={o.readonly} initialMouse={o.mouse} cwd={process.cwd()} onMouseChange={(on) => setMouse(term, on)} />
     </ThemeContext.Provider>,
-    { alternateScreen: alt, exitOnCtrlC: false, patchConsole: true, maxFps: 30 },
+    // interactive: stdin and stdout are terminals (checked above). Ink's own
+    // check also says no when CI is set, and then draws nothing until exit.
+    { alternateScreen: alt, exitOnCtrlC: false, patchConsole: true, maxFps: 30, interactive: true },
   );
   unmount = () => instance.unmount();
   try {

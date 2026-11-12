@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 /// A temporary host: a user configuration with one shared device, a state
 /// folder, a runtime folder and a project.
 pub struct World {
-    _tmp: tempfile::TempDir,
+    _tmp: super::TestDir,
     pub root: PathBuf,
     /// The device name of the paths below.
     pub name: String,

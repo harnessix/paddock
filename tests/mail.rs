@@ -96,7 +96,7 @@ fn output(
 }
 
 struct World {
-    _tmp: tempfile::TempDir,
+    _tmp: common::TestDir,
     root: PathBuf,
     env: HostEnv,
 }
@@ -417,9 +417,7 @@ fn send_and_watch_round_trip_in_order_once_across_restarts() {
     );
 }
 
-/// The tmux server of a test. It stops when the test ends, also after a
-/// failure: its pane stays after its process ends, so the server does not
-/// stop on its own.
+/// The tmux server of a test, to run tmux commands on it.
 struct TmuxServer(paddock::view::Tmux);
 
 impl TmuxServer {
@@ -433,12 +431,6 @@ impl TmuxServer {
     }
 }
 
-impl Drop for TmuxServer {
-    fn drop(&mut self) {
-        let _ = output(self.command(&["kill-server"]), "`tmux kill-server`", None);
-    }
-}
-
 #[test]
 fn killing_the_agent_process_behind_a_live_pane_is_one_gone_line() {
     let w = World::new();
@@ -446,6 +438,10 @@ fn killing_the_agent_process_behind_a_live_pane_is_one_gone_line() {
         eprintln!("skipped: no tmux");
         return;
     };
+    // The guard stops the server when the test ends, also after a failure:
+    // the pane stays after its process ends, so the server does not stop on
+    // its own.
+    let _guard = paddock::view::guard::TmuxGuard::of(&tmux);
     tmux.new_session(RUN, &["sleep".into(), "300".into()])
         .unwrap();
     let server = TmuxServer(tmux);

@@ -22,9 +22,9 @@ fn paddock(root: &Path, args: &[&str]) -> Output {
         .unwrap()
 }
 
-fn world() -> tempfile::TempDir {
+fn world() -> paddock::view::guard::TestDir {
     use std::os::unix::fs::PermissionsExt;
-    let t = tempfile::tempdir().unwrap();
+    let t = paddock::view::guard::tempdir();
     for d in ["home", "run", "bin"] {
         std::fs::create_dir_all(t.path().join(d)).unwrap();
     }

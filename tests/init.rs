@@ -49,8 +49,8 @@ fn explain(dir: &Path, extra: &[&str]) {
     );
 }
 
-fn project() -> (tempfile::TempDir, PathBuf) {
-    let t = tempfile::tempdir().unwrap();
+fn project() -> (paddock::view::guard::TestDir, PathBuf) {
+    let t = paddock::view::guard::tempdir();
     let p = t.path().join("p");
     std::fs::create_dir_all(&p).unwrap();
     (t, p)

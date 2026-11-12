@@ -32,6 +32,10 @@ pub mod sshd;
 
 const PARENT_VAR: &str = "PADDOCK_TEST_PARENT";
 
+/// A test folder whose tmux servers stop at the end of the test.
+#[allow(unused_imports)]
+pub use paddock::view::guard::{guarded, TestDir};
+
 fn passwd_home() -> io::Result<PathBuf> {
     // SAFETY: getpwuid_r writes only to the supplied record and buffer. The
     // home is copied while that buffer is still alive.
@@ -125,7 +129,8 @@ pub fn fits_socket_paths(parent: &Path) -> bool {
 }
 
 /// A new, test-owned folder for one test. No other test folder is removed.
-pub fn tempdir() -> tempfile::TempDir {
+/// Its tmux servers stop at the end of the test.
+pub fn tempdir() -> TestDir {
     let env_home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .expect("HOME is needed to protect the user's folders");
@@ -161,9 +166,9 @@ pub fn tempdir() -> tempfile::TempDir {
     } else {
         Err(io::Error::other("test parent is too long for Unix sockets"))
     };
-    result.unwrap_or_else(|e| {
+    guarded(result.unwrap_or_else(|e| {
         panic!("cannot create a safe test folder ({}: {e}). Set {PARENT_VAR} to a short private directory or root-owned sticky temporary directory outside HOME and caches", parent.display())
-    })
+    }))
 }
 
 /// The address of the user's D-Bus session bus, read before a test points

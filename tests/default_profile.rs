@@ -59,36 +59,16 @@ printf "new\n" > "$HOME/.fake/new.txt"
 rm "$HOME/.fake/old.txt"
 "#;
 
-/// A one-shot run on macOS starts a tmux server for `paddock view`, with
-/// its socket outside the test folder: stop it.
-#[cfg(target_os = "macos")]
-struct StopTmux(std::path::PathBuf);
-
-#[cfg(target_os = "macos")]
-impl Drop for StopTmux {
-    fn drop(&mut self) {
-        let uid = unsafe { libc::getuid() };
-        let sock =
-            paddock::sockpath::socket_dir(&self.0.join("run/paddock"), uid, "").join("view.sock");
-        if sock.exists() {
-            let _ = Command::new("tmux")
-                .arg("-S")
-                .arg(&sock)
-                .arg("kill-server")
-                .stderr(std::process::Stdio::null())
-                .status();
-        }
-    }
-}
-
 #[test]
 fn a_shadow_run_sees_the_host_data_and_changes_only_its_snapshot() {
     let tmp = common::tempdir();
-    // On macOS the temp folder is behind the /var symlink.
+    // On macOS the temp folder is behind the /var symlink. A one-shot run
+    // starts a tmux server for `paddock view`: the guard of `tmp` stops it,
+    // also when its socket is in a short folder outside the test folder.
     let root_buf = std::fs::canonicalize(tmp.path()).unwrap();
     let root = root_buf.as_path();
     #[cfg(target_os = "macos")]
-    let (backend, _tmux) = ("seatbelt", StopTmux(root_buf.clone()));
+    let backend = "seatbelt";
     #[cfg(not(target_os = "macos"))]
     let backend = {
         if !common::bwrap_works() || !overlay_works(root) {

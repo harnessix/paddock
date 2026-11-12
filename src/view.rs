@@ -243,10 +243,6 @@ impl Tmux {
         }
     }
 
-    pub fn kill(&self, id: &str) -> bool {
-        valid_id(id) && self.run(&["kill-session", "-t", &format!("={id}")])
-    }
-
     /// The last lines of pane `id`. A detached run has no view log. Its
     /// output is this pane.
     pub fn pane_tail(&self, id: &str) -> Option<String> {
@@ -1124,6 +1120,9 @@ pub fn open(env: &HostEnv, id: &str, write: bool) -> Result<()> {
         .with_context(|| format!("cannot start {}", argv[0].to_string_lossy()))
 }
 
+mod end;
+#[doc(hidden)]
+pub mod guard;
 mod pane;
 pub mod split;
 #[cfg(test)]

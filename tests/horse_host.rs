@@ -89,7 +89,7 @@ fn write_claude(tmp: &Path, project: &str, n: usize) -> PathBuf {
 
 #[test]
 fn import_list_and_fork_a_host_session() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = paddock::view::guard::tempdir();
     let t = tmp.path();
     let rel = write_claude(t, "-home-me-src-app", 3);
     let host_file = std::fs::read(t.join("home").join(&rel)).unwrap();
@@ -132,7 +132,7 @@ fn import_list_and_fork_a_host_session() {
 
 #[test]
 fn adopt_hook_and_off_keep_every_byte_of_the_settings() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = paddock::view::guard::tempdir();
     let t = tmp.path();
     let rel = write_claude(t, "p", 2);
     let settings = t.join("home/.claude/settings.json");
@@ -181,7 +181,7 @@ fn adopt_hook_and_off_keep_every_byte_of_the_settings() {
 
 #[test]
 fn adopt_without_hooks_changes_no_configuration() {
-    let tmp = tempfile::tempdir().unwrap();
+    let tmp = paddock::view::guard::tempdir();
     let t = tmp.path();
     write_claude(t, "p", 1);
     paddock(t, &["adopt", "claude", "--no-hooks"]);

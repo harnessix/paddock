@@ -119,7 +119,7 @@ fn a_note_goes_into_the_record() {
 /// The stuck detector against a real pane, as in detach/tests.rs.
 #[test]
 fn a_pane_on_a_quota_screen_is_stuck_and_names_the_error() {
-    use crate::detach::tests::{ctl, quiet_session, record, until, Server};
+    use crate::detach::tests::{ctl, quiet_session, record, until};
     use std::time::Duration;
     let t = tempfile::tempdir().unwrap();
     let env = crate::detach::tests::env_in(t.path());
@@ -127,7 +127,7 @@ fn a_pane_on_a_quota_screen_is_stuck_and_names_the_error() {
         eprintln!("skipped: needs tmux");
         return;
     };
-    let _server = Server(tmux.clone());
+    let _server = crate::view::guard::TmuxGuard::of(&tmux);
     let dir = env.paddock_config();
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(

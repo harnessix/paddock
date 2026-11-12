@@ -30,7 +30,7 @@ fn text(o: &std::process::Output) -> String {
 
 #[test]
 fn list_and_remove_a_pasture() {
-    let t = tempfile::tempdir().unwrap();
+    let t = paddock::view::guard::tempdir();
     let home = t.path().join("home");
     let project = t.path().join("project");
     for d in [&home, &project, &t.path().join("run")] {
@@ -178,7 +178,7 @@ impl Drop for Kill {
 /// below and the unit tests of the relay.
 #[test]
 fn a_member_shares_a_port_in_its_own_socket_folder() {
-    let t = tempfile::tempdir().unwrap();
+    let t = paddock::view::guard::tempdir();
     let home = t.path().join("home");
     let ground = t.path().join("ground");
     let ports = t.path().join("ports");
@@ -466,7 +466,7 @@ const ANSWER: &str = r#"q=$(cat); case "$q" in *login*) cat "$0";; *) echo "B an
 #[test]
 fn a_member_asks_another_and_the_guard_withholds_a_login() {
     use paddock::pasture::bridge;
-    let t = tempfile::tempdir().unwrap();
+    let t = paddock::view::guard::tempdir();
     let home = t.path().join("home");
     let ground = t.path().join("ground");
     let b_home = t.path().join("b-home");
@@ -760,7 +760,7 @@ fn a_member_asks_another_in_bubblewrap() {
 
 #[test]
 fn the_workbench_needs_the_configuration() {
-    let t = tempfile::tempdir().unwrap();
+    let t = paddock::view::guard::tempdir();
     for d in ["home/.config/paddock", "project", "run"] {
         std::fs::create_dir_all(t.path().join(d)).unwrap();
     }

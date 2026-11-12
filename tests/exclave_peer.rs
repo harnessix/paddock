@@ -11,7 +11,7 @@ fn peer_runs_in_a_limited_sandbox() {
     if !common::peer_host_ready("peer_runs_in_a_limited_sandbox") {
         return;
     }
-    let dir = tempfile::tempdir().unwrap();
+    let dir = paddock::view::guard::tempdir();
     // The peer gets a scratch XDG_RUNTIME_DIR without the user manager in
     // it, as a peer started from a bare ssh session can have. paddock finds
     // the manager by itself (src/exclave/sandbox.rs, manager_runtime_dir).
