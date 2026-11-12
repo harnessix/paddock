@@ -1,6 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.2.3
+
+- New: `[loft] mode = "sync"`, in the user configuration or in a project `paddock.toml`. Then `.paddock` is a real folder of the project instead of a link to the loft, so agent tools such as Claude Code do not treat the notes as a place outside the project, and a write to a note does not ask for approval. paddock syncs the folder of each work tree with the loft in both directions: at the start and the end of each run, during the run when either side changes, and on `paddock loft sync` (`--watch` keeps syncing) and `paddock loft commit`. `/.paddock` goes into `.git/info/exclude`, never into `.gitignore`. If both sides changed a file, the loft version stays and the other version goes next to it as `NAME.conflict-<host or run>-<time>`. `paddock loft status` lists open conflicts. A delete against a change keeps the file. A sync that stops halfway leaves no half file and finishes at the next sync. `paddock loft mode sync|link` switches a work tree without loss. `link` stays the default. A delete never removes a note: a sync moves the loft version to the loft trash (`trash/<time>/<path>` in the loft), and the other work trees then remove the file. `paddock loft trash` lists the trash. `paddock loft restore PATH` brings a note, or a folder of notes, back to the loft and to the work trees. If the loft has a newer file at the path, the restored file becomes a conflict copy. `paddock gc --yes` removes trash folders older than 30 days, and `[loft] trash_days` changes the number. A delete in the work tree waits for a second sync, at least 5 seconds later, before it reaches the trash. If most of the folder is gone at once, no delete reaches the loft. A `mv` of a folder is not such a mass delete.
+- New: `paddock --launcher-protocol` prints one JSON line with the protocol and the features that paddock for Mac needs. It reads no file and starts nothing. paddock for Mac refuses a paddock that does not answer it.
+- Removed: a release has no macOS binaries, and the CI runs no macOS job. The macOS runners of GitHub often got no machine, so a release waited or failed. On macOS, install and update paddock with Homebrew (`brew install paddock`, `brew upgrade paddock`), which builds it from the source.
+- Fixed: on btrfs, `paddock horse grant --revoke` could skip a peek grant that a read rewrote at that moment, so the grant stayed active. The list of a sandbox's peek grants now waits for writers, and a peek read writes its grant under the store lock.
+- Fixed: on btrfs, `paddock horse grants` and the horse device tree (`self/memory/`, `self/views/`) could leave out a grant, memory or view that was rewritten at that moment.
 
 ## 0.2.2
 

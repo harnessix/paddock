@@ -44,7 +44,7 @@ secrets. See `paddock help environment` for the details and controls.
 From a release clone:
 
 ```sh
-git clone --branch v0.2.2 https://github.com/harnessix/paddock
+git clone --branch v0.2.3 https://github.com/harnessix/paddock
 cd paddock
 bin/install
 ```
@@ -52,11 +52,11 @@ bin/install
 Or download the prebuilt binary and its checksum:
 
 ```sh
-curl -fLO https://github.com/harnessix/paddock/releases/download/v0.2.2/paddock-0.2.2-x86_64-linux.tar.gz
-curl -fLO https://github.com/harnessix/paddock/releases/download/v0.2.2/paddock-0.2.2-x86_64-linux.tar.gz.sha256
-sha256sum -c paddock-0.2.2-x86_64-linux.tar.gz.sha256
-tar -xzf paddock-0.2.2-x86_64-linux.tar.gz
-install -m 755 paddock-0.2.2-x86_64-linux/paddock ~/.local/bin/paddock
+curl -fLO https://github.com/harnessix/paddock/releases/download/v0.2.3/paddock-0.2.3-x86_64-linux.tar.gz
+curl -fLO https://github.com/harnessix/paddock/releases/download/v0.2.3/paddock-0.2.3-x86_64-linux.tar.gz.sha256
+sha256sum -c paddock-0.2.3-x86_64-linux.tar.gz.sha256
+tar -xzf paddock-0.2.3-x86_64-linux.tar.gz
+install -m 755 paddock-0.2.3-x86_64-linux/paddock ~/.local/bin/paddock
 paddock doctor
 ```
 
