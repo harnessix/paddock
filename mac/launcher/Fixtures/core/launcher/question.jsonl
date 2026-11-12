@@ -1,0 +1,11 @@
+{"v":1,"t":"2026-11-06T12:01:00Z","kind":"question","state":"open","id":"r-1a2b3c","app":"sample-notes","host":"api.example.com","port":443,"process":"/Users/u/Applications/Sample Notes.app/Contents/MacOS/Sample Notes"}
+{"v":1,"t":"2026-11-06T12:01:09Z","kind":"question","state":"answered","id":"r-1a2b3c","app":"sample-notes","host":"api.example.com","port":443,"process":"/Users/u/Applications/Sample Notes.app/Contents/MacOS/Sample Notes","answer":"allow-always","by":"user"}
+{"v":1,"t":"2026-11-06T12:02:00Z","kind":"question","state":"open","id":"r-4d5e6f","app":"sample-notes","host":"telemetry.example.com","port":443}
+{"v":1,"t":"2026-11-06T12:04:00Z","kind":"question","state":"answered","id":"r-4d5e6f","app":"sample-notes","host":"telemetry.example.com","port":443,"answer":"deny","by":"rule"}
+{"v":1,"t":"2026-11-06T12:05:00Z","kind":"question","state":"paused","id":"r-7a8b9c","app":"sample-notes","host":"","port":0,"open":23}
+{"v":1,"t":"2026-11-06T12:06:00Z","kind":"question","state":"open","id":"r-old","app":"sample-notes","host":"api.example.com","port":443}
+{"v":1,"t":"2026-11-06T12:06:01Z","kind":"question","state":"withdrawn","id":"r-old","app":"sample-notes","host":"api.example.com","port":443}
+{"v":1,"t":"2026-11-06T12:06:01Z","kind":"question","state":"paused","id":"r-notice","app":"sample-notes","host":"","port":0,"open":21}
+{"v":1,"t":"2026-11-06T12:06:02Z","kind":"question","state":"resumed","id":"r-notice","app":"sample-notes","host":"","port":0,"answer":"allow-once","by":"cli","open":21}
+{"v":1,"t":"2026-11-06T12:06:02Z","kind":"question","state":"open","id":"r-old-g1","app":"sample-notes","host":"api.example.com","port":443}
+{"v":1,"t":"2026-11-06T12:06:03Z","kind":"question","state":"answered","id":"r-old-g1","app":"sample-notes","host":"api.example.com","port":443,"answer":"deny","by":"user"}

@@ -150,7 +150,7 @@ impl Store {
     }
 
     pub fn horses(&self) -> Result<Vec<Horse>> {
-        self.list_refs("horses")?
+        self.list_locked_refs("horses")?
             .iter()
             .filter_map(|n| n.strip_suffix(".json"))
             .map(|id| self.horse(id))
@@ -158,7 +158,7 @@ impl Store {
     }
 
     pub fn sessions(&self) -> Result<Vec<Session>> {
-        self.list_refs("sessions")?
+        self.list_locked_refs("sessions")?
             .iter()
             .filter_map(|n| n.strip_suffix(".json"))
             .map(|id| self.session(id))

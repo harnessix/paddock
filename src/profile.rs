@@ -337,6 +337,10 @@ pub struct TomlSet {
     /// Key path. `{project}` is the project path.
     pub path: Vec<String>,
     pub value: String,
+    /// The answer to the harness's own trust question for the project. Not
+    /// written in manual approvals mode (approvals.rs).
+    #[serde(default)]
+    pub trust: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -420,9 +424,13 @@ pub struct Setting {
     pub value: toml::Value,
     /// Only when the harness starts with its auto-approval flags
     /// (`yolo_args`), for example the acceptance of a bypass warning. With
-    /// `--no-yolo` the harness keeps asking.
+    /// `--manual` the harness keeps asking.
     #[serde(default)]
     pub yolo_only: bool,
+    /// The answer to the harness's own trust question for the project. Not
+    /// written in manual approvals mode (approvals.rs): the user answers it.
+    #[serde(default)]
+    pub trust: bool,
     /// Add `value` at the end of the array at `path`, unless the array has
     /// it already, for a hook beside the user's own hooks.
     #[serde(default)]
@@ -641,6 +649,16 @@ impl<'a> HarnessFactory<'a> {
             path_dirs,
             source: source.clone(),
         })
+    }
+
+    /// The program of a harness, without its install closure: the first
+    /// that `[locate]` finds. The VM guest asks it before a run starts.
+    pub fn program(&self, name: &str) -> Result<PathBuf> {
+        let (profile, _) = self
+            .profiles
+            .get(name)
+            .ok_or_else(|| anyhow!("unknown harness '{name}'"))?;
+        self.locate(profile)
     }
 
     /// A harness for a profile that paddock builds itself, such as the

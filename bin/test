@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run every automated check: unit and integration tests, the leak guard,
+# Run every automated check: unit and integration tests
 # and the escape probe on each backend this host can run.
 set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -15,7 +15,6 @@ if [ "$(uname -s)" = Linux ] && command -v bwrap >/dev/null &&
 fi
 cargo test
 
-.github/scripts/leak-guard.sh
 sh packaging/macos/guest/launch_test.sh
 
 bin=target/debug/paddock

@@ -1,6 +1,6 @@
 {
   "name": "@harnessix/paddock-tui",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "A terminal interface for paddock: runs, approvals, mail and the board, with the keyboard or the mouse",
   "license": "MIT",
   "repository": {
@@ -19,8 +19,8 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && chmod +x dist/cli.js",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "node scripts/bundle-sprites.mjs && tsc -p tsconfig.build.json && chmod +x dist/cli.js",
+    "typecheck": "node scripts/bundle-sprites.mjs && tsc -p tsconfig.json --noEmit",
     "lint": "eslint .",
     "test": "npm run build && vitest run",
     "compile": "node scripts/compile.mjs",

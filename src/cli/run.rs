@@ -20,6 +20,17 @@ account folder that the sandbox logs in with. In the home folder, the agent work
 project under ~/.local/share/paddock/scratch. PADDOCK_BYPASS=1 runs the command without a sandbox.";
 
 impl RunArgs {
+    /// `--manual` (or `--no-yolo`) and `--auto`. None: the configuration
+    /// decides.
+    pub(crate) fn approvals(&self) -> Option<paddock::approvals::Approvals> {
+        use paddock::approvals::Approvals;
+        match (self.manual, self.auto) {
+            (true, _) => Some(Approvals::Manual),
+            (_, true) => Some(Approvals::Auto),
+            _ => None,
+        }
+    }
+
     fn options(&self, env: &HostEnv, shell: bool) -> Result<Options> {
         let mut harness = self.harness.clone();
         let mut path = self.path.clone();
@@ -48,7 +59,8 @@ impl RunArgs {
             network: self.network,
             gui: self.gui,
             gpu: self.gpu,
-            no_yolo: self.no_yolo,
+            no_yolo: false,
+            approvals: self.approvals(),
             worktree: self.worktree,
             worktree_app: None,
             allow_domains: self.allow.clone(),
@@ -194,7 +206,8 @@ fn start_with(
     // The VM backend starts the same run with paddock in the guest.
     built.spec.intent = paddock::spec::Intent {
         shell,
-        no_yolo: opts.no_yolo,
+        // The guest has no configuration of the user: it gets the mode.
+        no_yolo: built.approvals != Some(paddock::approvals::Approvals::Auto),
         args: opts.args.clone(),
         horse_id: a.horse_id.clone(),
     };
@@ -209,15 +222,15 @@ fn start_with(
         }
         None => None,
     };
-    let code = start_built(env, &opts, built, shell);
+    let code = start_built(env, built, shell);
     if let Some((home, id)) = prompt_home {
         paddock::spawn::remove_prompt(&home, &id);
     }
     code
 }
 
-fn start_built(env: &HostEnv, opts: &Options, built: build::Built, shell: bool) -> Result<i32> {
-    if !shell && !opts.no_yolo {
+fn start_built(env: &HostEnv, built: build::Built, shell: bool) -> Result<i32> {
+    if !shell && built.approvals == Some(paddock::approvals::Approvals::Auto) {
         if let Err(e) = run::probe_flags(env, &built) {
             if let Some(w) = &built.worktree {
                 build::discard_worktree(env, w);
@@ -242,6 +255,18 @@ fn start_built(env: &HostEnv, opts: &Options, built: build::Built, shell: bool) 
         eprintln!("\n{}", paddock::worktree::finish(env, &w).0);
     }
     Ok(code)
+}
+
+/// The approvals line of `paddock explain`, in plain words.
+fn explain_approvals(a: Option<paddock::approvals::Approvals>) -> &'static str {
+    use paddock::approvals::Approvals;
+    match a {
+        Some(Approvals::Auto) => {
+            "auto: the agent approves its own steps; the sandbox is the boundary"
+        }
+        Some(Approvals::Manual) => "manual: you approve each step in the agent's own interface",
+        None => "the command's own flags decide; paddock adds none",
+    }
 }
 
 pub(crate) fn explain(env: &HostEnv, a: &RunArgs, json: bool) -> Result<()> {
@@ -296,6 +321,8 @@ pub(crate) fn explain(env: &HostEnv, a: &RunArgs, json: bool) -> Result<()> {
         if let Some(note) = cache_note {
             v["cache_backend_note"] = note.into();
         }
+        v["approvals"] = paddock::approvals::shown(built.approvals).into();
+        v["approvals_origin"] = built.approvals_origin.clone().into();
         v["screens"] = paddock::screens::explain(&built.profile).into();
         v["tack"] = paddock::tack::report::explain(env, &s.env).into();
         v["backend"] = match &backend {
@@ -320,9 +347,10 @@ pub(crate) fn explain(env: &HostEnv, a: &RunArgs, json: bool) -> Result<()> {
     if let Some(note) = cache_note {
         println!("cache     {note}");
     }
-    match s.memory_high {
-        Some(high) => println!("memory    planned high {high} bytes (systemd scope only)"),
-        None => println!("memory    high disabled"),
+    if let Some(line) =
+        paddock::run::memory_scope::explain_line(s.memory_high, cfg!(target_os = "macos"))
+    {
+        println!("memory    {line}");
     }
     println!(
         "network   {:?}{}",
@@ -347,6 +375,11 @@ pub(crate) fn explain(env: &HostEnv, a: &RunArgs, json: bool) -> Result<()> {
         s.gui.mode,
         s.gui.origin,
         if s.gui.gpu { ", gpu" } else { "" }
+    );
+    println!(
+        "approvals {}  ({})",
+        explain_approvals(built.approvals),
+        built.approvals_origin
     );
     if !mcp.is_empty() {
         println!("\nMCP servers:");

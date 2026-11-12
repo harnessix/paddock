@@ -171,7 +171,7 @@ pub(super) fn active(store: &Store, sandbox: &str) -> Result<Vec<Grant>> {
         return Ok(Vec::new());
     }
     let mut grants = Vec::new();
-    for filename in store.list_refs(&directory)? {
+    for filename in store.list_locked_refs(&directory)? {
         let Some(id) = filename.strip_suffix(".json") else {
             continue;
         };
@@ -193,7 +193,7 @@ pub fn revoke(store: &Store, sandbox: &str) -> Result<bool> {
         return Ok(false);
     }
     let mut found = false;
-    for filename in store.list_refs(&directory)? {
+    for filename in store.list_locked_refs(&directory)? {
         let Some(id) = filename.strip_suffix(".json") else {
             continue;
         };
@@ -216,12 +216,15 @@ pub fn revoke_one(store: &Store, sandbox: &str, id: &str) -> Result<bool> {
     }
     grant.revoked = true;
     grant.mount_key.zeroize();
+    // The rename must not run next to a listing (`revoke`, `active`).
+    let _store = store.lock()?;
     put(store, &grant)?;
     Ok(true)
 }
 
 /// Serialize reads and revocation of one grant without holding the global
-/// horse writer lock while decrypting or searching a long trajectory.
+/// horse writer lock while decrypting or searching a long trajectory. The
+/// write of the grant at the end takes the store lock too, inside this one.
 pub(super) fn lock(store: &Store, sandbox: &str, id: &str) -> Result<std::fs::File> {
     path(sandbox, id)?;
     let directory = store.root().join("peek/locks").join(sandbox);
@@ -302,5 +305,7 @@ pub(super) fn record(
         bytes,
         status: status.into(),
     });
+    // The rename must not run next to a listing (`revoke`, `active`).
+    let _store = store.lock()?;
     put(store, &grant)
 }

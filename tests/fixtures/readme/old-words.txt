@@ -2182,7 +2182,7 @@
 5 groups
 2 grow
 1 grows
-12 guard
+11 guard
 1 guarded
 2 guards
 1 guessing
@@ -2461,7 +2461,7 @@
 1 layouts
 3 lazy
 2 leads
-2 leak
+1 leak
 2 lean_builds
 18 lease
 8 leases

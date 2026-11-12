@@ -464,10 +464,20 @@ pub fn rules_for(profile: &crate::profile::Profile, unwatched: bool) -> Vec<Rule
         .collect()
 }
 
+/// The rules that a run in the manual approvals mode keeps: the folder
+/// trust screens are the user's to answer there (approvals.rs).
+pub fn for_approvals(rules: Vec<Rule>, manual: bool) -> Vec<Rule> {
+    rules
+        .into_iter()
+        .filter(|r| !manual || r.kind != RuleKind::FolderTrust)
+        .collect()
+}
+
 /// The rules of a harness for one run, or None.
 ///
 /// - `unwatched`: a detached run or an invisible terminal. Every rule.
 /// - Otherwise only the rules marked `always`.
+/// - `manual`: the approvals mode is manual, so no folder trust rule.
 /// - Without a terminal the harness has no screen to answer.
 pub fn prepare(
     env: &crate::env::HostEnv,
@@ -476,8 +486,9 @@ pub fn prepare(
     terminal: bool,
     unwatched: bool,
     detached: bool,
+    manual: bool,
 ) -> Option<std::sync::Arc<live::Watcher>> {
-    let rules = rules_for(profile, unwatched);
+    let rules = for_approvals(rules_for(profile, unwatched), manual);
     if !terminal || rules.is_empty() {
         return None;
     }

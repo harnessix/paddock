@@ -1,5 +1,5 @@
 import React from 'react';
-import { Box } from 'ink';
+import { Box, Text } from 'ink';
 import { cells, cut, fit, oneLine } from '../clean.js';
 import { age, now } from '../model.js';
 import { choicesOf, GUTTER, requestLines, takesText, type Choice } from '../approval.js';
@@ -25,24 +25,72 @@ export function cardTitle(p: Pending): string {
   return `Approval · ${oneLine(p.sandbox || p.harness || '?')} · sandbox`;
 }
 
-/** The lines of a card body, before the buttons: request, reason, age and scope. */
-function bodyLines(p: Pending, focus: Choice | undefined, width: number, maxRequest: number): { text: string; role?: 'muted' | 'warning' }[] {
-  const out: { text: string; role?: 'muted' | 'warning' }[] = [];
+type LineKind = 'pill' | 'question' | 'code' | 'text';
+
+interface BodyLine {
+  text: string;
+  role?: 'muted' | 'warning';
+  kind: LineKind;
+  /** The pill line: the words after the pill. */
+  rest?: string;
+}
+
+export const PILL = '◆ Approval needed';
+
+/** The question of a card, in words: who asks for what. */
+export function questionOf(p: Pending): string {
+  const who = oneLine(p.harness || p.sandbox || 'The agent');
+  const cap = oneLine(p.capability ?? '');
+  switch (cap) {
+    case 'exec':
+      return `${who} wants to run a command:`;
+    case 'connect':
+      return `${who} wants to connect to a host:`;
+    case 'ask':
+      return `${who} asks you:`;
+    case '':
+      return `${who} asks for this:`;
+    default:
+      return `${who} asks for ${cap}:`;
+  }
+}
+
+/** Seconds left and the whole time of a card with a time limit, else null. */
+export function timeLeft(p: Pending, t = now()): { left: number; total: number } | null {
+  if (!p.expires) return null;
+  const left = Math.max(0, p.expires - t);
+  const asked = p.age_s !== undefined ? t - p.age_s : (p.created ?? 0);
+  const total = asked > 0 ? p.expires - asked : left;
+  return { left, total: Math.max(total, left, 1) };
+}
+
+/** The bar of the time left: full when the card is new, empty when it times out. */
+export function timeBar(p: Pending, width: number, t = now()): string {
+  const tl = timeLeft(p, t);
+  if (!tl || width < 8) return '';
+  const label = ` ${age(tl.left)} left`;
+  const bar = Math.max(1, width - label.length);
+  const full = Math.round((bar * tl.left) / tl.total);
+  return '━'.repeat(full) + '─'.repeat(bar - full) + label;
+}
+
+/** The lines of a card body, before the buttons: the pill, the question, the request in a code box, the reason and the scope. */
+function bodyLines(p: Pending, focus: Choice | undefined, width: number, maxRequest: number): BodyLine[] {
+  const out: BodyLine[] = [];
+  const asked = p.age_s !== undefined ? p.age_s : p.created ? now() - p.created : 0;
+  const tl = timeLeft(p);
+  out.push({ kind: 'pill', text: PILL, rest: cut(`  ${tl ? `times out in ${age(tl.left)}` : 'no time limit'} · asked ${age(asked)} ago`, Math.max(0, width - cells(PILL))) });
+  out.push({ kind: 'question', text: cut(questionOf(p), width) });
   const req = requestLines(p);
   // The sandbox writes the request and its line breaks: each line gets the
   // gutter, so a line such as "[1] Deny" cannot pass for a button.
   const head = `${oneLine(p.capability ?? '?')}: `;
-  req.slice(0, maxRequest).forEach((l, i) => out.push({ text: cut(GUTTER + (i === 0 ? head : '') + l, width) }));
-  if (req.length > maxRequest) out.push({ text: `  … ${req.length - maxRequest} more lines: Enter on the card shows all`, role: 'muted' });
-  if (p.reason) out.push({ text: cut(`reason given by the agent: ${oneLine(p.reason)}`, width), role: 'muted' });
+  req.slice(0, maxRequest).forEach((l, i) => out.push({ kind: 'code', text: fit(cut(GUTTER + (i === 0 ? head : '') + l, width), width) }));
+  if (req.length > maxRequest) out.push({ kind: 'text', text: `  … ${req.length - maxRequest} more lines: Enter on the card shows all`, role: 'muted' });
+  if (p.reason) out.push({ kind: 'text', text: cut(`reason given by the agent: ${oneLine(p.reason)}`, width), role: 'muted' });
   const chain = chainText(p);
-  if (chain) out.push({ text: cut(chain, width), role: 'muted' });
-  const asked = p.age_s !== undefined ? p.age_s : p.created ? now() - p.created : 0;
-  const left = p.expires ? Math.max(0, p.expires - now()) : 0;
-  out.push({
-    text: cut(`asked ${age(asked)} ago${left ? ` · times out in ${age(left)}` : ''} · ${focus ? `remember: ${focus.scope}` : ''}`, width),
-    role: 'muted',
-  });
+  if (chain) out.push({ kind: 'text', text: cut(chain, width), role: 'muted' });
+  if (focus) out.push({ kind: 'text', text: cut(`remember: ${focus.scope}`, width), role: 'muted' });
   return out;
 }
 
@@ -66,7 +114,8 @@ export function cardHeight(p: Pending, width: number, readonly: boolean, maxRequ
   const choices = choicesOf(p);
   const body = bodyLines(p, choices[0], width, maxRequest).length;
   const buttons = readonly ? 1 : buttonRows(choices, width).length + 1 + (takesText(p) ? 1 : 0);
-  return body + buttons + 2;
+  const bar = timeLeft(p) ? 1 : 0;
+  return body + buttons + bar + 2;
 }
 
 export function ApprovalCard(props: {
@@ -86,6 +135,7 @@ export function ApprovalCard(props: {
   const w = inner(theme.plain, props.width, 3).width;
   const body = bodyLines(p, focus, w, props.maxRequest ?? 3);
   const height = cardHeight(p, w, props.readonly, props.maxRequest ?? 3);
+  const bar = timeBar(p, w);
   const armed = props.state.armed ? choices.find((c) => c.key === props.state.armed?.key) : undefined;
   let hint: React.JSX.Element;
   if (props.readonly) {
@@ -106,9 +156,7 @@ export function ApprovalCard(props: {
   return (
     <Pane title={cardTitle(p)} focused={props.focused} width={props.width} height={height} onClick={props.onFocusCard}>
       {body.map((l, i) => (
-        <T key={i} role={l.role}>
-          {l.text}
-        </T>
+        <CardLine key={i} line={l} />
       ))}
       {props.readonly
         ? null
@@ -119,7 +167,7 @@ export function ApprovalCard(props: {
                   key={c.key}
                   label={`[${c.key}] ${c.label}${c.wide ? ' ⚠' : ''}`}
                   focused={props.focused && c.key === props.state.focus}
-                  role={c.deny ? 'error' : c.wide ? 'warning' : 'normal'}
+                  role={c.deny ? 'error' : c.wide ? 'warning' : 'success'}
                   onClick={() => props.onChoose(c)}
                 />
               ))}
@@ -133,8 +181,35 @@ export function ApprovalCard(props: {
         </T>
       ) : null}
       {hint}
+      {bar ? <T role={(timeLeft(p)?.left ?? 0) * 4 < (timeLeft(p)?.total ?? 1) ? 'warning' : 'accent'}>{bar}</T> : null}
     </Pane>
   );
+}
+
+function CardLine(props: { line: BodyLine }): React.JSX.Element {
+  const theme = useTheme();
+  const l = props.line;
+  if (l.kind === 'pill') {
+    return (
+      <T>
+        <T role="warning" inverse={!theme.plain} bold>
+          {l.text}
+        </T>
+        <T role="muted">{l.rest ?? ''}</T>
+      </T>
+    );
+  }
+  if (l.kind === 'question') return <T bold>{l.text}</T>;
+  if (l.kind === 'code') {
+    // The dark box of the command: the same dark in both themes.
+    if (theme.plain || theme.mono) return <Text>{l.text}</Text>;
+    return (
+      <Text color="whiteBright" backgroundColor={theme.name === 'light' ? 'black' : 'blackBright'} wrap="truncate-end">
+        {l.text}
+      </Text>
+    );
+  }
+  return <T role={l.role}>{l.text}</T>;
 }
 
 export function ApprovalsView(props: {
@@ -175,9 +250,10 @@ export function ApprovalsView(props: {
   const after = pending.slice(sel + 1).slice(0, listRows - before.length);
   const line = (q: Pending, i: number) => (
     <Clickable key={q.id} width={width} onClick={() => props.onSelect(i)}>
-      {(hovered) => (
-        <T role="warning" underline={hovered}>
-          {cut(`◆ waits  ${fit(oneLine(q.sandbox ?? '?'), 22)} ${oneLine(q.capability ?? '')}: ${oneLine(q.summary || q.detail || '')}`, width)}
+      {(hovered, pointer) => (
+        <T role="warning" underline={hovered} inverse={pointer.pressed}>
+          {/* In line with the text of the card over it. */}
+          {cut(`${theme.plain ? '' : '  '}◆ waits  ${fit(oneLine(q.sandbox ?? '?'), 22)} ${oneLine(q.capability ?? '')}: ${oneLine(q.summary || q.detail || '')}`, width)}
         </T>
       )}
     </Clickable>

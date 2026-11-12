@@ -22,6 +22,8 @@ pub struct Launch {
     pub env: BTreeMap<String, String>,
     /// Files to write before the launch (path, contents, mode).
     pub files: Vec<(PathBuf, String, u32)>,
+    /// The folder the program starts in, or None for paddock's own.
+    pub cwd: Option<PathBuf>,
 }
 
 pub trait Backend {

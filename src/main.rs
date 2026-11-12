@@ -3,6 +3,7 @@ use clap::Parser;
 use paddock::env::HostEnv;
 
 mod cli;
+mod launcher_protocol;
 use cli::{Cli, Cmd};
 
 fn main() {
@@ -13,11 +14,23 @@ fn main() {
     if let Some(code) = paddock::tack::wrap::intercept() {
         std::process::exit(code);
     }
+    // The query of paddock for Mac (launcher_protocol.rs): before host
+    // detection, config, refresh and cleanup, so it reads and starts nothing.
+    let argv: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    let code = launcher_protocol::dispatch(
+        &argv,
+        &mut std::io::stdout(),
+        &mut std::io::stderr(),
+        || normal_main(&argv),
+    );
+    std::process::exit(code);
+}
+
+fn normal_main(argv: &[std::ffi::OsString]) -> i32 {
     // The start of a sandbox in a scope of its own (freeze.rs): stop, let
     // paddock move this process into the scope, then become the sandbox.
     // Before anything else, so the environment and the arguments pass as
     // they are.
-    let argv: Vec<std::ffi::OsString> = std::env::args_os().collect();
     if argv
         .get(1)
         .is_some_and(|a| a == paddock::freeze::SCOPE_EXEC)
@@ -30,14 +43,14 @@ fn main() {
     if let Some(code) = paddock::cleanstart::again(&argv[1..]) {
         std::process::exit(code);
     }
-    if let Some(code) = cli::help_topics::handle(&argv) {
+    if let Some(code) = cli::help_topics::handle(argv) {
         std::process::exit(code);
     }
     match real_main() {
-        Ok(code) => std::process::exit(code),
+        Ok(code) => code,
         Err(e) => {
             eprintln!("paddock: {e:#}");
-            std::process::exit(2);
+            2
         }
     }
 }

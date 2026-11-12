@@ -15,24 +15,31 @@ struct AppDetailView: View {
         VStack(spacing: 0) {
             if let app = store.app(named: name) {
                 SessionHeader(app: app)
-                    .padding()
+                    .padding(.horizontal, 20)
+                    .padding(.top, 16)
+                    .padding(.bottom, 12)
                 notices(app)
             }
-            TabView(selection: $store.detailTab) {
-                OverviewTab(model: model)
-                    .tabItem { Text("Overview") }
-                    .tag(DetailTab.overview)
-                    .accessibilityHidden(store.detailTab != .overview)
-                GrantsView(model: model)
-                    .tabItem { Text("Grants") }
-                    .tag(DetailTab.grants)
-                    .accessibilityHidden(store.detailTab != .grants)
-                LogView(model: model)
-                    .tabItem { Text("Log") }
-                    .tag(DetailTab.log)
-                    .accessibilityHidden(store.detailTab != .log)
+            // The tabs: a segmented control under the header, as Raycast
+            // and System Settings put them. Only the chosen tab is built.
+            Picker("Show", selection: $store.detailTab) {
+                Text("Overview").tag(DetailTab.overview)
+                Text("Grants").tag(DetailTab.grants)
+                Text("Log").tag(DetailTab.log)
             }
-            .padding([.horizontal, .bottom])
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .fixedSize()
+            .padding(.bottom, 4)
+            .accessibilityIdentifier("detail-tabs")
+            Group {
+                switch store.detailTab {
+                case .overview: OverviewTab(model: model)
+                case .grants: GrantsView(model: model).padding(.horizontal)
+                case .log: LogView(model: model).padding([.horizontal, .bottom])
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .task(id: name) { await model.load(force: true) }
     }
@@ -99,8 +106,8 @@ struct OverviewTab: View {
                             Text(since, format: .dateTime.day().month().hour().minute()).labelInk()
                         } label: { Text("Since").labelInk() }
                     }
-                    if let memory = OverviewCopy.memory(app.json) {
-                        LabeledContent { Text(memory).labelInk() } label: { Text("Memory").labelInk() }
+                    if let memory = OverviewCopy.memory(app.json), let fraction = OverviewCopy.memoryFraction(app.json) {
+                        MemoryRow(text: memory, fraction: fraction)
                     }
                     if let golden = app.json.golden {
                         LabeledContent { Text(verbatim: golden).labelInk() } label: { Text("Base image").labelInk() }
@@ -114,12 +121,12 @@ struct OverviewTab: View {
                 }
                 if let sizes = app.json.sizes {
                     Section("Disk") {
-                        LabeledContent { Text(verbatim: Format.gb(sizes.appCopy)).labelInk() } label: { Text("App copy").labelInk() }
-                        LabeledContent { Text(verbatim: Format.gb(sizes.data)).labelInk() } label: { Text("Data").labelInk() }
-                        LabeledContent { Text(verbatim: Format.gb(sizes.savedState)).labelInk() } label: { Text("Saved state").labelInk() }
-                        LabeledContent { Text(verbatim: Format.gb(sizes.total)).labelInk() } label: { Text("Total").labelInk() }
-                        Button("Clear saved state") { router.sheet = .clearState(app.key) }
-                            .disabled(sizes.savedState == 0 || app.state.holdsSession)
+                        DiskBar(sizes: sizes)
+                        HStack {
+                            Spacer()
+                            Button("Clear saved state") { router.sheet = .clearState(app.key) }
+                                .disabled(sizes.savedState == 0 || app.state.holdsSession)
+                        }
                     }
                 }
                 Section("Network") {
@@ -196,5 +203,107 @@ struct LogView: View {
         .accessibilityLabel(Text("Log"))
         .task { await model.loadLog() }
         .onDisappear { model.setFollow(false) }
+    }
+}
+
+/// `Memory  6 of 16 GB` with a capacity gauge, as System Settings shows
+/// memory. The value changes with the events stream.
+@MainActor
+struct MemoryRow: View {
+    let text: UIText
+    let fraction: Double
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        LabeledContent {
+            HStack(spacing: 10) {
+                Gauge(value: fraction) { Text("Memory") }
+                    .gaugeStyle(.accessoryLinearCapacity)
+                    .labelsHidden()
+                    .frame(width: 140)
+                    .accessibilityLabel(Text("Memory"))
+                    .accessibilityValue(Text(text))
+                    .accessibilityIdentifier("memory-gauge")
+                Text(text)
+                    .labelInk()
+                    .monospacedDigit()
+                    .contentTransition(.numericText())
+                    .accessibilityHidden(true)
+            }
+            .animation(reduceMotion ? nil : .default, value: fraction)
+        } label: { Text("Memory").labelInk() }
+    }
+}
+
+/// The disk of one app as one stacked bar, as macOS Storage draws it: app
+/// copy blue, data teal, saved state gray. A legend with the sizes and the
+/// total under it. Each color has its word in the legend.
+@MainActor
+struct DiskBar: View {
+    let sizes: AppSizesJSON
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    static func color(_ kind: DiskPart.Kind) -> Color {
+        switch kind {
+        case .appCopy: return .blue
+        case .data: return .teal
+        case .savedState: return .gray
+        }
+    }
+
+    var body: some View {
+        let parts = OverviewCopy.diskParts(sizes)
+        VStack(alignment: .leading, spacing: 8) {
+            GeometryReader { proxy in
+                HStack(spacing: 1) {
+                    ForEach(parts) { part in
+                        Rectangle()
+                            .fill(DiskBar.color(part.kind))
+                            .frame(width: max(0, proxy.size.width * part.fraction - 1))
+                    }
+                    if parts.isEmpty {
+                        Rectangle().fill(.fill.tertiary)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(height: 10)
+            .background(.fill.tertiary)
+            .clipShape(Capsule())
+            .animation(reduceMotion ? nil : .default, value: parts)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(Text("Disk"))
+            .accessibilityValue(Text(verbatim: parts.map { $0.title.localized + " " + Format.gb($0.bytes) }
+                .joined(separator: ", ")))
+            .accessibilityIdentifier("disk-bar")
+            HStack(spacing: 16) {
+                ForEach(parts) { part in
+                    HStack(spacing: 5) {
+                        Circle().fill(DiskBar.color(part.kind)).frame(width: 8, height: 8)
+                            .accessibilityHidden(true)
+                        Text(part.title).labelInk()
+                        Text(verbatim: Format.gb(part.bytes))
+                            .labelInk()
+                            .monospacedDigit()
+                            .contentTransition(.numericText())
+                    }
+                    .font(.callout)
+                    .accessibilityElement(children: .combine)
+                    .accessibilityIdentifier("disk-legend-" + part.id)
+                }
+                Spacer(minLength: 8)
+                HStack(spacing: 5) {
+                    Text("Total").labelInk()
+                    Text(verbatim: Format.gb(sizes.total))
+                        .labelInk()
+                        .monospacedDigit()
+                        .contentTransition(.numericText())
+                }
+                .font(.callout.weight(.semibold))
+                .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("disk-total")
+            }
+        }
+        .padding(.vertical, 4)
     }
 }

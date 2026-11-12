@@ -114,6 +114,20 @@ final class NetworkTests: XCTestCase {
         XCTAssertEqual(try? pasted.check(app: "Sample Notes", running: false).get().port, .number(8443))
     }
 
+    // The cards: newest first, undated last, paddock's order on a tie, and
+    // the lead line over the host.
+    func testQuestionCardsNewestFirst() {
+        let t = Date(timeIntervalSince1970: 1_800_000_000)
+        let list = [
+            QuestionJSON(id: "old", app: "A", host: "a.example.com", port: 443, opened: t),
+            QuestionJSON(id: "none", app: "A", host: "b.example.com", port: 443),
+            QuestionJSON(id: "new", app: "A", host: "c.example.com", port: 443, opened: t.addingTimeInterval(60)),
+            QuestionJSON(id: "tie", app: "A", host: "d.example.com", port: 443, opened: t),
+        ]
+        XCTAssertEqual(QuestionChoices.newestFirst(list).map(\.id), ["new", "old", "tie", "none"])
+        XCTAssertEqual(QuestionChoices.lead(list[0]).english, "A wants to connect to")
+    }
+
     // The launcher's answers are the panel's, in the panel's order.
     func testQuestionChoicesMirrorThePanel() {
         let q = QuestionJSON(id: "q9", app: "Sample Notes", host: "accounts.example.org", port: 443)

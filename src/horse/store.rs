@@ -7,7 +7,8 @@
 //!   the full object is encrypted. Equal rows on equal parents deduplicate.
 //! - `sessions/<id>.json`, `horses/<id>.json`: encrypted mutable objects.
 //! - `tmp/`: files that are not complete yet.
-//! - `lock`: the writer lock for the mutable objects.
+//! - `lock`: the writer lock for the mutable objects. A list of sessions,
+//!   horses, grants, memory names or views takes it shared (`listing`).
 //!
 //! Every write goes to `tmp/` first and is synced. An object then gets a hard
 //! link to its final name (an object that is there already is the same
@@ -21,12 +22,14 @@ use sha2::{Digest, Sha256};
 use std::fs::{File, OpenOptions};
 use std::io::Write as _;
 use std::os::unix::fs::OpenOptionsExt;
-use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 mod encryption;
 mod index;
+mod listing;
+#[cfg(test)]
+pub(crate) use listing::race_dir;
 
 /// A temporary file older than this is left over from a crash.
 const STALE_TMP: Duration = Duration::from_secs(3600);
@@ -149,6 +152,8 @@ pub struct Store {
 /// The writer lock of the store. It is released on drop.
 pub struct Lock<'a> {
     _file: File,
+    /// The device and inode of the lock file.
+    key: (u64, u64),
     pub(crate) store: &'a Store,
 }
 
@@ -340,24 +345,9 @@ impl Store {
     }
 
     /// Take the writer lock. Writers of sessions and horses hold it while
-    /// they read, change and write them.
+    /// they read, change and write them. A list of them takes it shared.
     pub fn lock(&self) -> Result<Lock<'_>> {
-        let f = OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .mode(privfs::FILE_MODE)
-            .open(self.root.join("lock"))?;
-        if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX) } != 0 {
-            bail!(
-                "cannot lock the horse store: {}",
-                std::io::Error::last_os_error()
-            );
-        }
-        Ok(Lock {
-            _file: f,
-            store: self,
-        })
+        listing::writer_lock(self)
     }
 
     fn object_path(&self, h: &Hash) -> PathBuf {

@@ -96,9 +96,7 @@ final class LibraryTests: XCTestCase {
     }
 
     func testRealSetupLines() throws {
-        let lines = try ReplayRunner.streamLines(Fixtures.root.deletingLastPathComponent()
-            .deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("tests/fixtures/launcher/setup.jsonl"))
+        let lines = try ReplayRunner.streamLines(Fixtures.core("launcher/setup.jsonl"))
         let decoded = lines.compactMap { LibraryDecode.setupLine($0) }
         XCTAssertEqual(decoded.count, lines.count, "every line of paddock's setup fixture decodes")
         XCTAssertEqual(decoded[0].step, "download")

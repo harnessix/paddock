@@ -351,6 +351,7 @@ impl Backend for Bwrap {
                 args: pa,
                 env: env_map,
                 files,
+                cwd: None,
             });
         }
         if !spec.publish.is_empty() && matches!(spec.network, Network::None | Network::Api) {
@@ -361,6 +362,7 @@ impl Backend for Bwrap {
             args: a,
             env: env_map,
             files,
+            cwd: None,
         })
     }
 }

@@ -1,0 +1,10 @@
+# argument prefix<TAB>answer files in ../base, in turn; the last one repeats
+# A 0.2.2 build whose answer names protocol twice.
+--version	version-022-dev.out
+--launcher-protocol	protocol-duplicate-key.json
+app --help	app-help.out
+macvm status --json	status-ready.json
+doctor --json	doctor-ok.json
+app list --json	apps.json
+approvals --json	approvals-empty.json
+events --follow --json	idle.jsonl

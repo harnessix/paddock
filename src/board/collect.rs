@@ -132,6 +132,7 @@ fn live(env: &HostEnv, r: &crate::state::Running, pending: &[crate::broker::Pend
     let mut f = from_mail(env, &r.id);
     f.harness = r.harness.clone();
     f.started = r.started;
+    f.approvals = r.approvals.clone();
     if let Some(rec) = crate::detach::Record::load(env, &r.id) {
         f.idle_since = rec.idle_since;
         f.stuck_since = rec.stuck.map(|s| s.since);

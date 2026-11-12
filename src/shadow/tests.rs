@@ -474,6 +474,7 @@ impl Backend for FakeOverlay {
             args: vec!["-c".into(), script],
             env: crate::backend::base_env(env, spec),
             files: vec![],
+            cwd: None,
         })
     }
 }

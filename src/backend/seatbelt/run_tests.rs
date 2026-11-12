@@ -53,6 +53,10 @@ fn profile(env: &HostEnv, s: &SandboxSpec) -> String {
     crate::seatbelt::render(&p).unwrap()
 }
 
+/// The network modes: which addresses each one reaches, and the proxy.
+#[path = "run_net_tests.rs"]
+mod net;
+
 #[test]
 fn the_project_is_writable_and_its_hidden_files_denied() {
     let (env, s) = spec();
@@ -141,171 +145,6 @@ fn the_broker_and_kv_sockets_can_be_reached_but_not_replaced() {
         vars["PADDOCK_KV_SOCKET"],
         "/private/tmp/paddock-501/ab/id1/kv.sock"
     );
-}
-
-#[test]
-fn egress_reaches_only_the_proxy_relay_and_allowed_host_ports() {
-    let (env, mut s) = spec();
-    s.add_host_port(8765, "manifest");
-    set_proxy(&mut s, 41000);
-    let sb = profile(&env, &s);
-    let outbound: Vec<&str> = sb
-        .lines()
-        .filter(|l| l.starts_with("(allow network-outbound (remote ip"))
-        .collect();
-    assert_eq!(
-        outbound,
-        [
-            "(allow network-outbound (remote ip \"localhost:8765\"))",
-            "(allow network-outbound (remote ip \"localhost:41000\"))",
-        ]
-    );
-    let vars = run_env(&env, &s, &private_tmp(&s));
-    assert_eq!(vars["HTTPS_PROXY"], "http://127.0.0.1:41000");
-    assert_eq!(vars["http_proxy"], "http://127.0.0.1:41000");
-    assert!(vars["NO_PROXY"].contains("127.0.0.1"));
-}
-
-#[test]
-fn api_reaches_only_the_proxy_relay() {
-    let (env, mut s) = spec();
-    s.network = Network::Api;
-    s.add_host_port(8765, "manifest");
-    set_proxy(&mut s, 41000);
-    let sb = profile(&env, &s);
-    assert!(sb.contains("(remote ip \"localhost:41000\")"));
-    assert!(!sb.contains("localhost:8765"));
-}
-
-#[test]
-fn allowlist_reaches_the_proxy_relay_and_allowed_host_ports() {
-    let (env, mut s) = spec();
-    s.network = Network::Allowlist;
-    assert!(refuse(&s).is_ok());
-    assert_eq!(net(Network::Allowlist).unwrap(), Net::Localhost);
-    s.add_host_port(8765, "manifest");
-    set_proxy(&mut s, 41000);
-    let sb = profile(&env, &s);
-    assert!(sb.contains("(remote ip \"localhost:41000\")"));
-    assert!(sb.contains("(remote ip \"localhost:8765\")"));
-    let vars = run_env(&env, &s, &private_tmp(&s));
-    assert_eq!(vars["HTTPS_PROXY"], "http://127.0.0.1:41000");
-}
-
-#[test]
-fn auto_picks_seatbelt_for_allowlist_on_macos_and_srt_on_linux() {
-    use crate::backend::auto_order;
-    assert_eq!(auto_order(Network::Allowlist, true), [NAME]);
-    assert_eq!(auto_order(Network::Allowlist, false), ["srt"]);
-    assert_eq!(auto_order(Network::Egress, true)[0], NAME);
-    assert_eq!(auto_order(Network::Api, false)[0], "bwrap");
-}
-
-#[test]
-fn the_proxy_enforces_the_list_in_modes_api_and_allowlist() {
-    let (_, mut s) = spec();
-    s.allow_domains = vec!["api.example.com".into(), "*.cdn.example.com".into()];
-    for (mode, want) in [
-        (Network::Egress, None),
-        (Network::None, None),
-        (Network::Api, Some("api")),
-        (Network::Allowlist, Some("allowlist")),
-    ] {
-        s.network = mode;
-        let p = crate::backend::listed_policy(&s, None);
-        assert_eq!(p.as_ref().map(|p| p.mode()), want, "{mode:?}");
-        if let Some(p) = p {
-            assert!(p.list.check("api.example.com", 443).is_ok());
-            assert!(p.list.check("a.cdn.example.com", 443).is_ok());
-            assert!(p.list.check("other.example.com", 443).is_err());
-        }
-    }
-}
-
-#[test]
-fn ip_entries_are_named_where_the_proxy_enforces_the_list() {
-    use crate::backend::ignored_entries;
-    let d = vec!["api.example.com".to_string(), "10.0.0.1".to_string()];
-    let w = ignored_entries(Network::Allowlist, &d, true).unwrap();
-    assert!(
-        w.starts_with("network mode allowlist ignores these entries: 10.0.0.1"),
-        "{w}"
-    );
-    assert!(ignored_entries(Network::Api, &d, false).is_some());
-    // srt enforces the list on Linux and takes IP entries.
-    assert!(ignored_entries(Network::Allowlist, &d, false).is_none());
-    assert!(ignored_entries(Network::Egress, &d, true).is_none());
-    assert!(ignored_entries(Network::Api, &d[..1], true).is_none());
-}
-
-/// Mode allowlist: the proxy behind the relay refuses a host outside the
-/// list, and the boundary log names it. Only the profile needs a Mac, so
-/// this runs on every platform.
-#[test]
-fn the_allowlist_proxy_refuses_a_host_outside_the_list() {
-    use std::io::{Read, Write};
-    let (_t, env, mut s) = temp_spec("");
-    s.network = Network::Allowlist;
-    s.allow_domains = vec!["api.example.com".into()];
-    std::fs::create_dir_all(env.paddock_run().join(&s.id)).unwrap();
-    start_proxy(&env, &mut s).unwrap();
-    let relay = s
-        .host_ports
-        .iter()
-        .find(|(_, o)| o == RELAY_ORIGIN)
-        .unwrap()
-        .0;
-    assert_eq!(
-        s.env["HTTPS_PROXY"].value,
-        format!("http://127.0.0.1:{relay}")
-    );
-    let mut c = std::net::TcpStream::connect(("127.0.0.1", relay)).unwrap();
-    c.write_all(b"CONNECT other.example.com:443 HTTP/1.1\r\nHost: other.example.com:443\r\n\r\n")
-        .unwrap();
-    let mut got = String::new();
-    let _ = c.read_to_string(&mut got);
-    assert!(got.starts_with("HTTP/1.1 403"), "{got}");
-    let log = crate::boundary::read(&env, &s.id);
-    assert!(
-        log.iter().any(|e| e.target == "other.example.com:443"
-            && e.rule == "network mode allowlist: not on the list"),
-        "{log:?}"
-    );
-}
-
-#[test]
-fn network_none_has_no_ip_rule_and_no_proxy() {
-    let (env, mut s) = spec();
-    s.network = Network::None;
-    s.set_env("HTTPS_PROXY", "http://127.0.0.1:7890", "host");
-    s.add_host_port(7890, "host proxy");
-    let sb = profile(&env, &s);
-    assert!(!sb.contains("(remote ip"));
-    assert!(!sb.contains("(local ip"));
-    let vars = run_env(&env, &s, &private_tmp(&s));
-    assert!(!vars.contains_key("HTTPS_PROXY"));
-}
-
-#[test]
-fn network_host_reaches_everything_with_the_host_proxy() {
-    let (env, mut s) = spec();
-    s.network = Network::Host;
-    s.set_env(
-        "HTTPS_PROXY",
-        "http://proxy.example:3128",
-        "network: host proxy",
-    );
-    assert!(refuse(&s).is_ok());
-    assert_eq!(net(Network::Host).unwrap(), Net::Host);
-    let sb = profile(&env, &s);
-    assert!(sb.contains("(allow network-outbound (remote ip \"*:*\"))"));
-    assert!(sb.contains("(allow network-bind (local ip \"*:*\"))"));
-    assert!(sb.contains("(allow network-inbound (local ip \"*:*\"))"));
-    assert!(sb.contains("mDNSResponder"));
-    let vars = run_env(&env, &s, &private_tmp(&s));
-    assert_eq!(vars["HTTPS_PROXY"], "http://proxy.example:3128");
-    assert!(HOST_WARNING.starts_with("network mode host"));
-    assert!(!HOST_WARNING.contains('\n'));
 }
 
 #[test]
@@ -606,7 +445,8 @@ fn codex_without_ptys_gets_its_shell_tool_without_a_terminal() {
     let profile = crate::profile::builtin("codex").unwrap();
     let with = |ptys: bool| {
         let (_t, env, mut s) = temp_spec("");
-        crate::privacy::push_state_settings(&profile, false, "profile codex", &mut s).unwrap();
+        crate::privacy::push_state_settings(&profile, true, false, "profile codex", &mut s)
+            .unwrap();
         if ptys {
             crate::backend::pty_settings(&mut s, true);
         } else {
@@ -628,7 +468,8 @@ fn settings_without_a_condition_stay_with_ptys_and_without() {
     let profile = crate::profile::builtin("claude").unwrap();
     for ptys in [true, false] {
         let (_t, _env, mut s) = temp_spec("");
-        crate::privacy::push_state_settings(&profile, false, "profile claude", &mut s).unwrap();
+        crate::privacy::push_state_settings(&profile, true, false, "profile claude", &mut s)
+            .unwrap();
         let n = s.home_settings.len();
         crate::backend::pty_settings(&mut s, ptys);
         assert_eq!(s.home_settings.len(), n);
@@ -716,4 +557,107 @@ fn the_harness_home_is_the_sandbox_home_at_its_host_path() {
     let (_, s) = spec();
     assert_eq!(SeatbeltRun.harness_home(&s), s.home_src);
     assert_ne!(SeatbeltRun.harness_home(&s), s.home);
+}
+
+/// MACRUN1: python3 and git found by PATH skip Apple's xcrun shim, which
+/// cannot write its cache in the sandbox.
+#[test]
+fn the_developer_tools_come_before_the_xcrun_shims() {
+    let clt = Path::new("/Library/Developer/CommandLineTools");
+    let all = |_: &Path| true;
+    assert_eq!(
+        developer_bins(clt, all),
+        vec![
+            clt.join("usr/bin"),
+            clt.join("Toolchains/XcodeDefault.xctoolchain/usr/bin")
+        ]
+    );
+    let xcode = Path::new("/Applications/Xcode.app/Contents/Developer");
+    let only_usr = |p: &Path| p.ends_with("Developer/usr/bin");
+    assert_eq!(developer_bins(xcode, only_usr), vec![xcode.join("usr/bin")]);
+    // A developer folder that the profile does not let the sandbox read.
+    assert!(
+        developer_bins(Path::new("/Users/u/Xcode-beta.app/Contents/Developer"), all).is_empty()
+    );
+
+    let bins = vec![clt.join("usr/bin")];
+    assert_eq!(
+        with_developer_bins("/opt/homebrew/bin:/usr/bin:/bin", &bins),
+        "/opt/homebrew/bin:/Library/Developer/CommandLineTools/usr/bin:/usr/bin:/bin"
+    );
+    assert_eq!(
+        with_developer_bins(
+            "/a:/Library/Developer/CommandLineTools/usr/bin:/usr/bin",
+            &bins
+        ),
+        "/a:/Library/Developer/CommandLineTools/usr/bin:/usr/bin"
+    );
+    assert_eq!(
+        with_developer_bins("/a", &bins),
+        "/a:/Library/Developer/CommandLineTools/usr/bin"
+    );
+    assert_eq!(with_developer_bins("/a:/usr/bin", &[]), "/a:/usr/bin");
+}
+
+/// MACRUN1-F2: codex runs commands with `zsh -lc`, and path_helper puts the
+/// /usr/bin shims first again. xcrun then writes its cache where `xcrun_db`
+/// says: an absolute file in the private temporary folder, which the
+/// profile lets the sandbox write. A host value of the variable does not win.
+#[test]
+fn the_xcrun_cache_is_in_the_private_temporary_folder() {
+    let (env, mut s) = spec();
+    s.set_env(XCRUN_DB, "/private/var/folders/ab/T/xcrun_db", "inherit");
+    let tmp = private_tmp(&s);
+    let vars = run_env(&env, &s, &tmp);
+    let db = Path::new(&vars[XCRUN_DB]);
+    assert!(db.is_absolute(), "{}", db.display());
+    assert!(db.starts_with(&tmp), "{}", db.display());
+    assert!(db.starts_with(&vars["TMPDIR"]), "{}", db.display());
+    assert_ne!(db.parent(), Some(tmp.parent().unwrap()));
+    let sb = profile(&env, &s);
+    assert!(
+        sb.contains(&format!(
+            "(allow file-read* file-write* (subpath \"{}\"))",
+            tmp.display()
+        )),
+        "{sb}"
+    );
+}
+
+/// MACRUN1-F2: the escape probe gets the host paths it checks as they are.
+/// Moved into the sandbox home, the real home would be the sandbox's own,
+/// and the probe would report it as an escape.
+#[test]
+fn the_probe_variables_keep_their_host_paths() {
+    let (env, mut s) = spec();
+    let real_home = s.home.display().to_string();
+    s.set_env("PADDOCK_PROBE_REALHOME", real_home.clone(), "doctor");
+    s.set_env(
+        "PADDOCK_PROBE_DENIED",
+        format!("{real_home}/.ssh:{real_home}/.aws"),
+        "doctor",
+    );
+    s.set_env("OTHER_IN_HOME", format!("{real_home}/.npmrc"), "profile");
+    let vars = run_env(&env, &s, &private_tmp(&s));
+    assert_eq!(vars["PADDOCK_PROBE_REALHOME"], real_home);
+    assert_eq!(
+        vars["PADDOCK_PROBE_DENIED"],
+        format!("{real_home}/.ssh:{real_home}/.aws")
+    );
+    // Other variables still move into the sandbox home.
+    assert_eq!(Path::new(&vars["OTHER_IN_HOME"]), s.home_src.join(".npmrc"));
+}
+
+/// MACRUN1-F2: the shell of the run starts in a folder that the sandbox
+/// can read, not in the caller's folder (the real home, say), where
+/// getcwd fails.
+#[test]
+fn the_run_starts_in_its_private_temporary_folder() {
+    let (_t, env, s) = temp_spec("");
+    std::fs::create_dir_all(&s.home_src).unwrap();
+    let l = SeatbeltRun.render(&env, &s, false).unwrap();
+    let tmp = private_tmp(&s);
+    assert_eq!(l.cwd.as_deref(), Some(tmp.as_path()));
+    assert!(tmp.is_dir());
+    assert_eq!(l.env["TMPDIR"], tmp.display().to_string());
 }

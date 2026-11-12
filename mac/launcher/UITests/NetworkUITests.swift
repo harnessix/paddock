@@ -231,6 +231,36 @@ final class NetworkUITests: XCTestCase {
         XCTAssertTrue(fake.waitForCall("approvals answer q2 --allow-site"))
     }
 
+    // The newest card is first and has the panel's keys (D14): Return
+    // allows once, Esc denies. The older cards have no keys.
+    func testNewestQuestionFirstWithPanelKeys() {
+        let fake = Fake("questions")
+        let app = fake.launch()
+        app.element("sidebar-questions").click()
+        let once = app.buttons["answer-allow-once-q3"]
+        XCTAssertTrue(once.waitForExistence(timeout: 10))
+        expectation(for: NSPredicate(format: "isEnabled == true"), evaluatedWith: once)
+        waitForExpectations(timeout: 5)
+        let q3 = app.element("question-q3").frame
+        let q1 = app.element("question-q1").frame
+        XCTAssertLessThan(q3.minY, q1.minY, "the newest question is on top")
+        XCTAssertEqual(app.element("question-host-q3").text, "files.files.example.com")
+        app.typeKey(.return, modifierFlags: [])
+        XCTAssertTrue(fake.waitForCall("approvals answer q3 --allow-once"), "\(fake.calls.map(\.line))")
+        let gone = NSPredicate(format: "exists == false")
+        expectation(for: gone, evaluatedWith: app.element("question-q3"))
+        waitForExpectations(timeout: 5)
+        // q2 is the newest now.
+        let deny = app.buttons["answer-deny-q2"]
+        expectation(for: NSPredicate(format: "isEnabled == true"), evaluatedWith: deny)
+        waitForExpectations(timeout: 5)
+        app.typeKey(.escape, modifierFlags: [])
+        XCTAssertTrue(fake.waitForCall("approvals answer q2 --deny"), "\(fake.calls.map(\.line))")
+        XCTAssertTrue(fake.calls("approvals answer q1").isEmpty, "an older card took a key")
+        XCTAssertTrue(fake.calls("approvals answer").allSatisfy { !$0.contains("always") && !$0.contains("site") },
+                      "a key wrote a permanent rule")
+    }
+
     // MARK: Clipboard
 
     func testSessionClipboardLeavesTheAppSetting() {

@@ -54,6 +54,7 @@ fn dir(horse: &str) -> String {
 /// Save view `name` of `horse`. The caller checks the name and that the
 /// session belongs to the horse.
 pub(super) fn save(store: &Store, horse: &str, name: &str, v: &View) -> Result<()> {
+    let _l = store.lock()?;
     store.write_ref(
         &format!("{}/{name}.json", dir(horse)),
         &serde_json::to_vec_pretty(v)?,
@@ -68,7 +69,7 @@ pub(in crate::horse::device) fn add(store: &Store, h: &Horse, t: &mut Tree) -> R
     if !store.root().join(&d).is_dir() {
         return Ok(());
     }
-    for file in store.list_refs(&d)? {
+    for file in store.list_locked_refs(&d)? {
         let Some(name) = file.strip_suffix(".json") else {
             continue;
         };

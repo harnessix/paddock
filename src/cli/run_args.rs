@@ -51,9 +51,19 @@ pub(crate) struct RunArgs {
     /// bwrap only.
     #[arg(long, value_name = "PROFILE", value_parser = ["default"])]
     pub(super) profile: Option<String>,
-    /// Start the harness without its auto-approval flags.
+    /// Manual approvals: you approve the agent's steps in its own
+    /// interface. paddock adds no auto-approval flags and does not answer
+    /// the agent's trust question. The sandbox stays the same.
+    /// `--no-yolo` is the old name. The default comes from `[run]
+    /// approvals` (paddock.toml, then the user configuration), else auto.
+    #[arg(long, visible_alias = "no-yolo", conflicts_with = "auto")]
+    #[serde(default, alias = "no_yolo")]
+    pub(super) manual: bool,
+    /// Auto approvals for this run, over a manual default: the agent
+    /// approves its own steps inside the sandbox.
     #[arg(long)]
-    pub(super) no_yolo: bool,
+    #[serde(default)]
+    pub(super) auto: bool,
     /// Approve the project's paddock.toml without asking.
     #[arg(long, short = 'y')]
     pub(super) yes: bool,

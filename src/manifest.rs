@@ -8,9 +8,7 @@ use crate::env::HostEnv;
 use crate::spec::{GuiMode, Network};
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
-use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
 pub const PROJECT_FILE: &str = "paddock.toml";
@@ -18,6 +16,10 @@ pub const PROJECT_FILE: &str = "paddock.toml";
 #[path = "manifest_net.rs"]
 mod net;
 pub use net::{check_max, net_name, net_rank, Base};
+
+#[path = "manifest_approval.rs"]
+mod approval;
+pub use approval::{approve, hex, is_approved, require_approval, unhex};
 
 /// Tables of `~/.config/paddock/config.toml` that other modules read
 /// themselves: `[kv]` (kv.rs), `[pastures]`
@@ -27,7 +29,8 @@ pub use net::{check_max, net_name, net_rank, Base};
 /// `[compaction]` (compaction.rs), `[hooks]` (hooks.rs), `[speckit]`
 /// (speckit.rs), `[loft]` (loft.rs), `[horse]` (horse/live.rs), and
 /// `[tack]` (tack/config.rs). A project
-/// `paddock.toml` with one of them is invalid. `[devices]` is not in the
+/// `paddock.toml` with one of them is invalid, except `[loft]` with only
+/// `mode` (loft/sync.rs). `[devices]` is not in the
 /// list: the user configuration defines devices there (devices.rs), and a
 /// project only requests them with `use` (`check_project_devices`).
 pub const USER_ONLY: &[&str] = &[
@@ -113,6 +116,32 @@ pub struct Manifest {
     /// Read from the user configuration only.
     #[serde(default)]
     pub macvm: Option<MacvmCfg>,
+    /// `[run]`: who approves the agent's steps (approvals.rs). A project
+    /// file may set `approvals` only; `[run.agents.NAME]` is for the user
+    /// configuration.
+    #[serde(default)]
+    pub run: RunCfg,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RunCfg {
+    /// `auto` (the default) or `manual`.
+    pub approvals: Option<crate::approvals::Approvals>,
+    /// `[run.agents.NAME] approvals`: the mode of one agent. User
+    /// configuration only.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub agents: BTreeMap<String, RunAgentCfg>,
+    /// The `approvals` of the project file. `merge` keeps it apart, because
+    /// it comes before `[run.agents.NAME]` of the user configuration.
+    #[serde(skip)]
+    pub project: Option<crate::approvals::Approvals>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RunAgentCfg {
+    pub approvals: Option<crate::approvals::Approvals>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -341,6 +370,12 @@ impl Manifest {
             let v: Option<toml::Value> = toml::from_str(&text).ok();
             if let Some(v) = &v {
                 check_project_devices(path, v)?;
+                if v.get("run").and_then(|r| r.get("agents")).is_some() {
+                    bail!(
+                        "{}: [run.agents] is only read from the user configuration (~/.config/paddock/config.toml); a project paddock.toml can set [run] approvals only",
+                        path.display()
+                    );
+                }
                 if v.get("network").and_then(|n| n.get("max")).is_some() {
                     bail!(
                         "{}: network.max is only read from the user configuration (~/.config/paddock/config.toml); a project paddock.toml cannot set it",
@@ -348,14 +383,30 @@ impl Manifest {
                     );
                 }
             }
-            if let Some(k) = USER_ONLY
-                .iter()
-                .find(|k| v.as_ref().is_some_and(|v| v.get(**k).is_some()))
-            {
+            // `[loft] mode` alone is a project setting (loft/sync.rs).
+            let loft_mode_only = v
+                .as_ref()
+                .and_then(|v| v.get("loft"))
+                .and_then(|l| l.as_table())
+                .is_some_and(|t| !t.is_empty() && t.keys().all(|k| k == "mode"));
+            if let Some(k) = USER_ONLY.iter().find(|k| {
+                v.as_ref().is_some_and(|v| v.get(**k).is_some())
+                    && !(**k == "loft" && loft_mode_only)
+            }) {
                 bail!(
                     "{}: [{k}] is only read from the user configuration (~/.config/paddock/config.toml); a project paddock.toml cannot set it, because an agent in the sandbox can edit the project",
                     path.display()
                 );
+            }
+            if loft_mode_only {
+                if let Some(mut v) = v {
+                    if let Some(t) = v.as_table_mut() {
+                        t.remove("loft");
+                    }
+                    return v
+                        .try_into()
+                        .with_context(|| format!("{} is invalid", path.display()));
+                }
             }
             return toml::from_str(&text).with_context(|| format!("{} is invalid", path.display()));
         }
@@ -380,15 +431,21 @@ impl Manifest {
         Ok(v.try_into()?)
     }
 
+    /// The user configuration alone, or the defaults without one.
+    pub fn load_user(env: &HostEnv) -> Result<Self> {
+        let user_file = env.paddock_config().join("config.toml");
+        if user_file.is_file() {
+            // The user configuration belongs to the host; it may be a link.
+            Self::read_with(&user_file, true)
+        } else {
+            Ok(Self::default())
+        }
+    }
+
     /// User configuration first, then the project file on top of it.
     pub fn load(env: &HostEnv, project: &Path) -> Result<Loaded> {
         let user_file = env.paddock_config().join("config.toml");
-        let user = if user_file.is_file() {
-            // The user configuration belongs to the host; it may be a link.
-            Self::read_with(&user_file, true)?
-        } else {
-            Self::default()
-        };
+        let user = Self::load_user(env)?;
         let project_file = project.join(PROJECT_FILE);
         let proj = if project_file.is_file() {
             Some((project_file.clone(), Self::read(&project_file)?))
@@ -501,6 +558,9 @@ impl Manifest {
         }
         self.setup.run.extend(o.setup.run);
         self.devices.r#use.extend(o.devices.r#use);
+        if o.run.approvals.is_some() {
+            self.run.project = o.run.approvals;
+        }
     }
 
     /// A network mode of the project file wider than the user's, unless
@@ -563,6 +623,9 @@ impl Manifest {
         if !allow.is_empty() {
             widening["network.allow"] = serde_json::json!(allow);
         }
+        if self.auto_approvals() {
+            widening["run.approvals"] = "auto".into();
+        }
         widening
     }
 
@@ -591,6 +654,14 @@ impl Manifest {
             || self.docker.image.is_some()
             || !self.docker.packages.is_empty()
             || !self.devices.r#use.is_empty()
+            || self.auto_approvals()
+    }
+
+    /// `[run] approvals = "auto"` in a project file: the agent then
+    /// approves its own steps even where the user chose `manual`, so it
+    /// needs the one-time approval. `manual` only asks the user more.
+    fn auto_approvals(&self) -> bool {
+        self.run.approvals == Some(crate::approvals::Approvals::Auto)
     }
 }
 
@@ -615,86 +686,6 @@ fn check_project_devices(path: &Path, v: &toml::Value) -> Result<()> {
     Ok(())
 }
 
-fn approval_file(env: &HostEnv, project_file: &Path) -> PathBuf {
-    let key = hex(&Sha256::digest(project_file.to_string_lossy().as_bytes()))[..16].to_string();
-    env.paddock_state().join("approved").join(key)
-}
-
-fn widening_hash(m: &Manifest, base: &Base) -> String {
-    hex(&Sha256::digest(m.widening(base).to_string().as_bytes()))
-}
-
-/// Bytes from lowercase or uppercase hex. None for odd lengths or other
-/// characters.
-pub fn unhex(s: &str) -> Option<Vec<u8>> {
-    if !s.len().is_multiple_of(2) {
-        return None;
-    }
-    (0..s.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(s.get(i..i + 2)?, 16).ok())
-        .collect()
-}
-
-pub fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
-/// With `--network`, an approval that also covers the mode of the file
-/// counts too.
-pub fn is_approved(env: &HostEnv, project_file: &Path, m: &Manifest, base: &Base) -> bool {
-    let Ok(s) = std::fs::read_to_string(approval_file(env, project_file)) else {
-        return false;
-    };
-    let full = Base {
-        cli_network: false,
-        ..base.clone()
-    };
-    s.trim() == widening_hash(m, base) || s.trim() == widening_hash(m, &full)
-}
-
-pub fn approve(env: &HostEnv, project_file: &Path, m: &Manifest, base: &Base) -> Result<()> {
-    let f = approval_file(env, project_file);
-    crate::privfs::write(&f, widening_hash(m, base))?;
-    Ok(())
-}
-
-/// Make sure that any widening in the project file is approved. Ask on a
-/// terminal; refuse without one.
-pub fn require_approval(env: &HostEnv, loaded: &Loaded, assume_yes: bool) -> Result<()> {
-    let Some((file, m)) = &loaded.project else {
-        return Ok(());
-    };
-    let base = &loaded.base;
-    if !m.widens(base) || is_approved(env, file, m, base) {
-        return Ok(());
-    }
-    let summary = serde_json::to_string_pretty(&m.widening(base))?;
-    eprintln!(
-        "paddock: {} asks for more access than the defaults:\n{summary}\n\
-         The project directory is writable from inside the sandbox, so an agent can edit this file.",
-        file.display()
-    );
-    if assume_yes {
-        return approve(env, file, m, base);
-    }
-    if !std::io::stdin().is_terminal() {
-        bail!(
-            "not approved. Review the file, then run: paddock approve {}",
-            file.parent().unwrap().display()
-        );
-    }
-    eprint!("Approve this access? [y/N] ");
-    std::io::stderr().flush().ok();
-    let mut answer = String::new();
-    std::io::stdin().read_line(&mut answer)?;
-    if matches!(answer.trim(), "y" | "Y" | "yes") {
-        approve(env, file, m, base)
-    } else {
-        bail!("not approved")
-    }
-}
-
 pub const TEMPLATE: &str = r#"# paddock.toml: sandbox settings for this project.
 # Fields that widen access need a one-time approval on the host.
 
@@ -715,6 +706,10 @@ pub const TEMPLATE: &str = r#"# paddock.toml: sandbox settings for this project.
 # allow = ["crates.io"]       # extra domains for modes "api" and "allowlist"
 # lan = true                # reach private networks: routers, NAS, other machines on the LAN
 # host_ports = [8765]         # host loopback ports reachable from the sandbox (local MCP servers)
+
+[run]
+# approvals = "auto"          # auto: the agent approves its own steps in the sandbox
+#                             # manual: you approve each step in the agent's interface
 
 [auth]
 # mode = "shared"             # shared: your login | isolated | isolated:NAME: a separate login

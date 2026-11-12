@@ -91,6 +91,7 @@ pub(crate) fn gc_cmd(env: &HostEnv, o: &paddock::storage::GcOptions, json: bool)
     items.extend(paddock::storage::auto::build_cache_items(env));
     items.extend(paddock::borrow::gc_items(env));
     items.extend(paddock::view::gc_items(env, state::now()));
+    items.extend(paddock::loft::trash::gc_items(env, state::now()));
     items.extend(paddock::macvm::manage::gc_items(env, o));
     match paddock::kv::gc_items(env, state::now()) {
         Ok(kv) => items.extend(kv),

@@ -5,7 +5,7 @@ use crate::env::HostEnv;
 use crate::gui::{self, WindowCompositor};
 use crate::manifest::hex;
 use crate::spec::{GuiMode, Network, SandboxSpec};
-use crate::state::{self, AuthSync, Running, SyncStep};
+use crate::state::{self, AuthSync, Running};
 use anyhow::{bail, Context, Result};
 use sha2::{Digest, Sha256};
 use std::io::IsTerminal;
@@ -13,16 +13,18 @@ mod capped;
 mod end;
 mod host_tools;
 mod mcp;
-mod memory_scope;
+pub mod memory_scope;
 use capped::read_capped;
 use end::{EndOfRun, ShadowRun};
 mod help;
+mod live_sync;
+use live_sync::{HistorySync, LoginSync, HISTORY_EVERY};
 mod sshagent;
 use help::help_text;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 pub fn write_files(launch: &Launch) -> Result<()> {
     for (path, text, mode) in &launch.files {
         gui::write_file(path, text, *mode)?;
@@ -486,14 +488,15 @@ pub fn run(
     mcp::validate(env, &built)?;
     // The Codex hook trust names the home that the harness sees.
     built.spec.harness_home = backend.harness_home(&built.spec);
-    // SIGTERM and SIGHUP must leave time for the device mount, login and
-    // history copies, and session record to finish.
-    // Before launch, paddock notes the signal and stops. After launch it
+    // SIGTERM and SIGHUP must leave time for the device mount, login and history copies, and
+    // session record to finish. Before launch, paddock notes the signal and stops. After launch it
     // forwards the signal and waits. A frozen sandbox is thawed first.
     crate::loft::push::start_notice(env, &built);
     let forwarding = Forward::install();
     // The mailbox comes first: the devices serve it.
     let mut end = EndOfRun::new(env, &built, quiet);
+    // The loft sync mode syncs at each change, and once more when it stops, before `end`.
+    let _loft_watch = crate::loft::sync::Watch::start(env, &built.spec.project, &built.spec.id);
     // `--profile default`: the private snapshot of the data roots, before
     // anything else starts. The run folder goes when `run` returns.
     let shadow = built.spec.shadow.clone().map(ShadowRun);
@@ -650,9 +653,8 @@ pub fn run(
             eprintln!("paddock: warning: provisioning failed; the harness starts anyway");
         }
     }
-    // Registered credentials (credentials.rs): after the install steps,
-    // which never get them, and before the harness starts, which waits for
-    // the user's two answers.
+    // Registered credentials (credentials.rs): after the install steps, which never get them, and
+    // before the harness starts, which waits for the user's two answers.
     let creds = setup_credentials(
         env,
         &mut built,
@@ -685,7 +687,12 @@ pub fn run(
                 .with_context(|| format!("cannot prepare ~/{}", rel.display()))?;
         }
         // A large settings file of the snapshot does not stop the run.
-        if let Err(e) = state::toml_set(&built.profile, &spec.home_src, &spec.project) {
+        if let Err(e) = state::toml_set(
+            &built.profile,
+            &spec.home_src,
+            &spec.project,
+            built.manual(),
+        ) {
             log::warn!("{e:#}");
         }
         match crate::privacy::write_home(spec) {
@@ -694,7 +701,12 @@ pub fn run(
         }
     } else {
         state::seed(env, &built.profile, &built.auth, &spec.home_src)?;
-        state::toml_set(&built.profile, &spec.home_src, &spec.project)?;
+        state::toml_set(
+            &built.profile,
+            &spec.home_src,
+            &spec.project,
+            built.manual(),
+        )?;
         state::json_import(
             env,
             &built.profile,
@@ -762,12 +774,15 @@ pub fn run(
     crate::boundary::record_start(env, spec);
     if !quiet {
         eprintln!(
-            "paddock: {} in {} (backend {}, network {}, display {})",
-            spec.harness,
-            spec.project.display(),
-            backend.name(),
-            format!("{:?}", spec.network).to_lowercase(),
-            format!("{:?}", spec.gui.mode).to_lowercase()
+            "paddock: {}",
+            start_line(
+                &spec.harness,
+                &spec.project,
+                backend.name(),
+                spec.network,
+                spec.gui.mode,
+                built.approvals,
+            )
         );
         for n in &spec.notices {
             eprintln!("paddock: {n}");
@@ -814,6 +829,9 @@ pub fn run(
             cmd.stdin(Stdio::piped());
         }
     }
+    if let Some(dir) = &launch.cwd {
+        cmd.current_dir(dir);
+    }
     if forwarding.stop_requested() {
         bail!("paddock was asked to stop before the sandbox started");
     }
@@ -830,6 +848,7 @@ pub fn run(
         caller_terminal,
         term.unwatched,
         built.detach,
+        built.manual(),
     );
     let tap = crate::relay::Taps::of(gate.clone(), screens, crate::horse::live::take_pty_tap());
     // The live view of a run without a terminal (view.rs). paddock copies
@@ -956,6 +975,7 @@ pub fn run(
         pid: child.id(),
         started: state::now(),
         auth: built.auth.to_string(),
+        approvals: crate::approvals::shown(built.approvals).into(),
         window_pid: _compositor.as_ref().map(|c| c.pid()),
         // Short lines for the bar panel, which shows the first one.
         // Only `login_ports = true` opens every port. The filtered login
@@ -1166,6 +1186,28 @@ pub fn run(
     Ok(Outcome { code, stdout: out })
 }
 
+/// The start line of a run, after `paddock: `: "codex in /p (backend
+/// seatbelt, network egress, display off, manual approvals)".
+pub fn start_line(
+    harness: &str,
+    project: &std::path::Path,
+    backend: &str,
+    network: crate::spec::Network,
+    display: crate::spec::GuiMode,
+    approvals: Option<crate::approvals::Approvals>,
+) -> String {
+    let approvals = match approvals {
+        Some(a) => format!("{a} approvals"),
+        None => "approvals by the command".into(),
+    };
+    format!(
+        "{harness} in {} (backend {backend}, network {}, display {}, {approvals})",
+        project.display(),
+        format!("{network:?}").to_lowercase(),
+        format!("{display:?}").to_lowercase()
+    )
+}
+
 pub fn select_backend(env: &HostEnv, built: &Built) -> Result<Box<dyn Backend>> {
     backend::docker::set_image_cfg(backend::docker::ImageCfg {
         image: built.manifest.docker.image.clone(),
@@ -1322,6 +1364,9 @@ fn provision(
         .env_clear()
         .envs(&l.env)
         .stdin(Stdio::null());
+    if let Some(dir) = &l.cwd {
+        cmd.current_dir(dir);
+    }
     if quiet {
         cmd.stdout(Stdio::null()).stderr(Stdio::null());
     } else {
@@ -1331,105 +1376,6 @@ fn provision(
         .status()
         .with_context(|| format!("cannot start {}", l.program.display()))?;
     Ok(status.success())
-}
-
-/// How often a running sandbox and the host bring its login files in line.
-const LOGIN_EVERY: Duration = Duration::from_secs(2);
-
-/// Keeps the login files of a running sandbox and the host in line, both
-/// ways (`AuthSync::sync_now`), so a refreshed token reaches the host and
-/// every other sandbox on the same login within seconds, not at the end.
-struct LoginSync {
-    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    thread: Option<std::thread::JoinHandle<AuthSync>>,
-}
-
-impl LoginSync {
-    fn start(mut auth: AuthSync, quiet: bool) -> Self {
-        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let s = stop.clone();
-        let thread = std::thread::spawn(move || {
-            while !s.load(std::sync::atomic::Ordering::SeqCst) {
-                for step in auth.sync_now() {
-                    match step {
-                        SyncStep::ToStore(f) if !quiet => {
-                            log::info!("saved a refreshed login to {}", f.display())
-                        }
-                        SyncStep::ToSandbox(f) if !quiet => {
-                            log::info!("the sandbox got the newer login of {}", f.display())
-                        }
-                        _ => {}
-                    }
-                }
-                let start = std::time::Instant::now();
-                while start.elapsed() < LOGIN_EVERY && !s.load(std::sync::atomic::Ordering::SeqCst)
-                {
-                    std::thread::sleep(Duration::from_millis(100));
-                }
-            }
-            // One last look before the copy back at the end.
-            auth.sync_now();
-            auth
-        });
-        Self {
-            stop,
-            thread: Some(thread),
-        }
-    }
-
-    fn finish(mut self) -> AuthSync {
-        self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
-        self.thread
-            .take()
-            .expect("started")
-            .join()
-            .expect("login sync thread")
-    }
-}
-
-/// History copied to the host while the sandbox runs, so the Omarchy agents
-/// panel counts new sessions before the sandbox exits. Logins are not synced
-/// here: a login goes back to its store only at exit.
-struct HistorySync {
-    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    thread: std::thread::JoinHandle<(Option<crate::history::CopyBack>, usize)>,
-}
-
-/// How often history is copied.
-const HISTORY_EVERY: Duration = Duration::from_secs(300);
-
-impl HistorySync {
-    fn start(history: Option<crate::history::CopyBack>, every: Duration) -> Self {
-        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let flag = stop.clone();
-        let thread = std::thread::spawn(move || {
-            let mut copied = 0;
-            let mut at = Instant::now();
-            while history.is_some() && !flag.load(std::sync::atomic::Ordering::SeqCst) {
-                std::thread::sleep(Duration::from_millis(200));
-                if at.elapsed() < every {
-                    continue;
-                }
-                at = Instant::now();
-                if let Some(h) = &history {
-                    match h.copy_out() {
-                        Ok(files) => copied += files.len(),
-                        Err(e) => log::debug!("cannot copy the session history: {e:#}"),
-                    }
-                }
-            }
-            (history, copied)
-        });
-        Self { stop, thread }
-    }
-
-    /// Stop the thread and return the history and the files it copied.
-    fn finish(self) -> (Option<crate::history::CopyBack>, usize) {
-        self.stop.store(true, std::sync::atomic::Ordering::SeqCst);
-        self.thread
-            .join()
-            .expect("the history thread does not panic")
-    }
 }
 
 /// The sandbox process that SIGTERM and SIGHUP are passed to (0 before it

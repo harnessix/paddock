@@ -113,6 +113,85 @@ pub fn range_line(range: (u16, u16), network: Network) -> String {
 /// The warning of network mode host at the start of a Seatbelt run.
 pub const HOST_WARNING: &str = "network mode host: the sandbox shares the network of this Mac. It reaches every service on localhost and on the LAN, and its servers are open to the LAN";
 
+/// The active developer folder of this Mac (`xcode-select -p`), or None
+/// without developer tools. Asked once per process.
+pub fn developer_dir() -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        static DIR: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+        DIR.get_or_init(|| {
+            let out = std::process::Command::new("/usr/bin/xcode-select")
+                .arg("-p")
+                .stdin(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .output()
+                .ok()?;
+            let p = PathBuf::from(String::from_utf8(out.stdout).ok()?.trim());
+            (out.status.success() && p.is_absolute() && p.is_dir()).then_some(p)
+        })
+        .clone()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
+    }
+}
+
+/// The tool folders of a developer folder that a terminal run can read:
+/// `usr/bin`, and the default toolchain of Xcode. Apple's `/usr/bin`
+/// shims (python3, git, clang) start xcrun, which writes its lookup cache
+/// into the user temp folder of the host. The sandbox cannot write there,
+/// and must not: the host's xcrun trusts that cache. With these folders
+/// before `/usr/bin`, a command found by PATH skips the shim and its cache.
+/// A login shell puts the shims first again: for it, `xcrun_db` moves the
+/// cache into the private temporary folder (`run_env`).
+pub fn developer_bins(dev: &Path, is_dir: impl Fn(&Path) -> bool) -> Vec<PathBuf> {
+    let readable = crate::seatbelt::SYSTEM_READ
+        .iter()
+        .chain(crate::seatbelt::TERMINAL_READ)
+        .any(|r| dev.starts_with(r));
+    if !readable {
+        return Vec::new();
+    }
+    [
+        dev.join("usr/bin"),
+        dev.join("Toolchains/XcodeDefault.xctoolchain/usr/bin"),
+    ]
+    .into_iter()
+    .filter(|d| is_dir(d))
+    .collect()
+}
+
+/// `path` with `bins` right before its first `/usr/bin`, or at its end.
+pub fn with_developer_bins(path: &str, bins: &[PathBuf]) -> String {
+    let mut out: Vec<String> = path
+        .split(':')
+        .filter(|d| !d.is_empty() && !bins.iter().any(|b| Path::new(d) == b))
+        .map(str::to_string)
+        .collect();
+    let at = out
+        .iter()
+        .position(|d| d == "/usr/bin")
+        .unwrap_or(out.len());
+    for (i, b) in bins.iter().enumerate() {
+        out.insert(at + i, b.display().to_string());
+    }
+    out.join(":")
+}
+
+/// The variable that names the cache file of xcrun. xcrun ignores a
+/// relative path.
+pub const XCRUN_DB: &str = "xcrun_db";
+
+/// The cache file of xcrun in a run: in its private temporary folder.
+pub fn xcrun_db(tmp: &Path) -> PathBuf {
+    tmp.join("xcrun_db")
+}
+
+/// Variables with this prefix hold host paths that a run gets as they are,
+/// not moved into the sandbox home: those of paddock doctor's escape probe.
+pub const HOST_PATH_VAR_PREFIX: &str = "PADDOCK_PROBE_";
+
 /// The private temporary folder of a run, in the sandbox home.
 pub fn private_tmp(spec: &SandboxSpec) -> PathBuf {
     spec.home_src.join(".paddock-tmp").join(&spec.id)
@@ -352,6 +431,20 @@ pub fn run_env(env: &HostEnv, spec: &SandboxSpec, tmp: &Path) -> BTreeMap<String
             vars.insert(k.into(), v.value.clone());
         }
     }
+    // The escape probe of paddock doctor names host paths (the real home,
+    // its secrets, paddock's state) to check that the sandbox cannot reach
+    // them. Moved into the sandbox home, they would name the sandbox's own.
+    for (k, v) in &spec.env {
+        if k.starts_with(HOST_PATH_VAR_PREFIX) {
+            vars.insert(k.clone(), v.value.clone());
+        }
+    }
+    // xcrun (behind Apple's /usr/bin shims) keeps its lookup cache in the
+    // file that `xcrun_db` names, else in the user temp folder of the host,
+    // which the sandbox cannot write. A login shell (`zsh -lc`, as codex
+    // runs commands) puts the shims first again with path_helper, but
+    // path_helper changes only PATH: this variable stays.
+    vars.insert(XCRUN_DB.into(), xcrun_db(tmp).display().to_string());
     // The host commands stay in their own folders. paddock's wrappers in the
     // run folder come first, other folders last, as for srt.
     let run = env.paddock_run().join(&spec.id);
@@ -370,7 +463,16 @@ pub fn run_env(env: &HostEnv, spec: &SandboxSpec, tmp: &Path) -> BTreeMap<String
             path.push(d);
         }
     }
-    vars.insert("PATH".into(), path.join(":"));
+    let mut path = path.join(":");
+    if let Some(dev) = developer_dir() {
+        let bins = developer_bins(&dev, Path::is_dir);
+        if !bins.is_empty() {
+            path = with_developer_bins(&path, &bins);
+            vars.entry("DEVELOPER_DIR".into())
+                .or_insert_with(|| dev.display().to_string());
+        }
+    }
+    vars.insert("PATH".into(), path);
     vars
 }
 
@@ -582,6 +684,10 @@ impl Backend for SeatbeltRun {
             args: command(spec, &profile),
             env: run_env(env, spec, &tmp),
             files: vec![(profile, crate::seatbelt::render(&pol)?, 0o600)],
+            // The shell of the run starts here, before it enters the work
+            // folder. In the folder of the caller (the real home, say) the
+            // sandbox cannot read its own current folder.
+            cwd: Some(tmp),
         })
     }
 }

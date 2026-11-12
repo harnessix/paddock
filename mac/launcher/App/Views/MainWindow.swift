@@ -18,7 +18,9 @@ struct MainWindow: View {
         @Bindable var router = router
         NavigationSplitView {
             Sidebar()
-                .navigationSplitViewColumnWidth(min: 200, ideal: 230)
+                .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 320)
+                // The sidebar is always there: no toggle in the title bar.
+                .toolbar(removing: .sidebarToggle)
                 .accessibilityElement(children: .contain)
                 .accessibilityLabel(Text("Sidebar"))
         } detail: {
@@ -142,36 +144,67 @@ struct Sidebar: View {
     }
 }
 
-/// A sidebar row: icon, name, status text, status symbol.
+/// A sidebar row: the icon with a status dot, the name, and the state
+/// under the name, as UTM and Parallels list their machines.
 @MainActor
 struct AppRow: View {
     let app: AppItem
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 60)) { context in
             let presentation = StatusPresentation.of(app.state, now: context.date)
             HStack(spacing: 8) {
-                AppIcon(path: app.json.bundlePath)
+                // The icon speaks the state word. It is 24 pt, large enough
+                // for the hit region audit; the dot alone is not.
+                AppIconWithStatus(path: app.json.bundlePath, presentation: presentation)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(Text(presentation.accessibilityLabel))
+                    .accessibilityIdentifier("status-symbol-" + app.key)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(verbatim: app.title).labelInk()
+                        .lineLimit(1)
                     // Label color: secondary and vibrant primary fail the contrast audit.
                     Text(presentation.text)
                         .font(.caption)
                         .labelInk()
                         .lineLimit(1)
+                        .contentTransition(.opacity)
                         .accessibilityIdentifier("status-text-" + app.key)
                 }
                 Spacer(minLength: 4)
-                AppStatusView(presentation: presentation)
-                    .accessibilityIdentifier("status-symbol-" + app.key)
+                if presentation.showsProgress {
+                    ProgressView()
+                        .controlSize(.small)
+                        .accessibilityHidden(true)
+                }
             }
+            .animation(reduceMotion ? nil : .default, value: presentation)
             // `.contain` keeps the status text and symbol as children with
             // their identifiers; the row still speaks name, text and state.
             .accessibilityElement(children: .contain)
-            .accessibilityLabel(Text(verbatim: [app.title, presentation.text.localized,
-                                                presentation.accessibilityLabel.localized].joined(separator: ", ")))
+            .accessibilityLabel(Text(verbatim: RowSpeech.of(app.title, presentation)))
             .accessibilityIdentifier("app-row-" + app.key)
         }
+    }
+}
+
+/// The spoken line of an app row: `Sample Notes, Running, 3 windows`. The
+/// state word comes first, then the detail of the row text.
+enum RowSpeech {
+    static func of(_ title: String, _ presentation: StatusPresentation) -> String {
+        let label = presentation.accessibilityLabel.localized
+        let text = presentation.text.localized
+        var parts = [title, label]
+        // `Running · 3 windows` adds `3 windows`; a text that is the label
+        // again, or holds it, adds nothing.
+        let detail = text.components(separatedBy: " · ").dropFirst().joined(separator: ", ")
+        if !detail.isEmpty {
+            parts.append(detail)
+        } else if !label.contains(text), text != label {
+            parts.append(text)
+        }
+        return parts.joined(separator: ", ")
     }
 }
 
@@ -252,11 +285,15 @@ struct EmptyAppsView: View {
         } description: {
             Text("Add an app from your Applications folder. It runs in its own sandbox the next time you start it.")
         } actions: {
-            Button("Add App…") { router.sheet = .addApp(path: nil) }
-                .keyboardShortcut(.defaultAction)
-                .disabled(!store.binary.isUsable)
-                .accessibilityIdentifier("empty-add-app")
-            Text(LibraryCopy.dropHint).font(.callout).labelInk()
+            VStack(spacing: 10) {
+                Button("Add App…") { router.sheet = .addApp(path: nil) }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(!store.binary.isUsable)
+                    .accessibilityIdentifier("empty-add-app")
+                Text(LibraryCopy.dropHint).font(.callout).labelInk()
+            }
         }
         // Without `.contain` the identifier goes to every child and hides
         // `empty-add-app`.

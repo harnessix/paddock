@@ -419,6 +419,7 @@ impl Backend for Srt {
             args,
             env: vars,
             files: vec![(settings_f, text, 0o600)],
+            cwd: None,
         })
     }
 }

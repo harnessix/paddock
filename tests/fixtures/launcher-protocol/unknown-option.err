@@ -1,0 +1,5 @@
+error: unexpected argument '--launcher-protocol' found
+
+Usage: paddock [OPTIONS] <COMMAND>
+
+For more information, try '--help'.

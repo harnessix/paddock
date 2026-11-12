@@ -60,10 +60,13 @@ pub fn apply(profile: &Profile, mode: Telemetry, spec: &mut SandboxSpec) -> Resu
 }
 
 /// Add `[[state.settings]]` of a profile. The `yolo_only` entries only
-/// when the harness starts with its auto-approval flags.
+/// when the harness starts with its auto-approval flags (`auto`), the
+/// `trust` entries unless the user approves by hand (`manual`): then the
+/// harness asks its own trust question.
 pub fn push_state_settings(
     profile: &Profile,
-    no_yolo: bool,
+    auto: bool,
+    manual: bool,
     porigin: &str,
     spec: &mut SandboxSpec,
 ) -> Result<()> {
@@ -71,7 +74,7 @@ pub fn push_state_settings(
         .state
         .settings
         .iter()
-        .filter(|s| !s.yolo_only || !no_yolo)
+        .filter(|s| (!s.yolo_only || auto) && !(s.trust && manual))
         .cloned()
         .collect();
     push_settings(

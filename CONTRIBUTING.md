@@ -32,7 +32,7 @@ paddock is a security tool. Some changes let a sandbox reach more of the host: a
 
 ## Continuous integration
 
-GitHub Actions runs checks on every pull request and on each push to `main`. It runs `cargo fmt`, `cargo clippy` and the tests. It runs the escape probe on the bwrap backend without a display. It checks that Rust files stay within the size limits. A changelog check requires a file in `changes/` when a pull request changes `src/`, `profiles/` or `skills/`. The label `no-changelog` skips that requirement. The check rejects an edit of the `Unreleased` section unless the head branch starts with `release/` or the pull request has the label `release`. A leak guard fails the build if a file contains private notes, internal names, or home paths other than `/home/demo`, or if a commit email is not a noreply address. The scripts are in `.github/scripts/`. Every check must pass before review.
+GitHub Actions runs checks on every pull request and on each push to `main`. It runs `cargo fmt`, `cargo clippy` and the tests. It runs the escape probe on the bwrap backend without a display. It checks that Rust files stay within the size limits. A changelog check requires a file in `changes/` when a pull request changes `src/`, `profiles/` or `skills/`. The label `no-changelog` skips that requirement. The check rejects an edit of the `Unreleased` section unless the head branch starts with `release/` or the pull request has the label `release`.
 
 ## The pull request
 

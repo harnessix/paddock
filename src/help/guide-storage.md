@@ -35,6 +35,7 @@ paddock gc --homes --yes                    # remove them
 - The package caches of gone projects and gone or merged paddock worktrees. Caches in use by a run or held by a live lease are kept; unrelated runs do not block their removal. If a shared uv or npm cache is empty, paddock moves an idle old worktree cache into it.
 - Project snapshots whose project is gone.
 - Pure caches in the homes of sandboxes that do not run (see Caches (`paddock help storage`)).
+- The folders of the loft trash that are older than `[loft] trash_days` (default 30). They hold the notes that a sync of a `.paddock` folder in sync mode deleted (see The loft (`paddock help private-notes`)).
 
 paddock also does this after it builds a new image. To turn that off, set `PADDOCK_GC_AFTER_BUILD=0`.
 
@@ -57,7 +58,7 @@ paddock cleans up by itself, so its folders do not fill the disk:
 - A worktree with unmerged work stays. When it is not used for `worktree_cache_days`, paddock deletes its build output: folders with a `CACHEDIR.TAG` file, such as cargo's `target/`, that git ignores and that hold no tracked file. paddock never deletes a tracked file, or an untracked file that git does not ignore.
 - The same cleanup removes snapshots and undo trash folders older than `snapshot_days`.
 - It never removes a sandbox home. A home holds your conversations with the harness (transcripts and history) and an app's login. Only `paddock gc --homes` removes homes, when you ask, and it names what is lost.
-- It also does what `paddock gc --yes` does, except for images.
+- It also does what `paddock gc --yes` does, except for images and the loft trash.
 
 The cleanup never touches the home, worktree or snapshot of a running sandbox. `paddock doctor` shows when it last ran, what it removed, and its errors. `paddock gc-auto --now` runs it at once.
 

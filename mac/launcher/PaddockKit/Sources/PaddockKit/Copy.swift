@@ -42,7 +42,26 @@ public enum StreamCopy {
 public enum OverviewCopy {
     public static func memory(_ app: AppJSON) -> UIText? {
         guard let mine = app.memoryBytes, let host = app.hostMemoryBytes else { return nil }
-        return UIText("%@ of %@", Format.memoryGB(mine), Format.memoryNumber(host))
+        return UIText("%@ of %@ GB", Format.memoryNumber(mine), Format.memoryNumber(host))
+    }
+
+    /// The share of the Mac's memory the app may use, for the memory gauge:
+    /// 0 to 1, or nil when paddock did not say.
+    public static func memoryFraction(_ app: AppJSON) -> Double? {
+        guard let mine = app.memoryBytes, let host = app.hostMemoryBytes, host > 0 else { return nil }
+        return min(1, max(0, Double(mine) / Double(host)))
+    }
+
+    /// The parts of the disk bar, in bar order: app copy, data, saved state.
+    /// Each fraction is of the total; an empty total gives no parts.
+    public static func diskParts(_ sizes: AppSizesJSON) -> [DiskPart] {
+        let total = sizes.total
+        guard total > 0 else { return [] }
+        return [
+            DiskPart(kind: .appCopy, bytes: sizes.appCopy, fraction: Double(sizes.appCopy) / Double(total)),
+            DiskPart(kind: .data, bytes: sizes.data, fraction: Double(sizes.data) / Double(total)),
+            DiskPart(kind: .savedState, bytes: sizes.savedState, fraction: Double(sizes.savedState) / Double(total)),
+        ]
     }
 
     public static func openQuestions(_ count: Int) -> UIText {
@@ -70,5 +89,26 @@ public enum OverviewCopy {
 public enum StorageCopy {
     public static func usage(used: Int64, total: Int64) -> UIText {
         UIText("paddock uses %@ of %@", Format.gb(used), Format.gb(total))
+    }
+}
+
+/// One part of the disk bar of an app.
+public struct DiskPart: Equatable, Sendable, Identifiable {
+    public enum Kind: String, Equatable, Sendable {
+        case appCopy, data, savedState
+    }
+
+    public var kind: Kind
+    public var bytes: Int64
+    public var fraction: Double
+
+    public var id: String { kind.rawValue }
+
+    public var title: UIText {
+        switch kind {
+        case .appCopy: return UIText("App copy")
+        case .data: return UIText("Data")
+        case .savedState: return UIText("Saved state")
+        }
     }
 }

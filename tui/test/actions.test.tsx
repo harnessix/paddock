@@ -39,6 +39,53 @@ test('n starts a detached run with harness, project and prompt file', async () =
   await r.waitFor('ok run');
 });
 
+test('Ctrl+A in the new run form switches the approvals mode of the run', async () => {
+  const dir = fakeWorld();
+  const project = mkdtempSync(join(tmpdir(), 'tui-project-'));
+  writeFileSync(join(project, 'task.md'), 'do it');
+  const r = await renderApp({ columns: 80, rows: 24, cwd: project });
+  await r.waitFor('sandbox bwrap');
+  await r.press('n');
+  await r.waitFor('your default');
+  await typeText(r, 'codex');
+  // Ctrl+A goes to the mode, never into the field.
+  await r.press('\u0001');
+  await r.waitFor('manual: you approve each step');
+  await r.press('\t');
+  await r.press('\t');
+  await typeText(r, 'task.md');
+  await r.press('\r');
+  await until(() => actions(dir).length > 0);
+  expect(actions(dir)[0]?.args).toEqual(['run', 'codex', project, '--detach', '--prompt-file', join(project, 'task.md'), '--manual']);
+  await r.waitFor('ok run');
+});
+
+test('Ctrl+A cycles default, manual, auto and back to the default', async () => {
+  const dir = fakeWorld();
+  const project = mkdtempSync(join(tmpdir(), 'tui-project-'));
+  writeFileSync(join(project, 'task.md'), 'do it');
+  const r = await renderApp({ columns: 80, rows: 24, cwd: project });
+  await r.waitFor('sandbox bwrap');
+  await r.press('n');
+  await r.waitFor('your default');
+  await typeText(r, 'claude');
+  await r.press('\u0001');
+  await r.waitFor('manual: you approve');
+  await r.press('\u0001');
+  await r.waitFor('auto: the agent approves');
+  await r.press('\u0001');
+  await r.waitFor('your default');
+  await r.press('\u0001');
+  await r.press('\u0001');
+  await r.waitFor('auto: the agent approves');
+  await r.press('\t');
+  await r.press('\t');
+  await typeText(r, 'task.md');
+  await r.press('\r');
+  await until(() => actions(dir).length > 0);
+  expect(actions(dir)[0]?.args).toEqual(['run', 'claude', project, '--detach', '--prompt-file', join(project, 'task.md'), '--auto']);
+});
+
 test('s asks first; y stops, another key keeps the run', async () => {
   const dir = fakeWorld();
   const r = await renderApp({ columns: 80, rows: 24 });

@@ -72,6 +72,11 @@ pub enum Action {
     Macvm {
         dir: PathBuf,
     },
+    /// A folder of a loft trash: notes that a sync deleted more than
+    /// `[loft] trash_days` ago (loft/trash.rs).
+    LoftTrash {
+        dir: PathBuf,
+    },
     /// Build output in a worktree that is kept: folders with a
     /// `CACHEDIR.TAG` that git ignores, relative to it (storage/buildout.rs).
     BuildOutput {

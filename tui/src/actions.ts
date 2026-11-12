@@ -20,6 +20,7 @@ export type ActionId =
   | 'palette'
   | 'help'
   | 'mouse'
+  | 'layout'
   | 'refresh'
   | 'quit';
 
@@ -49,6 +50,7 @@ export const ACTIONS: Action[] = [
   { id: 'palette', key: ': Ctrl+P', label: 'command palette: every action', changes: false },
   { id: 'help', key: '?', label: 'this help', changes: false },
   { id: 'mouse', key: 'M', label: 'mouse on or off (off: the terminal selects text)', changes: false },
+  { id: 'layout', key: 'L', label: 'runs as rooms (a card and a character per run) or as a list', changes: false },
   { id: 'refresh', key: 'R', label: 'read paddock again now', changes: false },
   { id: 'quit', key: 'Ctrl+C Q', label: 'quit', changes: false },
 ];

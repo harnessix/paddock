@@ -36,12 +36,22 @@ pub fn init(env: &HostEnv, dir: &Path) -> Result<String> {
         repo.display(),
         loft.root.display()
     );
-    match link(&loft, &repo) {
-        Ok(()) => msg.push_str(&format!(
-            "\n{}/{NOTES} leads to the loft's notes, also outside a sandbox.",
-            repo.display()
-        )),
-        Err(e) => msg.push_str(&format!("\nNo link {NOTES} in the project: {e:#}")),
+    if super::sync::mode(env, &repo) == super::sync::Mode::Sync {
+        match super::sync::apply_mode(env, &repo, &super::sync::host_name()) {
+            Ok(_) => msg.push_str(&format!(
+                "\n{}/{NOTES} is a real folder of the project, synced with the loft's notes ([loft] mode = \"sync\").",
+                repo.display()
+            )),
+            Err(e) => msg.push_str(&format!("\nNo synced folder {NOTES} in the project: {e:#}")),
+        }
+    } else {
+        match link(&loft, &repo) {
+            Ok(()) => msg.push_str(&format!(
+                "\n{}/{NOTES} leads to the loft's notes, also outside a sandbox.",
+                repo.display()
+            )),
+            Err(e) => msg.push_str(&format!("\nNo link {NOTES} in the project: {e:#}")),
+        }
     }
     exclude(&repo, "the loft", &[format!("/{NOTES}")])?;
     let waiting = waiting(env, &Cfg::load(env), &loft, &repo);
@@ -119,14 +129,22 @@ pub fn remove(env: &HostEnv, dir: &Path) -> Result<String> {
     if !loft.initialized() {
         bail!("{} has no loft", repo.display());
     }
+    let mut extra = String::new();
     if linked(env, &repo) {
         crate::safefs::Root::open(&repo)?
             .dir(Path::new(""), false)?
             .remove(OsStr::new(NOTES))?;
+    } else if super::sync::synced(&loft, &repo) {
+        // The real folder stays, and with it the notes: one last sync.
+        super::sync::sync(&loft, &repo, &super::sync::host_name())?;
+        extra = format!(
+            " {}/{NOTES} stays a real folder and still syncs with the notes.",
+            repo.display()
+        );
     }
     crate::privfs::write(&loft.root.join("off"), b"")?;
     Ok(format!(
-        "The loft is off. Its files and history stay in {}. `paddock loft init` turns it on again.",
+        "The loft is off. Its files and history stay in {}. `paddock loft init` turns it on again.{extra}",
         loft.root.display()
     ))
 }
@@ -259,20 +277,61 @@ pub fn status(env: &HostEnv, dir: &Path) -> Result<String> {
     } else {
         "on"
     };
+    let dir = &super::sync::worktree_of(dir);
+    let synced = super::sync::synced(&loft, dir);
     let mut out = format!(
-        "loft      {}\nstate     {state}\nstore     {}\nlink      {}\n",
+        "loft      {}\nstate     {state}\nstore     {}\nmode      {}\nlink      {}\n",
         loft.root.display(),
         if cfg.store == Store::External {
             "external"
         } else {
             "repo"
         },
+        super::sync::mode(env, dir).name(),
         if linked(env, &repo) {
             format!("{}/{NOTES} leads to the loft's notes", repo.display())
+        } else if synced {
+            format!(
+                "none: {}/{NOTES} is a real folder, synced with the loft's notes",
+                dir.display()
+            )
         } else {
             "none".into()
         }
     );
+    if synced {
+        let p = super::sync::pending(&loft, dir)?;
+        if p.is_empty() {
+            out.push_str("sync      the folder and the loft are the same\n");
+        } else {
+            out.push_str(&format!(
+                "sync      {} to sync (`paddock loft sync` syncs now):\n",
+                p.len()
+            ));
+            for l in p {
+                out.push_str(&format!("  {l}\n"));
+            }
+        }
+    }
+    let mut open = super::sync::conflicts(&loft);
+    if synced {
+        // What only the work tree has: a copy that cannot sync, or an
+        // interrupted copy that cannot be read.
+        for c in super::sync::local_conflicts(dir) {
+            if !open.contains(&c) {
+                open.push(c);
+            }
+        }
+    }
+    if !open.is_empty() {
+        out.push_str(&format!(
+            "conflicts {} open: compare each copy with its file, keep what you want, delete the copy\n",
+            open.len()
+        ));
+        for c in open {
+            out.push_str(&format!("  {NOTES}/{c}\n"));
+        }
+    }
     let waiting = waiting(env, &cfg, &loft, &repo);
     if loft.active() && !waiting.is_empty() {
         out.push_str(&format!(
@@ -314,10 +373,17 @@ pub fn explain(env: &HostEnv, project: &Path) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default();
-    let mut out = vec![format!(
-        "  notes   {NOTES}/  <- {}\n         the agents' notes, outside the repository",
-        loft.notes().display()
-    )];
+    let mut out = vec![if super::sync::synced(&loft, project) {
+        format!(
+            "  notes   {NOTES}/  <-> {}\n         the agents' notes: a real folder, synced with the loft, outside git",
+            loft.notes().display()
+        )
+    } else {
+        format!(
+            "  notes   {NOTES}/  <- {}\n         the agents' notes, outside the repository",
+            loft.notes().display()
+        )
+    }];
     for e in entries(&cfg) {
         let in_loft = if e.kind == Kind::SpecKit {
             super::speckit_external(env, &sk, project) && loft.path(&e).exists()
@@ -376,7 +442,16 @@ pub fn setup_step(
     Ok(())
 }
 
+/// `paddock loft mode MODE`: `[loft] mode` in the user configuration.
+pub fn set_mode(env: &HostEnv, mode: super::sync::Mode) -> Result<()> {
+    edit_cfg(env, "mode", toml_edit::value(mode.name()))
+}
+
 fn set_auto(env: &HostEnv, on: bool) -> Result<()> {
+    edit_cfg(env, "auto", toml_edit::value(on))
+}
+
+fn edit_cfg(env: &HostEnv, key: &str, value: toml_edit::Item) -> Result<()> {
     let file = env.paddock_config().join("config.toml");
     let text = std::fs::read_to_string(&file).unwrap_or_default();
     let mut doc: toml_edit::DocumentMut = text
@@ -385,7 +460,7 @@ fn set_auto(env: &HostEnv, on: bool) -> Result<()> {
     if !doc.contains_table("loft") {
         doc.insert("loft", toml_edit::table());
     }
-    doc["loft"]["auto"] = toml_edit::value(on);
+    doc["loft"][key] = value;
     std::fs::create_dir_all(env.paddock_config())?;
     std::fs::write(&file, doc.to_string())?;
     Ok(())

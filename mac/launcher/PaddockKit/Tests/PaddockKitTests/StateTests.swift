@@ -17,6 +17,8 @@ final class StateTests: XCTestCase {
                 ok = (try? decoder.decode(MacvmStatusJSON.self, from: data)) != nil
             case let n where n.hasPrefix("profiles"): ok = (try? decoder.decode(ProfileListJSON.self, from: data)) != nil
             case let n where n.hasPrefix("du"): ok = (try? decoder.decode(DuReportJSON.self, from: data)) != nil
+            // Some protocol answers are wrong on purpose. LauncherProtocolTests checks each one.
+            case let n where n.hasPrefix("protocol-"): ok = true
             case let n where n.hasPrefix("gc-"): ok = (try? decoder.decode(GcReportJSON.self, from: data)) != nil
             case let n where n.hasPrefix("pause-"): ok = (try? decoder.decode(SetupControlJSON.self, from: data)) != nil
             case let n where n.hasPrefix("remove-report"): ok = (try? decoder.decode(RemoveReportJSON.self, from: data)) != nil
@@ -177,6 +179,43 @@ final class StateTests: XCTestCase {
             XCTAssertFalse(p.accessibilityLabel.english.isEmpty)
             XCTAssertEqual(p.showsProgress, want.3)
         }
+    }
+
+    // The status pill: one word per state, a symbol for every word, and
+    // only Starting pulses.
+    func testPillWordsAndPulse() {
+        let now = ISO.date("2026-11-06T10:00:00Z")
+        let cases: [(AppState, String, Bool)] = [
+            (.stopped, "Stopped", false),
+            (.saved(since: now), "Ready", false),
+            (.running(since: nil, windows: 3), "Running", false),
+            (.starting(.booting), "Starting", true),
+            (.suspended(reason: nil), "Suspended", false),
+            (.stopping, "Stopping", false),
+            (.error(reason: "The VM stopped: out of memory"), "Error", false),
+            (.blocked(reason: "Build the base image to start this app.", code: "no_golden"), "Blocked", false),
+        ]
+        for (state, word, pulses) in cases {
+            let p = StatusPresentation.of(state, now: now)
+            XCTAssertEqual(p.word.english, word)
+            XCTAssertEqual(p.pulses, pulses, word)
+            XCTAssertTrue(p.symbol != nil || p.showsProgress, word)
+        }
+    }
+
+    // The memory gauge reads `6 of 16 GB`; the disk bar has three parts in
+    // bar order that add up to the whole.
+    func testMemoryGaugeAndDiskParts() throws {
+        let json = #"{"name":"Sample Notes","state":"running","memory_bytes":6442450944,"host_memory_bytes":17179869184}"#
+        let app = try PaddockJSON.decoder.decode(AppJSON.self, from: Data(json.utf8))
+        XCTAssertEqual(OverviewCopy.memory(app)?.english, "6 of 16 GB")
+        XCTAssertEqual(OverviewCopy.memoryFraction(app) ?? 0, 0.375, accuracy: 0.001)
+        let parts = OverviewCopy.diskParts(AppSizesJSON(appCopy: 2_000_000_000, data: 1_000_000_000, savedState: 1_000_000_000))
+        XCTAssertEqual(parts.map(\.kind), [.appCopy, .data, .savedState])
+        XCTAssertEqual(parts.map(\.title.english), ["App copy", "Data", "Saved state"])
+        XCTAssertEqual(parts.map(\.fraction).reduce(0, +), 1, accuracy: 0.0001)
+        XCTAssertEqual(parts[0].fraction, 0.5, accuracy: 0.0001)
+        XCTAssertTrue(OverviewCopy.diskParts(AppSizesJSON(appCopy: 0, data: 0, savedState: 0)).isEmpty)
     }
 
     func testSavedAgeAndTints() {

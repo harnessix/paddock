@@ -50,6 +50,12 @@ enum SessionButtons {
         if state.canStop { list.append(.stop) }
         return list
     }
+
+    /// The primary button of a list: Start, Resume or Open. Suspend and
+    /// Stop are never primary.
+    static func primary(of list: [SessionButtons]) -> SessionButtons? {
+        list.first { $0 != .stop && $0 != .suspend }
+    }
 }
 
 /// Runs a session button. Open activates the session's Dock app; when it
@@ -79,8 +85,10 @@ enum SessionCommand {
     }
 }
 
-/// The header of an app's detail: icon, name, bundle path, the session
-/// buttons, and a menu with Open New Instance and Remove.
+/// The header of an app's detail: the 64 pt icon and the name, the bundle
+/// path and the status pill under it, then the session buttons with the
+/// primary one last and prominent, and a menu with Open New Instance and
+/// Remove.
 @MainActor
 struct SessionHeader: View {
     let app: AppItem
@@ -89,10 +97,12 @@ struct SessionHeader: View {
 
     var body: some View {
         let buttons = SessionButtons.of(app.state, canSuspend: store.capabilities.suspend)
-        HStack(spacing: 12) {
-            AppIcon(path: app.json.bundlePath, size: 48)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(verbatim: app.title).font(.title2).labelInk()
+        let primary = SessionButtons.primary(of: buttons)
+        HStack(alignment: .center, spacing: 14) {
+            AppIcon(path: app.json.bundlePath, size: IconSize.header)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(verbatim: app.title).font(.title2.bold()).labelInk()
+                    .lineLimit(1)
                     .accessibilityIdentifier("detail-title")
                 if let path = app.json.bundlePath {
                     Text(verbatim: Format.tildePath(path, home: NSHomeDirectory()))
@@ -102,10 +112,18 @@ struct SessionHeader: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
+                TimelineView(.periodic(from: .now, by: 60)) { context in
+                    StatusPill(presentation: StatusPresentation.of(app.state, now: context.date))
+                        .accessibilityIdentifier("detail-status")
+                }
             }
-            Spacer()
-            ForEach(buttons, id: \.self) { button in
-                buttonView(button, primary: button == buttons.first(where: { $0 != .stop && $0 != .suspend }))
+            Spacer(minLength: 12)
+            // Secondary buttons first, the primary one last: the eye ends on it.
+            ForEach(buttons.filter { $0 != primary }, id: \.self) { button in
+                buttonView(button, primary: false)
+            }
+            if let primary {
+                buttonView(primary, primary: true)
             }
             Menu {
                 Button("Open New Instance") { SessionCommand.newInstance(app, store: store) }
@@ -114,9 +132,13 @@ struct SessionHeader: View {
                 Divider()
                 Button("Remove App…") { router.sheet = .removeApp(app.key) }
             } label: {
-                Image(systemName: "ellipsis.circle")
+                Image(systemName: "ellipsis")
             }
-            .menuStyle(.borderlessButton)
+            .menuStyle(.button)
+            .menuIndicator(.hidden)
+            .buttonStyle(.bordered)
+            .controlSize(.large)
+            .fixedSize()
             .menuAuditAction()
             .help(Text("More"))
             .accessibilityLabel(Text("More"))
@@ -127,26 +149,42 @@ struct SessionHeader: View {
     @ViewBuilder
     private func buttonView(_ button: SessionButtons, primary: Bool) -> some View {
         let action = { SessionCommand.perform(button, app, store: store, router: router) }
-        switch button {
-        case .start:
-            Button("Start", action: action)
-                .keyboardShortcut(primary ? .defaultAction : nil)
-                .disabled(!store.binary.isUsable)
-                .accessibilityIdentifier("start-button")
-        case .resume:
-            Button("Resume", action: action)
-                .keyboardShortcut(primary ? .defaultAction : nil)
-                .accessibilityIdentifier("resume-button")
-        case .open:
-            Button("Open", action: action)
-                .keyboardShortcut(primary ? .defaultAction : nil)
-                .accessibilityIdentifier("open-button")
-        case .suspend:
-            Button("Suspend", action: action)
-                .accessibilityIdentifier("suspend-button")
-        case .stop:
-            Button("Stop", action: action)
-                .accessibilityIdentifier("stop-button")
+        Group {
+            switch button {
+            case .start:
+                Button("Start", action: action)
+                    .disabled(!store.binary.isUsable)
+                    .accessibilityIdentifier("start-button")
+            case .resume:
+                Button("Resume", action: action)
+                    .accessibilityIdentifier("resume-button")
+            case .open:
+                Button("Open", action: action)
+                    .accessibilityIdentifier("open-button")
+            case .suspend:
+                Button("Suspend", action: action)
+                    .accessibilityIdentifier("suspend-button")
+            case .stop:
+                Button("Stop", action: action)
+                    .accessibilityIdentifier("stop-button")
+            }
+        }
+        .controlSize(.large)
+        .keyboardShortcut(primary ? .defaultAction : nil)
+        .modifier(SessionButtonStyle(primary: primary))
+    }
+}
+
+/// `.borderedProminent` for the one primary session button, `.bordered`
+/// for the rest.
+struct SessionButtonStyle: ViewModifier {
+    let primary: Bool
+
+    func body(content: Content) -> some View {
+        if primary {
+            content.buttonStyle(.borderedProminent)
+        } else {
+            content.buttonStyle(.bordered)
         }
     }
 }

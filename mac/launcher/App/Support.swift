@@ -35,9 +35,10 @@ extension View {
     }
 }
 
-/// A stand-in for `ContentUnavailableView`. That view paints its title and
-/// description with secondary and tertiary colors, which fail the contrast
-/// audit, and a parent `foregroundStyle` does not override them.
+/// A stand-in for `ContentUnavailableView`, with the same layout: a large
+/// symbol, a bold title, one sentence and one action. That view paints its
+/// title and description with secondary and tertiary colors, which fail the
+/// contrast audit, and a parent `foregroundStyle` does not override them.
 @MainActor
 struct PlainEmpty<Title: View, Description: View, Actions: View>: View {
     let title: Title
@@ -54,14 +55,36 @@ struct PlainEmpty<Title: View, Description: View, Actions: View>: View {
 
     var body: some View {
         VStack(spacing: 10) {
-            title.labelInk()
-            description.labelInk()
+            title
+                .labelStyle(EmptyStateLabelStyle())
+                .labelInk()
+            description
+                .labelInk()
+                .fixedSize(horizontal: false, vertical: true)
             actions
+                .padding(.top, 6)
         }
         .multilineTextAlignment(.center)
         .frame(maxWidth: 420)
+        .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .labelInk()
+    }
+}
+
+/// The title of an empty state: the symbol large over the title, as
+/// `ContentUnavailableView` draws it. The symbol only decorates.
+struct EmptyStateLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        VStack(spacing: 12) {
+            configuration.icon
+                .font(.system(size: 44, weight: .regular))
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(Color.secondary)
+                .imageScale(.large)
+            configuration.title
+                .font(.title2.bold())
+        }
     }
 }
 
@@ -280,6 +303,7 @@ struct StreamStatusLine: View {
                 Text("Live updates paused ·")
                 Button("Refresh") { Task { await store.refresh() } }
                     .buttonStyle(.link)
+                    .disabled(!store.binary.isUsable)
                 Spacer()
             }
             .font(.callout)
@@ -292,22 +316,146 @@ struct StreamStatusLine: View {
     }
 }
 
-/// The icon of an app bundle, or a generic app symbol.
+/// The icons of app bundles, cached by path and modification date: a list
+/// redraws often, and `NSWorkspace` reads the bundle at each call.
+@MainActor
+enum AppIconCache {
+    private struct Entry {
+        let date: Date?
+        let image: NSImage
+    }
+
+    private static var entries: [String: Entry] = [:]
+
+    /// The bundle's icon, or nil when no bundle is at `path`.
+    static func icon(_ path: String) -> NSImage? {
+        guard FileManager.default.fileExists(atPath: path) else {
+            entries[path] = nil
+            return nil
+        }
+        let date = (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date
+        if let entry = entries[path], entry.date == date { return entry.image }
+        let image = NSWorkspace.shared.icon(forFile: path)
+        entries[path] = Entry(date: date, image: image)
+        return image
+    }
+
+    /// The generic application icon of Finder.
+    static let generic: NSImage = NSWorkspace.shared.icon(for: .applicationBundle)
+}
+
+/// The icon sizes of the launcher: the detail header, a question card, the
+/// sidebar and the menu.
+enum IconSize {
+    static let header: CGFloat = 64
+    static let question: CGFloat = 32
+    static let sidebar: CGFloat = 24
+    static let menu: CGFloat = 16
+}
+
+/// The icon of an app bundle. When the bundle is gone, the generic app icon
+/// at half strength with a question mark: never an empty square.
 @MainActor
 struct AppIcon: View {
     let path: String?
-    var size: CGFloat = 20
+    var size: CGFloat = IconSize.sidebar
 
     var body: some View {
-        if let path, FileManager.default.fileExists(atPath: path) {
-            Image(nsImage: NSWorkspace.shared.icon(forFile: path))
+        if let path, let image = AppIconCache.icon(path) {
+            Image(nsImage: image)
                 .resizable()
+                .interpolation(.high)
                 .frame(width: size, height: size)
                 .accessibilityHidden(true)
         } else {
-            Image(systemName: "app")
+            Image(nsImage: AppIconCache.generic)
+                .resizable()
+                .interpolation(.high)
                 .frame(width: size, height: size)
+                .opacity(0.5)
+                .overlay(alignment: .bottomTrailing) {
+                    Image(systemName: "questionmark.circle.fill")
+                        .resizable()
+                        .symbolRenderingMode(.palette)
+                        .foregroundStyle(Color.white, Color.gray)
+                        .frame(width: max(8, size * 0.4), height: max(8, size * 0.4))
+                }
                 .accessibilityHidden(true)
+        }
+    }
+}
+
+/// An app icon with the state as a dot on its lower right corner, as the
+/// sidebar shows it. The dot pulses only while the app starts.
+@MainActor
+struct AppIconWithStatus: View {
+    let path: String?
+    let presentation: StatusPresentation
+    var size: CGFloat = IconSize.sidebar
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        AppIcon(path: path, size: size)
+            .overlay(alignment: .bottomTrailing) {
+                Image(systemName: "circle.fill")
+                    .font(.system(size: max(7, size * 0.34)))
+                    .foregroundStyle(presentation.dotColor)
+                    .symbolEffect(.pulse, isActive: presentation.pulses && !reduceMotion)
+                    .background(Circle().fill(Color(nsColor: .windowBackgroundColor)).padding(-1.5))
+                    .offset(x: 2, y: 2)
+                    .accessibilityHidden(true)
+            }
+            .padding(.trailing, 2)
+            .padding(.bottom, 2)
+    }
+}
+
+/// The state of an app as a pill: the symbol, tinted, and the word, both on
+/// a quiet capsule. Only the symbol carries color. While the app starts,
+/// a small spinner and the phase.
+@MainActor
+struct StatusPill: View {
+    let presentation: StatusPresentation
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        HStack(spacing: 5) {
+            if presentation.showsProgress {
+                ProgressView()
+                    .controlSize(.mini)
+                    .accessibilityHidden(true)
+                Text(presentation.kind == .starting ? presentation.text : presentation.word)
+                    .contentTransition(.opacity)
+            } else {
+                if let symbol = presentation.symbol {
+                    Image(systemName: symbol)
+                        .foregroundStyle(presentation.tint.color)
+                        .accessibilityHidden(true)
+                }
+                Text(presentation.word)
+            }
+        }
+        .font(.callout)
+        .labelInk()
+        .lineLimit(1)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(.fill.quaternary, in: Capsule())
+        .animation(reduceMotion ? nil : .default, value: presentation)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(presentation.accessibilityLabel))
+    }
+}
+
+extension StatusPresentation {
+    /// The dot on the sidebar icon: green Running, orange Error, red
+    /// Blocked, gray else. The text under the name says the same.
+    var dotColor: Color {
+        switch kind {
+        case .running: return .green
+        case .error: return .orange
+        case .blocked: return .red
+        default: return .gray
         }
     }
 }

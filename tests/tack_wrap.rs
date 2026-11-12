@@ -111,3 +111,20 @@ fn paddock_outside_the_wrapper_folder_is_paddock() {
     assert!(o.status.success(), "{o:?}");
     assert!(String::from_utf8_lossy(&o.stdout).contains(env!("CARGO_PKG_VERSION")));
 }
+
+#[test]
+fn the_launcher_query_of_a_wrapped_program_goes_to_that_program() {
+    let w = world();
+    let o = Command::new(w.wrap.join("show"))
+        .arg("--launcher-protocol")
+        .env_clear()
+        .env("HOME", w.wrap.parent().unwrap())
+        .env("PADDOCK_TACK_WRAP", &w.wrap)
+        .env("PADDOCK_TACK_PATH", &w.bin)
+        .output()
+        .unwrap();
+    assert!(o.status.success(), "{o:?}");
+    let out = String::from_utf8_lossy(&o.stdout);
+    assert!(out.contains("args=--launcher-protocol"), "{out}");
+    assert!(!out.contains("paddock.mac-launcher"), "{out}");
+}

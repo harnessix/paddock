@@ -105,16 +105,38 @@ struct GrantsView: View {
     }
 }
 
-/// The trailing status label of a grant row.
+/// The trailing status of a grant row, on a gray capsule: `Live`, `On next
+/// start`, or `Reopen files`. `Reopen files` is the one that asks the user
+/// to act: an orange capsule with a symbol, and it fades back to `Live`
+/// after 30 s. The text stays in the label color for contrast.
 @MainActor
 struct LiveLabel: View {
     let label: GrantLabel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        Text(label.text)
-            .font(.caption)
-            .labelInk()
-            .accessibilityIdentifier("grant-label")
+        HStack(spacing: 4) {
+            if label == .reopenFiles {
+                Image(systemName: "arrow.clockwise")
+                    .foregroundStyle(.orange)
+                    .accessibilityHidden(true)
+                    .transition(.opacity)
+            }
+            Text(label.text)
+                .labelInk()
+                .accessibilityIdentifier("grant-label")
+        }
+        .font(.caption)
+        .lineLimit(1)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 2)
+        .background(capsule, in: Capsule())
+        .fixedSize()
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.6), value: label)
+    }
+
+    private var capsule: AnyShapeStyle {
+        label == .reopenFiles ? AnyShapeStyle(Color.orange.opacity(0.22)) : AnyShapeStyle(.fill.quaternary)
     }
 }
 

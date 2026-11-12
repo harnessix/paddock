@@ -147,12 +147,17 @@ export const paddock = {
   async split(ids: string[]): Promise<string> {
     return oneLine(await checked(['split', ...ids]));
   },
-  async run(harness: string, project: string, promptFile: string): Promise<string> {
-    return oneLine(await checked(['run', harness, project, '--detach', '--prompt-file', promptFile]));
+  /** `approvals`: '' leaves the mode to paddock's configuration. */
+  async run(harness: string, project: string, promptFile: string, approvals: ApprovalsMode = ''): Promise<string> {
+    const mode = approvals === 'manual' ? ['--manual'] : approvals === 'auto' ? ['--auto'] : [];
+    return oneLine(await checked(['run', harness, project, '--detach', '--prompt-file', promptFile, ...mode]));
   },
   async sendMail(run: string, text: string): Promise<string> {
     return oneLine(await checked(['mail', 'send', run, '-'], text));
   },
 };
+
+/** The approvals mode of a new run; '' is the default of paddock's configuration. */
+export type ApprovalsMode = '' | 'auto' | 'manual';
 
 export type PaddockApi = typeof paddock;

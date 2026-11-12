@@ -1005,6 +1005,11 @@ pub struct Running {
     pub started: u64,
     #[serde(default)]
     pub auth: String,
+    /// Who approves the agent's steps: `auto`, `manual`, or `command`
+    /// (`paddock wrap` and desktop apps: the command decides). A record
+    /// of a paddock without approval modes reads as `auto`.
+    #[serde(default = "auto_approvals")]
+    pub approvals: String,
     /// The nested compositor of `window` mode, so the panel can focus it.
     #[serde(default)]
     pub window_pid: Option<u32>,
@@ -1073,6 +1078,10 @@ pub struct Running {
     /// macOS: the terminal app that owns `terminal_window`.
     #[serde(default)]
     pub terminal_pid: Option<u32>,
+}
+
+fn auto_approvals() -> String {
+    crate::approvals::Approvals::Auto.name().into()
 }
 
 /// A host login file and the sandbox's copy of it.
@@ -1335,13 +1344,19 @@ pub fn set_app_roots(env: &HostEnv, name: &str, roots: &[PathBuf]) -> Result<()>
 }
 
 /// Apply `toml_set` entries to files in the sandbox home, keeping the rest of
-/// each file as it is.
+/// each file as it is. `manual`: the run's approvals mode is manual, so the
+/// `trust` entries stay out and the harness asks its own trust question.
 ///
 /// The sandbox home is sandbox-controlled: the file is read and replaced
 /// through `safefs`, so a symlink left there is never followed.
-pub fn toml_set(profile: &Profile, home_src: &Path, project: &Path) -> Result<()> {
+pub fn toml_set(profile: &Profile, home_src: &Path, project: &Path, manual: bool) -> Result<()> {
     let home = crate::safefs::Root::open(home_src)?;
-    for t in &profile.state.toml_set {
+    for t in profile
+        .state
+        .toml_set
+        .iter()
+        .filter(|t| !(t.trust && manual))
+    {
         let file = home_src.join(&t.file);
         let rel = Path::new(&t.file);
         let text = match home.read(rel, crate::safefs::MAX_READ)? {
@@ -1955,31 +1970,4 @@ mod auth_sync_tests {
 }
 
 #[cfg(test)]
-mod toml_set_link_tests {
-    use super::*;
-    use std::os::unix::fs::symlink;
-
-    #[test]
-    fn never_writes_through_a_planted_link() {
-        let t = tempfile::tempdir().unwrap();
-        let home = t.path().join("home");
-        let outside = t.path().join("outside");
-        std::fs::create_dir_all(&home).unwrap();
-        std::fs::create_dir_all(&outside).unwrap();
-        let profile: Profile = toml::from_str(
-            "name = \"c\"\n[[state.toml_set]]\nfile = \".codex/config.toml\"\npath = [\"projects\", \"{project}\", \"trust_level\"]\nvalue = \"trusted\"\n",
-        )
-        .unwrap();
-        // A folder link: refused, nothing created outside.
-        symlink(&outside, home.join(".codex")).unwrap();
-        assert!(toml_set(&profile, &home, Path::new("/w/app")).is_err());
-        assert!(std::fs::read_dir(&outside).unwrap().next().is_none());
-        // A file link: refused to read; the host file stays as it was.
-        std::fs::remove_file(home.join(".codex")).unwrap();
-        std::fs::create_dir_all(home.join(".codex")).unwrap();
-        std::fs::write(outside.join("rc"), "keep").unwrap();
-        symlink(outside.join("rc"), home.join(".codex/config.toml")).unwrap();
-        assert!(toml_set(&profile, &home, Path::new("/w/app")).is_err());
-        assert_eq!(std::fs::read_to_string(outside.join("rc")).unwrap(), "keep");
-    }
-}
+mod toml_set_link_tests;

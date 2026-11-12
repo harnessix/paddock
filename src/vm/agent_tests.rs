@@ -215,3 +215,49 @@ fn the_guest_command_maps_the_network() {
     assert!(env[PROXY_SOCKET_VAR].ends_with("proxy.sock"));
     assert!(!env.contains_key("LD_PRELOAD"));
 }
+
+/// MACRUN1: the guest refuses a run whose harness program it does not
+/// have, before the run starts, with one line and the command that works.
+#[test]
+fn a_harness_missing_in_the_vm_is_refused_before_the_start() {
+    use crate::vm::agent_run::{missing_program, not_in_vm};
+    let t = tempfile::tempdir().unwrap();
+    let home = t.path().join("home");
+    let dir = t.path().join("run");
+    let profiles = dir.join("config/paddock/harness.d");
+    std::fs::create_dir_all(&profiles).unwrap();
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(
+        profiles.join("ghost.toml"),
+        "name = \"ghost\"\n[locate]\ncommands = [\"paddock-no-such-program-0\"]\n",
+    )
+    .unwrap();
+    std::fs::write(
+        profiles.join("present.toml"),
+        "name = \"present\"\n[locate]\ncommands = [\"sh\"]\n",
+    )
+    .unwrap();
+    let mut req = request("tok", t.path(), false);
+    req.harness = "ghost".into();
+    let why = missing_program(&req, &home, &dir, None).expect("refused");
+    assert!(why.starts_with("ghost is not installed in the VM"), "{why}");
+    assert!(
+        why.ends_with("paddock run ghost --backend seatbelt"),
+        "{why}"
+    );
+    assert!(why.contains("paddock-no-such-program-0"), "{why}");
+    assert_eq!(why.lines().count(), 1);
+    // A shell run and a found program pass; an unknown harness is left to
+    // paddock run in the guest, which names the known ones.
+    req.shell = true;
+    assert_eq!(missing_program(&req, &home, &dir, None), None);
+    req.shell = false;
+    req.harness = "present".into();
+    assert_eq!(missing_program(&req, &home, &dir, None), None);
+    req.harness = "fake".into();
+    assert_eq!(missing_program(&req, &home, &dir, None), None);
+    assert_eq!(
+        not_in_vm("codex", "x"),
+        "codex is not installed in the VM (x). The VM has its own Linux programs, not those of this Mac. Start it with Seatbelt: paddock run codex --backend seatbelt"
+    );
+}

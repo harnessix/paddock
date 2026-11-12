@@ -53,6 +53,7 @@ mod history_sync_tests {
     use super::super::*;
     use crate::profile::Profile;
     use std::collections::BTreeMap;
+    use std::time::Instant;
 
     #[test]
     fn new_history_reaches_the_host_before_the_sandbox_exits() {
@@ -155,6 +156,7 @@ mod cleanup_tests {
                 args: vec![],
                 env: crate::backend::base_env(env, spec),
                 files: vec![],
+                cwd: None,
             })
         }
     }
@@ -240,6 +242,7 @@ mod cleanup_tests {
                 args: vec![],
                 env: crate::backend::base_env(env, spec),
                 files: vec![],
+                cwd: None,
             })
         }
     }
@@ -294,4 +297,35 @@ mod cleanup_tests {
         let info = crate::mail::run_info(&env, &id).expect("the run's mailbox");
         assert_eq!(info.delivery.as_deref(), Some(crate::mail::deliver::HOOKS));
     }
+}
+
+#[test]
+fn the_start_line_names_the_approvals_mode() {
+    use crate::approvals::Approvals;
+    use crate::spec::{GuiMode, Network};
+    let p = std::path::Path::new("/w/app");
+    assert_eq!(
+        super::start_line(
+            "codex",
+            p,
+            "seatbelt",
+            Network::Egress,
+            GuiMode::Off,
+            Some(Approvals::Manual)
+        ),
+        "codex in /w/app (backend seatbelt, network egress, display off, manual approvals)"
+    );
+    assert!(super::start_line(
+        "claude",
+        p,
+        "bwrap",
+        Network::Api,
+        GuiMode::Off,
+        Some(Approvals::Auto)
+    )
+    .ends_with("network api, display off, auto approvals)"));
+    assert!(
+        super::start_line("claude", p, "bwrap", Network::Api, GuiMode::Off, None)
+            .ends_with("approvals by the command)")
+    );
 }

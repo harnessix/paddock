@@ -66,6 +66,7 @@ interface Source {
 export function useSnapshot(api: PaddockApi, intervalMs: number): [Snapshot, () => void] {
   const [snap, setSnap] = useState<Snapshot>({ errors: [], loaded: false, at: 0 });
   const busy = useRef(false);
+  const loaded = useRef(false);
   const again = useRef(false);
   const alive = useRef(true);
   const errors = useRef(new Map<Key, string>());
@@ -106,15 +107,20 @@ export function useSnapshot(api: PaddockApi, intervalMs: number): [Snapshot, () 
       if (!alive.current) break;
       const values: Partial<Record<Key, unknown>> = {};
       const done = Date.now();
+      const errorsBefore = [...errors.current.values()].join('\n');
+      let changed = !loaded.current;
       due.forEach((s, i) => {
         const r = results[i] as PromiseSettledResult<unknown>;
         if (r.status === 'fulfilled') {
           const text = JSON.stringify(r.value);
+          if (text !== s.last) {
+            changed = true;
+            values[s.key] = r.value;
+          }
           s.same = text === s.last ? s.same + 1 : 0;
           s.last = text;
           s.fails = 0;
           errors.current.delete(s.key);
-          values[s.key] = r.value;
         } else {
           const e = r.reason;
           if (e instanceof UnsupportedError) s.off = true;
@@ -123,6 +129,10 @@ export function useSnapshot(api: PaddockApi, intervalMs: number): [Snapshot, () 
         }
         s.due = done + nextDelay(s.base, s.fails, s.same, s.quiet, s.maxFailMs);
       });
+      if ([...errors.current.values()].join('\n') !== errorsBefore) changed = true;
+      // The same answers as before: nothing to draw, so no render at all.
+      if (!changed) continue;
+      loaded.current = true;
       setSnap((old) => ({
         ps: (values.ps as Ps | undefined) ?? old.ps,
         board: (values.board as Board | undefined) ?? old.board,

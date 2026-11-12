@@ -1,5 +1,6 @@
 # argument prefix<TAB>answer files in ../base, in turn; the last one repeats
 --version	version-022.out
+--launcher-protocol	../core/launcher-protocol/mac-v1.json
 app --help	app-help.out
 approvals --json	approvals-empty.json
 doctor --json	doctor-ok.json

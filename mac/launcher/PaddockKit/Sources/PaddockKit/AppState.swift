@@ -108,35 +108,70 @@ public struct StatusPresentation: Equatable, Sendable {
     public var accessibilityLabel: UIText
     public var showsProgress: Bool
 
+    /// The one state word of the status pill: `Running`, `Ready`, `Error`.
+    /// The row text under the name keeps the detail.
+    public var word: UIText {
+        switch kind {
+        case .stopped: return UIText("Stopped")
+        case .ready: return UIText("Ready")
+        case .starting: return UIText("Starting")
+        case .running: return UIText("Running")
+        case .suspended: return UIText("Suspended")
+        case .stopping: return UIText("Stopping")
+        case .error: return UIText("Error")
+        case .blocked: return UIText("Blocked")
+        }
+    }
+
+    /// The state without its values, for the word and the motion rules.
+    public enum Kind: String, Equatable, Sendable {
+        case stopped, ready, starting, running, suspended, stopping, error, blocked
+    }
+
+    public var kind: Kind
+
+    /// True while the app starts: the only state whose symbol pulses.
+    public var pulses: Bool { kind == .starting }
+
+    init(symbol: String?, tint: SymbolTint, text: UIText, accessibilityLabel: UIText, showsProgress: Bool,
+         kind: Kind) {
+        self.symbol = symbol
+        self.tint = tint
+        self.text = text
+        self.accessibilityLabel = accessibilityLabel
+        self.showsProgress = showsProgress
+        self.kind = kind
+    }
+
     public static func of(_ state: AppState, now: Date) -> StatusPresentation {
         switch state {
         case .stopped:
             return .init(symbol: "stop.circle", tint: .secondary, text: UIText("Stopped"),
-                         accessibilityLabel: UIText("Stopped"), showsProgress: false)
+                         accessibilityLabel: UIText("Stopped"), showsProgress: false, kind: .stopped)
         case .saved(let since):
             let text = since.map { UIText("Ready · saved %@", Format.age(since: $0, now: now).english) }
                 ?? UIText("Ready")
             return .init(symbol: "pause.circle", tint: .secondary, text: text,
-                         accessibilityLabel: UIText("Ready"), showsProgress: false)
+                         accessibilityLabel: UIText("Ready"), showsProgress: false, kind: .ready)
         case .starting(let phase):
             return .init(symbol: nil, tint: .secondary, text: phase.rowText,
-                         accessibilityLabel: UIText("Starting"), showsProgress: true)
+                         accessibilityLabel: UIText("Starting"), showsProgress: true, kind: .starting)
         case .running(_, let windows):
             let text = windows == 1 ? UIText("Running · 1 window") : UIText("Running · %@ windows", "\(windows)")
             return .init(symbol: "play.circle.fill", tint: .green, text: text,
-                         accessibilityLabel: UIText("Running"), showsProgress: false)
+                         accessibilityLabel: UIText("Running"), showsProgress: false, kind: .running)
         case .suspended:
             return .init(symbol: "pause.circle.fill", tint: .secondary, text: UIText("Suspended · resumes in about 4 s"),
-                         accessibilityLabel: UIText("Suspended"), showsProgress: false)
+                         accessibilityLabel: UIText("Suspended"), showsProgress: false, kind: .suspended)
         case .stopping:
             return .init(symbol: nil, tint: .secondary, text: UIText("Stopping…"),
-                         accessibilityLabel: UIText("Stopping"), showsProgress: true)
+                         accessibilityLabel: UIText("Stopping"), showsProgress: true, kind: .stopping)
         case .error(let reason):
             return .init(symbol: "exclamationmark.triangle.fill", tint: .orange, text: UIText(key: "%@", args: [reason]),
-                         accessibilityLabel: UIText("Error: %@", reason), showsProgress: false)
+                         accessibilityLabel: UIText("Error: %@", reason), showsProgress: false, kind: .error)
         case .blocked(let reason, _):
             return .init(symbol: "nosign", tint: .red, text: UIText(key: "%@", args: [reason]),
-                         accessibilityLabel: UIText("Blocked: %@", reason), showsProgress: false)
+                         accessibilityLabel: UIText("Blocked: %@", reason), showsProgress: false, kind: .blocked)
         }
     }
 }

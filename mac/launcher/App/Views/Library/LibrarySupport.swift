@@ -192,6 +192,8 @@ struct LibraryStateView: View {
                 Text(LibraryCopy.offline)
             } actions: {
                 Button("Check Again") { Task { await AppContainer.checkAgain() } }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
                     .keyboardShortcut(.defaultAction)
                     .accessibilityIdentifier("library-check-again")
             }
@@ -205,6 +207,8 @@ struct LibraryStateView: View {
                 Text(verbatim: line).labelInk()
             } actions: {
                 Button("Try Again") { Task { await store.refresh() } }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
                     .keyboardShortcut(.defaultAction)
             }
             .accessibilityElement(children: .contain)
@@ -214,25 +218,32 @@ struct LibraryStateView: View {
     }
 }
 
-/// The highlight while an app hovers over the window: a stroke in the
-/// accent color and one line. Nothing else moves.
+/// The highlight while an app hovers over the window: a dashed stroke in
+/// the accent color and one line. Nothing else moves.
 @MainActor
 struct DropHighlight: View {
     let active: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        if active {
-            RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(Color.accentColor, lineWidth: 3)
-                .overlay(alignment: .bottom) {
-                    Label { Text("Drop to add") } icon: { DecorativeSymbol(name: "plus.app") }
-                        .padding(8)
-                        .background(.regularMaterial, in: Capsule())
-                        .padding(12)
-                }
-                .padding(4)
-                .allowsHitTesting(false)
-                .accessibilityIdentifier("drop-highlight")
+        ZStack {
+            if active {
+                RoundedRectangle(cornerRadius: 10)
+                    .strokeBorder(Color.accentColor, style: StrokeStyle(lineWidth: 3, dash: [10, 6]))
+                    .background(Color.accentColor.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
+                    .overlay(alignment: .bottom) {
+                        Label { Text("Drop to add") } icon: { DecorativeSymbol(name: "plus.app") }
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(.regularMaterial, in: Capsule())
+                            .padding(16)
+                    }
+                    .padding(6)
+                    .transition(.opacity)
+                    .accessibilityIdentifier("drop-highlight")
+            }
         }
+        .allowsHitTesting(false)
+        .animation(reduceMotion ? nil : .default, value: active)
     }
 }

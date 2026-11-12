@@ -130,10 +130,14 @@ pub(crate) fn run(env: &HostEnv, cmd: ShimsCmd) -> Result<i32> {
                         } else {
                             "off"
                         };
-                        println!("{state}  {cmd:<10} paddock run {harness}");
+                        println!(
+                            "{state}  {cmd:<10} paddock run {harness:<10} {}",
+                            shim_approvals(env, &harness)
+                        );
                     }
                     if on {
                         println!("\nShims are on. Run one command without the sandbox with PADDOCK_BYPASS=1. Turn them off with: paddock shims remove");
+                        println!("Choose who approves the agent's steps with [run] approvals = \"auto\" or \"manual\" in ~/.config/paddock/config.toml ([run.agents.NAME] for one agent).");
                     } else {
                         println!("\nShims are off. Turn them on with: paddock shims install");
                     }
@@ -141,7 +145,10 @@ pub(crate) fn run(env: &HostEnv, cmd: ShimsCmd) -> Result<i32> {
                 ShimsCmd::Install { .. } => {
                     let r = shims::install(env)?;
                     for (harness, cmd) in &r.shims {
-                        println!("{cmd:<10} paddock run {harness}");
+                        println!(
+                            "{cmd:<10} paddock run {harness:<10} {}",
+                            shim_approvals(env, harness)
+                        );
                     }
                     if r.rc_files.is_empty() {
                         println!("\nNo ~/.bashrc or ~/.zshrc found. Source {} from your shell configuration.", shims::script_file(env).display());
@@ -176,6 +183,15 @@ pub(crate) fn run(env: &HostEnv, cmd: ShimsCmd) -> Result<i32> {
             Ok(0)
         }
     }
+}
+
+/// The approvals mode that a shim's run gets from the user configuration,
+/// as the shim list shows it. A project's paddock.toml can still change it.
+fn shim_approvals(env: &HostEnv, harness: &str) -> String {
+    format!(
+        "({} approvals)",
+        paddock::approvals::default_for(env, harness, None).mode
+    )
 }
 
 pub(crate) fn launchers(env: &HostEnv, cmd: LaunchersCmd) -> Result<i32> {

@@ -30,11 +30,10 @@ impl Choice {
 pub struct Facts {
     /// `paddock app run`.
     pub app: bool,
-    /// Linux-only features that the run needs, by name.
+    /// The harness of the run, for the refusal text.
+    pub harness: String,
+    /// Features of the run that Seatbelt cannot give, by name.
     pub linux_only: Vec<String>,
-    /// The profile has `[macos] needs_pty = true` and its program ignores
-    /// paddock's pty library: why.
-    pub needs_pty: Option<String>,
     /// Who asks for Seatbelt: `[macos] backend = "seatbelt"` of the profile.
     pub wants_seatbelt: Option<String>,
     /// `[macos] backend = "vm"` of the user configuration.
@@ -43,14 +42,18 @@ pub struct Facts {
     pub assets_error: Option<String>,
 }
 
-/// The text when a run needs the VM and the VM files are not there.
-pub fn refusal(need: &str, assets_error: &str) -> String {
+/// The refusal of a terminal run that needs what Seatbelt cannot give.
+/// `auto` never moves a terminal agent into the VM by itself: the VM has
+/// its own Linux programs, not the agent of this Mac.
+pub fn seatbelt_refusal(harness: &str, need: &str) -> String {
     format!(
-        "this run needs {need}, and on macOS only the VM backend gives it. The VM files are not set up ({assets_error}). Run `paddock vm setup`, then start again"
+        "{harness} on macOS runs with Seatbelt, which cannot give {need}. Turn it off and start again, or start with --backend vm when {harness} is installed in the VM (paddock vm setup)"
     )
 }
 
-/// The backend for `--backend auto` on macOS, and the reason.
+/// The backend for `--backend auto` on macOS, and the reason. A terminal
+/// run gets Seatbelt. The VM only when the user asks for it: `--backend
+/// vm`, or `[macos] backend = "vm"` in the user configuration.
 pub fn decide(f: &Facts) -> Result<(Choice, String)> {
     if f.app {
         return Ok((
@@ -58,20 +61,10 @@ pub fn decide(f: &Facts) -> Result<(Choice, String)> {
             "app mode runs desktop apps with Seatbelt".into(),
         ));
     }
-    let need = if !f.linux_only.is_empty() {
-        Some(format!("{} (Linux only)", f.linux_only.join(", ")))
-    } else {
-        f.needs_pty
-            .as_ref()
-            .map(|why| format!("new ptys, which Seatbelt cannot give this harness ({why})"))
-    };
-    if let Some(need) = need {
-        return match &f.assets_error {
-            None => Ok((Choice::Vm, format!("the run needs {need}"))),
-            Some(e) => bail!(refusal(&need, e)),
-        };
-    }
     if let Some(who) = &f.wants_seatbelt {
+        if !f.linux_only.is_empty() {
+            bail!(seatbelt_refusal(&f.harness, &f.linux_only.join(", ")));
+        }
         return Ok((Choice::Seatbelt, format!("{who} asks for Seatbelt")));
     }
     if f.user_vm {
@@ -84,6 +77,9 @@ pub fn decide(f: &Facts) -> Result<(Choice, String)> {
                 "[macos] backend = \"vm\" in the user configuration asks for the VM, and the VM files are not set up ({e}). Run `paddock vm setup`, or start with --backend seatbelt"
             ),
         };
+    }
+    if !f.linux_only.is_empty() {
+        bail!(seatbelt_refusal(&f.harness, &f.linux_only.join(", ")));
     }
     Ok((Choice::Seatbelt, "the default for a terminal run".into()))
 }
@@ -119,23 +115,18 @@ pub fn user_backend(env: &HostEnv) -> Result<Option<String>> {
     }
 }
 
-/// The Linux-only features of a built run.
+/// The features of a built run that Seatbelt cannot give.
 /// The devices are not in it: Seatbelt gets them over a socket, and the VM
-/// does not get them yet (`devices::start` says so in a notice).
-pub fn linux_only(built: &Built) -> Vec<String> {
-    let s = &built.spec;
+/// does not get them yet (`devices::start` says so in a notice). Borrow is
+/// not in it either: Seatbelt sees the borrow folder at its host path
+/// (`PADDOCK_BORROW_DIR`).
+pub fn linux_only(s: &crate::spec::SandboxSpec) -> Vec<String> {
     let mut out = Vec::new();
     if s.gui.mode == GuiMode::Window {
         out.push("window mode".into());
     }
     if let Some(m) = s.mounts.iter().find(|m| m.kind == MountKind::Overlay) {
         out.push(format!("an overlay at {}", m.dst.display()));
-    }
-    if s.mounts
-        .iter()
-        .any(|m| m.dst == std::path::Path::new(crate::borrow::MOUNT))
-    {
-        out.push("borrow".into());
     }
     if s.keyring || s.private_bus {
         out.push("the private keyring and session bus".into());
@@ -144,6 +135,9 @@ pub fn linux_only(built: &Built) -> Vec<String> {
 }
 
 /// The facts of a built run.
+/// `[macos] needs_pty` of the profile does not move the run into the VM:
+/// Seatbelt starts the harness and says in one line that it makes its own
+/// ptys (`seatbelt::run::start_pty`).
 pub fn facts(env: &HostEnv, built: &Built) -> Result<Facts> {
     let mac = &built.profile.macos;
     if let Some(b) = mac.backend.as_deref().filter(|b| *b != "seatbelt") {
@@ -152,15 +146,10 @@ pub fn facts(env: &HostEnv, built: &Built) -> Result<Facts> {
             built.profile.name
         );
     }
-    let needs_pty = if mac.needs_pty {
-        crate::backend::seatbelt::run::pty_refusal_for(env, &built.spec)
-    } else {
-        None
-    };
     Ok(Facts {
         app: built.spec.gui.mode == GuiMode::App,
-        linux_only: linux_only(built),
-        needs_pty,
+        harness: built.spec.harness.clone(),
+        linux_only: linux_only(&built.spec),
         wants_seatbelt: (mac.backend.as_deref() == Some("seatbelt"))
             .then(|| format!("the {} profile ([macos] backend)", built.profile.name)),
         user_vm: user_backend(env)?.as_deref() == Some(NAME),
@@ -182,11 +171,19 @@ mod tests {
     fn the_auto_rule() {
         let missing = Some("cannot read assets.toml".to_string());
         let lin = vec!["window mode".to_string()];
-        let pty = Some("agy has the hardened runtime".to_string());
         let sb = Some("the xcode profile ([macos] backend)".to_string());
         // (facts, the choice or None for a refusal, a word of the reason)
         let table: Vec<(Facts, Option<Choice>, &str)> = vec![
             (f(), Some(Choice::Seatbelt), "default"),
+            // A terminal agent gets Seatbelt, whatever the VM files.
+            (
+                Facts {
+                    assets_error: missing.clone(),
+                    ..f()
+                },
+                Some(Choice::Seatbelt),
+                "default",
+            ),
             (
                 Facts {
                     app: true,
@@ -197,39 +194,24 @@ mod tests {
                 Some(Choice::Seatbelt),
                 "app mode",
             ),
+            // A need that Seatbelt cannot give is a refusal, never a
+            // silent move into the VM, set up or not.
             (
                 Facts {
                     linux_only: lin.clone(),
                     ..f()
                 },
-                Some(Choice::Vm),
+                None,
+                "--backend vm",
+            ),
+            (
+                Facts {
+                    linux_only: lin.clone(),
+                    assets_error: missing.clone(),
+                    ..f()
+                },
+                None,
                 "window mode",
-            ),
-            (
-                Facts {
-                    linux_only: lin.clone(),
-                    assets_error: missing.clone(),
-                    ..f()
-                },
-                None,
-                "paddock vm setup",
-            ),
-            (
-                Facts {
-                    needs_pty: pty.clone(),
-                    ..f()
-                },
-                Some(Choice::Vm),
-                "hardened runtime",
-            ),
-            (
-                Facts {
-                    needs_pty: pty.clone(),
-                    assets_error: missing.clone(),
-                    ..f()
-                },
-                None,
-                "paddock vm setup",
             ),
             (
                 Facts {
@@ -254,12 +236,22 @@ mod tests {
                     linux_only: lin.clone(),
                     ..f()
                 },
-                Some(Choice::Vm),
+                None,
                 "window mode",
+            ),
+            // The user asks for the VM.
+            (
+                Facts {
+                    user_vm: true,
+                    ..f()
+                },
+                Some(Choice::Vm),
+                "user configuration",
             ),
             (
                 Facts {
                     user_vm: true,
+                    linux_only: lin.clone(),
                     ..f()
                 },
                 Some(Choice::Vm),
@@ -273,14 +265,6 @@ mod tests {
                 },
                 None,
                 "--backend seatbelt",
-            ),
-            (
-                Facts {
-                    assets_error: missing.clone(),
-                    ..f()
-                },
-                Some(Choice::Seatbelt),
-                "default",
             ),
         ];
         for (i, (facts, want, word)) in table.into_iter().enumerate() {
@@ -296,17 +280,50 @@ mod tests {
     }
 
     #[test]
-    fn the_refusal_names_the_need_and_the_setup() {
+    fn the_refusal_names_the_need_and_the_command_that_works() {
         let facts = Facts {
-            linux_only: vec!["--profile default".into(), "window mode".into()],
+            harness: "codex".into(),
+            linux_only: vec!["an overlay at /x".into(), "window mode".into()],
             assets_error: Some("cannot read /x/assets.toml".into()),
             ..f()
         };
         let e = decide(&facts).unwrap_err().to_string();
         assert_eq!(
             e,
-            "this run needs --profile default, window mode (Linux only), and on macOS only the VM backend gives it. The VM files are not set up (cannot read /x/assets.toml). Run `paddock vm setup`, then start again"
+            "codex on macOS runs with Seatbelt, which cannot give an overlay at /x, window mode. Turn it off and start again, or start with --backend vm when codex is installed in the VM (paddock vm setup)"
         );
+        assert_eq!(e.lines().count(), 1);
+    }
+
+    /// MACRUN1: `paddock run codex` in a git project has a borrow folder.
+    /// Seatbelt gives it, so the run stays in Seatbelt.
+    #[test]
+    fn borrow_is_not_a_reason_for_the_vm() {
+        let home = std::path::PathBuf::from("/Users/u");
+        let project = home.join("src/app");
+        let mut s = crate::spec::SandboxSpec::new(
+            "id1".into(),
+            "codex",
+            &project,
+            "/Users/u/.local/share/paddock/homes/codex/x".into(),
+            &home,
+            501,
+            20,
+            "u",
+        );
+        s.add_mount(crate::spec::Mount::same(&project, true, "project"));
+        s.add_mount(crate::spec::Mount::bind(
+            "/Users/u/.local/share/paddock/borrow/id1",
+            crate::borrow::MOUNT,
+            true,
+            "borrow folder",
+        ));
+        assert!(linux_only(&s).is_empty(), "{:?}", linux_only(&s));
+        let facts = Facts {
+            linux_only: linux_only(&s),
+            ..f()
+        };
+        assert_eq!(decide(&facts).unwrap().0, Choice::Seatbelt);
     }
 
     #[test]

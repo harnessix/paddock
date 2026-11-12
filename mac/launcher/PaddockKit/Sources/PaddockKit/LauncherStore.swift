@@ -105,6 +105,12 @@ public final class LauncherStore {
     @ObservationIgnored var buildTask: Task<Void, Never>?
     @ObservationIgnored var toastTask: Task<Void, Never>?
     @ObservationIgnored var streamAttempt = 0
+    /// Counts the starts. A start, or a read, whose serial is not the
+    /// current one drops its result: Check Again fences the old paddock.
+    @ObservationIgnored var startSerial = 0
+    /// The check of the current start. A new start cancels it, which kills
+    /// its paddock child.
+    @ObservationIgnored var checkTask: Task<VersionGate.Verdict, Never>?
     @ObservationIgnored var questionSnapshotSerial: UInt64 = 0
     @ObservationIgnored var questionSnapshotPending = false
     @ObservationIgnored var questionTouches: Set<String> = []
@@ -116,6 +122,8 @@ public final class LauncherStore {
     @ObservationIgnored public var reconnectDelay: Double = 5
     @ObservationIgnored public var toastSeconds: Double = 6
 
+    /// A service given here counts as checked: tests pass one, the app
+    /// passes nil and gets its service from `start`.
     public init(service: PaddockService?, clock: LauncherClock = SystemClock()) {
         self.service = service
         self.clock = clock
@@ -125,35 +133,88 @@ public final class LauncherStore {
 
     /// Checks the binary, loads the snapshots and starts the event stream.
     /// `locate` returns the binary path or nil, `makeService` wraps it.
+    ///
+    /// The store keeps no service until `--version` and the launcher
+    /// protocol both pass, so no read, stream or action reaches a paddock
+    /// that the launcher cannot use. A new start (Check Again) first stops
+    /// the stream and drops the old service. Of two overlapping starts, the
+    /// last one wins.
+    ///
+    /// Limit: the check and the later calls run the binary at the same
+    /// path. A binary replaced at that path in between is not seen until
+    /// the next Check Again.
     public func start(locate: () -> String?, makeService: (String) -> PaddockService,
                       gate versionGate: VersionGate = .current) async {
+        startSerial += 1
+        let serial = startSerial
+        checkTask?.cancel()
+        checkTask = nil
+        stopEvents()
+        service = nil
+        capabilities = Capabilities()
         binary = .checking
         guard let path = locate() else {
             binary = .missing
-            service = nil
             return
         }
-        let service = makeService(path)
-        self.service = service
-        let output = (try? await service.version()) ?? ""
-        let verdict = versionGate.check(versionOutput: output)
+        let candidate = makeService(path)
+        let check = Task { await LauncherStore.verdict(of: candidate, gate: versionGate) }
+        checkTask = check
+        let verdict = await check.value
+        guard serial == startSerial else { return }
+        checkTask = nil
         binary = .found(path: path, verdict: verdict)
         guard case .ok = verdict else { return }
-        capabilities = await LibraryActions.probe(service)
+        service = candidate
+        let capabilities = await LibraryActions.probe(candidate)
+        guard serial == startSerial else { return }
+        self.capabilities = capabilities
         await refreshAll()
+        guard serial == startSerial else { return }
         startEvents()
+    }
+
+    /// The verdict on a binary: `--version` in range, then the launcher
+    /// protocol of the same binary. Both runs are bounded.
+    public nonisolated static func verdict(of service: PaddockService,
+                                           gate: VersionGate = .current) async -> VersionGate.Verdict {
+        let output: String
+        do {
+            output = try await service.version()
+        } catch CommandError.timedOut {
+            return .incompatible(version: "", reason: .timedOut)
+        } catch CommandError.tooLarge {
+            return .incompatible(version: "", reason: .tooLarge)
+        } catch {
+            return gate.check(versionOutput: "")
+        }
+        let verdict = gate.check(versionOutput: output)
+        guard case .ok(let version) = verdict else { return verdict }
+        do {
+            let answer = try await service.launcherProtocol()
+            guard let failure = LauncherProtocol.check(answer) else { return verdict }
+            return .incompatible(version: version, reason: failure)
+        } catch {
+            return .incompatible(version: version, reason: LauncherProtocol.failure(of: error))
+        }
     }
 
     /// Loads every snapshot once: base image, apps, questions.
     public func refreshAll() async {
         guard let service else { return }
+        let serial = startSerial
         if gate.allow("macvm status", now: clock.now()) {
-            if let status = try? await service.macvmStatus() { applyStatus(status) }
+            let status = try? await service.macvmStatus()
+            guard serial == startSerial else { return }
+            if let status { applyStatus(status) }
         }
         if gate.allow("app list", now: clock.now()) {
             do {
-                applyList(try await service.listApps())
+                let list = try await service.listApps()
+                guard serial == startSerial else { return }
+                applyList(list)
             } catch {
+                guard serial == startSerial else { return }
                 let line = LauncherStore.line(of: error)
                 listError = line.isEmpty ? UIText("paddock did not list the apps. Click Try Again.").english : line
             }
@@ -222,8 +283,10 @@ public final class LauncherStore {
         questions.removeAll { $0.id == id }
     }
 
-    /// The `Refresh` action (⌘R): restarts the stream and reloads.
+    /// The `Refresh` action (⌘R): restarts the stream and reloads. It does
+    /// nothing without a checked paddock: Check Again runs the checks.
     public func refresh() async {
+        guard service != nil else { return }
         gate.reset()
         startEvents()
         await refreshAll()
@@ -288,7 +351,13 @@ public final class LauncherStore {
 
     // MARK: Event stream
 
+    /// Starts the event stream. Without a checked paddock it only stops
+    /// the old one.
     public func startEvents() {
+        guard service != nil else {
+            stopEvents()
+            return
+        }
         eventTask?.cancel()
         markStreamUncertain()
         streamAttempt += 1
@@ -379,7 +448,10 @@ public final class LauncherStore {
 
     func reloadStatus() async {
         guard let service, gate.allow("macvm status", now: clock.now()) else { return }
-        if let status = try? await service.macvmStatus() { applyStatus(status) }
+        let serial = startSerial
+        let status = try? await service.macvmStatus()
+        guard serial == startSerial else { return }
+        if let status { applyStatus(status) }
     }
 
     func applySession(_ e: SessionEvent) {
@@ -415,7 +487,10 @@ public final class LauncherStore {
 
     func reloadList() async {
         guard let service, gate.allow("app list", now: clock.now()) else { return }
-        if let list = try? await service.listApps() { applyList(list) }
+        let serial = startSerial
+        let list = try? await service.listApps()
+        guard serial == startSerial else { return }
+        if let list { applyList(list) }
     }
 
     func applyQuestion(_ e: QuestionEvent) {

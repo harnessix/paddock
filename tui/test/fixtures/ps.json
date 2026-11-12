@@ -3,7 +3,7 @@
   "shared_devices": [],
   "sandboxes": [
     {"id": "claude-alpha-71c3ac9d", "short": "71c3ac", "harness": "claude", "project": "/src/alpha", "backend": "bwrap", "network": "egress", "gui": "off", "started": 1000, "activity": "cargo test --lib board::", "detached": true, "view": true},
-    {"id": "codex-alpha-0b0b0b11", "short": "0b0b0b", "harness": "codex", "project": "/src/alpha", "backend": "bwrap", "network": "api", "gui": "off", "started": 2000, "activity": "waiting", "detached": true, "view": true},
+    {"id": "codex-alpha-0b0b0b11", "short": "0b0b0b", "harness": "codex", "project": "/src/alpha", "backend": "bwrap", "network": "api", "gui": "off", "approvals": "manual", "started": 2000, "activity": "waiting", "detached": true, "view": true},
     {"id": "grok-beta-0f0f0f22", "short": "0f0f0f", "harness": "grok", "project": "/src/beta", "backend": "podman", "network": "none", "gui": "off", "started": 3000, "idle_since": 3500, "activity": null},
     {"id": "evil-\u001b]0;pwned\u0007name-0e0e0e33", "short": "0e0e0e", "harness": "ev\u001b[31mil\u0007", "project": "/src/\u001b[2Jgamma", "backend": "seatbelt", "network": "none", "gui": "off", "started": 4000, "activity": "line\u001b[1;1Hmoved\u009b2J and ‮RTL"}
   ],

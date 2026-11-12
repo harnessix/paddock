@@ -12,6 +12,9 @@ enum Fixtures {
         .appendingPathComponent("Fixtures")
 
     static func scenario(_ name: String) -> URL { root.appendingPathComponent(name) }
+    /// A fixture of paddock core, vendored in Fixtures/core at the version
+    /// of core.pin.
+    static func core(_ path: String) -> URL { root.appendingPathComponent("core").appendingPathComponent(path) }
     static func base(_ name: String) -> URL { root.appendingPathComponent("base").appendingPathComponent(name) }
 
     static func data(_ name: String) throws -> Data { try Data(contentsOf: base(name)) }

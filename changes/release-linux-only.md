@@ -1,1 +1,0 @@
-- Removed: a release has no macOS binaries, and the CI runs no macOS job. The macOS runners of GitHub often got no machine, so a release waited or failed. On macOS, install and update paddock with Homebrew (`brew install paddock`, `brew upgrade paddock`), which builds it from the source.

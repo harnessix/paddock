@@ -517,4 +517,6 @@ mod hitch_tests;
 #[cfg(test)]
 mod live_tests;
 #[cfg(test)]
+mod race_tests;
+#[cfg(test)]
 pub(crate) mod tests;
