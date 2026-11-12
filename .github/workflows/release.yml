@@ -1,7 +1,8 @@
 name: Release
 
-# Builds the paddock binaries for a version tag: x86_64 and aarch64 Linux,
-# aarch64 and x86_64 macOS. It also packs the source, fills in the Homebrew
+# Builds the paddock binaries for a version tag: x86_64 and aarch64 Linux.
+# GitHub runs no macOS job: its macOS runners often get no machine. macOS
+# users install with Homebrew, which builds from the source. It also packs the source, fills in the Homebrew
 # formula and builds the VM guest files (vm-assets.yml). When every build is
 # done and the CI checks (ci.yml) passed on the same commit, one job attests
 # the provenance of every file and attaches them to the GitHub Release of
@@ -70,8 +71,7 @@ jobs:
     name: build (${{ matrix.arch }}-${{ matrix.os }})
     # Each target builds on a native GitHub runner. An older Ubuntu links
     # against an older glibc, so the Linux binary also runs on distributions
-    # with a newer one. On macOS, build.rs builds the pty library only for
-    # the system it runs on, so x86_64 needs an Intel runner.
+    # with a newer one.
     strategy:
       fail-fast: false
       matrix:
@@ -82,12 +82,6 @@ jobs:
           - arch: aarch64
             os: linux
             runner: ubuntu-22.04-arm
-          - arch: aarch64
-            os: macos
-            runner: macos-15
-          - arch: x86_64
-            os: macos
-            runner: macos-15-intel
     needs: commit
     runs-on: ${{ matrix.runner }}
     steps:
@@ -111,32 +105,13 @@ jobs:
         run: |
           out=$(target/release/paddock --version)
           [ "$out" = "paddock ${TAG#v}" ] || { echo "::error::paddock --version prints '$out', not 'paddock ${TAG#v}'"; exit 1; }
-      # Without the pty library, Seatbelt terminal runs get no pty.
-      - name: Check the pty library
-        if: matrix.os == 'macos'
-        run: |
-          if grep -q 'cannot build src/ptyshim/shim.c' build.log; then
-            echo "::error::build.rs could not build the pty library"
-            exit 1
-          fi
-      # paddock-vm owns the VM of the VM backend. It needs an ad hoc
-      # signature with only the virtualization entitlement.
-      - name: Sign paddock-vm
-        if: matrix.os == 'macos'
-        run: |
-          codesign --force --sign - --entitlements packaging/macos/paddock-vm.entitlements target/release/paddock-vm
-          codesign -d --entitlements - target/release/paddock-vm 2>&1 | tee entitlements.txt
-          grep -q com.apple.security.virtualization entitlements.txt || { echo "::error::paddock-vm has no virtualization entitlement"; exit 1; }
       - name: Package
         run: |
           name="paddock-${TAG#v}-${{ matrix.arch }}-${{ matrix.os }}"
           mkdir -p "dist/$name"
           cp target/release/paddock README.md LICENSE CHANGELOG.md "dist/$name/"
-          if [ "${{ matrix.os }}" = macos ]; then cp target/release/paddock-vm "dist/$name/"; fi
           tar -C dist -czf "dist/$name.tar.gz" "$name"
-          # macOS has shasum but no sha256sum. Both print the same line.
-          sum() { if command -v sha256sum >/dev/null; then sha256sum "$@"; else shasum -a 256 "$@"; fi; }
-          (cd dist && sum "$name.tar.gz" > "$name.tar.gz.sha256")
+          (cd dist && sha256sum "$name.tar.gz" > "$name.tar.gz.sha256")
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: dist-${{ matrix.arch }}-${{ matrix.os }}
