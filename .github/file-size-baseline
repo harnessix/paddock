@@ -26,7 +26,7 @@
 960 src/snapshot.rs
 1549 src/spawn.rs
 1382 src/spawn/tests.rs
-1985 src/state.rs
+1973 src/state.rs
 1202 src/timer.rs
 843 src/update.rs
 1129 src/view.rs
