@@ -1,0 +1,10 @@
+# argument prefix<TAB>answer files in ../base, in turn; the last one repeats
+# The released paddock 0.2.2: it does not know --launcher-protocol.
+--version	version-022.out
+--launcher-protocol	../core/launcher-protocol/unknown-option.err:2
+app --help	app-help.out
+macvm status --json	status-ready.json
+doctor --json	doctor-ok.json
+app list --json	apps.json
+approvals --json	approvals-empty.json
+events --follow --json	idle.jsonl

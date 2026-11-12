@@ -85,6 +85,7 @@ struct LauncherCommands: Commands {
             Divider()
             Button("Refresh") { Task { await store.refresh() } }
                 .keyboardShortcut("r")
+                .disabled(!store.binary.isUsable)
         }
         CommandMenu("App") {
             Button(startStopTitle) { Task { await store.toggleSelected() } }

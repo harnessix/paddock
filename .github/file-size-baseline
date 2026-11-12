@@ -21,7 +21,7 @@
 875 src/proxy/tests.rs
 473 src/relay.rs
 1584 src/run.rs
-1169 src/safefs.rs
+1105 src/safefs.rs
 712 src/shadow.rs
 960 src/snapshot.rs
 1549 src/spawn.rs

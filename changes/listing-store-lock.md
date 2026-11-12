@@ -1,0 +1,2 @@
+- Fixed: on btrfs, `paddock horse grant --revoke` could skip a peek grant that a read rewrote at that moment, so the grant stayed active. The list of a sandbox's peek grants now waits for writers, and a peek read writes its grant under the store lock.
+- Fixed: on btrfs, `paddock horse grants` and the horse device tree (`self/memory/`, `self/views/`) could leave out a grant, memory or view that was rewritten at that moment.

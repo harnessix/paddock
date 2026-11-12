@@ -43,3 +43,23 @@ Run the checks against the real paddock:
 ```sh
 Scripts/nightly-real.sh APP [SHIM_BUNDLE_ID]
 ```
+
+## The paddock check
+
+paddock for Mac runs two commands on the paddock that it finds, in this order:
+
+1. `paddock --version`. The version must be 0.2.2 or newer, with major version 0.
+2. `paddock --launcher-protocol` on the same binary. The answer must be one JSON object with `"protocol":"paddock.mac-launcher/v1"` and every feature in `LauncherProtocol.required`.
+
+Each command has a time limit of 15 seconds and an output limit of 16 KiB. Past a limit, or on Check Again, paddock for Mac kills the child process. The app stays unusable until both checks pass. The released paddock 0.2.2 does not know `--launcher-protocol`, so paddock for Mac asks you to update paddock.
+
+## The files of paddock core
+
+This folder builds and tests without the rest of paddock core. `Fixtures/core` holds copies of core fixtures. `core.pin` names the core version and commit that they come from.
+
+To move the pin:
+
+1. Copy `tests/fixtures/launcher/*.jsonl` of the new core commit into `Fixtures/core/launcher`.
+2. Copy `tests/fixtures/launcher-protocol/*.json` and `*.err` into `Fixtures/core/launcher-protocol`.
+3. Change `version` and `commit` in `core.pin`.
+4. Run the PaddockKit tests.

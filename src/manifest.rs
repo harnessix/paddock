@@ -27,7 +27,8 @@ pub use net::{check_max, net_name, net_rank, Base};
 /// `[compaction]` (compaction.rs), `[hooks]` (hooks.rs), `[speckit]`
 /// (speckit.rs), `[loft]` (loft.rs), `[horse]` (horse/live.rs), and
 /// `[tack]` (tack/config.rs). A project
-/// `paddock.toml` with one of them is invalid. `[devices]` is not in the
+/// `paddock.toml` with one of them is invalid, except `[loft]` with only
+/// `mode` (loft/sync.rs). `[devices]` is not in the
 /// list: the user configuration defines devices there (devices.rs), and a
 /// project only requests them with `use` (`check_project_devices`).
 pub const USER_ONLY: &[&str] = &[
@@ -348,14 +349,30 @@ impl Manifest {
                     );
                 }
             }
-            if let Some(k) = USER_ONLY
-                .iter()
-                .find(|k| v.as_ref().is_some_and(|v| v.get(**k).is_some()))
-            {
+            // `[loft] mode` alone is a project setting (loft/sync.rs).
+            let loft_mode_only = v
+                .as_ref()
+                .and_then(|v| v.get("loft"))
+                .and_then(|l| l.as_table())
+                .is_some_and(|t| !t.is_empty() && t.keys().all(|k| k == "mode"));
+            if let Some(k) = USER_ONLY.iter().find(|k| {
+                v.as_ref().is_some_and(|v| v.get(**k).is_some())
+                    && !(**k == "loft" && loft_mode_only)
+            }) {
                 bail!(
                     "{}: [{k}] is only read from the user configuration (~/.config/paddock/config.toml); a project paddock.toml cannot set it, because an agent in the sandbox can edit the project",
                     path.display()
                 );
+            }
+            if loft_mode_only {
+                if let Some(mut v) = v {
+                    if let Some(t) = v.as_table_mut() {
+                        t.remove("loft");
+                    }
+                    return v
+                        .try_into()
+                        .with_context(|| format!("{} is invalid", path.display()));
+                }
             }
             return toml::from_str(&text).with_context(|| format!("{} is invalid", path.display()));
         }

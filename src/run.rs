@@ -486,14 +486,15 @@ pub fn run(
     mcp::validate(env, &built)?;
     // The Codex hook trust names the home that the harness sees.
     built.spec.harness_home = backend.harness_home(&built.spec);
-    // SIGTERM and SIGHUP must leave time for the device mount, login and
-    // history copies, and session record to finish.
-    // Before launch, paddock notes the signal and stops. After launch it
+    // SIGTERM and SIGHUP must leave time for the device mount, login and history copies, and
+    // session record to finish. Before launch, paddock notes the signal and stops. After launch it
     // forwards the signal and waits. A frozen sandbox is thawed first.
     crate::loft::push::start_notice(env, &built);
     let forwarding = Forward::install();
     // The mailbox comes first: the devices serve it.
     let mut end = EndOfRun::new(env, &built, quiet);
+    // The loft sync mode syncs at each change, and once more when it stops, before `end`.
+    let _loft_watch = crate::loft::sync::Watch::start(env, &built.spec.project, &built.spec.id);
     // `--profile default`: the private snapshot of the data roots, before
     // anything else starts. The run folder goes when `run` returns.
     let shadow = built.spec.shadow.clone().map(ShadowRun);
@@ -650,9 +651,8 @@ pub fn run(
             eprintln!("paddock: warning: provisioning failed; the harness starts anyway");
         }
     }
-    // Registered credentials (credentials.rs): after the install steps,
-    // which never get them, and before the harness starts, which waits for
-    // the user's two answers.
+    // Registered credentials (credentials.rs): after the install steps, which never get them, and
+    // before the harness starts, which waits for the user's two answers.
     let creds = setup_credentials(
         env,
         &mut built,

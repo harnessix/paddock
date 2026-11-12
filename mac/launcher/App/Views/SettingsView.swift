@@ -304,6 +304,7 @@ struct AboutSection: View {
             case .ok(let version), .tooNew(let version): return version
             case .tooOld(let have, _): return have
             case .unreadable: return nil
+            case .incompatible(let version, _): return version.isEmpty ? nil : version
             }
         }
         return nil

@@ -113,7 +113,7 @@ pub fn list(store: &Store) -> Result<Vec<Grant>> {
         return Ok(Vec::new());
     }
     let mut out = Vec::new();
-    for name in store.list_refs(dir)? {
+    for name in store.list_locked_refs(dir)? {
         if let Some(id) = name.strip_suffix(".json") {
             if let Some(g) = get(store, id)? {
                 out.push(g);

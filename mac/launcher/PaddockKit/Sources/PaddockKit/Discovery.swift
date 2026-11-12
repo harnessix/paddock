@@ -88,6 +88,9 @@ public struct VersionGate: Equatable, Sendable {
         case tooOld(have: String, need: String)
         case tooNew(have: String)
         case unreadable(output: String)
+        /// The version is in range, but the launcher protocol check failed.
+        /// `version` is empty when `--version` itself did not answer.
+        case incompatible(version: String, reason: LauncherProtocol.Failure)
     }
 
     /// Reads `paddock 0.4.2` (or `0.4.2`) and gives the verdict.
@@ -123,6 +126,7 @@ public struct VersionGate: Equatable, Sendable {
         case .tooOld(let have, let need): return .tooOld(have: have, need: need)
         case .tooNew(let have): return .tooNew(have: have)
         case .unreadable: return .notInstalled
+        case .incompatible(let version, let reason): return .incompatible(version: version, reason: reason)
         }
     }
 }
@@ -254,6 +258,15 @@ public enum Prerequisites {
         case .unreadable?:
             return PrereqRow(kind: .paddock, status: .fail, title: title(.paddock), result: UIText("Not installed"),
                              actions: [.copyInstall, .checkAgain], command: ShellCommands.brewInstall)
+        case .incompatible(let version, let reason)?:
+            let error = LauncherError.incompatible(version: version, reason: reason)
+            let result = error.body ?? UIText("Not installed")
+            guard let command = error.command else {
+                return PrereqRow(kind: .paddock, status: .fail, title: title(.paddock), result: result,
+                                 actions: [.checkAgain])
+            }
+            return PrereqRow(kind: .paddock, status: .fail, title: title(.paddock), result: result,
+                             actions: [.copyUpgrade, .checkAgain], command: command)
         }
     }
 

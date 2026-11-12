@@ -16,6 +16,9 @@
 # test ends it. While it streams, the fake also prints every line that the
 # test appends to $PADDOCK_FAKE_STATE/inject.jsonl.
 #
+# The answer "hang" never ends, as a paddock that hangs: the launcher must
+# kill it at its time limit.
+#
 # The test ends the event stream by creating $PADDOCK_FAKE_STATE/kill-events.
 # While that file exists, a new event stream exits at once.
 #
@@ -65,6 +68,10 @@ case "$pick" in
   *:*) status=${pick##*:}; pick=${pick%:*} ;;
 esac
 file="$scenario/../base/$pick"
+if [ "$pick" = hang ]; then
+  printf '%s\n' "$$" >"$state/hang.pid"
+  exec sleep 3600
+fi
 
 stream() {
   if [ -f "$state/kill-events" ] && [ "$best" = "events --follow --json" ]; then

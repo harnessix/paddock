@@ -63,6 +63,8 @@ public enum RuleScope: String, Equatable, Sendable, CaseIterable, Identifiable {
 /// so the service and the "Show the paddock command" row agree.
 public enum PaddockArgs {
     public static let version = ["--version"]
+    /// The read-only query of `LauncherProtocol`. It must be the only word.
+    public static let launcherProtocol = ["--launcher-protocol"]
     public static let macvmStatus = ["macvm", "status", "--json"]
     public static let doctor = ["doctor", "--json"]
     public static let appList = ["app", "list", "--json"]

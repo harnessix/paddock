@@ -45,6 +45,24 @@ public enum QuestionChoices {
         UIText("%@ wants to connect to %@", q.app, q.host)
     }
 
+    /// The first line of a question card, over the host in large type.
+    public static func lead(_ q: QuestionJSON) -> UIText {
+        UIText("%@ wants to connect to", q.app)
+    }
+
+    /// The questions as the list shows them: the newest first. A question
+    /// without a time goes last; equal times keep paddock's order.
+    public static func newestFirst(_ questions: [QuestionJSON]) -> [QuestionJSON] {
+        questions.enumerated().sorted { a, b in
+            switch (a.element.opened, b.element.opened) {
+            case let (x?, y?) where x != y: return x > y
+            case (_?, nil): return true
+            case (nil, _?): return false
+            default: return a.offset < b.offset
+            }
+        }.map(\.element)
+    }
+
     public static func detail(_ q: QuestionJSON) -> UIText {
         if let name = site(q) {
             return UIText("port %@ · %@ and all its subdomains", "\(q.port)", name)

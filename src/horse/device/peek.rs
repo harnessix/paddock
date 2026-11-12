@@ -397,5 +397,8 @@ pub(crate) fn handle(access: Option<&Access>, sandbox: &str, req: &Request) -> R
 }
 
 #[cfg(test)]
+#[path = "peek/race_tests.rs"]
+mod race_tests;
+#[cfg(test)]
 #[path = "peek/tests.rs"]
 mod tests;

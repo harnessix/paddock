@@ -171,7 +171,7 @@ pub fn build(store: &Store, horse: &str, grants: &Grants) -> Result<Tree> {
     t.file("self/lineage", lineage);
     let dir = memory_dir(horse);
     if store.root().join(&dir).is_dir() {
-        for name in store.list_refs(&dir)? {
+        for name in store.list_locked_refs(&dir)? {
             if !valid_name(&name) {
                 continue;
             }

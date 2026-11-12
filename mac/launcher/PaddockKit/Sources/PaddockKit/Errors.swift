@@ -7,6 +7,8 @@ public enum LauncherError: Equatable, Sendable {
     case notInstalled
     case tooOld(have: String, need: String)
     case tooNew(have: String)
+    /// The version is in range, but `paddock --launcher-protocol` failed.
+    case incompatible(version: String, reason: LauncherProtocol.Failure)
     case twoRunning(app: String, running: [String])
     case lowDiskAtStart(app: String, needBytes: Int64, freeBytes: Int64)
     case appChanged(app: String)
@@ -62,7 +64,7 @@ public enum LauncherError: Equatable, Sendable {
 
     public var placement: Placement {
         switch self {
-        case .notInstalled, .tooOld, .tooNew: return .alert
+        case .notInstalled, .tooOld, .tooNew, .incompatible: return .alert
         case .appChanged: return .info
         case .agentAway: return .banner
         case .streamLost: return .statusLine
@@ -85,6 +87,12 @@ public enum LauncherError: Equatable, Sendable {
         case .notInstalled: return UIText("paddock is not installed")
         case .tooOld: return UIText("Update paddock")
         case .tooNew: return UIText("Update paddock for Mac")
+        case .incompatible(_, let reason):
+            switch reason {
+            case .otherProtocol: return UIText("Update paddock for Mac")
+            case .timedOut, .notRun: return UIText("paddock did not answer")
+            case .noAnswer, .badAnswer, .missingFeatures, .tooLarge: return UIText("Update paddock")
+            }
         case .twoRunning: return UIText("Two apps are already running")
         case .lowDiskAtStart(let app, _, _): return UIText("Not enough free space to start %@", app)
         case .appChanged: return nil
@@ -105,6 +113,21 @@ public enum LauncherError: Equatable, Sendable {
             return UIText("This version of paddock for Mac needs paddock %@ or newer. You have %@.", need, have)
         case .tooNew(let have):
             return UIText("This version of paddock for Mac is too old for paddock %@. Update paddock for Mac.", have)
+        case .incompatible(let version, let reason):
+            switch reason {
+            case .noAnswer:
+                return UIText("paddock %@ does not tell paddock for Mac what it supports. Update paddock, then check again.", version)
+            case .missingFeatures:
+                return UIText("paddock %@ lacks parts that paddock for Mac needs. Update paddock, then check again.", version)
+            case .otherProtocol:
+                return UIText("paddock %@ is newer than this version of paddock for Mac knows. Update paddock for Mac.", version)
+            case .badAnswer, .tooLarge:
+                return UIText("paddock for Mac cannot read the answer of this paddock. Update paddock, then check again.")
+            case .timedOut:
+                return UIText("paddock did not answer within 15 seconds. Check again.")
+            case .notRun:
+                return UIText("paddock for Mac could not start paddock. Check again.")
+            }
         case .twoRunning(let app, _):
             return UIText("macOS allows two sandboxed apps at a time. Stop one to start %@.", app)
         case .lowDiskAtStart(_, let need, let free):
@@ -136,6 +159,7 @@ public enum LauncherError: Equatable, Sendable {
         switch self {
         case .notInstalled: return .checkAgain
         case .tooOld, .tooNew: return .copyCommand
+        case .incompatible: return command == nil ? .checkAgain : .copyCommand
         case .twoRunning: return .stopPicker
         case .lowDiskAtStart: return .manageStorage
         case .appChanged, .agentAway: return .none
@@ -161,6 +185,12 @@ public enum LauncherError: Equatable, Sendable {
         case .notInstalled: return ShellCommands.brewInstall
         case .tooOld: return ShellCommands.brewUpgrade
         case .tooNew: return ShellCommands.brewUpgradeLauncher
+        case .incompatible(_, let reason):
+            switch reason {
+            case .otherProtocol: return ShellCommands.brewUpgradeLauncher
+            case .timedOut, .notRun: return nil
+            case .noAnswer, .badAnswer, .missingFeatures, .tooLarge: return ShellCommands.brewUpgrade
+            }
         default: return nil
         }
     }

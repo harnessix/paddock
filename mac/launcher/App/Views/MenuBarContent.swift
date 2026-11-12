@@ -1,3 +1,4 @@
+import AppKit
 import PaddockKit
 import SwiftUI
 
@@ -37,9 +38,13 @@ struct MenuBarContent: View {
         }
     }
 
+    /// One app: its 16 pt icon with the state dot, the name, and a submenu
+    /// that starts with the state line, then the session actions.
     private func appMenu(_ app: AppItem) -> some View {
         let presentation = StatusPresentation.of(app.state, now: Date())
         return Menu {
+            Text(presentation.text)
+            Divider()
             ForEach(SessionButtons.of(app.state, canSuspend: store.capabilities.suspend), id: \.self) { button in
                 Button(SessionMenuTitle.of(button)) {
                     SessionCommand.perform(button, app, store: store, router: router)
@@ -61,7 +66,7 @@ struct MenuBarContent: View {
             Label {
                 Text(verbatim: app.title)
             } icon: {
-                Image(systemName: presentation.symbol ?? "circle.dotted")
+                Image(nsImage: MenuAppIcon.image(path: app.json.bundlePath, presentation: presentation))
             }
             .accessibilityLabel(Text(verbatim: app.title + ", " + presentation.accessibilityLabel.localized))
         } primaryAction: {
@@ -74,5 +79,39 @@ struct MenuBarContent: View {
         if let selection { store.selection = selection }
         openWindow(id: WindowID.main)
         NSApp.activate()
+    }
+}
+
+/// The 16 pt icon of an app in the menu: the bundle icon with the state as
+/// a dot on its lower right corner, as OrbStack marks its machines. A
+/// missing bundle draws the generic app icon at half strength.
+@MainActor
+enum MenuAppIcon {
+    static func dotColor(_ presentation: StatusPresentation) -> NSColor {
+        switch presentation.kind {
+        case .running: return .systemGreen
+        case .error: return .systemOrange
+        case .blocked: return .systemRed
+        default: return .systemGray
+        }
+    }
+
+    static func image(path: String?, presentation: StatusPresentation) -> NSImage {
+        let found = path.flatMap { AppIconCache.icon($0) }
+        let base = found ?? AppIconCache.generic
+        let strength: CGFloat = found == nil ? 0.5 : 1
+        let dot = dotColor(presentation)
+        let side = IconSize.menu
+        let image = NSImage(size: NSSize(width: side, height: side), flipped: false) { rect in
+            base.draw(in: rect, from: .zero, operation: .sourceOver, fraction: strength)
+            let spot = NSRect(x: rect.maxX - 6, y: rect.minY, width: 6, height: 6)
+            NSColor.windowBackgroundColor.setFill()
+            NSBezierPath(ovalIn: spot.insetBy(dx: -1, dy: -1)).fill()
+            dot.setFill()
+            NSBezierPath(ovalIn: spot).fill()
+            return true
+        }
+        image.accessibilityDescription = presentation.accessibilityLabel.localized
+        return image
     }
 }

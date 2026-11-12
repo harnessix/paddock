@@ -52,7 +52,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.paddock.mac
-        # The paddock icon, rendered from docs/assets/paddock-icon.svg.
+        # The paddock icon, rendered from docs/assets/paddock-icon.svg of paddock core.
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         PRODUCT_NAME: paddock for Mac
         PRODUCT_MODULE_NAME: PaddockLauncher

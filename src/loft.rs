@@ -14,8 +14,9 @@
 //! - `off`: `paddock loft remove` turned the loft off; files and history
 //!   stay.
 //!
-//! `[loft]` in the user configuration, never in a project `paddock.toml`:
-//! `store` (`external` or `repo`), `auto`, `paths`, `public`, `commit`.
+//! `[loft]` in the user configuration: `store` (`external` or `repo`),
+//! `auto`, `paths`, `public`, `commit`, `mode`. A project `paddock.toml`
+//! can only set `mode` (`link` or `sync`, see sync.rs).
 //! `[speckit] store` stays as the short form for the Spec Kit folders.
 //!
 //! The notes folder `.paddock/` is in every sandbox, with or without
@@ -25,6 +26,8 @@
 pub mod git;
 pub mod host;
 pub mod push;
+pub mod sync;
+pub mod trash;
 
 use crate::env::HostEnv;
 use crate::spec::{Mount, SandboxSpec};
@@ -58,6 +61,12 @@ pub struct Cfg {
     pub paths: Vec<String>,
     pub public: Vec<String>,
     pub commit: Commit,
+    /// How `.paddock` of the project reaches the loft. A project
+    /// `paddock.toml` can set it too (sync::mode).
+    pub mode: sync::Mode,
+    /// How many days a deleted note stays in the trash of the loft before
+    /// `paddock gc` removes it.
+    pub trash_days: u64,
 }
 
 impl Default for Cfg {
@@ -68,6 +77,8 @@ impl Default for Cfg {
             paths: Vec::new(),
             public: Vec::new(),
             commit: Commit::Run,
+            mode: sync::Mode::Link,
+            trash_days: trash::DAYS,
         }
     }
 }
@@ -418,6 +429,7 @@ pub fn mount_with(
     }
     let project = spec.project.clone();
     let mut lines = vec![format!("/{NOTES}")];
+    sync::start_of_run(env, &project, &spec.id);
     if let Err(e) = notes(spec, &loft, &project, in_place) {
         log::warn!("no notes folder .paddock/ in this sandbox: {e:#}");
     }
@@ -465,6 +477,11 @@ pub fn mount_with(
 fn notes(spec: &mut SandboxSpec, loft: &Loft, project: &Path, in_place: bool) -> Result<()> {
     let notes = loft.notes();
     crate::privfs::dir(&notes)?;
+    // Sync mode: the real folder of the project, as it is. The sandbox
+    // sees it like any project folder; paddock syncs it.
+    if sync::synced(loft, project) {
+        return Ok(());
+    }
     let dst = project.join(NOTES);
     match std::fs::symlink_metadata(&dst) {
         Ok(m) if m.file_type().is_symlink() => {
@@ -536,6 +553,7 @@ fn mount_entry(spec: &mut SandboxSpec, loft: &Loft, project: &Path, e: &Entry) -
 
 /// The end of a run: one commit of the loft, unless the user commits.
 pub fn end_of_run(env: &HostEnv, project: &Path, id: &str, harness: &str) {
+    sync::sync_if_synced(env, project, id);
     let loft = Loft::of(env, project);
     if !loft.active() || Cfg::load(env).commit == Commit::Manual {
         return;

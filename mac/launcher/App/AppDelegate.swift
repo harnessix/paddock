@@ -11,6 +11,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     private var quitting = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        #if DEBUG
+        SnapshotDump.scheduleIfAsked()
+        #endif
         if !AppContainer.isUITest {
             let center = UNUserNotificationCenter.current()
             center.delegate = self
@@ -69,14 +72,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         alert.alertStyle = .warning
         alert.messageText = error.title?.localized ?? ""
         alert.informativeText = error.body?.localized ?? ""
-        alert.addButton(withTitle: LauncherError.Primary.copyCommand.title!.localized)
+        // A paddock that did not answer has no command to copy.
+        let command = error.command
+        if command != nil { alert.addButton(withTitle: LauncherError.Primary.copyCommand.title!.localized) }
         alert.addButton(withTitle: String(localized: "Check Again"))
         alert.addButton(withTitle: String(localized: "Quit"))
-        switch alert.runModal() {
-        case .alertFirstButtonReturn:
-            if let command = error.command { Pasteboard.copy(command) }
+        // The index of the button in the full list: Copy, Check Again, Quit.
+        let order: [NSApplication.ModalResponse] = [.alertFirstButtonReturn, .alertSecondButtonReturn,
+                                                     .alertThirdButtonReturn]
+        let shown = order.firstIndex(of: alert.runModal()) ?? order.count
+        switch shown + (command == nil ? 1 : 0) {
+        case 0:
+            if let command { Pasteboard.copy(command) }
             showVersionAlertIfNeeded()
-        case .alertSecondButtonReturn:
+        case 1:
             Task {
                 await AppContainer.checkAgain()
                 showVersionAlertIfNeeded()

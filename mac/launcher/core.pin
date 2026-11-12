@@ -1,0 +1,7 @@
+# The paddock core that the files in Fixtures/core come from: the JSON
+# event fixtures (tests/fixtures/launcher) and the answers of
+# `paddock --launcher-protocol` (tests/fixtures/launcher-protocol).
+# To move the pin, copy those folders from the new core commit into
+# Fixtures/core and change both lines.
+version=0.2.2
+commit=e1c120be3e6458b675ad3575cc5563bbc22e4cd7

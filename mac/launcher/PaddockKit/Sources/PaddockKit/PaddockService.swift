@@ -4,7 +4,11 @@ import Foundation
 /// never the runner or a socket. `CLIPaddockService` implements it with the
 /// paddock CLI. Tests use it with `ReplayRunner`.
 public protocol PaddockService: AnyObject, Sendable {
+    /// `paddock --version`, bounded by `LauncherProtocol.limits`.
     func version() async throws -> String
+    /// `paddock --launcher-protocol`, bounded by `LauncherProtocol.limits`.
+    /// The output as it is: `LauncherProtocol.check` reads it.
+    func launcherProtocol() async throws -> CommandOutput
     func macvmStatus() async throws -> MacvmStatusJSON
     func doctor() async throws -> DoctorJSON
     func listApps() async throws -> [AppJSON]
@@ -37,7 +41,13 @@ public final class CLIPaddockService: PaddockService, @unchecked Sendable {
     }
 
     public func version() async throws -> String {
-        try await text(PaddockArgs.version)
+        let out = try await runner.run(PaddockArgs.version, limits: LauncherProtocol.limits)
+        if out.status != 0 { throw CommandError.failed(status: out.status, line: CLIPaddockService.lastLine(out.stderr)) }
+        return out.stdoutText
+    }
+
+    public func launcherProtocol() async throws -> CommandOutput {
+        try await runner.run(PaddockArgs.launcherProtocol, limits: LauncherProtocol.limits)
     }
 
     public func macvmStatus() async throws -> MacvmStatusJSON {

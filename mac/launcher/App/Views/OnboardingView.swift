@@ -17,6 +17,7 @@ struct OnboardingView: View {
     @State private var useIPSW = false
     @State private var ipsw: String?
     @State private var showCancel = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private let titles: [LocalizedStringKey] = ["What paddock does", "Check this Mac", "Build the base image", "Building"] // localized
 
@@ -64,23 +65,21 @@ struct OnboardingView: View {
         VStack(alignment: .leading, spacing: 14) {
             ForEach(1...4, id: \.self) { index in
                 HStack(spacing: 8) {
-                    Image(systemName: symbol(index))
-                        .foregroundStyle(index < step ? Color.green : Color.secondary)
+                    Image(systemName: OnboardingSteps.symbol(index, current: step))
+                        .foregroundStyle(index < step ? Color.green : index == step ? Color.accentColor : Color.secondary)
+                        .font(.body.weight(index == step ? .semibold : .regular))
+                        .contentTransition(.symbolEffect(.replace))
                         .accessibilityLabel(index < step ? Text("Done") : index == step ? Text("Current step") : Text("Not started"))
                     Text(titles[index - 1])
                         .fontWeight(index == step ? .semibold : .regular)
                 }
                 .accessibilityElement(children: .combine)
+                .accessibilityIdentifier("onboarding-step-" + String(index))
             }
             Spacer()
         }
         .padding(.horizontal, 16)
-    }
-
-    private func symbol(_ index: Int) -> String {
-        if index < step { return "checkmark.circle.fill" }
-        if index == step { return "\(index).circle.fill" }
-        return "\(index).circle"
+        .animation(reduceMotion ? nil : .default, value: step)
     }
 
     // MARK: Content
@@ -94,16 +93,36 @@ struct OnboardingView: View {
     }
 
     private var whatStep: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text("Run apps in their own sandbox").font(.title2)
-            Label { Text("Each app runs inside a separate macOS virtual machine on this Mac. Its windows appear on your desktop like any other app.") } icon: {
-                DecorativeSymbol(name: "shield")
+        VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 10) {
+                Image(nsImage: NSApp.applicationIconImage)
+                    .resizable()
+                    .interpolation(.high)
+                    .frame(width: 64, height: 64)
+                    .accessibilityHidden(true)
+                Text("Run apps in their own sandbox").font(.title2.bold())
             }
-            Label { Text("The app only sees the folders you share with it.") } icon: { DecorativeSymbol(name: "folder") }
-            Label { Text("The first time an app wants to reach a new server, paddock asks you.") } icon: {
-                DecorativeSymbol(name: "network")
+            featureRow("shield.lefthalf.filled") {
+                Text("Each app runs inside a separate macOS virtual machine on this Mac. Its windows appear on your desktop like any other app.")
             }
+            featureRow("folder") { Text("The app only sees the folders you share with it.") }
+            featureRow("network") { Text("The first time an app wants to reach a new server, paddock asks you.") }
             Text("paddock needs a base image of macOS, about 25 GB, built once. Apps start from a copy of it in about half a minute.")
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// A row of step 1: a 24 pt accent symbol, then one sentence.
+    private func featureRow<Content: View>(_ symbol: String, @ViewBuilder text: () -> Content) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: symbol)
+                .font(.system(size: 24))
+                .symbolRenderingMode(.hierarchical)
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 32)
+                .accessibilityHidden(true)
+            text()
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -113,23 +132,37 @@ struct OnboardingView: View {
         return Prerequisites.rows(doctor: doctor, binary: verdict, binaryMissing: store.binary == .missing)
     }
 
+    /// Step 2 as a checklist: each check, its result under it, and the
+    /// result symbol at the end of the row.
     private var checkStep: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Check this Mac").font(.title2)
+            Text("Check this Mac").font(.title2.bold())
             ForEach(rows) { row in
                 HStack(alignment: .top, spacing: 10) {
-                    StatusSymbol(name: row.symbol, tint: row.tint, label: row.accessibilityLabel)
                     VStack(alignment: .leading, spacing: 4) {
                         Text(row.title).font(.headline)
                         Text(row.result).fixedSize(horizontal: false, vertical: true)
                         if let command = row.command { CopyField(command: command) }
                         HStack { ForEach(row.actions, id: \.self) { action in actionButton(action) } }
                     }
+                    Spacer(minLength: 8)
+                    if row.status == .checking {
+                        ProgressView()
+                            .controlSize(.small)
+                            .accessibilityLabel(Text(row.accessibilityLabel))
+                    } else {
+                        StatusSymbol(name: row.symbol, tint: row.tint, label: row.accessibilityLabel)
+                            .font(.title3)
+                            .transition(.opacity)
+                    }
                 }
+                .padding(.vertical, 2)
                 .accessibilityElement(children: .contain)
                 .accessibilityIdentifier("prereq-" + row.kind.rawValue)
+                if row.id != rows.last?.id { Divider() }
             }
         }
+        .animation(reduceMotion ? nil : .default, value: rows)
     }
 
     @ViewBuilder
@@ -148,8 +181,11 @@ struct OnboardingView: View {
 
     private var buildStep: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Build the base image").font(.title2)
+            Text("Build the base image").font(.title2.bold())
             Text(BuildCopy.body).fixedSize(horizontal: false, vertical: true)
+            if let doctor {
+                SpaceGauge(free: doctor.freeBytes, need: doctor.needBytes)
+            }
             LabeledContent("Keep in") {
                 Text(verbatim: Format.tildePath(store.golden.info?.dir ?? defaultDir, home: NSHomeDirectory()))
                     .lineLimit(1)
@@ -179,7 +215,7 @@ struct OnboardingView: View {
         switch store.golden {
         case .ready, .needsUpdate:
             VStack(alignment: .leading, spacing: 14) {
-                Label { Text("Base image ready").font(.title2) } icon: {
+                Label { Text("Base image ready").font(.title2.bold()) } icon: {
                     Image(systemName: "checkmark.circle.fill").foregroundStyle(.green).accessibilityHidden(true)
                 }
                 Text("Add an app from your Applications folder to start.")
@@ -210,6 +246,7 @@ struct OnboardingView: View {
             switch step {
             case 1, 2:
                 Button("Continue") { step += 1 }
+                    .buttonStyle(.borderedProminent)
                     .keyboardShortcut(.defaultAction)
                     .disabled(step == 2 && !Prerequisites.canContinue(rows))
                     .accessibilityIdentifier("onboarding-continue")
@@ -218,12 +255,14 @@ struct OnboardingView: View {
                     store.build(ipsw: useIPSW ? ipsw : nil)
                     step = 4
                 }
+                .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
                 .accessibilityIdentifier("onboarding-build")
             default:
                 if store.golden.isReady {
                     Button("Open paddock") { finish(addApp: false) }
                     Button("Add App…") { finish(addApp: true) }
+                        .buttonStyle(.borderedProminent)
                         .keyboardShortcut(.defaultAction)
                         .accessibilityIdentifier("onboarding-add-app")
                 }
@@ -246,6 +285,46 @@ struct OnboardingView: View {
         } else {
             doctor = LocalDoctor.make()
         }
+    }
+}
+
+/// The symbols of the onboarding steps: a check when done, a filled ring
+/// for the current step, an empty ring for the rest.
+enum OnboardingSteps {
+    static func symbol(_ index: Int, current: Int) -> String {
+        if index < current { return "checkmark.circle.fill" }
+        if index == current { return "circle.inset.filled" }
+        return "circle"
+    }
+}
+
+/// The free space on this disk against what the build needs, as a bar with
+/// the two sizes. Orange when the space is short.
+@MainActor
+struct SpaceGauge: View {
+    let free: Int64
+    let need: Int64
+
+    var body: some View {
+        let text = UIText("Needs about %@, %@ free", Format.gb(need), Format.gb(free))
+        VStack(alignment: .leading, spacing: 4) {
+            Gauge(value: Double(min(need, max(free, 1))), in: 0...Double(max(free, 1))) {
+                Text("Space")
+            }
+            .gaugeStyle(.accessoryLinearCapacity)
+            .tint(free >= need ? Color.blue : Color.orange)
+            .labelsHidden()
+            .accessibilityLabel(Text("Space"))
+            .accessibilityValue(Text(text))
+            Text(text)
+                .font(.callout)
+                .labelInk()
+                .monospacedDigit()
+                .accessibilityHidden(true)
+        }
+        .frame(maxWidth: 360, alignment: .leading)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("space-gauge")
     }
 }
 

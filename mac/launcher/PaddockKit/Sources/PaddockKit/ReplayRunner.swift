@@ -46,9 +46,19 @@ public final class ReplayRunner: CommandRunner, @unchecked Sendable {
         lock.unlock()
     }
 
+    /// The answer of a child that never ends. A bounded run of it ends at
+    /// its time limit or at a cancel, as `ProcessRunner` kills the child.
+    public static let hang = CommandOutput(status: Int32.min, stdout: Data(), stderr: "fake paddock: hang")
+
+    /// Answers every call that starts with `prefix` with a hang.
+    public func hang(prefix: String) {
+        on(prefix: prefix, output: ReplayRunner.hang)
+    }
+
     /// Loads a scenario folder of mac/launcher/Fixtures: its map.tsv and
     /// the answer files in ../base. Stream files (.jsonl) are skipped: a
-    /// test pushes stream lines through `feed`.
+    /// test pushes stream lines through `feed`. The answer `hang` never
+    /// ends.
     public static func load(scenario: URL, clock: LauncherClock = SystemClock()) throws -> ReplayRunner {
         let runner = ReplayRunner(clock: clock)
         let base = scenario.deletingLastPathComponent().appendingPathComponent("base")
@@ -64,6 +74,10 @@ public final class ReplayRunner: CommandRunner, @unchecked Sendable {
                     status = Int32(item[item.index(after: colon)...]) ?? 0
                 }
                 if name.hasSuffix(".jsonl") { continue }
+                if name == "hang" {
+                    runner.hang(prefix: parts[0])
+                    continue
+                }
                 let data = try Data(contentsOf: base.appendingPathComponent(name))
                 // A .err file is paddock's stderr, as in the fake script.
                 let output = name.hasSuffix(".err")
@@ -99,6 +113,98 @@ public final class ReplayRunner: CommandRunner, @unchecked Sendable {
 
     public func run(_ args: [String]) async throws -> CommandOutput {
         answer(args)
+    }
+
+    /// The bounded run: the limits as `ProcessRunner` applies them.
+    public func run(_ args: [String], limits: RunLimits) async throws -> CommandOutput {
+        let output = answer(args)
+        if output == ReplayRunner.hang { return try await hold(limits) }
+        if output.stdout.count > limits.maxBytes || output.stderr.utf8.count > limits.maxBytes {
+            count(hanging: 0, kills: 1)
+            throw CommandError.tooLarge
+        }
+        return output
+    }
+
+    /// The kills of a bounded run: past a limit or at a cancel.
+    public var kills: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return _kills
+    }
+
+    /// The bounded runs that hang now.
+    public var hanging: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return _hanging
+    }
+
+    private var _kills = 0
+    private var _hanging = 0
+
+    /// Synchronous, so the lock is not taken in an async context.
+    private func count(hanging: Int, kills: Int) {
+        lock.lock()
+        _hanging += hanging
+        _kills += kills
+        lock.unlock()
+    }
+
+    /// Waits until the time limit on the clock, or until a cancel.
+    private func hold(_ limits: RunLimits) async throws -> CommandOutput {
+        let end = HangEnd()
+        count(hanging: 1, kills: 0)
+        defer { count(hanging: -1, kills: 1) }
+        let clock = self.clock
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<CommandOutput, Error>) in
+                end.attach(continuation)
+                Task {
+                    try? await clock.sleep(seconds: limits.seconds)
+                    end.finish(CommandError.timedOut)
+                }
+            }
+        } onCancel: {
+            end.finish(CancellationError())
+        }
+    }
+
+    /// The one end of a hang: the first of the time limit and the cancel.
+    final class HangEnd: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<CommandOutput, Error>?
+        private var error: Error?
+        private var done = false
+
+        func attach(_ continuation: CheckedContinuation<CommandOutput, Error>) {
+            lock.lock()
+            if let error = self.error {
+                done = true
+                lock.unlock()
+                continuation.resume(throwing: error)
+                return
+            }
+            self.continuation = continuation
+            lock.unlock()
+        }
+
+        func finish(_ error: Error) {
+            lock.lock()
+            guard !done, self.error == nil else {
+                lock.unlock()
+                return
+            }
+            guard let continuation = self.continuation else {
+                self.error = error
+                lock.unlock()
+                return
+            }
+            done = true
+            self.continuation = nil
+            lock.unlock()
+            continuation.resume(throwing: error)
+        }
     }
 
     /// Logs the call and picks the answer. Synchronous, so the lock is not

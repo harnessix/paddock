@@ -106,9 +106,7 @@ final class FlowTests: XCTestCase {
     }
 
     func testProducerQuestionAndGrantFixturesDecode() async throws {
-        let root = Fixtures.root.deletingLastPathComponent()
-            .deletingLastPathComponent().deletingLastPathComponent()
-            .appendingPathComponent("tests/fixtures/launcher")
+        let root = Fixtures.core("launcher")
         let h = try await Harness("questions")
         let questions = try ReplayRunner.streamLines(root.appendingPathComponent("question.jsonl"))
         for line in questions {
@@ -194,14 +192,27 @@ final class FlowTests: XCTestCase {
     func testQuitStopsAppsWhenSettingOff() async throws {
         let h = try await Harness("ready")
         XCTAssertEqual(QuitPlanner.plan(keepRunning: false, apps: h.store.apps, building: false), [.stop("Sample Notes")])
-        let quit = Task { await h.store.performQuit(keepRunning: false, timeout: 60) }
-        await waitUntil { h.calls(["app", "stop", "Sample Notes"]).count == 1 }
+        // Count the sleepers before the quit, so only the quit loop's own
+        // sleep is waited for. The stream watcher sleeps only between
+        // reconnects, and this stream stays open.
+        let base = h.clock.sleeperCount
+        let done = QuitDone()
+        let quit = Task {
+            await h.store.performQuit(keepRunning: false, timeout: 60)
+            done.value = true
+        }
+        await waitUntil { h.calls(["app", "stop", "Sample Notes"]).count == 1 && h.clock.sleeperCount > base }
+        // While the app runs, the quit keeps waiting: a wake-up only sleeps again.
+        h.clock.advance(1)
+        await waitUntil { h.clock.sleeperCount > base }
+        XCTAssertFalse(done.value)
+        // The app is saved: the next wake-up ends the quit.
         h.events.send(#"{"v":1,"kind":"session","app":"Sample Notes","state":"saved","since":"2026-11-06T10:00:05Z"}"#)
         await waitUntil { if case .saved = h.store.app(named: "Sample Notes")!.state { return true } else { return false } }
-        // The stream watcher sleeps too; wait for the quit loop's own sleep.
-        await waitUntil { h.clock.sleeperCount >= 2 }
+        XCTAssertFalse(done.value)
         h.clock.advance(1)
         await quit.value
+        XCTAssertTrue(done.value)
         XCTAssertEqual(h.calls(["app", "stop"]).count, 1)
     }
 
@@ -448,4 +459,10 @@ final class PartialApprovalTests: XCTestCase {
         XCTAssertNil(h.store.paused)
         XCTAssertFalse(h.store.pausedConfirmed)
     }
+}
+
+/// Set when a quit task ends, so a test can see that it has not ended yet.
+@MainActor
+final class QuitDone {
+    var value = false
 }

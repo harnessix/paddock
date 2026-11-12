@@ -1,0 +1,1 @@
+- New: `paddock --launcher-protocol` prints one JSON line with the protocol and the features that paddock for Mac needs. It reads no file and starts nothing. paddock for Mac refuses a paddock that does not answer it.
