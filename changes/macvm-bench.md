@@ -1,3 +1,0 @@
-- New: `paddock macvm bench CASE` measures one performance target of the macOS guest (warm, cold, first, quit, update, input, move, frames, idle, video, disk), and `packaging/macos/bench.sh` runs every case, writes `.paddock/bench/<date>.json`, prints the table and exits non-zero with the case named when a target of `packaging/macos/bench/targets.json` is missed. A Linux test checks the committed baseline against the targets.
-- New: `paddock app run NAME --bench` starts a macOS guest session whose agent honors the bench ops; every other session refuses them.
-- Changed: the event log of a macOS guest profile carries the millisecond part of each time, for the bench.

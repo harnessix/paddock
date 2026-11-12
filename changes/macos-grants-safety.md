@@ -1,3 +1,0 @@
-- Fix: Keep explicit read-only folders read-only and disable clipboard access when a macOS guest grants file cannot be read.
-- Fix: Refuse unknown open file counts without --force and check folders before saving a live mode change.
-- Fix: Attempt to restore a live grant when saving the profile fails, and report rollback failures.

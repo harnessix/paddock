@@ -1,4 +1,0 @@
-- New: In a macOS app session, a drag of a window's title bar or edge moves or resizes the window on your Mac at once, and the guest window follows. The content moves with the frame, and a click or double click on the title bar still reaches the app.
-- New: The guest agent measures the corner radius of each window, so the rounded clip of the session window matches the window on macOS 26 and later. The agent gets the Screen Recording permission in the guest for this at `paddock macvm setup`.
-- Changed: A window that goes to full screen in the guest now goes to full screen on your Mac and shows the whole guest display, instead of a refusal.
-- Fix: The full screen toolbar of a guest app no longer shows as a frame over the top of the window.

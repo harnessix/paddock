@@ -1,2 +1,0 @@
-- Add independent, read-only trainer reviews for live horse runs, with bounded briefs, scoped peek grants, structured mailbox advice, automatic triggers and per-run limits.
-- Record explicit adoption feedback and later run facts; `paddock train stats` reports the records and repeated negative feedback reduces the matching automatic trigger.

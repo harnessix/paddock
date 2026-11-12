@@ -1,1 +1,0 @@
-- Changed: the README is a short starting guide. Run `paddock help TOPIC` for the full reference and `paddock help` for the topic list.

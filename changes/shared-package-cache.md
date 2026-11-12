@@ -1,4 +1,0 @@
-- Changed: Worktrees of one repository share a uv cache. Other projects cannot write to it. The host `XDG_CACHE_HOME` no longer redirects sandbox caches by default.
-- Changed: Package cache limits remove the oldest idle tool caches. Configure the per-project and total limits in `[storage]`.
-- Changed: `paddock gc` lists caches of gone or merged worktrees and moves an old uv cache when the shared cache is empty.
-- Changed: `paddock doctor` warns about low disk space and reports Btrfs unallocated space and metadata use.

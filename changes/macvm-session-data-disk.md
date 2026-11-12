@@ -1,4 +1,0 @@
-- Fix: a macOS guest session now gets the guest password from the keyring of `paddock macvm setup`. The quit shuts the guest down in order, so the stamp says `"clean": true`, and the first start of a profile moves the guest home onto the data disk (`data.prepare`). Before, the password never reached the session: the home stayed on the system disk, and each quit stopped the VM hard.
-- New: the `data disk` row of `paddock app status` says whether the data disk is prepared, or which step failed. A failed or unanswered prepare names its step in `events.jsonl`, the app still starts, the quit saves no state, and the next start tries again. A warm start never moves the home under a running app.
-- Fix: `logs/console.log` of a session is no longer empty. The guest agent writes its start line and the `sw_vers` lines to the serial console at each start.
-- Changed: the guest agent presses Ignore on a disk dialog of the boot before it runs the first request of the host.

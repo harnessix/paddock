@@ -1,2 +1,0 @@
-- Changed: a project `paddock.toml` with a network mode wider than the user configuration (none < api < allowlist < egress < host), or with `network.allow` domains that the user configuration does not list, now needs the one-time approval. A `--network` flag still wins and needs no approval.
-- Added: `network.max` in the user configuration sets the widest network mode of any sandbox. No project file, approval or `--network` flag can exceed it.

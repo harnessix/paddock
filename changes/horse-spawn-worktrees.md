@@ -1,2 +1,0 @@
-- Fix: two children of one project that start at the same moment both start. Before, one start sometimes failed with "policy: ... commondir is writable inside .git".
-- Changed: a sandbox sees the `.git/worktrees` folder of its repository read-only. Only the git folder of its own worktree stays writable, so `git worktree add` and `git worktree prune` fail inside a sandbox.

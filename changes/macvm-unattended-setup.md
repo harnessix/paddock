@@ -1,3 +1,0 @@
-- New: `paddock macvm setup` gives a macOS 27 guest on a macOS 27 Mac its account with the provisioning options of macOS 27, so the guest skips Setup Assistant.
-- New: `PADDOCK_MACVM_GUIDED=1` leaves every step of the guest to you in the guided window.
-- Changed: the golden boots with a USB screen-coordinate pointer before the trackpad, so a click lands at its point in the guest.

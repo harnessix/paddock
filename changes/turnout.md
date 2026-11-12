@@ -1,1 +1,0 @@
-- New: schedule host-owned checks with timers or branch polling, resource limits, a pause switch, mailbox reports and health records. The host-checks job runs integration suites on new commits without a model call.

@@ -1,1 +1,0 @@
-- Fix: (experimental) If dsh refuses a message of paddock, the run in horse mode no longer hangs, and the first close of the input ends it. paddock offers a refused message again after 30 seconds. After three refusals, the message leaves the queue, paddock writes one `horse:` line on stderr, and the history of the horse records an `append.dropped` event with the message.

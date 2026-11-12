@@ -1,3 +1,0 @@
-- Horse session content and the private local DNA registry are encrypted at rest with per-horse data keys wrapped by a host keyring master key. Back up and restore the master with `paddock horse key export|import PATH`; a missing or wrong key refuses access without deleting the store.
-- Horse mount content files contain ciphertext. `paddock-host peek` reads explicitly granted content through the broker, with audit, byte limits, revocation and normal pipe behavior. DNA writes use `paddock-host horse dna put`.
-- `paddock horse migrate --verify` copies and verifies a legacy plaintext store and retains its plaintext backup. `--drop-plain` separately verifies and permanently removes the retained copies.

@@ -1,1 +1,0 @@
-- New: exclave sends plain folders without Git, follows their ignore files, and accepts an explicit project root with `--root`.

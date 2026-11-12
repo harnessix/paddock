@@ -1,4 +1,0 @@
-- New: (experimental) the horse store reads agy 1.4.12 conversation databases row by row, and keeps the old rows when agy changes or removes steps. `paddock horse project-agy` writes a session back, and a fork gets a new conversation id. A fork inside a turn is refused. Other versions and schemas are refused.
-- New: (experimental) in horse mode, an agy child of `paddock-host spawn` runs with `--input-format stream-json --output-format stream-json`. paddock stops a running turn with SIGINT. A line that names another conversation ends the custody.
-- New: (experimental) an interactive agy in horse mode gets queued entries through the pty relay. paddock adds the `PreInvocation` and `Stop` hooks to the sandbox copy of `.gemini/config/hooks.json`.
-- New: (experimental) for agy, the prefix guard says that the cache scope is unknown. It treats a fork with a new conversation id as a cold start.

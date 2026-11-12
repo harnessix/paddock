@@ -1,4 +1,0 @@
-- New: `paddock wait RUN...` waits for all runs, or for the first with `--any`. `--status` also returns on `done:` or `blocked:`. Each result includes the run ID and full status text.
-- New: `[hooks] run_end` starts a host command after a run ends. The command receives `PADDOCK_RUN_ID` and `PADDOCK_RUN_STATUS`.
-- Fixed: mailbox watchers deliver events promptly and keep full status text.
-- Fixed: incomplete or conflicting end records now report an unknown outcome. A matching event in the mailbox log can restore the end marker.
