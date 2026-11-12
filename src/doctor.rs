@@ -27,6 +27,7 @@ true
 "#;
 
 mod deps;
+pub mod seatbelt_escape;
 pub use deps::{Dep, DEPS};
 
 pub fn family() -> usize {
@@ -294,10 +295,12 @@ pub struct EscapeOpts {
 
 /// Run the probe in a real sandbox. Returns the number of failed checks.
 pub fn escape(env: &HostEnv, o: &EscapeOpts) -> Result<usize> {
-    // probe.sh checks mounts, namespaces and /proc. The Seatbelt checks are in src/backend/seatbelt/run_macos_tests.rs and tests/seatbelt_run.rs; the device sandbox ones in src/backend/seatbelt/device_macos_tests.rs and tests/seatbelt_devices.rs.
-    let mac_auto = crate::onboard::Os::HOST == crate::onboard::Os::Macos && o.backend == "auto";
-    if o.backend == crate::backend::seatbelt::NAME || mac_auto {
-        anyhow::bail!("the escape probe is for the Linux backends: on macOS the Seatbelt checks run with cargo test, and --backend podman or docker probes a Linux container");
+    // probe.sh checks mounts, namespaces and /proc. A Seatbelt run has its
+    // own probe (seatbelt_escape.rs); more Seatbelt checks are in
+    // src/backend/seatbelt/run_macos_tests.rs and tests/seatbelt_run.rs.
+    let macos = crate::onboard::Os::HOST == crate::onboard::Os::Macos;
+    if seatbelt_escape::wanted(&o.backend, macos) {
+        return seatbelt_escape::escape(env, o);
     }
     // Homes of earlier runs whose scratch project is gone go too.
     let mut scratch = Scratch::new(&env.paddock_cache().join(SCRATCH_DIR))?;

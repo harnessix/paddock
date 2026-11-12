@@ -13,7 +13,7 @@ mod capped;
 mod end;
 mod host_tools;
 mod mcp;
-mod memory_scope;
+pub mod memory_scope;
 use capped::read_capped;
 use end::{EndOfRun, ShadowRun};
 mod help;

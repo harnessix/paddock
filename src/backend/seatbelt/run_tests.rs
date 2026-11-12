@@ -717,3 +717,43 @@ fn the_harness_home_is_the_sandbox_home_at_its_host_path() {
     assert_eq!(SeatbeltRun.harness_home(&s), s.home_src);
     assert_ne!(SeatbeltRun.harness_home(&s), s.home);
 }
+
+/// MACRUN1: python3 and git found by PATH skip Apple's xcrun shim, which
+/// cannot write its cache in the sandbox.
+#[test]
+fn the_developer_tools_come_before_the_xcrun_shims() {
+    let clt = Path::new("/Library/Developer/CommandLineTools");
+    let all = |_: &Path| true;
+    assert_eq!(
+        developer_bins(clt, all),
+        vec![
+            clt.join("usr/bin"),
+            clt.join("Toolchains/XcodeDefault.xctoolchain/usr/bin")
+        ]
+    );
+    let xcode = Path::new("/Applications/Xcode.app/Contents/Developer");
+    let only_usr = |p: &Path| p.ends_with("Developer/usr/bin");
+    assert_eq!(developer_bins(xcode, only_usr), vec![xcode.join("usr/bin")]);
+    // A developer folder that the profile does not let the sandbox read.
+    assert!(
+        developer_bins(Path::new("/Users/u/Xcode-beta.app/Contents/Developer"), all).is_empty()
+    );
+
+    let bins = vec![clt.join("usr/bin")];
+    assert_eq!(
+        with_developer_bins("/opt/homebrew/bin:/usr/bin:/bin", &bins),
+        "/opt/homebrew/bin:/Library/Developer/CommandLineTools/usr/bin:/usr/bin:/bin"
+    );
+    assert_eq!(
+        with_developer_bins(
+            "/a:/Library/Developer/CommandLineTools/usr/bin:/usr/bin",
+            &bins
+        ),
+        "/a:/Library/Developer/CommandLineTools/usr/bin:/usr/bin"
+    );
+    assert_eq!(
+        with_developer_bins("/a", &bins),
+        "/a:/Library/Developer/CommandLineTools/usr/bin"
+    );
+    assert_eq!(with_developer_bins("/a:/usr/bin", &[]), "/a:/usr/bin");
+}

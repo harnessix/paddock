@@ -113,6 +113,70 @@ pub fn range_line(range: (u16, u16), network: Network) -> String {
 /// The warning of network mode host at the start of a Seatbelt run.
 pub const HOST_WARNING: &str = "network mode host: the sandbox shares the network of this Mac. It reaches every service on localhost and on the LAN, and its servers are open to the LAN";
 
+/// The active developer folder of this Mac (`xcode-select -p`), or None
+/// without developer tools. Asked once per process.
+pub fn developer_dir() -> Option<PathBuf> {
+    #[cfg(target_os = "macos")]
+    {
+        static DIR: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+        DIR.get_or_init(|| {
+            let out = std::process::Command::new("/usr/bin/xcode-select")
+                .arg("-p")
+                .stdin(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .output()
+                .ok()?;
+            let p = PathBuf::from(String::from_utf8(out.stdout).ok()?.trim());
+            (out.status.success() && p.is_absolute() && p.is_dir()).then_some(p)
+        })
+        .clone()
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        None
+    }
+}
+
+/// The tool folders of a developer folder that a terminal run can read:
+/// `usr/bin`, and the default toolchain of Xcode. Apple's `/usr/bin`
+/// shims (python3, git, clang) start xcrun, which writes its lookup cache
+/// into the user temp folder of the host. The sandbox cannot write there,
+/// and must not: the host's xcrun trusts that cache. With these folders
+/// before `/usr/bin`, a command found by PATH skips the shim and its cache.
+pub fn developer_bins(dev: &Path, is_dir: impl Fn(&Path) -> bool) -> Vec<PathBuf> {
+    let readable = crate::seatbelt::SYSTEM_READ
+        .iter()
+        .chain(crate::seatbelt::TERMINAL_READ)
+        .any(|r| dev.starts_with(r));
+    if !readable {
+        return Vec::new();
+    }
+    [
+        dev.join("usr/bin"),
+        dev.join("Toolchains/XcodeDefault.xctoolchain/usr/bin"),
+    ]
+    .into_iter()
+    .filter(|d| is_dir(d))
+    .collect()
+}
+
+/// `path` with `bins` right before its first `/usr/bin`, or at its end.
+pub fn with_developer_bins(path: &str, bins: &[PathBuf]) -> String {
+    let mut out: Vec<String> = path
+        .split(':')
+        .filter(|d| !d.is_empty() && !bins.iter().any(|b| Path::new(d) == b))
+        .map(str::to_string)
+        .collect();
+    let at = out
+        .iter()
+        .position(|d| d == "/usr/bin")
+        .unwrap_or(out.len());
+    for (i, b) in bins.iter().enumerate() {
+        out.insert(at + i, b.display().to_string());
+    }
+    out.join(":")
+}
+
 /// The private temporary folder of a run, in the sandbox home.
 pub fn private_tmp(spec: &SandboxSpec) -> PathBuf {
     spec.home_src.join(".paddock-tmp").join(&spec.id)
@@ -370,7 +434,16 @@ pub fn run_env(env: &HostEnv, spec: &SandboxSpec, tmp: &Path) -> BTreeMap<String
             path.push(d);
         }
     }
-    vars.insert("PATH".into(), path.join(":"));
+    let mut path = path.join(":");
+    if let Some(dev) = developer_dir() {
+        let bins = developer_bins(&dev, Path::is_dir);
+        if !bins.is_empty() {
+            path = with_developer_bins(&path, &bins);
+            vars.entry("DEVELOPER_DIR".into())
+                .or_insert_with(|| dev.display().to_string());
+        }
+    }
+    vars.insert("PATH".into(), path);
     vars
 }
 

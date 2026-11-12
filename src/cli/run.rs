@@ -320,9 +320,10 @@ pub(crate) fn explain(env: &HostEnv, a: &RunArgs, json: bool) -> Result<()> {
     if let Some(note) = cache_note {
         println!("cache     {note}");
     }
-    match s.memory_high {
-        Some(high) => println!("memory    planned high {high} bytes (systemd scope only)"),
-        None => println!("memory    high disabled"),
+    if let Some(line) =
+        paddock::run::memory_scope::explain_line(s.memory_high, cfg!(target_os = "macos"))
+    {
+        println!("memory    {line}");
     }
     println!(
         "network   {:?}{}",

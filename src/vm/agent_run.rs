@@ -4,7 +4,7 @@
 
 use super::agent::{self, Agent, Outlet, HOST_SOCKET_VAR, PROXY_SOCKET_VAR};
 use super::{ports, proto, term};
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::os::fd::{AsRawFd, OwnedFd};
@@ -69,6 +69,34 @@ pub fn command(
         env.insert(PROXY_SOCKET_VAR.into(), s(&dir.join("proxy.sock")));
     }
     (a, env)
+}
+
+/// The refusal of a run whose harness program the guest does not have.
+/// The VM has its own Linux programs: an agent installed on the Mac is not
+/// in it. The run stops before it starts, with the command that works.
+pub fn missing_program(
+    req: &proto::RunRequest,
+    home: &Path,
+    dir: &Path,
+    user: Option<(u32, u32)>,
+) -> Option<String> {
+    if req.shell {
+        return None;
+    }
+    let (_, vars) = command(req, home, dir);
+    let (uid, gid) = user.unwrap_or((0, 0));
+    let env = crate::env::HostEnv::from_parts(home.into(), "paddock".into(), uid, gid, vars);
+    let factory = crate::profile::HarnessFactory::new(&env).ok()?;
+    factory.profile(&req.harness)?;
+    let e = factory.program(&req.harness).err()?;
+    Some(not_in_vm(&req.harness, &format!("{e:#}")))
+}
+
+/// The one line when the VM does not have the program of `harness`.
+pub fn not_in_vm(harness: &str, why: &str) -> String {
+    format!(
+        "{harness} is not installed in the VM ({why}). The VM has its own Linux programs, not those of this Mac. Start it with Seatbelt: paddock run {harness} --backend seatbelt"
+    )
 }
 
 /// Run one request. `control` is the control connection after the request
@@ -136,6 +164,9 @@ fn start(
         if let Some((uid, gid)) = user {
             std::os::unix::fs::chown(&file, Some(uid), Some(gid))?;
         }
+    }
+    if let Some(why) = missing_program(req, home, dir, user) {
+        bail!(why);
     }
     let t = &agent.cfg.transport;
     let _host = Outlet::start(

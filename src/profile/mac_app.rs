@@ -36,7 +36,8 @@ pub struct ProfileMacos {
     /// codesign).
     pub backend: Option<String>,
     /// The harness needs new ptys. When its program ignores paddock's pty
-    /// library on Seatbelt, `--backend auto` picks the VM.
+    /// library on Seatbelt, the run says so in one line. `--backend auto`
+    /// still picks Seatbelt: the VM only when the user asks for it.
     #[serde(default)]
     pub needs_pty: bool,
 }

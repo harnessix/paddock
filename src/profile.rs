@@ -643,6 +643,16 @@ impl<'a> HarnessFactory<'a> {
         })
     }
 
+    /// The program of a harness, without its install closure: the first
+    /// that `[locate]` finds. The VM guest asks it before a run starts.
+    pub fn program(&self, name: &str) -> Result<PathBuf> {
+        let (profile, _) = self
+            .profiles
+            .get(name)
+            .ok_or_else(|| anyhow!("unknown harness '{name}'"))?;
+        self.locate(profile)
+    }
+
     /// A harness for a profile that paddock builds itself, such as the
     /// workbench of a pasture.
     pub fn adopt(&self, profile: Profile, source: &str) -> Result<Harness> {
