@@ -9,6 +9,8 @@ export interface PsSandbox {
   backend?: string;
   network?: string;
   gui?: string;
+  /** Who approves the agent's steps: auto, manual, or command (paddock wrap, apps). */
+  approvals?: string;
   started?: number;
   parent?: string;
   pasture?: string | null;
@@ -50,6 +52,7 @@ export interface BoardRun {
   last?: string;
   since?: string;
   card?: boolean;
+  approvals?: string;
 }
 
 export interface BoardTicket {

@@ -4,6 +4,7 @@ import { cut, fit } from '../clean.js';
 import { searchActions, visibleActions, type Action } from '../actions.js';
 import { Button, List, Pane, T, inner } from '../ui.js';
 import { useTheme } from '../theme.js';
+import type { ApprovalsMode } from '../paddock.js';
 
 export function helpLines(readonly: boolean, mouse: boolean): { key: string; text: string }[] {
   const lines = visibleActions(readonly).map((a) => ({ key: a.key, text: a.label }));
@@ -12,6 +13,7 @@ export function helpLines(readonly: boolean, mouse: boolean): { key: string; tex
     '↑↓ j k move · PgUp PgDn page · Home End first and last',
     'Approval card: 1-7 or y s n answer, ←→ choose, ↵ answer, Esc deny',
     'Wide grants (⚠: always, or every host) need the key again within 3 s',
+    readonly ? '' : 'New run: Ctrl+A switches the approvals mode (default, manual, auto)',
     mouse ? 'Mouse: click selects, double-click opens, wheel scrolls; hold Shift to select text' : 'The mouse is off: M turns it on',
     readonly ? 'Read-only: the actions that change something are hidden' : '',
   ]) {
@@ -88,6 +90,19 @@ export interface FormState {
   values: [string, string, string];
   error: string;
   busy: boolean;
+  /** Who approves the new run's steps; '' is the configured default. Ctrl+A switches it. */
+  approvals?: ApprovalsMode;
+}
+
+/** The next approvals mode for Ctrl+A: default, manual, auto, default. */
+export function nextApprovals(a: ApprovalsMode | undefined): ApprovalsMode {
+  return !a ? 'manual' : a === 'manual' ? 'auto' : '';
+}
+
+export function formApprovalsLabel(a: ApprovalsMode | undefined): string {
+  if (a === 'manual') return 'manual: you approve each step in the agent';
+  if (a === 'auto') return 'auto: the agent approves its own steps in the sandbox';
+  return 'your default ([run] approvals, else auto)';
 }
 
 export const FORM_FIELDS = ['Harness', 'Project', 'Prompt file'] as const;
@@ -110,7 +125,7 @@ export function NewRunForm(props: {
     'a file with the task, relative to the project or absolute',
   ];
   return (
-    <Pane title="New run · in a sandbox, detached · Tab next field · ↵ start · Esc cancel" focused width={props.width} height={props.height}>
+    <Pane title="New run · in a sandbox, detached · Tab next field · Ctrl+A approvals · ↵ start · Esc cancel" focused width={props.width} height={props.height}>
       {FORM_FIELDS.map((name, i) => (
         <Box key={name} flexDirection="column">
           <Button label={`${fit(name, 12)}`} focused={f.field === i} onClick={() => props.onField(i)} />
@@ -122,6 +137,11 @@ export function NewRunForm(props: {
           <T role="muted">{cut(`  ${hints[i] ?? ''}`, box.width)}</T>
         </Box>
       ))}
+      <T>
+        {fit('Approvals', 12)}
+        <T role={f.approvals === 'manual' ? 'warning' : 'normal'}>{cut(formApprovalsLabel(f.approvals), Math.max(0, box.width - 12))}</T>
+      </T>
+      <T role="muted">{cut('  Ctrl+A switches: default, manual, auto. The sandbox is the same.', box.width)}</T>
       <Box flexDirection="row" gap={2}>
         <Button label={f.busy ? ' Starting… ' : ' Start the run ↵ '} focused={false} role="accent" onClick={props.onSubmit} />
         <Button label=" Cancel Esc " focused={false} onClick={props.onCancel} />

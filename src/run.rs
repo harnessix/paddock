@@ -685,7 +685,12 @@ pub fn run(
                 .with_context(|| format!("cannot prepare ~/{}", rel.display()))?;
         }
         // A large settings file of the snapshot does not stop the run.
-        if let Err(e) = state::toml_set(&built.profile, &spec.home_src, &spec.project) {
+        if let Err(e) = state::toml_set(
+            &built.profile,
+            &spec.home_src,
+            &spec.project,
+            built.manual(),
+        ) {
             log::warn!("{e:#}");
         }
         match crate::privacy::write_home(spec) {
@@ -694,7 +699,12 @@ pub fn run(
         }
     } else {
         state::seed(env, &built.profile, &built.auth, &spec.home_src)?;
-        state::toml_set(&built.profile, &spec.home_src, &spec.project)?;
+        state::toml_set(
+            &built.profile,
+            &spec.home_src,
+            &spec.project,
+            built.manual(),
+        )?;
         state::json_import(
             env,
             &built.profile,
@@ -762,12 +772,15 @@ pub fn run(
     crate::boundary::record_start(env, spec);
     if !quiet {
         eprintln!(
-            "paddock: {} in {} (backend {}, network {}, display {})",
-            spec.harness,
-            spec.project.display(),
-            backend.name(),
-            format!("{:?}", spec.network).to_lowercase(),
-            format!("{:?}", spec.gui.mode).to_lowercase()
+            "paddock: {}",
+            start_line(
+                &spec.harness,
+                &spec.project,
+                backend.name(),
+                spec.network,
+                spec.gui.mode,
+                built.approvals,
+            )
         );
         for n in &spec.notices {
             eprintln!("paddock: {n}");
@@ -833,6 +846,7 @@ pub fn run(
         caller_terminal,
         term.unwatched,
         built.detach,
+        built.manual(),
     );
     let tap = crate::relay::Taps::of(gate.clone(), screens, crate::horse::live::take_pty_tap());
     // The live view of a run without a terminal (view.rs). paddock copies
@@ -959,6 +973,7 @@ pub fn run(
         pid: child.id(),
         started: state::now(),
         auth: built.auth.to_string(),
+        approvals: crate::approvals::shown(built.approvals).into(),
         window_pid: _compositor.as_ref().map(|c| c.pid()),
         // Short lines for the bar panel, which shows the first one.
         // Only `login_ports = true` opens every port. The filtered login
@@ -1167,6 +1182,28 @@ pub fn run(
         crate::recover::notice(env, &spec.id, &spec.home_src, running.started);
     }
     Ok(Outcome { code, stdout: out })
+}
+
+/// The start line of a run, after `paddock: `: "codex in /p (backend
+/// seatbelt, network egress, display off, manual approvals)".
+pub fn start_line(
+    harness: &str,
+    project: &std::path::Path,
+    backend: &str,
+    network: crate::spec::Network,
+    display: crate::spec::GuiMode,
+    approvals: Option<crate::approvals::Approvals>,
+) -> String {
+    let approvals = match approvals {
+        Some(a) => format!("{a} approvals"),
+        None => "approvals by the command".into(),
+    };
+    format!(
+        "{harness} in {} (backend {backend}, network {}, display {}, {approvals})",
+        project.display(),
+        format!("{network:?}").to_lowercase(),
+        format!("{display:?}").to_lowercase()
+    )
 }
 
 pub fn select_backend(env: &HostEnv, built: &Built) -> Result<Box<dyn Backend>> {

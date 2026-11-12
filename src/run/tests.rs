@@ -297,3 +297,34 @@ mod cleanup_tests {
         assert_eq!(info.delivery.as_deref(), Some(crate::mail::deliver::HOOKS));
     }
 }
+
+#[test]
+fn the_start_line_names_the_approvals_mode() {
+    use crate::approvals::Approvals;
+    use crate::spec::{GuiMode, Network};
+    let p = std::path::Path::new("/w/app");
+    assert_eq!(
+        super::start_line(
+            "codex",
+            p,
+            "seatbelt",
+            Network::Egress,
+            GuiMode::Off,
+            Some(Approvals::Manual)
+        ),
+        "codex in /w/app (backend seatbelt, network egress, display off, manual approvals)"
+    );
+    assert!(super::start_line(
+        "claude",
+        p,
+        "bwrap",
+        Network::Api,
+        GuiMode::Off,
+        Some(Approvals::Auto)
+    )
+    .ends_with("network api, display off, auto approvals)"));
+    assert!(
+        super::start_line("claude", p, "bwrap", Network::Api, GuiMode::Off, None)
+            .ends_with("approvals by the command)")
+    );
+}

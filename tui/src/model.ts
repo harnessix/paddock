@@ -39,6 +39,8 @@ export interface RunRow {
   projectName: string;
   backend: string;
   network: string;
+  /** auto, manual or command; empty when paddock does not say. */
+  approvals: string;
   state: RunState;
   live: boolean;
   /** Unix seconds: start of a live run, end of an ended one. */
@@ -128,6 +130,7 @@ export function buildRuns(
       projectName: baseName(project),
       backend: oneLine(s.backend ?? ''),
       network: oneLine(s.network ?? ''),
+      approvals: oneLine(s.approvals || b?.run.approvals || ''),
       state,
       live: true,
       since: s.started ?? 0,
@@ -157,6 +160,7 @@ export function buildRuns(
       projectName: baseName(project),
       backend: '',
       network: '',
+      approvals: '',
       state,
       live: false,
       since: e.ended ?? 0,

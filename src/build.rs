@@ -29,7 +29,14 @@ pub struct Options {
     pub network: Option<Network>,
     pub gui: Option<GuiMode>,
     pub gpu: bool,
+    /// paddock adds no approval flags or settings of its own: the command
+    /// decides (`paddock wrap`, desktop apps). The approvals mode does not
+    /// apply then.
     pub no_yolo: bool,
+    /// `--manual` (or `--no-yolo`) and `--auto` of the command line. None:
+    /// the project, the agent and the user configuration decide
+    /// (approvals.rs).
+    pub approvals: Option<crate::approvals::Approvals>,
     /// Pass the host environment. None means the manifest decides (default true).
     pub inherit_env: Option<bool>,
     /// shared, isolated, or isolated:NAME. None means the manifest decides.
@@ -132,6 +139,18 @@ pub struct Built {
     pub harness_exe: PathBuf,
     pub manifest: Manifest,
     pub backend: String,
+    /// Who approves the agent's steps. None: the command decides
+    /// (`Options::no_yolo`), and paddock adds nothing.
+    pub approvals: Option<crate::approvals::Approvals>,
+    /// Where the mode comes from, for `paddock explain`.
+    pub approvals_origin: String,
+}
+
+impl Built {
+    /// The user approves the agent's steps by hand (approvals.rs).
+    pub fn manual(&self) -> bool {
+        self.approvals == Some(crate::approvals::Approvals::Manual)
+    }
 }
 
 /// The host folders that a sandbox can write, as real paths: the project,
@@ -232,6 +251,26 @@ pub fn build_with(env: &HostEnv, opts: &Options, harness: Harness) -> Result<Bui
         }
     };
     crate::devices::check_requested(env, &opts.devices)?;
+    // Who approves the agent's steps (approvals.rs). A spawned child runs
+    // one task without a terminal, so nobody could answer it by hand.
+    let approvals = if opts.no_yolo {
+        crate::approvals::Choice {
+            mode: crate::approvals::Approvals::Manual,
+            origin: "the command: paddock adds no approval flags".into(),
+        }
+    } else if opts.child.is_some() {
+        crate::approvals::Choice {
+            mode: crate::approvals::Approvals::Auto,
+            origin: "spawned sandbox: a one-shot task has nobody to answer it".into(),
+        }
+    } else {
+        crate::approvals::of(&m, &opts.harness, opts.approvals)
+    };
+    let approvals_mode = (!opts.no_yolo).then_some(approvals.mode);
+    // In manual mode paddock writes none of the settings that skip the
+    // agent's own questions (bypass warning, project trust).
+    let manual = approvals_mode == Some(crate::approvals::Approvals::Manual);
+    let auto = approvals_mode == Some(crate::approvals::Approvals::Auto);
     let profile = harness.profile.clone();
     // The settings and the sandbox home belong to the repository; the agent
     // works in the worktree.
@@ -593,7 +632,7 @@ pub fn build_with(env: &HostEnv, opts: &Options, harness: Harness) -> Result<Bui
         }
     }
     crate::mcp::apply(env, &profile, &m, &project, &mut spec);
-    crate::privacy::push_state_settings(&profile, opts.no_yolo, &porigin, &mut spec)?;
+    crate::privacy::push_state_settings(&profile, auto, manual, &porigin, &mut spec)?;
     crate::hooks::apply_all(env, &profile, &auth, &mut spec)?;
     if !matches!(spec.network, Network::None | Network::Api) {
         for p in &profile.network.publish {
@@ -682,7 +721,7 @@ pub fn build_with(env: &HostEnv, opts: &Options, harness: Harness) -> Result<Bui
         c
     } else {
         let mut c = vec![harness.exe.display().to_string()];
-        if !opts.no_yolo {
+        if auto {
             c.extend(profile.launch.yolo_args.iter().cloned());
         }
         c.extend(crate::privacy::args(&profile, privacy));
@@ -840,6 +879,8 @@ pub fn build_with(env: &HostEnv, opts: &Options, harness: Harness) -> Result<Bui
         harness_exe: harness.exe,
         manifest: m,
         backend,
+        approvals: approvals_mode,
+        approvals_origin: approvals.origin,
     })
 }
 
@@ -925,6 +966,136 @@ mod tests {
         };
         let built = build_with(&env, &opts, h).unwrap();
         (tmp, built)
+    }
+
+    /// A Claude Code build in a fresh home, with a user configuration and
+    /// a project file.
+    fn claude_with(
+        user: &str,
+        project_file: Option<&str>,
+        approvals: Option<crate::approvals::Approvals>,
+        assume_yes: bool,
+    ) -> (tempfile::TempDir, PathBuf, Result<Built>) {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = tmp.path().join("home");
+        let proj = tmp.path().join("proj");
+        std::fs::create_dir_all(&proj).unwrap();
+        let env = HostEnv::from_parts(home, "t".into(), 1000, 1000, Default::default());
+        std::fs::create_dir_all(env.paddock_config()).unwrap();
+        std::fs::write(env.paddock_config().join("config.toml"), user).unwrap();
+        if let Some(f) = project_file {
+            std::fs::write(proj.join(manifest::PROJECT_FILE), f).unwrap();
+        }
+        let h = Harness {
+            profile: crate::profile::builtin("claude").unwrap(),
+            exe: PathBuf::from("/usr/bin/true"),
+            install_mounts: vec![],
+            path_dirs: vec![],
+            source: "test".into(),
+        };
+        let opts = Options {
+            harness: "claude".into(),
+            project: Some(proj.clone()),
+            assume_yes,
+            approvals,
+            ..Default::default()
+        };
+        let b = build_with(&env, &opts, h);
+        (tmp, proj, b)
+    }
+
+    /// Manual approvals: the same sandbox, but no auto-approval flag, no
+    /// bypass answer and no trust answer, so Claude Code asks as usual.
+    #[test]
+    fn manual_approvals_leave_the_agents_own_questions_alone() {
+        use crate::approvals::Approvals;
+        let flag = "--dangerously-skip-permissions".to_string();
+        let (ta, _p, auto) = claude_with("", None, None, true);
+        let auto = auto.unwrap();
+        let (tm, _p, manual) = claude_with("", None, Some(Approvals::Manual), true);
+        let manual = manual.unwrap();
+        assert_eq!(auto.approvals, Some(Approvals::Auto));
+        assert_eq!(auto.approvals_origin, "default");
+        assert!(auto.spec.command.contains(&flag));
+        assert!(auto
+            .spec
+            .home_settings
+            .iter()
+            .any(|s| s.file == Path::new(".claude.json")));
+        assert_eq!(manual.approvals, Some(Approvals::Manual));
+        assert_eq!(manual.approvals_origin, "command line");
+        assert!(manual.manual());
+        assert!(!manual.spec.command.contains(&flag));
+        assert!(
+            !manual.spec.home_settings.iter().any(|s| {
+                s.path.iter().any(|k| {
+                    k == "hasTrustDialogAccepted" || k == "skipDangerousModePermissionPrompt"
+                })
+            }),
+            "{:?}",
+            manual.spec.home_settings
+        );
+        // The sandbox itself does not change: the same network and the
+        // same mounts, relative to each test's own folder.
+        assert_eq!(auto.spec.network, manual.spec.network);
+        let dsts = |b: &Built, root: &Path| -> Vec<String> {
+            let root = root.display().to_string();
+            b.spec
+                .mounts
+                .iter()
+                .map(|m| m.dst.display().to_string().replace(&root, "ROOT"))
+                .collect()
+        };
+        assert_eq!(dsts(&auto, ta.path()), dsts(&manual, tm.path()));
+    }
+
+    #[test]
+    fn approvals_come_from_flag_project_agent_then_user() {
+        use crate::approvals::Approvals::{Auto, Manual};
+        let user = "[run]\napprovals = \"manual\"\n";
+        let (_t, _p, b) = claude_with(user, None, None, false);
+        let b = b.unwrap();
+        assert_eq!(b.approvals, Some(Manual));
+        assert_eq!(b.approvals_origin, "user configuration [run] approvals");
+        let agent = "[run]\napprovals = \"manual\"\n[run.agents.claude]\napprovals = \"auto\"\n";
+        let (_t, _p, b) = claude_with(agent, None, None, false);
+        assert_eq!(b.unwrap().approvals, Some(Auto));
+        let other = "[run.agents.codex]\napprovals = \"manual\"\n";
+        let (_t, _p, b) = claude_with(other, None, None, false);
+        assert_eq!(b.unwrap().approvals, Some(Auto));
+        // A project file that asks for manual needs no approval.
+        let proj = "[run]\napprovals = \"manual\"\n";
+        let (_t, _p, b) = claude_with(agent, Some(proj), None, false);
+        let b = b.unwrap();
+        assert_eq!(b.approvals, Some(Manual));
+        assert_eq!(b.approvals_origin, "paddock.toml [run] approvals");
+        // `--auto` wins over all of them.
+        let (_t, _p, b) = claude_with(user, Some(proj), Some(Auto), false);
+        assert_eq!(b.unwrap().approvals, Some(Auto));
+    }
+
+    /// The agent can edit the project file: `approvals = "auto"` there
+    /// needs the one-time approval, and `[run.agents]` is refused.
+    #[test]
+    fn a_project_file_needs_approval_for_auto_approvals() {
+        use crate::approvals::Approvals::{Auto, Manual};
+        let user = "[run]\napprovals = \"manual\"\n";
+        let proj = "[run]\napprovals = \"auto\"\n";
+        let (_t, _p, b) = claude_with(user, Some(proj), None, false);
+        let e = format!("{:#}", b.err().expect("not approved"));
+        assert!(e.contains("not approved"), "{e}");
+        let (_t, _p, b) = claude_with(user, Some(proj), None, true);
+        let b = b.unwrap();
+        assert_eq!(b.approvals, Some(Auto));
+        let (_t, _p, b) = claude_with(user, Some(proj), Some(Manual), true);
+        assert_eq!(b.unwrap().approvals, Some(Manual));
+        let agents = "[run.agents.claude]\napprovals = \"auto\"\n";
+        let (_t, _p, b) = claude_with("", Some(agents), None, true);
+        let e = format!("{:#}", b.err().expect("refused"));
+        assert!(
+            e.contains("[run.agents] is only read from the user configuration"),
+            "{e}"
+        );
     }
 
     /// A detached Claude Code run has no terminal to answer its own two

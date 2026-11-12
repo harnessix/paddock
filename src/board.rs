@@ -148,6 +148,10 @@ pub struct Run {
     pub since: String,
     /// A card of this run waits in the panel.
     pub card: bool,
+    /// Who approves the run's steps: `auto`, `manual` or `command`. Absent
+    /// for an ended run.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub approvals: String,
 }
 
 /// A message of a run: its time and its text.
@@ -185,6 +189,9 @@ pub struct Facts {
     /// The done text of the run end.
     pub end_text: Option<String>,
     pub origin: Option<origin::Origin>,
+    /// The approvals mode of a running run (`Running::approvals`). Empty
+    /// for an ended one: its record is gone.
+    pub approvals: String,
 }
 
 /// Put the facts together. Pure: the same input gives the same board.
@@ -221,6 +228,7 @@ pub fn build(
                     last: rules::last(f, state),
                     since: crate::waiting::format_rfc3339(since),
                     card: !f.cards.is_empty(),
+                    approvals: rules::one_line(&f.approvals),
                 };
                 match f.origin.as_ref().and_then(|o| tickets::owner(o, files)) {
                     Some(i) => by_ticket[i].push((state, since, run)),

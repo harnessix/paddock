@@ -757,3 +757,26 @@ fn a_loft_path_is_rejected_for_every_listed_character_and_for_length() {
     assert!(plain_path(&horses));
     assert!(!plain_path(&format!("{horses}\u{1F40E}")));
 }
+
+/// `paddock board --json` names the approvals mode of a running run, and
+/// leaves it out where paddock does not know it.
+#[test]
+fn a_run_shows_its_approvals_mode() {
+    let mut manual = facts();
+    manual.approvals = "manual".into();
+    let mut unknown = facts();
+    unknown.id = "claude-p-bbbbbb".into();
+    let b = build(&[manual, unknown], &BTreeMap::new(), 0, vec![]);
+    let runs = &b.projects[0].runs_without_ticket;
+    let v = serde_json::to_value(runs).unwrap();
+    let by_id = |id: &str| {
+        v.as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["id"] == id)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(by_id("aaaaaa")["approvals"], "manual");
+    assert!(by_id("bbbbbb").get("approvals").is_none());
+}

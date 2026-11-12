@@ -47,6 +47,8 @@ dir = ".codex"
 file = ".codex/config.toml"
 path = ["projects", "{project}", "trust_level"]
 value = "trusted"
+# Not in manual approvals mode: then codex asks, as outside paddock.
+trust = true
 
 # macOS: released Codex builds have the hardened runtime, so dyld ignores
 # paddock's pty library, and a Seatbelt run cannot open a pty. Codex's shell

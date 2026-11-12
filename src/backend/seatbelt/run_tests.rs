@@ -606,7 +606,8 @@ fn codex_without_ptys_gets_its_shell_tool_without_a_terminal() {
     let profile = crate::profile::builtin("codex").unwrap();
     let with = |ptys: bool| {
         let (_t, env, mut s) = temp_spec("");
-        crate::privacy::push_state_settings(&profile, false, "profile codex", &mut s).unwrap();
+        crate::privacy::push_state_settings(&profile, true, false, "profile codex", &mut s)
+            .unwrap();
         if ptys {
             crate::backend::pty_settings(&mut s, true);
         } else {
@@ -628,7 +629,8 @@ fn settings_without_a_condition_stay_with_ptys_and_without() {
     let profile = crate::profile::builtin("claude").unwrap();
     for ptys in [true, false] {
         let (_t, _env, mut s) = temp_spec("");
-        crate::privacy::push_state_settings(&profile, false, "profile claude", &mut s).unwrap();
+        crate::privacy::push_state_settings(&profile, true, false, "profile claude", &mut s)
+            .unwrap();
         let n = s.home_settings.len();
         crate::backend::pty_settings(&mut s, ptys);
         assert_eq!(s.home_settings.len(), n);
