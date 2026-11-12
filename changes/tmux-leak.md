@@ -1,1 +1,0 @@
-- Fix: When paddock ends the last session of its view server, the server ends too. Tests stop their tmux servers, and CI fails a test binary that leaves one running.

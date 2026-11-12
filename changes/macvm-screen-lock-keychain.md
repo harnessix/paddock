@@ -1,3 +1,0 @@
-- Fix: A macOS app session unlocks the login keychain of the guest with the guest password before the app starts, after the home moves onto the data disk and after a warm start, so an app no longer asks for the "login" keychain password. The search list and the default keychain point at the moved home.
-- New: A macOS app session sees when the guest screen locks, records the time, the last input and the uptime in the event log, and types the guest password to unlock it, with 3 tries at most. It types only while the guest reports a locked screen.
-- New: The control lines `bench lock` and `bench keychain` of a `--bench` session lock the guest screen and report the state of the login keychain, for the Mac checks `lock` and `keychain`.

@@ -1,1 +1,0 @@
-- New: A build from a git checkout that is not a clean checkout of a release tag is a development build. `paddock --version` then prints `-dev`, the commit and a dirty mark, for example `paddock 0.2.1-dev (commit 1a2b3c4, dirty)`. A release prints only `paddock 0.2.1`. `paddock doctor --report` has a line `Build:` with `release` or `development build` and the full commit.

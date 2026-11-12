@@ -1,1 +1,0 @@
-- Fix: an approved `exec` no longer runs without isolation when the systemd user manager cannot give a unit its mount namespace. Before, the command saw the whole home. paddock now tests this once and then uses bwrap. Without bwrap, the exec fails and says why.

@@ -1,5 +1,0 @@
-- New: `paddock events --follow --json` prints the live state of app mode on macOS as JSON lines (sessions, firewall questions, rule grants, golden builds, the golden, free space), with one versioned schema and fixtures in `tests/fixtures/launcher/`.
-- New: `paddock app add PATH [--name] [--memory] [--dry-run] [--json]` and `paddock app remove NAME [--delete-data] [--json]` for the app profiles of the macOS guest.
-- New: `paddock macvm setup --json` prints the build progress as JSON lines, and `--pause-download` and `--resume` pause and continue the download. `paddock macvm status --json` reports `paused`.
-- New: `paddock doctor --json` reports the prerequisites of app mode on macOS, and `paddock macvm remove --json` reports the freed bytes.
-- Changed: `paddock app list --json`, `paddock macvm status --json` and `paddock approvals --json` have a top-level `v`; approval entries have `process` and `age_s`.

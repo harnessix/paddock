@@ -1,2 +1,0 @@
-- Fix: (experimental) A run in horse mode no longer ends before its hitched children report. When the input ends, the run waits until the result of each hitched child reached its session, and it delivers the inbox entries in the meantime, for example the DNA of a new session. If you close the input a second time, the run ends at once.
-- Fix: (experimental) A hitched child that cannot start now sends a failed result to its parent's session.

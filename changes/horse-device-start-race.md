@@ -1,1 +1,0 @@
-- Fix: two sandboxes that start at the same moment no longer unmount the `/dev/paddock` of each other. Before, a child sometimes started without its devices.

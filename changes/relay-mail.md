@@ -1,1 +1,0 @@
-- New: in horse mode, a supported terminal agent gets unread mail at its idle prompt. The delivered event says when paddock typed it.

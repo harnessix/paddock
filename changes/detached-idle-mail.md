@@ -1,2 +1,0 @@
-- Changed: detached runs detect quiet screens despite cursor redraws or status-bar clocks. The mailbox reports idle runs even without unread mail and includes the last status and desktop notice.
-- New: a detached agent's done status produces a mailbox event and ends the run after `[mail] end_after_done` (default `2m`), unless a view is attached or new mail arrives.

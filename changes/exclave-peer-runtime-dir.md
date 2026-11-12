@@ -1,1 +1,0 @@
-- Fixed: an exclave peer whose `XDG_RUNTIME_DIR` does not hold the user manager (a scratch folder, or the `/tmp` fallback of a session without pam_systemd) failed with "Failed to connect to user scope bus via local transport". The peer now gives `systemd-run` the folder `/run/user/UID` when the manager listens there, and otherwise the session bus.

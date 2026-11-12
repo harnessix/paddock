@@ -1,1 +1,0 @@
-- Fix: Codex rollout reading and unchanged projection keep unknown records. Fork, swap and delivery check the history first and report the line of an unknown or unverified record; some known record types are refused for changes until their meaning is verified.

@@ -1,1 +1,0 @@
-- Fix: Keep macOS launcher setup progress, event delivery, and JSON errors reliable under concurrent use and closed readers.

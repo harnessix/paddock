@@ -1,2 +1,0 @@
-- Changed: cargo builds in a sandbox write much less to the disk: no incremental folder and line tables instead of full debug information (`[storage] lean_builds`, on by default).
-- Fix: a run started in a worktree that paddock made, without `--worktree`, now uses the build cache of its repository instead of a full `target/` of its own.

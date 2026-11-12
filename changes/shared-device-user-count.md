@@ -1,1 +1,0 @@
-- Fixed: the user count of a shared device in `paddock ps` no longer shows a stale number when several runs take or drop a lease at the same moment.

@@ -1,1 +1,0 @@
-- New: on macOS, the terminal window of an agent run gets the same mark as an app window (frame, badge and menu entry) when the terminal app is in front at the start. `paddock windows` lists the marked windows on macOS.

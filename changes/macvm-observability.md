@@ -1,4 +1,0 @@
-- New: `paddock app status NAME [--json]` shows one screen about a profile of the macOS guest: the session, the golden, the app, the guest's health, the sizes, the network counts, the shares, the logs, and what the next start will do.
-- New: `paddock app log NAME [--events | --shim | --guest | --console] [--follow]` prints the logs of a profile of the macOS guest; `paddock macvm status` lists each profile with its last end and the two VM slots with their holders.
-- New: the `macvm` block of `paddock doctor` names each profile with its last end and the slot holders; `paddock doctor --report` gains a `MACVM` section with the logs, the stamps and the rules files, redacted, and `--no-hosts` replaces every host name with `host-N`.
-- Changed: the shim log and the console log of a macOS guest profile rotate at 1 MiB with five files, and the agent log of the guest is fetched into `logs/agent.log` at each quit.

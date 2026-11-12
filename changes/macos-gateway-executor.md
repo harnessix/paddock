@@ -1,4 +1,0 @@
-- New: On macOS, the gateway executor runs `exec`, `tool`, `git-push` and `forge` with `sandbox-exec` and a Seatbelt profile from `[exec]`. The command sees the system read-only, the project read-write, an empty home, its own `TMPDIR` and the network. `git-push` and `forge` see the home read-only and reach the login keychain, so `gh` and git credential helpers work.
-- New: On macOS, `paddock gateway install` writes a LaunchAgent (`~/Library/LaunchAgents/com.harnessix.paddock.gatewayd.plist`). launchd owns the socket and starts the executor on the first request. `paddock gateway remove` unloads it and deletes the file. `paddock doctor` shows the gateway line on macOS too.
-- Security: On macOS, the gateway signing key moves to the temporary folder of the user (`DARWIN_USER_TEMP_DIR`), which macOS empties at each restart. paddock removes the old key in `~/.local/state/paddock/run`.
-- Changed: On macOS, the executor socket is `~/.local/state/paddock/gatewayd.sock`.

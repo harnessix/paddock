@@ -1,8 +1,0 @@
-- New: `paddock macvm setup` writes the guest agent and a first-boot service into the guest disk before the first boot, as your user and without administrator rights. Nobody types the install command in the guest. If the write fails, the disk stays as it was and the window shows the command.
-- New: a new setup step `trust` shuts the guest down after the agent reports, turns on Accessibility for `paddock-guest` in the permission database of the stopped guest, and boots it again. If that fails, the window asks you to turn on the switch.
-- New: each configure step in the guest has a limit of 30 seconds, and the terminal shows one line per step with its exit code and its time. A failed step names its output and what its check printed.
-- Changed: the desktop picture of the golden is set by the guest agent, and the step that removed the login items is gone. Both used System Events, which asked the guest for a permission that nobody grants.
-- Changed: the guest shuts down with `sudo shutdown` for the trust step and the seal.
-- Changed: `paddock macvm setup` checks before the download that the volume has room for the restore image and the golden image together.
-- Changed: `packaging/macos/build-guest.sh` signs the agent with the requirement `identifier "dev.paddock.guest"`, so its Accessibility permission stays after a self-update.
-- Removed: the setup no longer reads the guest screen or clicks in the guest. `PADDOCK_MACVM_PRESET` and the presets are gone.

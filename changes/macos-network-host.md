@@ -1,2 +1,0 @@
-- New: network mode `host` works on macOS, for Seatbelt runs (`paddock run`) and for app mode. The sandbox gets the network of the Mac and keeps the host proxy variables, as on Linux, and paddock prints a warning at the start.
-- New: `[apps.NAME] login_ports` is accepted on macOS. The app already listens on the localhost of the Mac, so paddock opens nothing and prints one notice line.

@@ -1,1 +1,0 @@
-- The texts of the coming macOS guest route for desktop apps are in one place, `src/macvm/text.rs`, with a test for each text. The `chatgpt-desktop` profile names the hosts of a ChatGPT login in `[app.macos] seed_hosts`, so the firewall of that route can allow them without a question.
