@@ -31,7 +31,8 @@ fn a_claude_tui_without_a_channel_gets_entries_between_turns_through_the_relay()
     let (master, slave) = super::codex_tui::pty();
     let mut tui = Command::new(env!("CARGO_BIN_EXE_paddock"))
         .args(["run", "claude", "--backend", "bwrap", "--network", "none"])
-        .args(["--env", "clean", "-y"])
+        // The fake TUI logs in the project folder and waits for its flag there.
+        .args(["--env", "clean", "-y", "--direct"])
         .arg(root.join("project"))
         .env("HOME", root.join("home"))
         .env("XDG_CONFIG_HOME", root.join("cfg"))

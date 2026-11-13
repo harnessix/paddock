@@ -524,6 +524,9 @@ impl Device for Forward {
     fn name(&self) -> &str {
         &self.def.name
     }
+    fn asks(&self, _call: &Call) -> bool {
+        self.gate.asks()
+    }
 
     fn info(&self) -> Info {
         let mut i = info(&self.def);

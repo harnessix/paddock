@@ -183,6 +183,7 @@ fn the_launcher_vendors_the_fixtures_of_this_core() {
     }
     for (core, copy) in [
         ("tests/fixtures/launcher", "launcher"),
+        ("tests/fixtures/launcher/json", "launcher/json"),
         ("tests/fixtures/launcher-protocol", "launcher-protocol"),
     ] {
         let names = |dir: &Path| -> Vec<String> {

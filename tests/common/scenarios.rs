@@ -11,7 +11,7 @@
 //! never reads a half-written file. Each function returns false when the
 //! host cannot run the scenario, after it said why.
 
-use super::device_world::{alive, can_run, fuse_works, wait_for, World};
+use super::device_world::{alive, can_run, finish, fuse_works, wait_for, World, AWAIT_SECS};
 use paddock::devices::{Call, DevError, Device, DeviceFs, Info, Limits, Sink};
 use std::io::{Read, Write};
 use std::sync::Arc;
@@ -20,6 +20,10 @@ use std::time::{Duration, Instant};
 /// How long a wait for a sandbox start, a request or a stop may take on
 /// a busy host.
 pub const WIDE: Duration = Duration::from_secs(120);
+
+/// How long a run may take to end after its last flag: the bound of
+/// `await` in the fake harness, and a minute more.
+pub const RUN_END: Duration = Duration::from_secs(AWAIT_SECS + 60);
 
 /// The fake harness of the agent-sandbox scenario: a request, then a wait
 /// for a flag file, then a request again, and a flag of its own after
@@ -30,10 +34,10 @@ F=flags
 if [ ! -e /dev/paddock/up ]; then echo NODEV; exit 0; fi
 echo "FIRST $(printf abc | paddock-host device up - | tail -n 1) EXIT $?"
 cat /dev/paddock/.catalog > "$F/catalog1.tmp" 2>/dev/null && mv "$F/catalog1.tmp" "$F/catalog1"
-while [ ! -e "$F/go" ]; do sleep 0.1; done
+await "$F/go"
 echo "SECOND $(printf def | paddock-host device up - | tail -n 1) EXIT $?"
 : > "$F/second"
-while [ ! -e "$F/go2" ]; do sleep 0.1; done
+await "$F/go2"
 echo "THIRD $(printf ghi | paddock-host device up - | tail -n 1) EXIT $?"
 "#;
 
@@ -147,7 +151,7 @@ pub fn agent_drives_instance() -> bool {
         .unwrap();
     assert!(String::from_utf8_lossy(&out.stdout).contains("start shape exec"));
     std::fs::write(flags.join("go2"), "").unwrap();
-    let out = child.wait_with_output().unwrap();
+    let out = finish(child, RUN_END);
     let text = String::from_utf8_lossy(&out.stdout).into_owned();
     assert!(
         out.status.success(),
@@ -214,10 +218,10 @@ pub fn agent_uses_shared_instance() -> bool {
     // the exit code of the request on its last line.
     w.harness(
         "agent",
-        "if [ ! -e /dev/paddock/up ]; then echo NODEV; exit 0; fi\nn=$(od -An -N4 -tu4 /dev/urandom | tr -d ' ')\nprintf abc | paddock-host device up - > \"flags/tmp.$n\" 2>&1\necho \"exit $?\" >> \"flags/tmp.$n\"\nmv \"flags/tmp.$n\" \"flags/out.$n\"\nwhile [ ! -e flags/go ]; do sleep 0.1; done",
+        "if [ ! -e /dev/paddock/up ]; then echo NODEV; exit 0; fi\nn=$(od -An -N4 -tu4 /dev/urandom | tr -d ' ')\nprintf abc | paddock-host device up - > \"flags/tmp.$n\" 2>&1\necho \"exit $?\" >> \"flags/tmp.$n\"\nmv \"flags/tmp.$n\" \"flags/out.$n\"\nawait flags/go",
     );
-    let mut one = w.run("agent");
-    let mut two = w.run("agent");
+    let one = w.run("agent");
+    let two = w.run("agent");
     let state = w
         .root
         .join("state/paddock/devices/instances/up/shared.json");
@@ -266,8 +270,8 @@ pub fn agent_uses_shared_instance() -> bool {
         "the caller is the same: {answers:?}"
     );
     std::fs::write(flags.join("go"), "").unwrap();
-    let _ = one.wait();
-    let _ = two.wait();
+    finish(one, RUN_END);
+    finish(two, RUN_END);
     wait_for("the idle exit", WIDE, || !state.exists());
     assert!(
         !paddock::state::alive(pid as u32),

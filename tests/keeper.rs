@@ -154,6 +154,8 @@ fn the_keeper_refreshes_once_and_the_sandbox_never_holds_the_refresh_token() {
             "--env",
             "clean",
             "-y",
+            // The harness writes what it saw in the project folder.
+            "--direct",
         ])
         .arg(root.join("project"))
         .env_clear()

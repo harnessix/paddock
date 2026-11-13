@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         if !AppContainer.isUITest {
             let center = UNUserNotificationCenter.current()
             center.delegate = self
+            AppContainer.store.onNotice = { [weak self] notice in self?.post(notice) }
         }
         Task {
             await AppContainer.start()
@@ -113,6 +114,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             content.userInfo = ["question": question.id]
             center.add(UNNotificationRequest(identifier: question.id, content: content, trigger: nil))
         }
+    }
+
+    /// A notice of paddock: paddock leaves it to the launcher, so it shows
+    /// with the name and icon of paddock for Mac.
+    private func post(_ notice: NoticeEvent) {
+        let center = UNUserNotificationCenter.current()
+        center.requestAuthorization(options: [.alert, .sound]) { _, _ in }
+        let content = UNMutableNotificationContent()
+        content.title = notice.title
+        content.body = notice.text
+        if notice.critical == true { content.sound = .default }
+        content.userInfo = ["notice": notice.what, "action": notice.action ?? ""]
+        center.add(UNNotificationRequest(identifier: "notice-\(UUID().uuidString)", content: content, trigger: nil))
     }
 
     nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse,

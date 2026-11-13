@@ -142,6 +142,8 @@ impl Ctl {
             &self.env,
             &crate::broker::notify::Note {
                 summary: "paddock".into(),
+                what: "stuck".into(),
+                action: Some(self.id.clone()),
                 body: format!("{} looks stuck: {why}", super::who(rec)),
                 actions: Vec::new(),
                 critical: false,

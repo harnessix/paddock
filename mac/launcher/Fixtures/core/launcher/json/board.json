@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "approvals_waiting": 0,
+  "compile_slots": [],
+  "projects": [
+    {
+      "name": "webshop",
+      "path": "/Users/demo/src/webshop",
+      "tickets": [],
+      "runs_without_ticket": [
+        {
+          "id": "3f2a9c",
+          "harness": "claude",
+          "model": "",
+          "state": "working",
+          "last": "",
+          "since": "2026-11-06T12:00:00Z",
+          "card": false,
+          "loft_commits": 2,
+          "loft_last": "2026-11-06T12:40:00Z"
+        }
+      ]
+    }
+  ]
+}

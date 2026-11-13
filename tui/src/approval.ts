@@ -4,6 +4,7 @@
 
 import { cleanText, oneLine } from './clean.js';
 import type { Pending } from './types.js';
+import { t } from './i18n/index.js';
 
 export interface Choice {
   /** The number key, also shown on the button. */
@@ -26,15 +27,15 @@ export const CONNECT = 'connect';
 export function choicesOf(p: Pending): Choice[] {
   const cap = p.capability ?? '';
   if (cap === CONNECT) {
-    const host = oneLine(p.connect?.host ?? 'the host');
+    const host = oneLine(p.connect?.host ?? t('approval.theHost'));
     return [
-      { key: '1', label: 'Allow once', args: ['--allow-once'], scope: 'this connection only', wide: false, deny: false },
-      { key: '2', label: 'Allow for this session', args: ['--allow-session'], scope: 'this app, host and port until the session ends', wide: false, deny: false },
-      { key: '3', label: 'Deny', args: ['--deny'], scope: 'this connection only', wide: false, deny: true },
-      { key: '4', label: 'Allow site always', args: ['--allow-site'], scope: `${host} and its subdomains, from now on`, wide: true, deny: false },
-      { key: '5', label: 'Allow always', args: ['--allow-always'], scope: 'this app, host and port from now on (a rule)', wide: true, deny: false },
-      { key: '6', label: 'Allow every host 10 min', args: ['--allow-everything'], scope: 'all hosts for ten minutes', wide: true, deny: false },
-      { key: '7', label: 'Deny always', args: ['--deny-always'], scope: 'this app, host and port from now on (a rule)', wide: true, deny: true },
+      { key: '1', label: t('approval.allowOnce'), args: ['--allow-once'], scope: t('approval.scope.thisConnection'), wide: false, deny: false },
+      { key: '2', label: t('approval.allowSession'), args: ['--allow-session'], scope: t('approval.scope.untilSessionEnds'), wide: false, deny: false },
+      { key: '3', label: t('approval.deny'), args: ['--deny'], scope: t('approval.scope.thisConnection'), wide: false, deny: true },
+      { key: '4', label: t('approval.allowSite'), args: ['--allow-site'], scope: t('approval.scope.site', { host }), wide: true, deny: false },
+      { key: '5', label: t('approval.allowAlways'), args: ['--allow-always'], scope: t('approval.scope.rule'), wide: true, deny: false },
+      { key: '6', label: t('approval.allowEverything'), args: ['--allow-everything'], scope: t('approval.scope.allHosts'), wide: true, deny: false },
+      { key: '7', label: t('approval.denyAlways'), args: ['--deny-always'], scope: t('approval.scope.rule'), wide: true, deny: true },
     ];
   }
   const answers = (p.choices ?? []).map(oneLine).filter((c) => c.length > 0).slice(0, 8);
@@ -44,29 +45,29 @@ export function choicesOf(p: Pending): Choice[] {
       label: c,
       args: [],
       text: c,
-      scope: 'the agent gets this answer',
+      scope: t('approval.scope.answer'),
       wide: false,
       deny: false,
     }));
     list.push({
       key: String(answers.length + 1),
-      label: cap === ASK ? 'Dismiss' : 'Deny',
+      label: cap === ASK ? t('approval.dismiss') : t('approval.deny'),
       args: ['deny'],
-      scope: cap === ASK ? 'the agent gets no answer' : 'this request only',
+      scope: cap === ASK ? t('approval.scope.noAnswer') : t('approval.scope.thisRequest'),
       wide: false,
       deny: true,
     });
     return list;
   }
   const list: Choice[] = [
-    { key: '1', label: 'Allow once', args: ['once'], scope: 'this request only', wide: false, deny: false },
+    { key: '1', label: t('approval.allowOnce'), args: ['once'], scope: t('approval.scope.thisRequest'), wide: false, deny: false },
   ];
   if (p.session_allowed) {
-    list.push({ key: '2', label: 'Allow for this run', args: ['session'], scope: 'this run only: the same request again until it ends', wide: false, deny: false });
+    list.push({ key: '2', label: t('approval.allowRun'), args: ['session'], scope: t('approval.scope.runAllow'), wide: false, deny: false });
   }
-  list.push({ key: '3', label: 'Deny', args: ['deny'], scope: 'this request only', wide: false, deny: true });
+  list.push({ key: '3', label: t('approval.deny'), args: ['deny'], scope: t('approval.scope.thisRequest'), wide: false, deny: true });
   if (p.session_allowed) {
-    list.push({ key: '4', label: 'Deny for this run', args: ['deny-session'], scope: 'this run only: the same request is denied without a card', wide: false, deny: true });
+    list.push({ key: '4', label: t('approval.denyRun'), args: ['deny-session'], scope: t('approval.scope.runDeny'), wide: false, deny: true });
   }
   return list;
 }
@@ -95,7 +96,7 @@ export function defaultChoice(choices: Choice[]): Choice | undefined {
 export function requestLines(p: Pending): string[] {
   const text = cleanText(p.detail && p.detail.length > 0 ? p.detail : (p.summary ?? ''));
   const lines = text.split('\n').map((l) => l.trimEnd()).filter((l) => l.length > 0);
-  if (lines.length === 0) lines.push(oneLine(p.capability ?? 'request'));
+  if (lines.length === 0) lines.push(oneLine(p.capability ?? t('approval.request')));
   return lines;
 }
 

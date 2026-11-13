@@ -48,8 +48,10 @@ pub fn detect(env: &HostEnv) -> Result<Vec<(String, String)>> {
         let Some(p) = f.profile(&e.name) else {
             continue;
         };
-        // A harness that cannot work in a sandbox keeps its own command.
-        if p.launch.wrap_on_host.is_some() {
+        // A harness that cannot work in a sandbox keeps its own command. A
+        // gateway agent gets one: its clients attach to the sandboxed
+        // gateway (agentgw.rs).
+        if p.launch.wrap_on_host.is_some() && p.gateway.is_none() {
             continue;
         }
         let commands = if p.locate.commands.is_empty() {

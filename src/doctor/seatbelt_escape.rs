@@ -5,7 +5,7 @@
 //! secrets, other users, the host /tmp and paddock's state are out of
 //! reach, the project is writable, and the network matches the mode.
 
-use super::{doctor_harness, Recorder, Scratch, SCRATCH_DIR};
+use super::{doctor_harness, Recorder, Scratch};
 use crate::build::{self, Options};
 use crate::env::HostEnv;
 use crate::policy::DENIED_HOME;
@@ -107,7 +107,7 @@ pub fn escape(env: &HostEnv, o: &super::EscapeOpts) -> Result<usize> {
     if let Some(why) = refusal(o, cfg!(target_os = "macos")) {
         bail!(why);
     }
-    let mut scratch = Scratch::new(&env.paddock_cache().join(SCRATCH_DIR))?;
+    let mut scratch = Scratch::new(&super::scratch_base(env))?;
     crate::storage::remove_doctor_homes(env);
     let root = scratch.root.clone();
     let project = root.join("project");

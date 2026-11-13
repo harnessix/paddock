@@ -11,11 +11,11 @@ fn outcome(
     applies: Applies,
     live: Option<Answer>,
 ) -> Outcome {
-    Outcome {
-        change: Change::new(1, what, action, "/h/me/src", value, applies, Source::You),
+    Outcome::new(
+        Change::new(1, what, action, "/h/me/src", value, applies, Source::You),
         live,
-        warnings: Vec::new(),
-    }
+        Vec::new(),
+    )
 }
 
 #[test]
@@ -438,4 +438,55 @@ fn grant_session_changed() {
     let t = super::grant_session_changed("Notes");
     assert!(t.starts_with("Notes started or stopped"), "{t}");
     assert!(t.contains("Nothing changed"), "{t}");
+}
+
+#[test]
+fn grant_done_keep() {
+    let o = outcome(What::Folder, "keep", "rw", Applies::NextStart, None);
+    assert_eq!(
+        super::grant_done("sample-notes", "~/Projects", &o),
+        "Kept ~/Projects for the next starts of sample-notes, read and write. The running session does not change."
+    );
+}
+
+#[test]
+fn grant_clipboard_both() {
+    let on = Clipboard {
+        to_app: true,
+        from_app: false,
+    };
+    let off = Clipboard {
+        to_app: false,
+        from_app: false,
+    };
+    let line = super::grant_clipboard_both("sample-notes", on, Some(off));
+    assert!(
+        line.contains("Saved clipboard of sample-notes") && line.contains("This session"),
+        "{line}"
+    );
+    assert!(!super::grant_clipboard_both("n", on, None).contains("This session"));
+}
+
+#[test]
+fn grant_session_not_running() {
+    let e = super::grant_session_not_running("sample-notes");
+    assert!(e.contains("paddock app run sample-notes"), "{e}");
+}
+
+#[test]
+fn grant_already_kept() {
+    let e = super::grant_already_kept("sample-notes", std::path::Path::new("/h/me/src"));
+    assert!(
+        e.contains("/h/me/src") && e.contains("share sample-notes list"),
+        "{e}"
+    );
+}
+
+#[test]
+fn grant_keep_not_running() {
+    let e = super::grant_keep_not_running("sample-notes");
+    assert!(
+        e.contains("not running") && e.contains("share sample-notes add PATH"),
+        "{e}"
+    );
 }

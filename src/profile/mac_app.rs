@@ -40,4 +40,8 @@ pub struct ProfileMacos {
     /// still picks Seatbelt: the VM only when the user asks for it.
     #[serde(default)]
     pub needs_pty: bool,
+    /// `[[macos.tmp]]`: fixed names in `/private/tmp` that the harness uses
+    /// in a Seatbelt run (tmpclaim.rs).
+    #[serde(default)]
+    pub tmp: Vec<crate::tmpclaim::Want>,
 }

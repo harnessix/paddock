@@ -311,9 +311,9 @@ fn the_start_line_names_the_approvals_mode() {
             "seatbelt",
             Network::Egress,
             GuiMode::Off,
-            Some(Approvals::Manual)
+            (Some(Approvals::Manual), "default")
         ),
-        "codex in /w/app (backend seatbelt, network egress, display off, manual approvals)"
+        "codex in /w/app (backend seatbelt, network egress, display off, manual approvals: default)"
     );
     assert!(super::start_line(
         "claude",
@@ -321,11 +321,105 @@ fn the_start_line_names_the_approvals_mode() {
         "bwrap",
         Network::Api,
         GuiMode::Off,
-        Some(Approvals::Auto)
+        (Some(Approvals::Auto), "user configuration [run] approvals")
     )
-    .ends_with("network api, display off, auto approvals)"));
-    assert!(
-        super::start_line("claude", p, "bwrap", Network::Api, GuiMode::Off, None)
-            .ends_with("approvals by the command)")
-    );
+    .ends_with("network api, display off, auto approvals: user configuration [run] approvals)"));
+    assert!(super::start_line(
+        "claude",
+        p,
+        "bwrap",
+        Network::Api,
+        GuiMode::Off,
+        (None, "x")
+    )
+    .ends_with("approvals by the command)"));
+}
+
+mod supported_args_tests {
+    use super::super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    fn args(a: &[&str]) -> Vec<String> {
+        a.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn a_flag_passes_only_when_the_help_names_it_as_a_whole_word() {
+        let help = "Options:\n  --no-daemon  Run without the server\n  [--fast-x]\n";
+        let want = args(&["--no-daemon", "--fast", "--fast-x", "plain", "-"]);
+        assert_eq!(
+            names_in_help(help, &want),
+            args(&["--no-daemon", "--fast-x"])
+        );
+        assert!(names_in_help("--no-daemon-x", &args(&["--no-daemon"])).is_empty());
+        assert!(names_in_help("", &args(&["--no-daemon"])).is_empty());
+    }
+
+    #[test]
+    fn the_probe_reads_the_help_once_and_caches_both_answers() {
+        let tmp = tempfile::tempdir().unwrap();
+        let env = HostEnv::from_parts(
+            tmp.path().join("home"),
+            "t".into(),
+            1000,
+            1000,
+            Default::default(),
+        );
+        let runs = tmp.path().join("runs");
+        let exe = tmp.path().join("tool");
+        std::fs::write(
+            &exe,
+            format!(
+                "#!/bin/sh\necho x >> {}\necho \"  --no-daemon  no server\"\n",
+                runs.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let probe = args(&["--help"]);
+        let flag = args(&["--no-daemon"]);
+        assert_eq!(supported_args(&env, &exe, &flag, &probe), flag);
+        assert_eq!(supported_args(&env, &exe, &flag, &probe), flag);
+        let missing = args(&["--no-such"]);
+        assert!(supported_args(&env, &exe, &missing, &probe).is_empty());
+        assert!(supported_args(&env, &exe, &missing, &probe).is_empty());
+        let n = std::fs::read_to_string(&runs).unwrap().lines().count();
+        assert_eq!(n, 2, "one help run per set of flags");
+        // No entries: no help run at all.
+        assert!(supported_args(&env, &exe, &[], &probe).is_empty());
+        // A missing executable passes nothing.
+        let gone = tmp.path().join("gone");
+        assert!(supported_args(&env, &gone, &flag, &probe).is_empty());
+    }
+
+    #[test]
+    fn the_probe_writes_in_a_scratch_home_and_never_in_the_users_home() {
+        // DAEMON1 probes `codex --help` on the host. A harness that writes
+        // at start writes in an empty home that paddock removes after it.
+        let tmp = tempfile::tempdir().unwrap();
+        let seen = tmp.path().join("seen");
+        let exe = tmp.path().join("tool");
+        std::fs::write(
+            &exe,
+            format!(
+                "#!/bin/sh
+mkdir -p \"$HOME/.codex/sessions\" && echo \"$HOME|${{XDG_STATE_HOME:-unset}}|${{CODEX_HOME:-unset}}\" > {}\necho --no-daemon\n",
+                seen.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let text = super::super::help::help_text(&exe, &args(&["--help"])).unwrap();
+        assert!(text.contains("--no-daemon"), "{text}");
+        let line = std::fs::read_to_string(&seen).unwrap();
+        let mut parts = line.trim().split('|');
+        let home = std::path::PathBuf::from(parts.next().unwrap());
+        assert_eq!(parts.next(), Some("unset"), "{line}");
+        assert_eq!(parts.next(), Some("unset"), "{line}");
+        assert_ne!(Some(home.as_os_str()), std::env::var_os("HOME").as_deref());
+        assert!(home
+            .file_name()
+            .is_some_and(|n| n.to_string_lossy().starts_with("paddock-probe-")));
+        assert!(!home.exists(), "the scratch home stays after the probe");
+    }
 }

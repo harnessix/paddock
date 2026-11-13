@@ -512,6 +512,8 @@ fn run_dsh_for(root: &Path, secs: u64) -> std::process::Output {
             "--env",
             "clean",
             "-y",
+            // The fake dsh and the test talk through files in the project folder.
+            "--direct",
         ])
         .arg(root.join("project"))
         .env("HOME", root.join("home"))

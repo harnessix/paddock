@@ -3,15 +3,23 @@
 
 import { spawn } from 'node:child_process';
 import { oneLine } from './clean.js';
+import { t } from './i18n/index.js';
 import type {
   Approvals,
   Board,
+  DeviceList,
+  FilesList,
+  Forage,
   Harness,
+  HorseSession,
+  KvOverview,
   MailBox,
   MailMessage,
   Ps,
   ViewTail,
 } from './types.js';
+import type { Explain, Recent } from './launch.js';
+import { normalApply, normalChanges, normalRestore, type ApplyResult, type BackupsDoc, type ChangesDoc, type CopiesDoc, type OnConflict, type PathsResult, type PointerDoc, type RestoreResult } from './copy.js';
 
 export class PaddockError extends Error {}
 
@@ -37,9 +45,10 @@ export function paddockBin(env: NodeJS.ProcessEnv = process.env): string {
   return env.PADDOCK_BIN && env.PADDOCK_BIN.length > 0 ? env.PADDOCK_BIN : 'paddock';
 }
 
-export function call(args: string[], opts: { stdin?: string; bin?: string } = {}): Promise<CallResult> {
+export function call(args: string[], opts: { stdin?: string; bin?: string; cwd?: string } = {}): Promise<CallResult> {
   return new Promise((resolve) => {
     const child = spawn(opts.bin ?? paddockBin(), args, {
+      cwd: opts.cwd,
       stdio: [opts.stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
       env: { ...process.env, NO_COLOR: '1', COLUMNS: '200' },
     });
@@ -62,7 +71,7 @@ export function call(args: string[], opts: { stdin?: string; bin?: string } = {}
     }
     child.on('error', (e) => {
       clearTimeout(timer);
-      resolve({ code: 127, stdout, stderr: `could not start ${opts.bin ?? paddockBin()}: ${e.message}` });
+      resolve({ code: 127, stdout, stderr: t('paddock.couldNotStart', { bin: opts.bin ?? paddockBin(), error: e.message }) });
     });
     child.on('close', (code, signal) => {
       clearTimeout(timer);
@@ -78,12 +87,12 @@ export function errorLine(r: CallResult): string {
     .map((l) => oneLine(l))
     .filter((l) => l.length > 0);
   // clap ends with a usage hint: the "error:" line says what went wrong.
-  return lines.find((l) => l.startsWith('error:')) ?? lines[lines.length - 1] ?? `paddock exited with code ${r.code}`;
+  return lines.find((l) => l.startsWith('error:')) ?? lines[lines.length - 1] ?? t('paddock.exitCode', { code: r.code });
 }
 
 async function checked(args: string[], stdin?: string): Promise<string> {
   const r = await call(args, { stdin });
-  if (r.code !== 0 && isUnsupported(r)) throw new UnsupportedError(`needs a newer paddock: \`paddock ${args.join(' ')}\``);
+  if (r.code !== 0 && isUnsupported(r)) throw new UnsupportedError(t('paddock.needsNewer', { command: `paddock ${args.join(' ')}` }));
   if (r.code !== 0) throw new PaddockError(errorLine(r));
   return r.stdout;
 }
@@ -93,8 +102,25 @@ async function json<T>(args: string[]): Promise<T> {
   try {
     return JSON.parse(out) as T;
   } catch {
-    throw new PaddockError(`paddock ${args.join(' ')} printed no JSON`);
+    throw new PaddockError(t('paddock.noJson', { command: `paddock ${args.join(' ')}` }));
   }
+}
+
+/**
+ * The JSON result of an action. An apply that left a conflict exits with
+ * an error after its JSON: the JSON is the answer then too.
+ */
+async function result<T>(args: string[], cwd?: string): Promise<T> {
+  const r = await call(args, { cwd });
+  try {
+    const v: unknown = JSON.parse(r.stdout);
+    if (v && typeof v === 'object' && 'api_version' in v) return v as T;
+  } catch {
+    // No JSON: the error line says why.
+  }
+  if (r.code !== 0 && isUnsupported(r)) throw new UnsupportedError(t('paddock.needsNewer', { command: `paddock ${args.slice(0, 2).join(' ')}` }));
+  if (r.code !== 0) throw new PaddockError(errorLine(r));
+  throw new PaddockError(t('paddock.noJson', { command: `paddock ${args[0]}` }));
 }
 
 export const paddock = {
@@ -127,6 +153,29 @@ export const paddock = {
     const v = await json<{ harnesses?: Harness[] }>(['list', '--json']);
     return v.harnesses ?? [];
   },
+  /** The projects where runs started, newest first. */
+  async recent(): Promise<Recent[]> {
+    const v = await json<{ projects?: Recent[] }>(['recent', '--json']);
+    return Array.isArray(v.projects) ? v.projects : [];
+  },
+  /**
+   * What paddock would start for an agent in a folder, and what the folder
+   * guard says. A refused folder is an answer, not a failure: paddock
+   * prints `folder_check` and exits with an error, and both come back.
+   */
+  async explain(harness: string, folder: string): Promise<Explain> {
+    const r = await call(['explain', harness, folder, '--json']);
+    let v: Explain = {};
+    try {
+      const parsed: unknown = JSON.parse(r.stdout);
+      if (parsed && typeof parsed === 'object') v = parsed as Explain;
+    } catch {
+      // No JSON: the error line says why.
+    }
+    const out: Explain = { network: v.network, approvals: v.approvals, folder_check: v.folder_check };
+    if (r.code !== 0) out.error = isUnsupported(r) ? t('paddock.noExplain') : errorLine(r);
+    return out;
+  },
   /** `paddock approvals answer ID ...`. A text goes through stdin, never the process list. */
   async answer(id: string, args: string[], text?: string): Promise<string> {
     const full = ['approvals', 'answer', id, ...args];
@@ -152,8 +201,89 @@ export const paddock = {
     const mode = approvals === 'manual' ? ['--manual'] : approvals === 'auto' ? ['--auto'] : [];
     return oneLine(await checked(['run', harness, project, '--detach', '--prompt-file', promptFile, ...mode]));
   },
+  /** The tools of the user configuration: one list for every run. */
+  async devices(): Promise<DeviceList> {
+    const v = await json<Partial<DeviceList>>(['device', 'ls', '--json']);
+    return { ...v, devices: v.devices ?? [] };
+  },
+  /** The shared notes: every pasture with its members, the user scope and the namespaces. */
+  async kvOverview(): Promise<KvOverview> {
+    const v = await json<Partial<KvOverview>>(['kv', 'overview', '--json']);
+    return { ...v, pastures: v.pastures ?? [] };
+  },
+  /** What each sandbox changed in its home and in its project. */
+  async files(): Promise<FilesList> {
+    const v = await json<Partial<FilesList>>(['files', '--json']);
+    return { ...v, sandboxes: v.sandboxes ?? [] };
+  },
+  /** The use of the accounts of the agents. */
+  async forage(): Promise<Forage> {
+    const v = await json<Partial<Forage>>(['forage', '--json']);
+    return { ...v, windows: v.windows ?? [] };
+  },
+  /** The saved sessions of horse mode. An empty list: the feature is off or has none. */
+  async horses(): Promise<HorseSession[]> {
+    return (await json<HorseSession[]>(['horse', 'list', '--json'])) ?? [];
+  },
+  /** `paddock freeze ID [--tree]`: the run stops in place and keeps its memory. */
+  async freeze(id: string, tree = false): Promise<string> {
+    return oneLine(await checked(['freeze', id, ...(tree ? ['--tree'] : [])]));
+  },
+  /** `paddock thaw ID [--tree]`. */
+  async thaw(id: string, tree = false): Promise<string> {
+    return oneLine(await checked(['thaw', id, ...(tree ? ['--tree'] : [])]));
+  },
   async sendMail(run: string, text: string): Promise<string> {
     return oneLine(await checked(['mail', 'send', run, '-'], text));
+  },
+
+  // ---- the copy of a run (COPY1) ----
+
+  /** Every run that works on a copy, with the counts of its changes. */
+  async copies(): Promise<CopiesDoc> {
+    const v = await json<Partial<CopiesDoc>>(['changes', '--json']);
+    return { ...v, runs: Array.isArray(v.runs) ? v.runs : [] };
+  },
+  /** What a run changed in its copy. */
+  async changes(run: string): Promise<ChangesDoc> {
+    return normalChanges(await json<Partial<ChangesDoc>>(['changes', run, '--json']));
+  },
+  /** The diff of one file, as the unified text that paddock makes. */
+  async diff(run: string, path: string): Promise<string> {
+    return checked(['changes', run, `--diff=${path}`]);
+  },
+  /** Write changes to the folder. `token`: only when the list is still the one that the user saw. */
+  async apply(run: string, paths: string[], on: OnConflict, token: string): Promise<ApplyResult> {
+    return normalApply(await result<Partial<ApplyResult>>(['apply', run, '--on-conflict', on, ...(token ? ['--token', token] : []), '--yes', '--json', '--', ...paths]));
+  },
+  async keep(run: string, paths: string[], off: boolean): Promise<PathsResult> {
+    const v = await result<Partial<PathsResult>>(['keep', run, '--json', ...(off ? ['--off'] : []), '--', ...paths]);
+    return { ...v, paths: Array.isArray(v.paths) ? v.paths : [] };
+  },
+  /** Drop changes from the copy. Never without a path: that would remove the whole copy. */
+  async discardChanges(run: string, paths: string[]): Promise<PathsResult> {
+    if (paths.length === 0) throw new PaddockError(t('fx.paddock.noDiscard'));
+    const v = await result<Partial<PathsResult>>(['discard', run, '--yes', '--json', '--', ...paths]);
+    return { ...v, paths: Array.isArray(v.paths) ? v.paths : [] };
+  },
+  /** Take the last apply or restore of a project back. `paddock undo` means the folder that it runs in. */
+  async undoApply(project: string): Promise<RestoreResult> {
+    return normalRestore(await result<Partial<RestoreResult>>(['undo', '--yes', '--json'], project));
+  },
+  async backups(project: string): Promise<BackupsDoc> {
+    const v = await json<Partial<BackupsDoc>>(['backups', project, '--json']);
+    return { ...v, backups: Array.isArray(v.backups) ? v.backups : [], snapshots: Array.isArray(v.snapshots) ? v.snapshots : [] };
+  },
+  async restore(backup: string, project: string): Promise<RestoreResult> {
+    return normalRestore(await result<Partial<RestoreResult>>(['restore', backup, '--project', project, '--yes', '--json']));
+  },
+  async pointer(project: string): Promise<PointerDoc> {
+    const v = await json<Partial<PointerDoc>>(['pointer', 'status', project, '--json']);
+    return { ...v, state: typeof v.state === 'string' ? v.state : null };
+  },
+  /** `paddock pointer new|create|link PROJECT`: the line that paddock prints. */
+  async pointerDo(verb: 'new' | 'create' | 'link', project: string): Promise<string> {
+    return oneLine(await checked(['pointer', verb, project, ...(verb === 'create' ? [] : ['--yes'])]));
   },
 };
 

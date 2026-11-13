@@ -12,6 +12,8 @@ unverified = [
 [locate]
 mise = "freebuff"
 commands = ["freebuff"]
+# The folders of its installers, for a run with a thin PATH.
+dirs = ["~/.npm-global/bin", "~/.bun/bin"]
 
 [launch]
 # Freebuff has no flags and asks no tool permissions. It logs in through

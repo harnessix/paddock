@@ -1,0 +1,9 @@
+{
+  "path": "src/cart.ts",
+  "kind": "changed",
+  "state": "conflict",
+  "conflict": null,
+  "merge": "clean",
+  "merge_preview": "ONE\ntwo\nTHREE\n",
+  "merge_preview_cut": false
+}

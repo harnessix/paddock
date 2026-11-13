@@ -16,6 +16,8 @@ unverified = [
 [locate]
 mise = "grok"
 commands = ["grok"]
+# The folders of its installers, for a run with a thin PATH.
+dirs = ["~/.grok/bin"]
 
 [launch]
 # Logs in through a browser and a loopback callback on a random port

@@ -63,11 +63,12 @@ pub fn require_approval(env: &HostEnv, loaded: &Loaded, assume_yes: bool) -> Res
         return Ok(());
     }
     let summary = serde_json::to_string_pretty(&m.widening(base))?;
-    eprintln!(
-        "paddock: {} asks for more access than the defaults:\n{summary}\n\
+    // The user must answer this: -q does not hide it (note.rs).
+    crate::note::ask(format!(
+        "{} asks for more access than the defaults:\n{summary}\n\
          The project directory is writable from inside the sandbox, so an agent can edit this file.",
         file.display()
-    );
+    ));
     if assume_yes {
         return approve(env, file, m, base);
     }

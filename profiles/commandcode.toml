@@ -10,6 +10,8 @@ unverified = [
 [locate]
 mise = "commandcode"
 commands = ["commandcode", "cmdc"]
+# The folders of its installers, for a run with a thin PATH.
+dirs = ["~/.npm-global/bin", "~/.bun/bin"]
 
 [launch]
 # `cmd login` opens the browser with a local callback server.

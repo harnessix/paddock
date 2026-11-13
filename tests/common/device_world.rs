@@ -65,12 +65,16 @@ impl World {
         f.display().to_string()
     }
 
+    /// The script can call `await FILE`: it waits for the file, and
+    /// after [`AWAIT_SECS`] it gives up and exits with 124, so a flag
+    /// that never comes fails the test instead of hanging it.
     pub fn harness(&self, name: &str, script: &str) {
+        let script = format!("{AWAIT}{script}");
         std::fs::write(
             self.root.join(format!("cfg/paddock/harness.d/{name}.toml")),
             format!(
                 "name = \"{name}\"\n[locate]\ncommands = [\"sh\"]\n[launch]\nargs = [\"-c\", {}]\n",
-                serde_json::to_string(script).unwrap()
+                serde_json::to_string(&script).unwrap()
             ),
         )
         .unwrap();
@@ -78,6 +82,10 @@ impl World {
 
     pub fn paddock(&self) -> Command {
         let mut c = Command::new(env!("CARGO_BIN_EXE_paddock"));
+        // `PADDOCK_LOG=debug cargo test` shows the log of paddock.
+        if let Some(v) = std::env::var_os("PADDOCK_LOG") {
+            c.env("PADDOCK_LOG", v);
+        }
         c.env("HOME", self.root.join("home"))
             .env("XDG_CONFIG_HOME", self.root.join("cfg"))
             .env("XDG_DATA_HOME", self.root.join("data"))
@@ -124,6 +132,9 @@ impl World {
                 "--env",
                 "clean",
                 "-y",
+                // The harness and the test talk through files in the
+                // project folder, so the run works in the folder itself.
+                "--direct",
             ])
             .arg(self.root.join("project"))
             .stdin(Stdio::null())
@@ -186,6 +197,31 @@ pub fn started_ms(out: &str) -> u64 {
         .and_then(|(_, r)| r.split_once(' '))
         .and_then(|(n, _)| n.parse().ok())
         .unwrap_or_else(|| panic!("no start time in:\n{out}"))
+}
+
+/// How long `await FILE` in a fake harness waits.
+pub const AWAIT_SECS: u64 = 300;
+
+/// The shell function `await FILE` of [`World::harness`].
+const AWAIT: &str = "await() { n=0; while [ ! -e \"$1\" ]; do sleep 0.1; n=$((n+1)); if [ $n -ge 3000 ]; then echo \"TIMEOUT: no $1\"; exit 124; fi; done; }\n";
+
+/// The output of `child`, at most `within` after the call. After that
+/// the child gets SIGKILL and the test fails, so a run that never ends
+/// does not hang the test binary.
+pub fn finish(child: std::process::Child, within: Duration) -> std::process::Output {
+    let pid = child.id() as i32;
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(child.wait_with_output());
+    });
+    match rx.recv_timeout(within) {
+        Ok(out) => out.unwrap(),
+        Err(_) => {
+            // SAFETY: SIGKILL to our own child, which has not been reaped.
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+            panic!("the run did not end within {within:?}");
+        }
+    }
 }
 
 pub fn alive(pid: u64) -> bool {

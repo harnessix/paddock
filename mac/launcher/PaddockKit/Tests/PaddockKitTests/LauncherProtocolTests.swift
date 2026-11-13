@@ -88,7 +88,8 @@ final class LauncherProtocolTests: XCTestCase {
     func testUnknownFeaturesAndFieldsAndWhitespaceAreAllowed() {
         let text = """
           { "protocol" : "paddock.mac-launcher/v1", "build": {"commit": "1a2b3c4", "n": [1, -2.5e3, true, null]},
-            "features": ["setup-progress-v1", "future-v9", "macvm-status-v1", "events-v1", "approvals-v1", "app-list-v1"] }
+            "features": ["setup-progress-v1", "future-v9", "notices-v1", "macvm-status-v1", "events-v1", "approvals-v1",
+                         "app-list-v1"] }
 
         """
         XCTAssertNil(LauncherProtocol.check(output(text)))
@@ -101,7 +102,7 @@ final class LauncherProtocolTests: XCTestCase {
             if case .string(let name) = item { return name }
             return nil
         }
-        XCTAssertEqual(features, LauncherProtocol.required)
+        XCTAssertEqual(features, (LauncherProtocol.required + LauncherProtocol.optional).sorted())
         XCTAssertFalse(features.contains("app-list-v1-completeness"))
     }
 

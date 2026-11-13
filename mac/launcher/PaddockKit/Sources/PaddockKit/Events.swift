@@ -3,8 +3,8 @@ import Foundation
 /// One line of `paddock events --follow --json`.
 ///
 /// Each line is a JSON object with `v` and `kind`. The launcher reads the
-/// kinds `session`, `question`, `grant`, `setup`, `golden` and `disk`, and
-/// ignores any other kind, so a newer paddock can add kinds.
+/// kinds `session`, `question`, `grant`, `setup`, `golden`, `disk` and
+/// `notice`, and ignores any other kind, so a newer paddock can add kinds.
 public enum PaddockEvent: Equatable, Sendable {
     case session(SessionEvent)
     case question(QuestionEvent)
@@ -14,6 +14,8 @@ public enum PaddockEvent: Equatable, Sendable {
     case disk(freeBytes: Int64)
     /// `started` (the first line) or `lost` (the follower missed events).
     case stream(state: String)
+    /// A desktop notification of paddock, which the launcher shows.
+    case notice(NoticeEvent)
     case unknown(kind: String)
 
     /// Decodes one line. Returns nil for a line that is not a JSON object
@@ -43,6 +45,8 @@ public enum PaddockEvent: Equatable, Sendable {
             }
         case "stream":
             return (try? decoder.decode(StreamEvent.self, from: data)).map { .stream(state: $0.state) }
+        case "notice":
+            return (try? decoder.decode(NoticeEvent.self, from: data)).map(PaddockEvent.notice)
         default:
             return .unknown(kind: head.kind)
         }
@@ -68,6 +72,28 @@ struct DiskEvent: Decodable {
 
 struct StreamEvent: Decodable {
     var state: String
+}
+
+/// A notification that paddock leaves to the launcher. paddock does not
+/// post it itself while the launcher follows with `--notify`.
+public struct NoticeEvent: Codable, Equatable, Sendable {
+    /// What it is about: `approval`, `question`, `frozen`, `storage`, `info`.
+    public var what: String
+    public var title: String
+    public var text: String
+    /// paddock asks for attention now.
+    public var critical: Bool?
+    /// What answers it, for example the request id of
+    /// `paddock approvals answer ID`.
+    public var action: String?
+
+    public init(what: String, title: String, text: String, critical: Bool? = nil, action: String? = nil) {
+        self.what = what
+        self.title = title
+        self.text = text
+        self.critical = critical
+        self.action = action
+    }
 }
 
 public struct SessionEvent: Codable, Equatable, Sendable {

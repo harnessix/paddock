@@ -79,6 +79,13 @@ pub fn link(loft: &Loft, repo: &Path) -> Result<()> {
             }
             bail!("{NOTES} is a symlink to another place; remove it first");
         }
+        // The pointer folder of a project with copies (copy/pointer.rs) stays
+        // a real folder: the sandbox gets the notes through a mount.
+        Some(crate::safefs::Kind::Dir)
+            if crate::copy::pointer::read(repo).is_ok_and(|p| p.is_some()) =>
+        {
+            return Ok(());
+        }
         Some(crate::safefs::Kind::Dir) => {
             // rename does not follow the last component: whatever is there
             // moves into a folder of the host.

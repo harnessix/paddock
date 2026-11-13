@@ -15,11 +15,18 @@ use std::path::{Path, PathBuf};
 pub(super) fn check(spec: &SandboxSpec) -> Result<()> {
     for m in spec.mounts.iter().filter(|m| m.kind == MountKind::Rw) {
         let src = m.src.as_ref().unwrap();
+        // Where the sandbox sees a path of this mount. A copy of a project
+        // is mounted at the path of the project (copy.rs), so the source
+        // and the mount point differ.
+        let seen = |p: &Path| match p.strip_prefix(src) {
+            Ok(rel) => m.dst.join(rel),
+            Err(_) => p.to_path_buf(),
+        };
         for git_dir in git_dirs_under(src) {
             let own_mount = spec
                 .mounts
                 .iter()
-                .any(|o| o.dst == git_dir && o.kind == MountKind::Rw);
+                .any(|o| o.dst == seen(&git_dir) && o.kind == MountKind::Rw);
             if git_dir.starts_with(src) && git_dir != *src && !own_mount {
                 bail!(
                     "policy: {} is not a mount point of its own inside {} (from {}). The sandbox could rename it and plant a new one.",
@@ -45,7 +52,7 @@ pub(super) fn check(spec: &SandboxSpec) -> Result<()> {
                 if !p.exists() || !p.starts_with(src) {
                     continue;
                 }
-                if writable(spec, &p) {
+                if writable(spec, &seen(&p)) {
                     bail!(
                         "policy: {} is writable inside {} (from {}). Git reads and runs it on the host.",
                         p.display(),

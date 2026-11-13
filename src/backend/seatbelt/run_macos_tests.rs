@@ -663,3 +663,71 @@ fn the_devices_come_over_the_socket_and_secret_files_are_fifos() {
     assert!(!sandboxed(&w, "exec 3<>/dev/paddock/echo"));
     drop(devices);
 }
+
+/// SOCK1: codex binds `$HOME/.codex/app-server-control/app-server-control.sock`.
+/// The real sandbox home is too long for the 104 bytes of a Unix socket
+/// path, so `$HOME` is a short alias of it. The bind and a connect go
+/// through the alias and pass the Seatbelt rules; the socket shows in the
+/// real home. The same for `TMPDIR`.
+#[test]
+fn codex_binds_its_app_server_socket_through_the_short_home() {
+    // A short temporary root, as a home in /Users/NAME is short.
+    let t = tempfile::Builder::new().tempdir_in("/private/tmp").unwrap();
+    let root = real(t.path());
+    let home = root.join("home");
+    let project = root.join("project");
+    let home_src = home.join(".local/share/paddock/homes/codex/isolated-check/pstest-77fdbb263b");
+    for d in [&home, &project, &home_src] {
+        std::fs::create_dir_all(d).unwrap();
+    }
+    // SAFETY: getuid and getgid cannot fail.
+    let (uid, gid) = unsafe { (libc::getuid(), libc::getgid()) };
+    let env = HostEnv::from_parts(home.clone(), "u".into(), uid, gid, BTreeMap::new());
+    let mut spec = SandboxSpec::new(
+        "sbsock".into(),
+        "fake",
+        &project,
+        home_src.clone(),
+        &home,
+        uid,
+        gid,
+        "u",
+    );
+    spec.add_mount(Mount::same(&project, true, "project"));
+    spec.network = Network::None;
+    std::fs::create_dir_all(env.paddock_run().join(&spec.id)).unwrap();
+    let w = World {
+        _t: t,
+        env,
+        spec,
+        home,
+    };
+    let rel = ".codex/app-server-control/app-server-control.sock";
+    // Without the alias the path does not fit: this is the bug.
+    assert!(!crate::sockpath::fits(
+        &home_src.join(rel),
+        crate::sockpath::MACOS_MAX
+    ));
+    let alias = crate::shorthome::candidate(&w.home, crate::shorthome::HOMES, &home_src, 0);
+    let bind = r#"/usr/bin/perl -MIO::Socket::UNIX -e '
+        my $p = shift;
+        my $s = IO::Socket::UNIX->new(Type => SOCK_STREAM(), Local => $p, Listen => 1) or die "bind $p: $!";
+        IO::Socket::UNIX->new(Type => SOCK_STREAM(), Peer => $p) or die "connect $p: $!";
+        exit 0' "#;
+    let script = format!(
+        "test \"$HOME\" = '{}' && mkdir -p \"$HOME/.codex/app-server-control\" && {bind} \"$HOME/{rel}\" && {bind} \"$TMPDIR/s.sock\"",
+        alias.display()
+    );
+    assert!(sandboxed(&w, &script), "{script}");
+    let m = std::fs::symlink_metadata(home_src.join(rel)).unwrap();
+    assert!(std::os::unix::fs::FileTypeExt::is_socket(&m.file_type()));
+    // The alias still points to the real home, and the sandbox cannot
+    // replace it.
+    assert_eq!(std::fs::read_link(&alias).unwrap(), home_src);
+    assert!(!sandboxed(&w, "rm \"$HOME\""));
+    assert!(!sandboxed(
+        &w,
+        &format!("ln -sfn /private/tmp '{}'", alias.display())
+    ));
+    assert_eq!(std::fs::read_link(&alias).unwrap(), home_src);
+}

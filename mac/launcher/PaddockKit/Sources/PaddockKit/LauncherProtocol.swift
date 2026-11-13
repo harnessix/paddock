@@ -21,7 +21,20 @@ public enum LauncherProtocol {
         "approvals-v1",
         "events-v1",
         "macvm-status-v1",
+        "notices-v1",
         "setup-progress-v1",
+    ]
+
+    /// The features that this launcher uses when paddock lists them, and
+    /// does without on an older paddock: the data of the motions and the
+    /// file screens.
+    public static let optional: [String] = [
+        "backup-files-v1",
+        "board-loft-v1",
+        "device-call-v1",
+        "mail-unread-ask-v1",
+        "merge-preview-v1",
+        "restore-plan-v1",
     ]
 
     /// The limits of the query and of `--version`. paddock answers both at

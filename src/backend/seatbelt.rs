@@ -31,6 +31,7 @@ pub mod device;
 pub mod keychain;
 mod plist;
 pub mod run;
+pub mod suid_shim;
 
 pub use plist::{app_sandboxed, plist_bool, plist_string, plist_xml, APP_SANDBOX_KEY};
 
@@ -162,6 +163,14 @@ pub fn electron_args(data_dir: &Path, proxy: Option<u16>) -> Vec<String> {
         v.push(format!("--proxy-server=http://127.0.0.1:{port}"));
     }
     v
+}
+
+/// The macOS sections of `paddock doctor`: the setuid shims, the socket
+/// paths and what a run gets for `/tmp`.
+pub fn print_doctor(env: &HostEnv) {
+    suid_shim::print_doctor(env);
+    crate::shorthome::print_doctor(env);
+    crate::tmpclaim::host::print_doctor(env);
 }
 
 /// The real path of `p`, also for a path that does not exist yet (its

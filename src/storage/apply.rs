@@ -400,6 +400,7 @@ pub fn apply(env: &HostEnv, containers: &dyn Containers, items: &[Item]) -> Vec<
             })(),
             Action::View { id } => crate::view::remove(env, id),
             Action::LoftTrash { dir } => crate::loft::trash::remove(env, dir),
+            Action::Tmp { run } => crate::tmpclaim::host::gc_remove(env, run),
             Action::Macvm { dir } => crate::macvm::manage::gc_remove(env, dir),
             Action::Kv { sandboxes } => {
                 crate::kv::gc_apply(env, sandboxes, state::now()).map(|_| ())

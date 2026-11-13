@@ -1,5 +1,6 @@
 //! Run ownership, native transcript attribution and final reconciliation.
 use super::{agy, claude, codex, dsh, grok, live, run, Store};
+use crate::note::{say_line, Level};
 use crate::{build::Built, env::HostEnv};
 use anyhow::{bail, Context, Result};
 use run::setup::Custody;
@@ -84,20 +85,21 @@ pub fn start(env: &HostEnv, built: &mut Built) -> Result<Option<Lifecycle>> {
     }
     let (custody, line) = run::setup::choose(built, expected);
     if let Some(line) = line {
-        eprintln!("{line}");
+        say_line(Level::Info, &line);
     }
     // The command and the task of a headless live run of Claude Code or
     // Codex, or the channel of a Claude Code TUI, before the store gets
     // anything.
     let headless = run::setup::prepare(built, custody, expected)?;
     if custody == Custody::Pty {
-        eprintln!(
+        say_line(Level::Info, &format!(
             "horse: {} gets queued entries between its turns: paddock types them into the TUI when it is idle",
             built.spec.harness
-        );
+        ));
     }
     if custody == Custody::Channel {
-        eprintln!("horse: claude gets queued entries between its turns through the paddock channel; confirm the development channel when Claude Code asks");
+        // The user must confirm the channel: -q does not hide this line.
+        say_line(Level::Ask, "horse: claude gets queued entries between its turns through the paddock channel; confirm the development channel when Claude Code asks");
     }
     let home = built.spec.home_src.clone();
     let before = run::snapshot::Snapshot::capture(&home, &built.spec.harness)?;
@@ -238,7 +240,7 @@ impl Lifecycle {
             self.base.as_ref(),
         )?;
         for l in linked {
-            eprintln!("{}", l.line());
+            say_line(Level::Info, &l.line());
         }
         custody
     }
@@ -246,7 +248,7 @@ impl Lifecycle {
 impl Drop for Lifecycle {
     fn drop(&mut self) {
         if let Err(e) = self.finish() {
-            eprintln!("paddock: horse final ingest: {e:#}");
+            say_line(Level::Error, &format!("paddock: horse final ingest: {e:#}"));
         }
     }
 }

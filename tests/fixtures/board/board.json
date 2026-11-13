@@ -25,7 +25,8 @@
               "state": "waiting",
               "last": "git push to origin/main",
               "since": "2026-11-11T15:58:00Z",
-              "card": true
+              "card": true,
+              "loft_commits": 0
             },
             {
               "id": "0c0c0c",
@@ -34,7 +35,8 @@
               "state": "done",
               "last": "done: hooks merged",
               "since": "2026-11-11T12:00:00Z",
-              "card": false
+              "card": false,
+              "loft_commits": 0
             }
           ]
         },
@@ -51,7 +53,8 @@
               "state": "blocked",
               "last": "blocked: needs the signing key",
               "since": "2026-11-11T15:55:00Z",
-              "card": false
+              "card": false,
+              "loft_commits": 0
             }
           ]
         },
@@ -68,7 +71,8 @@
               "state": "working",
               "last": "KV2: code and 14 tests pass",
               "since": "2026-11-11T15:45:00Z",
-              "card": false
+              "card": false,
+              "loft_commits": 0
             }
           ]
         },
@@ -88,7 +92,8 @@
           "state": "stuck",
           "last": "idle with unread mail",
           "since": "2026-11-11T15:40:00Z",
-          "card": false
+          "card": false,
+          "loft_commits": 0
         },
         {
           "id": "0f0f0f",
@@ -97,7 +102,8 @@
           "state": "idle",
           "last": "",
           "since": "2026-11-11T15:48:20Z",
-          "card": false
+          "card": false,
+          "loft_commits": 0
         }
       ]
     },
@@ -119,7 +125,8 @@
               "state": "waiting",
               "last": "Which ledger format?",
               "since": "2026-11-11T15:51:40Z",
-              "card": false
+              "card": false,
+              "loft_commits": 0
             }
           ]
         }
@@ -132,7 +139,8 @@
           "state": "stuck",
           "last": "the screen does not change",
           "since": "2026-11-11T15:56:00Z",
-          "card": false
+          "card": false,
+          "loft_commits": 0
         }
       ]
     }

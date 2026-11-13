@@ -12,6 +12,8 @@ unverified = [
 [locate]
 mise = "dsh"
 commands = ["dsh"]
+# The folders of its installers, for a run with a thin PATH.
+dirs = ["~/.npm-global/bin", "~/.bun/bin"]
 
 [launch]
 # Since 0.2.1 `dsh` is a launcher that needs a dsh profile name, and has no

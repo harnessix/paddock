@@ -275,6 +275,7 @@ impl DeviceFs {
                 cancel: cancel.clone(),
                 remote: None,
             };
+            super::announce_call(crate::eventstream::default_bus(), &*dev, &call);
             let (tx, rx) = std::sync::mpsc::channel();
             let worker_dev = dev.clone();
             let req_len = request.len();

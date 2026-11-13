@@ -14,6 +14,15 @@ Build, agy (Antigravity), Gemini CLI, opencode and Copilot CLI, on Linux
 desktop apps run in paddock's own macOS guest VM. `paddock help macos`
 lists what is not confirmed on a Mac yet.
 
+## Your computer stays yours
+
+You use your agents as usual, and you approve their steps one by one. Each
+agent lives in its own room. It cannot touch your keys or your other
+projects. Its changes land on a copy first, and you decide what goes back.
+
+When you trust an agent with a task, you can let it work on its own:
+`paddock claude --auto`. The room is the same in both modes.
+
 ## Watch a run
 
 ![A terminal recording of paddock running an agent](docs/assets/demo.gif)
@@ -32,10 +41,13 @@ Install paddock below, then run:
 ```sh
 paddock setup
 cd ~/src/my-app
-paddock claude
+paddock claude             # manual: you approve each step in Claude Code
+paddock claude --auto      # opt-in: the agent works on its own in its room
 ```
 
 You can use `paddock codex` or another installed agent in place of `claude`.
+Manual is the default of a new installation. To make auto your default, set
+`[run] approvals = "auto"` in `~/.config/paddock/config.toml`.
 By default, environment variables pass through except names that look like
 secrets. See `paddock help environment` for the details and controls.
 
@@ -44,7 +56,7 @@ secrets. See `paddock help environment` for the details and controls.
 From a release clone:
 
 ```sh
-git clone --branch v0.2.3 https://github.com/harnessix/paddock
+git clone --branch v0.2.4 https://github.com/harnessix/paddock
 cd paddock
 bin/install
 ```
@@ -52,11 +64,12 @@ bin/install
 Or download the prebuilt binary and its checksum:
 
 ```sh
-curl -fLO https://github.com/harnessix/paddock/releases/download/v0.2.3/paddock-0.2.3-x86_64-linux.tar.gz
-curl -fLO https://github.com/harnessix/paddock/releases/download/v0.2.3/paddock-0.2.3-x86_64-linux.tar.gz.sha256
-sha256sum -c paddock-0.2.3-x86_64-linux.tar.gz.sha256
-tar -xzf paddock-0.2.3-x86_64-linux.tar.gz
-install -m 755 paddock-0.2.3-x86_64-linux/paddock ~/.local/bin/paddock
+curl -fLO https://github.com/harnessix/paddock/releases/download/v0.2.4/paddock-0.2.4-x86_64-linux.tar.gz
+curl -fLO https://github.com/harnessix/paddock/releases/download/v0.2.4/paddock-0.2.4-x86_64-linux.tar.gz.sha256
+sha256sum -c paddock-0.2.4-x86_64-linux.tar.gz.sha256
+tar -xzf paddock-0.2.4-x86_64-linux.tar.gz
+install -m 755 paddock-0.2.4-x86_64-linux/paddock ~/.local/bin/paddock
+install -m 755 paddock-0.2.4-x86_64-linux/paddock-tui ~/.local/bin/paddock-tui
 paddock doctor
 ```
 
@@ -84,6 +97,7 @@ app mode, terminal runs and current Mac limitations.
 
 | Command | Purpose |
 | --- | --- |
+| `paddock` | Open the home screen in a terminal: start an agent, open an app, answer requests. |
 | `paddock codex` | Start an installed agent in the current project. |
 | `paddock run claude PATH` | Start an agent in a chosen project. |
 | `paddock ps` | List running sandboxes. |
@@ -91,8 +105,12 @@ app mode, terminal runs and current Mac limitations.
 | `paddock split` | Show an agent in its sandbox and a host shell in one window, each pane labeled sandbox or host. |
 | `paddock tui` | Open the terminal interface: runs, approvals, mail and the board, with the keyboard or the mouse. |
 | `paddock explain codex` | Show mounts, environment settings and their origins before a run. |
-| `paddock undo` | Restore files from a run's snapshot. |
+| `paddock run claude --copy` | Let the agent work on a copy. Your folder changes only when you apply. |
+| `paddock changes` | List what a run changed in its copy. |
+| `paddock apply 1a2b3c` | Write the changes of a copy to your folder, after a backup. |
+| `paddock undo` | Take the last apply back, or restore files from a run's snapshot. |
 | `paddock doctor` | Check the system and its dependencies. |
+| `paddock gateway openclaw start` | Run the OpenClaw gateway in a sandbox of its own. `paddock openclaw tui` attaches to it. |
 
 Run `paddock help` for all commands, or `paddock help COMMAND` for one.
 Run `paddock help TOPIC` to read the full guide for a topic.

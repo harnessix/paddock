@@ -50,6 +50,7 @@ pub const HOME_BIN_DIRS: &[&str] = &[
     "go/bin",
     ".bun/bin",
     ".deno/bin",
+    ".npm-global/bin",
 ];
 
 /// The directory to mount for an executable. For npm packages this is the

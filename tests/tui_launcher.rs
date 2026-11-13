@@ -1,5 +1,9 @@
-//! `paddock tui` starts the terminal interface, or says what to install.
-//! Fake programs on a temporary PATH. No Node.js needed.
+//! `paddock tui` starts the terminal interface. Without one, the paddock of
+//! these tests, a development build, says how to build it: it never
+//! downloads, and it never runs npx or node. Fake programs on a temporary
+//! PATH. No Node.js needed, and no network. The download of a release
+//! build has its tests in src/update/tui_tests.rs, with a local release
+//! server.
 
 mod common;
 
@@ -16,6 +20,8 @@ fn script(dir: &Path, name: &str, body: &str) {
 /// paddock with HOME and the XDG folders inside `root`, never the user's.
 fn paddock(root: &Path) -> Command {
     let mut c = Command::new(env!("CARGO_BIN_EXE_paddock"));
+    // The tests may run in a paddock sandbox. These starts are on a host.
+    c.env_remove("PADDOCK").env_remove("PADDOCK_TUI");
     for (key, dir) in [
         ("HOME", "home"),
         ("XDG_CONFIG_HOME", "config"),
@@ -41,31 +47,56 @@ fn paddock_tui(path: &Path, args: &[&str]) -> std::process::Output {
         .unwrap()
 }
 
-#[test]
-fn without_node_tui_says_what_to_install() {
-    let tmp = common::tempdir();
-    let out = paddock_tui(tmp.path(), &[]);
+/// The one line of a development build without the interface.
+fn assert_says_how_to_build(out: &std::process::Output) {
     assert_eq!(out.status.code(), Some(127), "{out:?}");
     let err = String::from_utf8_lossy(&out.stderr);
-    assert!(err.contains("needs Node.js 22 or newer"), "{err}");
+    assert_eq!(err.lines().count(), 1, "{err}");
     assert!(
-        err.contains("paddock-tui binary of a paddock release next to paddock"),
+        err.starts_with("The paddock TUI is not installed."),
         "{err}"
     );
-    assert!(err.contains("cd tui && npm ci && npm run build"), "{err}");
-    assert!(!err.contains("npm install"), "{err}");
+    assert!(err.contains("development build"), "{err}");
+    let dir = Path::new(env!("CARGO_BIN_EXE_paddock")).parent().unwrap();
+    let dir = dir.canonicalize().unwrap();
+    assert!(
+        err.trim_end()
+            .ends_with(&format!("with: tui/scripts/install.sh {}", dir.display())),
+        "{err}"
+    );
+    assert!(
+        !err.contains("npm install") && !err.contains("npx"),
+        "{err}"
+    );
     assert!(out.stdout.is_empty());
 }
 
 #[test]
-fn an_old_node_is_named_in_the_message() {
+fn without_the_tui_a_development_build_says_how_to_build_it() {
     let tmp = common::tempdir();
-    script(tmp.path(), "node", "echo v18.19.0");
-    script(tmp.path(), "npx", "exit 3");
     let out = paddock_tui(tmp.path(), &[]);
-    assert_eq!(out.status.code(), Some(127), "{out:?}");
-    let err = String::from_utf8_lossy(&out.stderr);
-    assert!(err.contains("version 18"), "{err}");
+    assert_says_how_to_build(&out);
+}
+
+/// The interface is one program with its own runtime. paddock does not ask
+/// node for its version, old or new.
+#[test]
+fn an_old_node_is_never_asked() {
+    let tmp = common::tempdir();
+    let rec = tmp.path().join("ran.txt");
+    script(
+        tmp.path(),
+        "node",
+        &format!("echo node >> '{}'\necho v18.19.0", rec.display()),
+    );
+    script(
+        tmp.path(),
+        "npx",
+        &format!("echo npx >> '{}'\nexit 3", rec.display()),
+    );
+    let out = paddock_tui(tmp.path(), &[]);
+    assert_says_how_to_build(&out);
+    assert!(!rec.exists(), "{:?}", std::fs::read_to_string(&rec));
 }
 
 #[test]
@@ -99,6 +130,8 @@ fn npx_is_never_run_even_with_a_planted_package_in_the_project() {
     std::fs::create_dir_all(&bin).unwrap();
     std::fs::create_dir_all(project.join("node_modules/@harnessix/paddock-tui")).unwrap();
     std::fs::write(project.join(".npmrc"), "registry=http://127.0.0.1:9/\n").unwrap();
+    // A planted program in the project is not on the absolute PATH.
+    script(&project, "paddock-tui", "exit 9");
     let rec = tmp.path().join("args.txt");
     script(&bin, "node", "echo v22.11.0");
     script(
@@ -108,23 +141,92 @@ fn npx_is_never_run_even_with_a_planted_package_in_the_project() {
     );
     let out = paddock(tmp.path())
         .args(["tui", "--readonly"])
-        .env("PATH", &bin)
+        .env(
+            "PATH",
+            std::env::join_paths([bin.as_path(), Path::new(".")]).unwrap(),
+        )
         .current_dir(&project)
         .stdin(Stdio::null())
         .output()
         .unwrap();
-    assert_eq!(out.status.code(), Some(127), "{out:?}");
     assert!(
         !rec.exists(),
         "npx ran: {:?}",
         std::fs::read_to_string(&rec)
     );
+    assert_says_how_to_build(&out);
+}
+
+/// `PADDOCK_TUI` names the program of a developer. It comes before every
+/// other place.
+#[test]
+fn paddock_tui_variable_names_the_program_to_start() {
+    let tmp = common::tempdir();
+    let dev = tmp.path().join("dev");
+    std::fs::create_dir_all(&dev).unwrap();
+    script(&dev, "cli.js", "echo dev \"$@\"\nexit 5");
+    script(tmp.path(), "paddock-tui", "exit 7");
+    let out = paddock(tmp.path())
+        .args(["tui", "--plain"])
+        .env("PATH", tmp.path())
+        .env("PADDOCK_TUI", dev.join("cli.js"))
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(5), "{out:?}");
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "dev --plain\n");
+
+    // A wrong value stops the start. paddock does not fall back to another
+    // program in silence.
+    let out = paddock(tmp.path())
+        .arg("tui")
+        .env("PATH", tmp.path())
+        .env("PADDOCK_TUI", "dev/cli.js")
+        .current_dir(tmp.path())
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(127), "{out:?}");
     let err = String::from_utf8_lossy(&out.stderr);
-    assert!(err.contains("does not download it with npx"), "{err}");
     assert!(
-        err.contains("paddock-tui binary of a paddock release next to paddock"),
+        err.contains("PADDOCK_TUI=dev/cli.js is not the absolute path of a program"),
         "{err}"
     );
-    assert!(err.contains("cd tui && npm ci && npm run build"), "{err}");
-    assert!(!err.contains("npm install"), "{err}");
+}
+
+/// The copy that paddock installs into its data folder, when it cannot
+/// write next to its binary, starts too.
+#[test]
+fn the_copy_in_the_data_folder_starts() {
+    let tmp = common::tempdir();
+    let own = tmp
+        .path()
+        .join("folders/data/paddock/tui")
+        .join(env!("CARGO_PKG_VERSION"));
+    std::fs::create_dir_all(&own).unwrap();
+    script(&own, "paddock-tui", "echo own \"$@\"\nexit 6");
+    let out = paddock_tui(tmp.path(), &["--readonly"]);
+    assert_eq!(out.status.code(), Some(6), "{out:?}");
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "own --readonly\n");
+}
+
+/// In a sandbox, paddock installs nothing. It names the command for the
+/// user on the host.
+#[test]
+fn in_a_sandbox_tui_asks_for_the_host() {
+    let tmp = common::tempdir();
+    let out = paddock(tmp.path())
+        .arg("tui")
+        .env("PATH", tmp.path())
+        .env("PADDOCK", "1")
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(127), "{out:?}");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(err.lines().count(), 1, "{err}");
+    assert!(
+        err.contains("sandbox (PADDOCK=1)") && err.trim_end().ends_with("on the host: paddock tui"),
+        "{err}"
+    );
 }

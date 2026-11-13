@@ -1,0 +1,40 @@
+paddock · 2 laufen                                                           Läufe   Board   Genehmigungen      Post
+ claude · webshop · läuft 4 min · Kopie: 4 geändert, 2 neu, 1 gelöscht
+ Lauf  Genehmigungen  Post [Dateien]                                                                  Pointer: ● linked
+╭─ Dateien · Änderungen ───────╮╭─ docs/README.md · Konflikt · +6 -2 ──────────────────────────────────────────────────╮
+│  ▾ webshop/   !1 ~2 +2 -1 =1 ││  @@ Zeile 1                              │ @@ Zeile 1                                │
+│  ▾ docs/                  !1 ││  1 # webshop                             │ 1 # webshop                               │
+│ ▸   ! README.md    [A][K][D] ││  2                                       │ 2                                         │
+│  ▾ src/             ~2 +2 =1 ││ ~3 A small shop.                         │~3 A small shop with a cart and taxes.     │
+│    ▾ lib/util/            +1 ││ ~4 Run it with npm start.                │~4                                         │
+│       + format.ts  neu       ││                                          │+5 ## Run it                               │
+│     ~ cart.ts      geändert  ││                                          │+6                                         │
+│     = old.ts       behalten  ││                                          │+7 npm install                             │
+│     ~ price.ts     geändert  ││                                          │+8 npm start                               │
+│     + tax.ts       neu       ││  5                                       │ 9                                         │
+│   - logo.png       gelöscht  ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+╰─ 1 von 7 · 1 Konflikt ───────╯╰─ Änderung 1 von 1 · Original │ Kopie · 1 2 3 Seiten ─────────────────────────────────╯
+aktuell · v öffnet ein Ansichtsfenster (kein paddock split)
+A anwenden  K behalten  D verwerfen  ↵ Diff  c Filter  b Sicherungen  i Pointer  ? Hilfe

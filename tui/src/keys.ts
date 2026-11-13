@@ -171,7 +171,7 @@ export function useKeys(opts: {
   };
 }
 
-const BLANK: Key = {
+export const BLANK: Key = {
   upArrow: false,
   downArrow: false,
   leftArrow: false,

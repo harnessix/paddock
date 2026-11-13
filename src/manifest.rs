@@ -21,6 +21,10 @@ pub use net::{check_max, net_name, net_rank, Base};
 mod approval;
 pub use approval::{approve, hex, is_approved, require_approval, unhex};
 
+#[path = "manifest_template.rs"]
+mod template;
+pub use template::TEMPLATE;
+
 /// Tables of `~/.config/paddock/config.toml` that other modules read
 /// themselves: `[kv]` (kv.rs), `[pastures]`
 /// (pasture.rs), `[credentials]` (credentials.rs) and `[exec]`
@@ -28,7 +32,7 @@ pub use approval::{approve, hex, is_approved, require_approval, unhex};
 /// (snapshot.rs), `[profiles]` (shadow.rs), `[detach]` (detach.rs),
 /// `[compaction]` (compaction.rs), `[hooks]` (hooks.rs), `[speckit]`
 /// (speckit.rs), `[loft]` (loft.rs), `[horse]` (horse/live.rs), and
-/// `[tack]` (tack/config.rs). A project
+/// `[tack]` (tack/config.rs), and `[copy]` (copy/config.rs). A project
 /// `paddock.toml` with one of them is invalid, except `[loft]` with only
 /// `mode` (loft/sync.rs). `[devices]` is not in the
 /// list: the user configuration defines devices there (devices.rs), and a
@@ -57,6 +61,7 @@ pub const USER_ONLY: &[&str] = &[
     "turnout",
     "exclave",
     "tack",
+    "copy",
 ];
 
 /// Parse host user TOML without exposing private source lines in errors.
@@ -132,6 +137,11 @@ pub struct RunCfg {
     /// configuration only.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub agents: BTreeMap<String, RunAgentCfg>,
+    /// `[run] allow_wide = ["PATH"]`: wide folders that start without
+    /// `--yes-wide-folder` (folder_check.rs). User configuration only: the
+    /// agent can edit a project file.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allow_wide: Vec<String>,
     /// The `approvals` of the project file. `merge` keeps it apart, because
     /// it comes before `[run.agents.NAME]` of the user configuration.
     #[serde(skip)]
@@ -310,9 +320,27 @@ pub struct GuiCfg {
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct EnvCfg {
-    /// Pass the host environment (default true). False passes only the
-    /// allowlist: locale, terminal, the profile's env_pass, and `pass`.
+    /// `listed`: only the lists pass (the default of a new installation).
+    /// `inherit`: the host environment passes, without secrets, cloud
+    /// credentials and sockets (envset.rs).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<crate::envset::Mode>,
+    /// The older form of `mode`: true is `inherit`, false is `listed`.
+    /// `mode` wins when both are there.
     pub inherit: Option<bool>,
+    /// The paddock version that wrote `mode = "inherit"` for a current
+    /// installation. The review of current users is open while it is
+    /// there; two releases later `listed` applies (envset::forced). User
+    /// configuration only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub migrated: Option<String>,
+    /// `[env.agent.NAME]`: pass and set for one agent. User configuration only.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub agent: BTreeMap<String, ScopeCfg>,
+    /// `[env.project."PATH"]`: pass and set for one project. User
+    /// configuration only.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub project: BTreeMap<String, ScopeCfg>,
     /// Host variables that are not inherited. `paddock env hide` edits this list.
     #[serde(default)]
     pub hide: Vec<String>,
@@ -321,6 +349,16 @@ pub struct EnvCfg {
     pub pass: Vec<String>,
     /// Fixed variables.
     #[serde(default)]
+    pub set: BTreeMap<String, String>,
+}
+
+/// The variables of one scope of `[env]`: an agent or a project.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ScopeCfg {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pass: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub set: BTreeMap<String, String>,
 }
 
@@ -376,12 +414,33 @@ impl Manifest {
                         path.display()
                     );
                 }
+                if v.get("run").and_then(|r| r.get("allow_wide")).is_some() {
+                    bail!(
+                        "{}: [run] allow_wide is only read from the user configuration (~/.config/paddock/config.toml); a project paddock.toml cannot set it, because an agent in the sandbox can edit the project",
+                        path.display()
+                    );
+                }
                 if v.get("network").and_then(|n| n.get("max")).is_some() {
                     bail!(
                         "{}: network.max is only read from the user configuration (~/.config/paddock/config.toml); a project paddock.toml cannot set it",
                         path.display()
                     );
                 }
+            }
+            if let Some(k) = v
+                .as_ref()
+                .and_then(|v| v.get("env"))
+                .and_then(|e| e.as_table())
+                .and_then(|t| {
+                    ["agent", "project", "migrated"]
+                        .into_iter()
+                        .find(|k| t.contains_key(*k))
+                })
+            {
+                bail!(
+                    "{}: [env] {k} is only read from the user configuration (~/.config/paddock/config.toml); a project paddock.toml can ask for pass and set, because an agent in the sandbox can edit the project",
+                    path.display()
+                );
             }
             // `[loft] mode` alone is a project setting (loft/sync.rs).
             let loft_mode_only = v
@@ -542,6 +601,13 @@ impl Manifest {
         }
         if o.env.inherit.is_some() {
             self.env.inherit = o.env.inherit;
+            // The project's older key overrides the user's mode too.
+            if o.env.mode.is_none() {
+                self.env.mode = None;
+            }
+        }
+        if o.env.mode.is_some() {
+            self.env.mode = o.env.mode;
         }
         self.env.pass.extend(o.env.pass);
         self.env.hide.extend(o.env.hide);
@@ -598,7 +664,7 @@ impl Manifest {
             "network.lan": self.network.lan == Some(true),
             "mcp.allow": self.mcp.allow,
             "auth.shared": self.auth.mode.as_deref() == Some("shared"),
-            "env.inherit": self.env.inherit == Some(true),
+            "env.inherit": self.env_inherits(),
             "gui.host": self.gui.mode == Some(GuiMode::Host),
             "gui.gpu": self.gui.gpu == Some(true),
             "env.pass": self.env.pass,
@@ -646,7 +712,7 @@ impl Manifest {
                 .values()
                 .any(|p| p.start != McpStart::Never)
             || self.auth.mode.as_deref() == Some("shared")
-            || self.env.inherit == Some(true)
+            || self.env_inherits()
             || self.gui.mode == Some(GuiMode::Host)
             || self.gui.gpu == Some(true)
             || !self.env.pass.is_empty()
@@ -655,6 +721,15 @@ impl Manifest {
             || !self.docker.packages.is_empty()
             || !self.devices.r#use.is_empty()
             || self.auto_approvals()
+    }
+
+    /// The file asks for the host environment: `mode = "inherit"`, or
+    /// `inherit = true` without a mode.
+    fn env_inherits(&self) -> bool {
+        match self.env.mode {
+            Some(m) => m == crate::envset::Mode::Inherit,
+            None => self.env.inherit == Some(true),
+        }
     }
 
     /// `[run] approvals = "auto"` in a project file: the agent then
@@ -685,64 +760,6 @@ fn check_project_devices(path: &Path, v: &toml::Value) -> Result<()> {
     }
     Ok(())
 }
-
-pub const TEMPLATE: &str = r#"# paddock.toml: sandbox settings for this project.
-# Fields that widen access need a one-time approval on the host.
-
-# default_harness = "claude"
-# backend = "auto"            # auto | bwrap | docker
-
-[mounts]
-# rw = []                     # extra writable host paths
-# ro = ["../shared-protos"]   # extra read-only host paths
-
-[secrets]
-# hide = ["secrets/"]         # hide more project paths
-# reveal = [".env.test"]      # do not hide these
-
-[network]
-# mode = "egress"             # none | api | allowlist | egress | host
-# publish = [5173]            # ports reachable from the host
-# allow = ["crates.io"]       # extra domains for modes "api" and "allowlist"
-# lan = true                # reach private networks: routers, NAS, other machines on the LAN
-# host_ports = [8765]         # host loopback ports reachable from the sandbox (local MCP servers)
-
-[run]
-# approvals = "auto"          # auto: the agent approves its own steps in the sandbox
-#                             # manual: you approve each step in the agent's interface
-
-[auth]
-# mode = "shared"             # shared: your login | isolated | isolated:NAME: a separate login
-
-[mcp]
-# allow = ["my-server"]       # MCP servers whose host files may be mounted read-only
-
-[gui]
-# mode = "headless"           # off | headless | window | host
-#                             # headless: private display inside the sandbox (default for desktop projects)
-#                             # window:   a nested compositor window on your desktop
-#                             # host:     your real desktop; the agent can read the screen and type
-# gpu = false                 # bind /dev/dri render nodes
-# width = 1600
-# height = 1000
-
-[env]
-# inherit = true              # pass the host environment; false passes only the allowlist
-# pass = []                   # host variables to pass through when inherit = false
-# set = { RUST_LOG = "info" }
-
-[setup]
-# mise_install = true
-# shared_build_cache = true   # worktree runs build in a cargo cache outside the worktree
-# run = []
-
-[docker]
-# image = "debian:stable"
-# packages = ["libssl-dev"]
-
-[devices]
-# use = ["mac"]               # ask for devices of the user configuration (paddock device ls)
-"#;
 
 #[cfg(test)]
 #[path = "manifest_tests.rs"]

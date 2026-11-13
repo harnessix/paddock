@@ -1,7 +1,7 @@
 # Builds paddock from this source tree: run `makepkg -si` in this directory,
 # or `bin/install` from the repository root.
 pkgname=omarchy-paddock
-pkgver=0.2.3
+pkgver=0.2.4
 pkgrel=1
 pkgdesc='Run coding-agent harnesses with full auto-approval inside an isolated sandbox'
 conflicts=('paddock-git')
@@ -17,13 +17,20 @@ optdepends=(
   'mise: per-project toolchains from mise.toml'
   'gnome-keyring: a private keyring in sandboxes of harnesses that need one (copilot)'
 )
-makedepends=('cargo')
+# mise gets the node and bun that build the terminal interface, in the
+# versions of tui/mise.toml, each checked against tui/mise.lock.
+makedepends=('cargo' 'mise')
+# paddock-tui is a bun program: its code sits behind the runtime in the same
+# file, and strip cuts it off. Cargo strips paddock itself (Cargo.toml).
+options=('!strip')
 source=()
 sha256sums=()
 
 build() {
   cd "$startdir/.."
   cargo build --release --locked
+  # The terminal interface, as one program next to the paddock binary.
+  tui/scripts/install.sh "$PWD/target/release"
 }
 
 check() {
@@ -34,6 +41,7 @@ check() {
 package() {
   cd "$startdir/.."
   install -Dm755 target/release/paddock "$pkgdir/usr/bin/paddock"
+  install -Dm755 target/release/paddock-tui "$pkgdir/usr/bin/paddock-tui"
   install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
   install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
 }

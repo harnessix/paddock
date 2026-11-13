@@ -49,7 +49,8 @@ impl Release {
             os,
         })
     }
-    fn stem(&self) -> String {
+    /// The folder inside the tarball, and the tarball name without `.tar.gz`.
+    pub fn stem(&self) -> String {
         format!("paddock-{}-{}-{}", self.version, self.arch, self.os)
     }
     pub fn tarball(&self) -> String {
@@ -61,6 +62,10 @@ impl Release {
     /// The binary inside the tarball.
     pub fn member(&self) -> String {
         format!("{}/paddock", self.stem())
+    }
+    /// The terminal interface inside the tarball.
+    pub fn tui_member(&self) -> String {
+        format!("{}/paddock-tui", self.stem())
     }
     fn asset_url(&self, name: &str) -> String {
         format!("{REPO_URL}/releases/download/{}/{name}", self.tag)

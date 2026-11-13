@@ -9,7 +9,8 @@ import React, { createContext, useContext, useEffect, useLayoutEffect, useRef, t
 import { Box, Text, measureElement, type DOMElement } from 'ink';
 import { drawRuns, prepareSprite, type ArtMode, type Cell, type PreparedSprite } from './art.js';
 import { SPRITE_FPS, type Sprite } from './sprites.js';
-import type { Overlay } from './screen.js';
+import type { Overlay, Row } from './screen.js';
+import { rowText } from './world/canvas.js';
 
 export const FPS = SPRITE_FPS;
 
@@ -20,6 +21,30 @@ interface Entry {
   rendered: number;
   /** What the screen shows: the frame and the place, or null (not known). */
   shown: { frame: number; x: number; y: number } | null;
+}
+
+/**
+ * A scene: a rectangle of cells that draws itself anew at each frame of
+ * the clock (the world). A sprite has ready frames; a scene has a
+ * function of the frame.
+ */
+export interface Scene {
+  /** The size in cells. */
+  w: number;
+  h: number;
+  /** Whether something moves at this frame: the clock runs only while it does. */
+  animated(tick: number): boolean;
+  /** The cells at a frame of the clock. */
+  rows(tick: number): readonly Row[];
+}
+
+interface SceneEntry {
+  scene: Scene;
+  ref: RefObject<DOMElement | null>;
+  /** What the screen shows (the sink only): the rows and the place, or null (Ink's render). */
+  shown: { rows: readonly Row[]; x: number; y: number } | null;
+  /** The rows of Ink's last render of the scene. */
+  rendered: readonly Row[];
 }
 
 export interface ArtLayerOptions {
@@ -47,6 +72,7 @@ export class ArtLayer {
   private painter: { patch(o: Overlay): boolean } | null;
   private onStep: ((ms: number) => void) | undefined;
   private entries = new Set<Entry>();
+  private scenes = new Set<SceneEntry>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private focused = true;
   /** The frame clock: every sprite shows frame `tick % its frame count`. */
@@ -85,11 +111,20 @@ export class ArtLayer {
       const at = this.place(e);
       if (at) out.push({ ...at, rows: this.prepared(e.sprite).screen[this.frameOf(e.sprite)] as Overlay['rows'] });
     }
+    for (const e of this.scenes) {
+      const at = this.placeOf(e.ref, e.scene.w, e.scene.h);
+      if (at) out.push({ ...at, rows: e.scene.rows(this.tick) });
+    }
     return out;
   }
 
   get enabled(): boolean {
     return this.mode !== 'none';
+  }
+
+  /** Whether the layer can move anything: it has art and a way to draw a step. Without it, a scene shows each end state at once. */
+  get animates(): boolean {
+    return this.enabled && this.canDraw;
   }
 
   get hasFocus(): boolean {
@@ -140,6 +175,15 @@ export class ArtLayer {
     };
   }
 
+  registerScene(e: SceneEntry): () => void {
+    this.scenes.add(e);
+    this.update();
+    return () => {
+      this.scenes.delete(e);
+      this.update();
+    };
+  }
+
   setFocused(on: boolean): void {
     if (on === this.focused) return;
     this.focused = on;
@@ -148,7 +192,11 @@ export class ArtLayer {
 
   /** Start or stop the clock: it runs only when there is something to animate. */
   update(): void {
-    const want = this.enabled && this.canDraw && this.focused && [...this.entries].some((e) => e.sprite.frames.length > 1);
+    const want =
+      this.enabled &&
+      this.canDraw &&
+      this.focused &&
+      ([...this.entries].some((e) => e.sprite.frames.length > 1) || [...this.scenes].some((e) => e.scene.animated(this.tick)));
     if (want && !this.timer) {
       this.timer = setInterval(() => this.step(), Math.round(1000 / this.fps));
       this.timer.unref?.();
@@ -163,17 +211,23 @@ export class ArtLayer {
     this.sink = null;
     this.painter = null;
     this.entries.clear();
+    this.scenes.clear();
     this.update();
   }
 
   /** Where a sprite stands on the screen, or null when any part of it is off the screen. */
   private place(e: Entry): { x: number; y: number } | null {
-    const node = e.ref.current;
+    return this.placeOf(e.ref, e.sprite.w, Math.ceil(e.sprite.h / 2));
+  }
+
+  /** Where a box of w x h cells stands on the screen, or null when any part of it is off the screen. */
+  private placeOf(ref: RefObject<DOMElement | null>, w: number, h: number): { x: number; y: number } | null {
+    const node = ref.current;
     if (!node) return null;
     const m = measureElement(node);
     const { columns, rows } = this.screen();
     if (m.width <= 0 || m.height <= 0) return null;
-    if (m.x < 0 || m.y < 0 || m.x + e.sprite.w > columns || m.y + Math.ceil(e.sprite.h / 2) > rows) return null;
+    if (m.x < 0 || m.y < 0 || m.x + w > columns || m.y + h > rows) return null;
     return { x: m.x, y: m.y };
   }
 
@@ -188,6 +242,8 @@ export class ArtLayer {
       if (drew) this.steps++;
     } else this.stepSink();
     this.onStep?.(performance.now() - t0);
+    // A motion of a scene that is over: with nothing left to move, the clock stops.
+    if (this.scenes.size > 0) this.update();
   }
 
   private stepSink(): void {
@@ -207,11 +263,47 @@ export class ArtLayer {
       if (from !== next) out += drawRuns(this.prepared(e.sprite).step(from, next), at);
       e.shown = { frame: next, ...at };
     }
+    for (const e of this.scenes) {
+      const at = this.placeOf(e.ref, e.scene.w, e.scene.h);
+      if (!at) {
+        e.shown = null;
+        continue;
+      }
+      const next = e.scene.rows(this.tick);
+      const from = e.shown && e.shown.x === at.x && e.shown.y === at.y ? e.shown.rows : e.rendered;
+      out += drawRowChanges(from, next, at);
+      e.shown = { rows: next, ...at };
+    }
     if (out) {
       this.steps++;
       this.sink(out);
     }
   }
+}
+
+/** The bytes that turn the rows `from` on the screen into `to`: each run of changed cells with one cursor move. */
+export function drawRowChanges(from: readonly Row[], to: readonly Row[], at: { x: number; y: number }): string {
+  let out = '';
+  for (let y = 0; y < to.length; y++) {
+    const a = from[y];
+    const b = to[y] as Row;
+    let x = 0;
+    while (x < b.ch.length) {
+      if (a && a.ch[x] === b.ch[x] && a.st[x] === b.st[x]) {
+        x++;
+        continue;
+      }
+      let end = x;
+      while (end + 1 < b.ch.length && !(a && a.ch[end + 1] === b.ch[end + 1] && a.st[end + 1] === b.st[end + 1])) end++;
+      // A wide character is written whole.
+      let start = x;
+      if (b.ch[start] === '' && start > 0) start--;
+      if (end + 1 < b.ch.length && b.ch[end + 1] === '') end++;
+      out += `\u001b[${at.y + y + 1};${at.x + start + 1}H` + rowText({ ch: b.ch.slice(start, end + 1), st: b.st.slice(start, end + 1) });
+      x = end + 1;
+    }
+  }
+  return out ? `\u001b7${out}\u001b[0m\u001b8` : '';
 }
 
 const preparedSprites = new WeakMap<Sprite, Map<ArtMode, PreparedSprite>>();
@@ -247,6 +339,38 @@ export function SpriteView(props: { sprite: Sprite }): React.JSX.Element | null 
       {rows.map((r, i) => (
         <Text key={i} wrap="truncate-end">
           {r}
+        </Text>
+      ))}
+    </Box>
+  );
+}
+
+/**
+ * A scene in its place: w columns, h rows. The painter draws it when there
+ * is one; else Ink draws the frame of the clock as text, and the layer
+ * writes the cells that change between Ink's frames.
+ */
+export function SceneView(props: { scene: Scene }): React.JSX.Element {
+  const layer = useArt();
+  const ref = useRef<DOMElement>(null);
+  const { scene } = props;
+  const entry = useRef<SceneEntry>({ scene, ref, shown: null, rendered: [] });
+  if (entry.current.scene !== scene) {
+    entry.current.scene = scene;
+    entry.current.shown = null;
+  }
+  useLayoutEffect(() => layer.registerScene(entry.current), [layer]);
+  // A new scene can start or end a motion: the clock follows.
+  useEffect(() => layer.update());
+  if (layer.paints && layer.enabled) return <Box ref={ref} width={scene.w} height={scene.h} flexShrink={0} />;
+  const rows = scene.rows(layer.tick);
+  entry.current.rendered = rows;
+  entry.current.shown = null;
+  return (
+    <Box ref={ref} flexDirection="column" width={scene.w} height={scene.h} flexShrink={0}>
+      {rows.map((r, i) => (
+        <Text key={i} wrap="truncate-end">
+          {rowText(r) || ' '}
         </Text>
       ))}
     </Box>

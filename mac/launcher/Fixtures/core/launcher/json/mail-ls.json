@@ -1,0 +1,14 @@
+[
+  {
+    "id": "claude-webshop-3f2a9c",
+    "short": "3f2a9c",
+    "state": "running",
+    "starter": "user",
+    "parent": null,
+    "up": 4,
+    "unread_up": 2,
+    "unread_ask": 1,
+    "unread_down": 0,
+    "last": 1793448000
+  }
+]

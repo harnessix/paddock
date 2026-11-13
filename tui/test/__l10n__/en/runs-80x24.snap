@@ -1,0 +1,24 @@
+paddock · 4 running · 3 wait for you      Runs   Board   Approvals ◆3   Mail ✉2
+╭─ Runs · 4 live, 3 ended ─────────────────────────────────────────────────────╮
+│ ›  ◆ waits for you 71c3ac claude  sandbox bwrap    16 min T-102 · 1 card ✉ … │
+│    ◆ waits for you 0b0b0b codex   sandbox bwrap    33 min T-101 · manual 1 … │
+│    ▲ stuck         0e0e0e evil    sandbox seatbelt 1 h    gamma · idle with… │
+│    ○ idle          0f0f0f grok    sandbox podman   50 min beta               │
+│    ✓ done          0c0c0c claude  sandbox          1 h    T-101 · hooks mer… │
+│    ✖ failed        0d0d0d codex   sandbox          1 h    beta · tests fail… │
+│    ✓ ended         0a0a0a codex   sandbox          50 min beta · stopped     │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+up to date · v opens a view window (no paddock split)
+↵ open  n new  s stop  v split  a approvals  ? help    hold Shift to select text

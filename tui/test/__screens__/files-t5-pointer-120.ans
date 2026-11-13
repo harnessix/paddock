@@ -1,0 +1,34 @@
+[1mpaddock[22m · 2 running                                                              [7m[1m Runs [22m[27m  Board   Approvals      Mail
+ claude · webshop · running 4 min · copy: 4 changed, 2 new, 1 deleted
+ run  approvals  mail [1m[36m[files][39m[22m                                                                         [2mpointer: ● linked [22m
+[36m╭─ [39m[1mPointer · ~/code/webshop[22m[36m ───────────────────────────────────────────────────────────────────────────────────────────╮[39m
+[36m│[39m [7m[1m[32m● linked[39m[22m[27m[2m   The pointer and the store agree.[22m                                                                          [36m│[39m
+[36m│[39m [2m ▏ [22mStore     [2m~/.local/share/paddock/copies/7c1e42  ·  1 copy  ·  4 backups[22m                                           [36m│[39m
+[36m│[39m [2m ▏ [22mSize      [2m60 KB of its own[22m                                                                                        [36m│[39m
+[36m│[39m [2m ▏ [22mDisk      [2mencrypted (LUKS)[22m                                                                                        [36m│[39m
+[36m│[39m [2mA copy of this folder carries only the pointer, not the files.[22m                                                       [36m│[39m
+[36m│[39m [7m[1m[Esc] Close[22m[27m                                                                                                          [36m│[39m
+[36m│[39m [2mEsc closes the card[22m                                                                                                  [36m│[39m
+[36m╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯[39m
+[2m╭─ Files · changes ────────────╮╭─ src/cart.ts · changed · +3 -2 ──────────────────────────────────────────────────────╮[22m
+[2m│[22m  [1m▾ webshop/   !1 ~2[22m[2m +2 -1 =1[22m [2m││[22m [1m[36m @@ line 38                              [39m[22m[2m│[22m[1m[36m @@ line 38[39m[22m                                [2m│[22m
+[2m│[22m  [1m▾ docs/           [22m[2m       !1[22m [2m││[22m  38 export function total(items: Item[])…[2m│[22m 38 export function total(items: Item[]):… [2m│[22m
+[2m│[22m     [31m![39m README.md    [31mconflict [39m [2m││[22m  39   if (items.length === 0) return 0;  [2m│[22m 39   if (items.length === 0) return 0;    [2m│[22m
+[2m│[22m  [1m▾ src/            [22m[2m ~2 +2 =1[22m [2m││[22m  40                                      [2m│[22m 40                                        [2m│[22m
+[2m│[22m  [1m  ▾ lib/util/     [22m[2m       +1[22m [2m││[22m  41   const total = items.reduce(        [2m│[22m 41   const total = items.reduce(          [2m│[22m
+[2m│[22m       [32m+[39m format.ts  [32mnew      [39m [2m││[22m [33m~42     (s, i) => s + i.price, 0);       [39m[2m│[22m[33m~42     (s, i) => s + i.price * i.qty,    [39m [2m│[22m
+[2m│[22m [1m[36m▸[39m[22m   [1m[33m~[39m[22m [1mcart.ts      [36m[A][K][D][39m[22m [2m││[22m                                          [2m│[22m[32m+43     0);                               [39m [2m│[22m
+[2m│[22m     [2m=[22m [2mold.ts       kept     [22m [2m││[22m  43   return total;                      [2m│[22m 44   return total;                        [2m│[22m
+[2m│[22m     [33m~[39m price.ts     [33mchanged  [39m [2m││[22m  44 }                                    [2m│[22m 45 }                                      [2m│[22m
+[2m│[22m     [32m+[39m tax.ts       [32mnew      [39m [2m││[22m [36m @@ line 61                              [39m[2m│[22m[36m @@ line 62[39m                                [2m│[22m
+[2m│[22m   [31m-[39m logo.png       [31mdeleted  [39m [2m││[22m  61                                      [2m│[22m 62                                        [2m│[22m
+[2m│[22m                              [2m││[22m  62 export function label(item: Item): s…[2m│[22m 63 export function label(item: Item): st… [2m│[22m
+[2m│[22m                              [2m││[22m  63   const name = item.name.trim();     [2m│[22m 64   const name = item.name.trim();       [2m│[22m
+[2m│[22m                              [2m││[22m [33m~64   return name + ' x' + item.count + …[39m[2m│[22m[33m~65   return name + ' x' + item.qty + ' a…[39m [2m│[22m
+[2m│[22m                              [2m││[22m  65 }                                    [2m│[22m 66 }                                      [2m│[22m
+[2m│[22m                              [2m││[22m  66                                      [2m│[22m 67                                        [2m│[22m
+[2m│[22m                              [2m││[22m  67 export const EMPTY: Item[] = [];     [2m│[22m 68 export const EMPTY: Item[] = [];       [2m│[22m
+[2m│[22m                              [2m││[22m                                                                                      [2m│[22m
+[2m╰─ 3 of 7 · 1 conflict ────────╯╰─ change 1 of 2 · original │ copy ────────────────────────────────────────────────────╯[22m
+[2mup to date · v opens a view window (no paddock split)[22m
+[1m[36m←→[39m[22m[2m choose  [22m[1m[36m↵[39m[22m[2m answer  [22m[1m[36mEsc[39m[22m[2m close  [22m[1m[36m?[39m[22m[2m help  [22m                                                       [2mhold Shift to select text[22m

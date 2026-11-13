@@ -2,15 +2,20 @@
 //! the manifest and the command line, then run the policy engine on it.
 
 mod cleanup;
+mod copy;
+mod paths;
 #[cfg(test)]
 mod privacy_tests;
 mod worktree;
 use cleanup::{PendingShadow, PendingWorktree};
+pub use copy::Copy;
+pub use paths::{check_harness_install, resolve_project, sandbox_writable};
+pub(crate) use worktree::ymd;
 pub use worktree::{
     create_worktree, discard_worktree, worktree_counts, worktree_report, worktree_status, Worktree,
 };
 
-use crate::detect::{self, git_toplevel, Context};
+use crate::detect::{self, Context};
 use crate::env::HostEnv;
 use crate::gui;
 use crate::manifest::{self, Manifest};
@@ -74,26 +79,11 @@ pub struct Options {
     /// that this run gets, whatever their `grant` says. A spawned child
     /// gets them from its parent, within the parent's ceiling.
     pub devices: Vec<String>,
-}
-
-/// Today's date in UTC as YYYYMMDD, for branch names.
-fn today() -> String {
-    ymd(state::now())
-}
-
-pub(crate) fn ymd(unix: u64) -> String {
-    let days = (unix / 86_400) as i64;
-    // Civil date from days since 1970-01-01 (Howard Hinnant's algorithm).
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = yoe + era * 400 + i64::from(m <= 2);
-    format!("{y:04}{m:02}{d:02}")
+    /// `--yes-wide-folder`: start in a wide folder (folder_check.rs), for
+    /// example a folder of projects.
+    pub wide_folder: bool,
+    /// `--copy`, `--direct` and what the command allows (copy.rs).
+    pub copy: crate::copy::Ask,
 }
 
 pub struct Built {
@@ -128,6 +118,8 @@ pub struct Built {
     /// Off for the escape probe and app windows.
     pub view: bool,
     pub worktree: Option<Worktree>,
+    /// The copy of the project that the run works on (copy.rs).
+    pub copy: Copy,
     /// The pasture it joined; None: a pasture of its own.
     pub pasture: Option<String>,
     /// The one-shot command that answers the questions of other members
@@ -153,80 +145,17 @@ impl Built {
     }
 }
 
-/// The host folders that a sandbox can write, as real paths: the project,
-/// every read-write mount so far, and all sandbox homes and worktrees (a
-/// sandbox of another project can write those).
-pub fn sandbox_writable(env: &HostEnv, spec: &SandboxSpec) -> Vec<PathBuf> {
-    let mut v = vec![
-        spec.project.clone(),
-        spec.home_src.clone(),
-        env.paddock_data().join("homes"),
-        env.paddock_data().join("worktrees"),
-    ];
-    v.extend(
-        spec.mounts
-            .iter()
-            .filter(|m| m.kind == crate::spec::MountKind::Rw)
-            .filter_map(|m| m.src.clone()),
-    );
-    v.into_iter()
-        .map(|p| std::fs::canonicalize(&p).unwrap_or(p))
-        .collect()
-}
-
-/// The harness install mounts come from the executable and the script
-/// headers it leads to (`profile::harness_closure`). A file in a folder the
-/// sandbox can write could name any host path in its header, and paddock
-/// would mount that path. So the harness must not come from such a folder,
-/// for example through a host PATH entry inside the project.
-pub fn check_harness_install(harness: &Harness, writable: &[PathBuf]) -> Result<()> {
-    let all = std::iter::once(&harness.exe)
-        .chain(&harness.install_mounts)
-        .chain(&harness.path_dirs);
-    for p in all {
-        if let Some(w) = writable.iter().find(|w| p.starts_with(w)) {
-            bail!(
-                "the {} harness resolves to {}, inside {}, which the sandbox can write. \
-                 paddock does not mount host paths that such a file names. \
-                 Install the harness outside the project and the sandbox homes.",
-                harness.profile.name,
-                p.display(),
-                w.display()
-            );
-        }
-    }
-    Ok(())
-}
-
-pub fn resolve_project(path: Option<&Path>) -> Result<PathBuf> {
-    let raw = match path {
-        Some(p) => p.to_path_buf(),
-        None => std::env::current_dir()?,
-    };
-    let dir = std::fs::canonicalize(&raw)
-        .with_context(|| format!("project directory {} does not exist", raw.display()))?;
-    if !dir.is_dir() {
-        bail!("{} is not a directory", dir.display());
-    }
-    Ok(git_toplevel(&dir).unwrap_or(dir))
-}
-
-/// Build a spec for a located harness.
-pub fn build(env: &HostEnv, opts: &Options) -> Result<Built> {
-    if let Some(name) = &opts.pasture {
-        if opts.child.is_some() {
-            bail!("a sandbox that another one starts cannot join a pasture");
-        }
-        crate::pasture::admit(env, name, &opts.harness)?;
-    }
-    let factory = HarnessFactory::new(env)?;
-    let harness = factory.create(&opts.harness)?;
-    build_with(env, opts, harness)
-}
-
 pub fn build_with(env: &HostEnv, opts: &Options, harness: Harness) -> Result<Built> {
     let memory = crate::memory::limit::Config::load(env)?;
     let project = resolve_project(opts.project.as_deref())?;
+    // The folder guard. A spawned sandbox gets the project of its parent,
+    // whose start passed the whole check: only the hard rules again.
+    if opts.child.is_some() {
+        crate::folder_check::enforce_hard(env, &project)?;
+    } else {
+        crate::folder_check::enforce(env, &project, opts.wide_folder, opts.transparent.is_none())?;
+    }
+    // The older check stays as a backstop of the guard.
     // The project path is resolved, so compare it with the resolved home
     // too: `$HOME` may name a symlink.
     if crate::policy::homes(env)
@@ -234,8 +163,9 @@ pub fn build_with(env: &HostEnv, opts: &Options, harness: Harness) -> Result<Bui
         .any(|h| project == *h || h.starts_with(&project))
     {
         bail!(
-            "refusing to use {} as the project: it is the home directory or contains it",
-            project.display()
+            "refusing to use {} as the project: it is the home directory or contains it. {}",
+            project.display(),
+            crate::folder_check::FIX
         );
     }
     // A child uses the settings that its parent had when it started. The
@@ -264,7 +194,7 @@ pub fn build_with(env: &HostEnv, opts: &Options, harness: Harness) -> Result<Bui
             origin: "spawned sandbox: a one-shot task has nobody to answer it".into(),
         }
     } else {
-        crate::approvals::of(&m, &opts.harness, opts.approvals)
+        crate::approvals::of(env, &m, &opts.harness, opts.approvals)
     };
     let approvals_mode = (!opts.no_yolo).then_some(approvals.mode);
     // In manual mode paddock writes none of the settings that skip the
@@ -322,6 +252,8 @@ pub fn build_with(env: &HostEnv, opts: &Options, harness: Harness) -> Result<Bui
         })?),
         None => None,
     };
+    let mut copy = copy::PendingCopy::start(env, opts, &profile, &m, &project, &id)?;
+    let project = copy.work(project);
     // `--profile default`: the home is an overlay on a private snapshot, or
     // a clone (macOS). Its upper folder or the clone gets the credentials.
     let shadow = if opts.profile_default {
@@ -386,7 +318,7 @@ pub fn build_with(env: &HostEnv, opts: &Options, harness: Harness) -> Result<Bui
         ));
         spec.shadow = Some(p.clone());
     }
-    spec.add_mount(Mount::same(&project, true, "project"));
+    copy.mount(&mut spec, &project);
 
     // The harness.
     let porigin = format!("profile {}", profile.name);
@@ -405,7 +337,23 @@ pub fn build_with(env: &HostEnv, opts: &Options, harness: Harness) -> Result<Bui
         spec.add_path(d.clone());
     }
     // The host environment first, so profile, manifest and detectors override it.
-    let inherit = opts.inherit_env.or(m.env.inherit).unwrap_or(true);
+    let env_mode = crate::envset::run_mode(env, &m, opts.inherit_env);
+    let inherit = env_mode.mode == crate::envset::Mode::Inherit;
+    let env_scopes = crate::envset::scopes(env, &m, Some(&profile.name), &project);
+    // Names that the user or the profile hands over: they pass in both modes.
+    let named: std::collections::BTreeSet<&String> = m
+        .env
+        .pass
+        .iter()
+        .chain(&profile.state.env_pass)
+        .chain(env_scopes.iter().flat_map(|(_, _, s)| &s.pass))
+        .collect();
+    if env_mode.origin == "forced" {
+        spec.notices.push(
+            "environment: the review time of the host environment is over, so only the lists pass now ([env] mode = \"listed\"). To see them: paddock env show. To go back: paddock env mode inherit"
+                .to_string(),
+        );
+    }
     if inherit {
         let mut withheld = Vec::new();
         let mut dropped = Vec::new();
@@ -425,7 +373,7 @@ pub fn build_with(env: &HostEnv, opts: &Options, harness: Harness) -> Result<Bui
             }
             // Named in [env] pass or env_pass: those loops below add it.
             if policy::is_cloud_secret(k) {
-                if !m.env.pass.contains(k) && !profile.state.env_pass.contains(k) {
+                if !named.contains(k) {
                     dropped.push(k.clone());
                 }
                 continue;
@@ -434,7 +382,7 @@ pub fn build_with(env: &HostEnv, opts: &Options, harness: Harness) -> Result<Bui
             // variables (env_pass) and the ones that the user hands over in
             // [env] pass are added below, with their values.
             if policy::looks_secret(k) {
-                if !m.env.pass.contains(k) && !profile.state.env_pass.contains(k) {
+                if !named.contains(k) {
                     withheld.push(k.clone());
                 }
                 continue;
@@ -497,6 +445,12 @@ pub fn build_with(env: &HostEnv, opts: &Options, harness: Harness) -> Result<Bui
             note.push_str(
                 ". To drop one: paddock env hide NAME. To pass only the allowlist: --env clean",
             );
+            if let Some(r) = &env_mode.review {
+                note.push_str(&format!(
+                    ". These variables pass unseen. Review them once: paddock env migrate. From paddock {}, only the lists pass",
+                    r.forced_from
+                ));
+            }
             spec.notices.push(note);
         }
     }
@@ -522,6 +476,10 @@ pub fn build_with(env: &HostEnv, opts: &Options, harness: Harness) -> Result<Bui
     }
     for k in &profile.state.env_pass {
         if let Some(v) = env.var(k) {
+            if let Some(why) = policy::never_pass(k, Some(v)) {
+                spec.deny(crate::boundary::ENV, k, why.name());
+                continue;
+            }
             spec.set_secret_env(k, v, &format!("{porigin} env_pass"));
         }
     }
@@ -582,13 +540,34 @@ pub fn build_with(env: &HostEnv, opts: &Options, harness: Harness) -> Result<Bui
             );
         }
     }
-    for k in &m.env.pass {
-        if let Some(v) = env.var(k) {
-            spec.set_secret_env(k, v, "manifest env.pass");
+    // [env] pass and set: the user and the project file, then the agent's
+    // scope, then the project's. The never-pass list has no switch.
+    let mut refused = Vec::new();
+    let mut pass_one = |spec: &mut SandboxSpec, k: &String, origin: &str| {
+        let Some(v) = env.var(k) else { return };
+        if let Some(why) = policy::never_pass(k, Some(v)) {
+            spec.deny(crate::boundary::ENV, k, why.name());
+            refused.push(policy::never_sentence(k, why));
+            return;
         }
+        spec.set_secret_env(k, v, origin);
+    };
+    for k in &m.env.pass {
+        pass_one(&mut spec, k, "manifest env.pass");
     }
     for (k, v) in &m.env.set {
         spec.set_env(k, v.clone(), "manifest env.set");
+    }
+    for (kind, key, s) in &env_scopes {
+        for k in &s.pass {
+            pass_one(&mut spec, k, &format!("manifest env.{kind}.{key} pass"));
+        }
+        for (k, v) in &s.set {
+            spec.set_env(k, v.clone(), &format!("manifest env.{kind}.{key} set"));
+        }
+    }
+    for r in refused {
+        spec.notices.push(format!("environment: {r}"));
     }
     // A registered credential reaches the sandbox only through its channel
     // (credentials.rs), never with the environment, env_pass or [env] pass.
@@ -641,7 +620,7 @@ pub fn build_with(env: &HostEnv, opts: &Options, harness: Harness) -> Result<Bui
             }
         }
     }
-    if let Some(why) = &profile.launch.wrap_on_host {
+    if let Some(why) = crate::agentgw::wrap_notice(&profile) {
         spec.warnings.push(format!("{}: {why}", profile.name));
     }
     // Last, so neither the host environment nor a project file turns
@@ -732,6 +711,12 @@ pub fn build_with(env: &HostEnv, opts: &Options, harness: Harness) -> Result<Bui
         // Transparent: the command already has the arguments it needs.
         if opts.transparent.is_none() {
             c.extend(profile.launch.args.iter().cloned());
+            c.extend(crate::run::supported_args(
+                env,
+                &harness.exe,
+                &profile.launch.args_if_supported,
+                &profile.launch.probe_args,
+            ));
         }
         // An editor that opens the repository opens the worktree instead.
         let repo_arg = home_key.display().to_string();
@@ -846,6 +831,7 @@ pub fn build_with(env: &HostEnv, opts: &Options, harness: Harness) -> Result<Bui
         _ => None,
     };
 
+    copy.finish(env, &mut spec)?;
     policy::enforce(env, &spec)?;
 
     let backend = opts
@@ -871,6 +857,7 @@ pub fn build_with(env: &HostEnv, opts: &Options, harness: Harness) -> Result<Bui
             pending_shadow.0 = None;
             pending.keep()
         },
+        copy: copy.keep(),
         pasture: opts.pasture.clone(),
         bridge,
         auth,
@@ -883,6 +870,9 @@ pub fn build_with(env: &HostEnv, opts: &Options, harness: Harness) -> Result<Bui
         approvals_origin: approvals.origin,
     })
 }
+
+mod entry;
+pub use entry::build;
 
 #[cfg(test)]
 mod tests;

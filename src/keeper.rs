@@ -740,6 +740,8 @@ fn notify_failure(env: &HostEnv, store: &Path, e: &anyhow::Error) {
     let _ = crate::broker::notify::show(
         env,
         &crate::broker::notify::Note {
+            what: "login_refresh".into(),
+            action: None,
             summary: "paddock cannot refresh a login".into(),
             body: format!(
                 "{}: {e:#}. The sandboxes that use it may have to sign in again soon.",

@@ -4,7 +4,8 @@
 //! queue of the VM (a new `VZMultipleDirectoryShare` on the running
 //! `VZVirtioFileSystemDevice`), and the session takes the new state only
 //! when the framework did. The network mode goes to the firewall, the
-//! clipboard directions to the clipboard machine. While a workspace
+//! clipboard directions to the clipboard machine, a rule of the session
+//! (`grant rule ...`) to the firewall. While a workspace
 //! folder is shared, the shim asks the guest for the open file handles
 //! every few seconds and writes them into the session record.
 
@@ -71,6 +72,12 @@ impl Session<'_> {
         };
         if self.quitting {
             let _ = reply.send(Err(text::grant_quitting()));
+            return;
+        }
+        // A rule of the session goes to the firewall, not to the VM.
+        if let Some(r) = self.firewall.rule_op(&op) {
+            let _ =
+                reply.send(r.and_then(|a| serde_json::to_string(&a).map_err(|e| e.to_string())));
             return;
         }
         if self.files.grant_pending.is_some() || self.files.fresh_handles.is_some() {

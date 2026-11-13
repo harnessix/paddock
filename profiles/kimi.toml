@@ -10,6 +10,8 @@ unverified = [
 [locate]
 mise = "kimi"
 commands = ["kimi"]
+# The folders of its installers, for a run with a thin PATH.
+dirs = ["~/.kimi-code/bin", "~/.npm-global/bin", "~/.bun/bin"]
 
 [launch]
 # `kimi login` uses a device code, without a localhost callback.

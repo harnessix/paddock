@@ -13,6 +13,8 @@ unverified = [
 [locate]
 mise = "codex"
 commands = ["codex"]
+# The folders of its installers, for a run with a thin PATH.
+dirs = ["~/.npm-global/bin", "~/.bun/bin"]
 # Codex 0.167 starts codex-code-mode-host and codex-exec-server from the
 # folder of its binary. In /usr/bin paddock mounts only these names.
 helpers = ["code-mode-host", "exec-server"]
@@ -22,6 +24,13 @@ helpers = ["code-mode-host", "exec-server"]
 login_callback = true
 # The help text says this flag is intended for externally sandboxed environments.
 yolo_args = ["--dangerously-bypass-approvals-and-sandbox"]
+# Codex 0.166 starts a background app server ("daemon") that outlives the
+# run and that other runs could share. A sandbox run works without it. The
+# flag is a root option of the interactive CLI: `codex --no-daemon resume`
+# and `fork` keep it (codex-rs cli/src/main.rs, rust-v0.166.0), and
+# `codex --no-daemon exec` ignores it. [oneshot] does not get it. An older
+# codex whose `--help` does not name the flag starts without it.
+args_if_supported = ["--no-daemon"]
 
 [state]
 # The host data that `--profile default` copies into a private snapshot.
@@ -65,6 +74,29 @@ format = "toml"
 path = ["features", "unified_exec_tty"]
 value = false
 when = "no_pty"
+
+# macOS (Seatbelt): codex 0.166 binds the socket of its app server at
+# /private/tmp/codex-daemon-<uid>/<sha256 of the canonical rendezvous path>,
+# with a lock file next to it (codex-rs uds/src/daemon_directory.rs and
+# app-server-transport/src/transport/unix_socket.rs `protected_socket_path`).
+# The folder must be a real folder of the user with mode 0700. The run gets
+# its own two names in it, so `--no-daemon` is not needed. The daemon leaves
+# the process group (setsid). The end of the run stops it and its MCP helpers:
+# every process in the sandbox of the run, and the pids of the pid files.
+# Linux has a private /tmp and keeps `--no-daemon`.
+[[macos.tmp]]
+name = "codex-daemon-{uid}"
+kind = "shared"
+entries = [
+  "{sha256:{home}/.codex/app-server-control/app-server-control.sock}",
+  "{sha256:{home}/.codex/app-server-control/app-server-control.sock}.lock",
+]
+replaces_args = ["--no-daemon"]
+stop_pid_files = [
+  ".codex/app-server-daemon/daemon.pid",
+  ".codex/app-server-daemon/daemon-updater.pid",
+]
+why = "the socket of the codex app server"
 
 [[mcp]]
 file = ".codex/config.toml"

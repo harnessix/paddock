@@ -159,6 +159,7 @@ fn the_refresh_runs_in_a_shared_sandbox_with_network_api() {
     let joined = a.join(" ");
     assert!(joined.starts_with("run agy "), "{joined}");
     assert!(joined.contains("--auth shared --network api --no-yolo"));
+    assert!(joined.contains("--yes --direct"), "{joined}");
     assert!(joined.contains("--allow daily-cloudcode-pa.googleapis.com"));
     assert!(joined.ends_with("-- models"), "{joined}");
     assert_eq!(a[2], scratch(&e, "agy").display().to_string());

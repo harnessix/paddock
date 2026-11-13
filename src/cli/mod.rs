@@ -12,6 +12,7 @@ pub(crate) mod approver;
 pub(crate) mod auth;
 pub(crate) mod board;
 pub(crate) mod catalog;
+pub(crate) mod copy;
 pub(crate) mod credentials;
 pub(crate) mod device;
 pub(crate) mod device_serve;
@@ -60,14 +61,15 @@ pub(crate) mod worktree;
     version = paddock::VERSION_LONG,
     about = "Run a coding-agent harness with full auto-approval inside an isolated sandbox",
     long_about = None,
-    after_help = "Examples:\n  paddock claude              start Claude Code in the current project\n  paddock codex ~/src/app     start Codex in another project\n  paddock explain claude      show every mount, variable and rule, and why\n  paddock doctor --escape     try to escape the sandbox and report the result"
+    after_help = "Examples:\n  paddock                     open the home screen (in a terminal)\n  paddock claude              start Claude Code in the current project\n  paddock codex ~/src/app     start Codex in another project\n  paddock explain claude      show every mount, variable and rule, and why\n  paddock doctor --escape     try to escape the sandbox and report the result"
 )]
 pub(crate) struct Cli {
     /// Show more log output: -v info, -vv debug, -vvv trace. PADDOCK_LOG=debug
     /// or PADDOCK_LOG=broker=debug sets levels too.
     #[arg(short, long, global = true, action = clap::ArgAction::Count)]
     pub(crate) verbose: u8,
-    /// Show only errors.
+    /// Show only errors: -q hides info and warnings, -qq hides all but a
+    /// fatal error. A question or an approval always shows.
     #[arg(short, long, global = true, action = clap::ArgAction::Count)]
     pub(crate) quiet: u8,
     #[command(subcommand)]
@@ -167,6 +169,7 @@ pub(crate) enum Cmd {
     Split(split::SplitArgs),
     /// The terminal interface: runs, approvals, mail and the board, with the
     /// keyboard or the mouse. `paddock tui --help` lists its options.
+    /// `paddock` alone in a terminal opens its home screen.
     #[command(disable_help_flag = true)]
     Tui {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -293,7 +296,10 @@ pub(crate) enum Cmd {
         #[arg(long)]
         json: bool,
     },
-    /// Bring the project back to its snapshot from before a sandbox started.
+    #[command(flatten)]
+    Copy(copy::CopyCmd),
+    /// Take the last apply of a copy back, or bring the project back to
+    /// its snapshot from before a sandbox started.
     Undo {
         /// A session id from `paddock undo --list`, such as 1a2b3c. Without it, the last
         /// session of this project.
@@ -307,6 +313,9 @@ pub(crate) enum Cmd {
         /// Also restore files that changed after the session ended.
         #[arg(long)]
         force: bool,
+        /// With an apply to take back: print JSON (paddock.undo/v1).
+        #[arg(long, requires = "yes")]
+        json: bool,
     },
     /// Copy files from a sandbox home to the host, then remove the sandbox copy.
     Recover {
@@ -325,14 +334,23 @@ pub(crate) enum Cmd {
         #[arg(long)]
         keep: bool,
     },
-    /// Delete files from the recovery folders of a sandbox home.
+    /// Delete files from the recovery folders of a sandbox home. For a run
+    /// on a copy: drop changes from the copy, or the whole copy without PATHS.
     Discard {
         /// A sandbox id from `paddock files`, or its short form such as 1a2b3c.
         id: String,
-        #[arg(required_unless_present = "all")]
         paths: Vec<String>,
         #[arg(long, conflicts_with = "paths")]
         all: bool,
+        /// The files of the sandbox home, also for a run on a copy.
+        #[arg(long)]
+        home: bool,
+        /// For a copy: discard without a question.
+        #[arg(long, short = 'y')]
+        yes: bool,
+        /// For a copy: print JSON (paddock.discard/v1).
+        #[arg(long, requires = "yes")]
+        json: bool,
     },
     /// Check dependencies, or try to escape the sandbox with --escape.
     Doctor {
@@ -428,6 +446,9 @@ pub(crate) enum Cmd {
         /// Update without asking.
         #[arg(long, short = 'y', conflicts_with = "check")]
         yes: bool,
+        /// Only install the terminal interface of this paddock version.
+        #[arg(long, conflicts_with_all = ["check", "yes"])]
+        tui: bool,
     },
     /// Show or change which host environment variables a sandbox inherits.
     Env {
@@ -585,6 +606,12 @@ pub(crate) enum Cmd {
     /// Inside an app sandbox: the link and notification services on its private bus.
     #[command(hide = true)]
     Portal,
+    /// On macOS: what the end of a Seatbelt run sees in /private/tmp.
+    #[command(hide = true)]
+    Tmp {
+        #[command(subcommand)]
+        cmd: TmpCmd,
+    },
     /// On macOS: mark the windows of app sandboxes with a frame, a badge and
     /// a menu bar item. paddock starts this with an app sandbox.
     #[command(hide = true)]
@@ -644,12 +671,17 @@ pub(crate) enum Cmd {
         #[command(subcommand)]
         cmd: tools::ToolsCmd,
     },
-    /// The executor of approved host requests: let systemd start it on the
-    /// first request (socket activation), or turn that off again.
+    /// The executor of approved host requests (install, remove, status),
+    /// and the sandboxed gateways of gateway agents: `paddock gateway
+    /// openclaw start|stop|status|logs`.
     Gateway {
         #[command(subcommand)]
         cmd: gateway::GatewayCmd,
     },
+    /// The supervisor of one sandboxed agent gateway (started by `paddock
+    /// gateway NAME start` through systemd, launchd or a detached process).
+    #[command(hide = true)]
+    GatewayServe { name: String },
     /// The executor of approved host requests (started by paddock or by
     /// systemd socket activation).
     #[command(hide = true)]
@@ -734,26 +766,15 @@ pub(crate) enum McpServe {
 }
 
 #[cfg(test)]
-mod doctor_json_conflict_tests {
-    use super::Cli;
-    use clap::Parser;
+mod doctor_json_conflict_tests;
 
-    #[test]
-    fn json_rejects_explicit_backend_and_device() {
-        // The complete command tree needs the same stack as the main thread.
-        std::thread::Builder::new()
-            .stack_size(8 * 1024 * 1024)
-            .spawn(|| {
-                for args in [
-                    vec!["paddock", "doctor", "--json", "--backend", "auto"],
-                    vec!["paddock", "doctor", "--json", "--device", "x"],
-                ] {
-                    assert!(Cli::try_parse_from(args).is_err());
-                }
-                assert!(Cli::try_parse_from(["paddock", "doctor", "--json"]).is_ok());
-            })
-            .unwrap()
-            .join()
-            .unwrap();
-    }
+/// `paddock tmp`: the fixed names in /private/tmp of Seatbelt runs.
+#[derive(clap::Subcommand, Debug)]
+pub enum TmpCmd {
+    /// Print the records, the last release, and for each process of the
+    /// user what the kernel tells about its sandbox. It stops nothing.
+    Debug {
+        /// Only this run.
+        run: Option<String>,
+    },
 }

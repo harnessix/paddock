@@ -112,6 +112,7 @@ pub fn collect(env: &HostEnv, now: u64) -> Snapshot {
         }
     }
     facts.retain(|f| keep(f, &files, now));
+    loft_commits(env, &mut facts);
     files.retain(|repo, _| facts.iter().any(|f| &f.repo == repo));
     let mut board = super::build(&facts, &files, pending.len(), slots(env, now));
     // build() is pure: the loft folders are read here.
@@ -121,9 +122,25 @@ pub fn collect(env: &HostEnv, now: u64) -> Snapshot {
             .find(|f| f.repo.display().to_string() == p.path)
             .and_then(|f| super::loft_of(env, &f.repo));
     }
+    board.gateways = crate::agentgw::report::all(env);
     Snapshot {
         board,
         tickets: files,
+    }
+}
+
+/// The loft commits of each run: one read of the history per project.
+fn loft_commits(env: &HostEnv, facts: &mut [Facts]) {
+    let mut by_repo: HashMap<PathBuf, HashMap<String, (u64, u64)>> = HashMap::new();
+    for f in facts.iter_mut() {
+        let commits = by_repo.entry(f.repo.clone()).or_insert_with(|| {
+            let loft = crate::loft::Loft::of(env, &f.repo);
+            crate::loft::git::run_commits(&loft)
+        });
+        if let Some(&(n, last)) = commits.get(&f.id) {
+            f.loft_commits = n;
+            f.loft_last = Some(last);
+        }
     }
 }
 

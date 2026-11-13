@@ -2,7 +2,11 @@
 // overlay and the footer read this list, so no feature hides behind a key
 // that is not written somewhere.
 
+import { t } from './i18n/index.js';
+import { en } from './i18n/en.js';
+
 export type ActionId =
+  | 'home'
   | 'open'
   | 'back'
   | 'new'
@@ -21,38 +25,67 @@ export type ActionId =
   | 'help'
   | 'mouse'
   | 'layout'
+  | 'world'
+  | 'plumbing'
+  | 'inspector'
+  | 'pause'
+  | 'files'
+  | 'applyAll'
+  | 'backups'
+  | 'pointer'
   | 'refresh'
   | 'quit';
 
 export interface Action {
   id: ActionId;
   key: string;
-  label: string;
+  /** The words of the action, in the language of the interface. */
+  readonly label: string;
   /** Changes something: hidden with --readonly. */
   changes: boolean;
 }
 
+function act(id: ActionId, key: string, changes: boolean): Action {
+  return {
+    id,
+    key,
+    get label() {
+      return t(`action.${id}`);
+    },
+    changes,
+  };
+}
+
 export const ACTIONS: Action[] = [
-  { id: 'open', key: '↵', label: 'open the selected item', changes: false },
-  { id: 'back', key: 'q Esc', label: 'go back (quit on the first screen)', changes: false },
-  { id: 'new', key: 'n', label: 'new run: harness, project, prompt file', changes: true },
-  { id: 'stop', key: 's', label: 'stop the selected run (asks first)', changes: true },
-  { id: 'split', key: 'v', label: 'split view of the marked runs, or view the selected run', changes: false },
-  { id: 'mark', key: 'Space', label: 'mark a run for the split view', changes: false },
-  { id: 'view', key: 'o', label: 'open the live view of the run in a new terminal window', changes: false },
-  { id: 'write', key: 'w', label: 'write a message to the agent of the run', changes: true },
-  { id: 'runs', key: 'r', label: 'show the runs', changes: false },
-  { id: 'board', key: 'b', label: 'show the board', changes: false },
-  { id: 'approvals', key: 'a', label: 'show the approvals that wait', changes: false },
-  { id: 'mail', key: 'm', label: 'show the mail of the runs', changes: false },
-  { id: 'nextTab', key: 'Tab', label: 'next tab or pane (Shift+Tab back)', changes: false },
-  { id: 'filter', key: '/', label: 'filter the list', changes: false },
-  { id: 'palette', key: ': Ctrl+P', label: 'command palette: every action', changes: false },
-  { id: 'help', key: '?', label: 'this help', changes: false },
-  { id: 'mouse', key: 'M', label: 'mouse on or off (off: the terminal selects text)', changes: false },
-  { id: 'layout', key: 'L', label: 'runs as rooms (a card and a character per run) or as a list', changes: false },
-  { id: 'refresh', key: 'R', label: 'read paddock again now', changes: false },
-  { id: 'quit', key: 'Ctrl+C Q', label: 'quit', changes: false },
+  act('home', 'H', false),
+  act('open', '↵', false),
+  act('back', 'q Esc', false),
+  act('new', 'n', true),
+  act('stop', 's', true),
+  act('split', 'v', false),
+  act('mark', 'Space', false),
+  act('view', 'o', false),
+  act('write', 'w', true),
+  act('runs', 'r', false),
+  act('board', 'b', false),
+  act('approvals', 'a', false),
+  act('mail', 'm', false),
+  act('nextTab', 'Tab', false),
+  act('filter', '/', false),
+  act('palette', ': Ctrl+P', false),
+  act('help', '?', false),
+  act('mouse', 'M', false),
+  act('layout', 'L', false),
+  act('world', 'W', false),
+  act('plumbing', 'P', false),
+  act('inspector', 'I', false),
+  act('pause', 'z', true),
+  act('files', 'f', false),
+  act('applyAll', '', true),
+  act('backups', '', false),
+  act('pointer', '', false),
+  act('refresh', 'R', false),
+  act('quit', 'Ctrl+C Q', false),
 ];
 
 export function visibleActions(readonly: boolean): Action[] {
@@ -62,5 +95,8 @@ export function visibleActions(readonly: boolean): Action[] {
 export function searchActions(list: Action[], query: string): Action[] {
   const q = query.trim().toLowerCase();
   if (!q) return list;
-  return list.filter((a) => a.label.toLowerCase().includes(q) || a.id.toLowerCase().includes(q) || a.key.toLowerCase() === q);
+  // The English words find an action in every language.
+  return list.filter(
+    (a) => a.label.toLowerCase().includes(q) || en[`action.${a.id}`].toLowerCase().includes(q) || a.id.toLowerCase().includes(q) || a.key.toLowerCase() === q,
+  );
 }

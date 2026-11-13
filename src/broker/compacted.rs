@@ -66,6 +66,7 @@ impl Broker {
         );
         if cfg.notify {
             let n = super::notify::Note {
+                what: "compaction".into(),
                 summary: format!("{}: context compacted", self.ctx.harness),
                 body: format!("{} (compaction {count})", self.ctx.id),
                 ..Default::default()

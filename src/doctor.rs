@@ -28,7 +28,11 @@ true
 
 mod deps;
 mod planted;
+mod scratch;
 use planted::Planted;
+use scratch::random_hex;
+pub use scratch::scratch_base;
+pub use scratch::Scratch;
 pub mod seatbelt_escape;
 pub use deps::{Dep, DEPS};
 
@@ -133,6 +137,9 @@ fn report_rest(env: &HostEnv, os: crate::onboard::Os) -> Result<()> {
         }
     }
 
+    if !linux {
+        crate::backend::seatbelt::print_doctor(env);
+    }
     println!("\nDevices and paddock kv:");
     // On macOS the devices come to Seatbelt over a socket, with no FUSE.
     let devices = crate::devices::doctor_lines(env);
@@ -146,6 +153,9 @@ fn report_rest(env: &HostEnv, os: crate::onboard::Os) -> Result<()> {
         match factory.create(&name) {
             Ok(h) => {
                 println!("  ok       {:<10} {}", name, h.exe.display());
+                if let Some(line) = outside_path_line(env, factory.found(&name)) {
+                    println!("           {:<10} {line}", "");
+                }
                 for u in &h.profile.unverified {
                     println!("           {:<10} not verified on a real install: {u}", "");
                 }
@@ -219,8 +229,13 @@ fn report_rest(env: &HostEnv, os: crate::onboard::Os) -> Result<()> {
         }
     }
 
+    println!("\nWide folders (an agent starts there without --yes-wide-folder):");
+    for l in crate::folder_check::doctor_lines(env) {
+        println!("{l}");
+    }
+
     println!("\nGateway (host requests):");
-    println!("{}", crate::gatewayd::status_line(env));
+    crate::agentgw::report::print_doctor(env);
     if !linux {
         println!("\nLinux only (refused on macOS with one line):");
         crate::onboard::refused_lines(os)
@@ -269,6 +284,18 @@ pub fn default_gateway() -> Option<std::net::IpAddr> {
 
 const KEYRINGS: &str = ".local/share/keyrings";
 
+/// The doctor's note for a harness that the locate step found outside
+/// PATH: the folder, and how to add it to PATH for the user's shell. A
+/// shell or an app with a thin PATH does not find the command there.
+pub fn outside_path_line(env: &HostEnv, found: Option<crate::profile::Found>) -> Option<String> {
+    let found = found.filter(|f| f.by != crate::profile::FoundBy::Path)?;
+    Some(format!(
+        "found outside PATH in {}. To run it from your shell, {}",
+        found.dir.display(),
+        crate::profile::path_hint(env, &found.dir)
+    ))
+}
+
 fn doctor_harness() -> Result<Harness> {
     // The doctor reads a project `.mcp.json`, as the claude profile does.
     let profile: Profile = toml::from_str(
@@ -305,7 +332,7 @@ pub fn escape(env: &HostEnv, o: &EscapeOpts) -> Result<usize> {
         return seatbelt_escape::escape(env, o);
     }
     // Homes of earlier runs whose scratch project is gone go too.
-    let mut scratch = Scratch::new(&env.paddock_cache().join(SCRATCH_DIR))?;
+    let mut scratch = Scratch::new(&scratch_base(env))?;
     crate::storage::remove_doctor_homes(env);
     let root = scratch.root.clone();
     let project = root.join("project");
@@ -816,101 +843,6 @@ impl crate::broker::Approver for Recorder {
     }
 }
 
-/// The folder under the paddock cache with one scratch folder per escape
-/// run. Older versions used `doctor` and cleared all of it at each start, so
-/// this name keeps their runs from deleting the files of a new one.
-const SCRATCH_DIR: &str = "doctor-runs";
-
-/// The scratch folder of one escape run: `<base>/<pid>-<random>`, 0700. It
-/// holds the project, its remote and the canaries; the run's sandbox home
-/// and the fake other home are removed with it. Concurrent runs each have
-/// their own, so no run removes the files of another. Drop removes it all,
-/// also after an error or a panic, and never follows a link that the probe
-/// planted. Git makes its object folders read-only: the removal adds the
-/// owner write bit first.
-pub struct Scratch {
-    pub root: PathBuf,
-    extra: Vec<PathBuf>,
-}
-
-impl Scratch {
-    /// Make a new scratch folder under `base`, after removing what ended
-    /// runs left there.
-    pub fn new(base: &Path) -> Result<Self> {
-        use std::os::unix::fs::DirBuilderExt as _;
-        crate::privfs::dir(base)?;
-        clear_stale(base);
-        for _ in 0..100 {
-            let root = base.join(format!("{}-{}", std::process::id(), random_hex()));
-            match std::fs::DirBuilder::new().mode(0o700).create(&root) {
-                Ok(()) => {
-                    crate::privfs::tighten(&root, 0o700)?;
-                    return Ok(Self {
-                        root,
-                        extra: vec![],
-                    });
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                Err(e) => return Err(e.into()),
-            }
-        }
-        bail!("no free scratch folder in {}", base.display())
-    }
-
-    /// Remove `path` together with the scratch folder.
-    pub fn also_remove(&mut self, path: PathBuf) {
-        self.extra.push(path);
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        for p in std::iter::once(&self.root).chain(self.extra.iter()) {
-            if let Err(e) = crate::safefs::remove_tree_path(p) {
-                eprintln!("paddock: cannot remove {}: {e:#}", p.display());
-            }
-        }
-    }
-}
-
-fn random_hex() -> String {
-    use std::io::Read as _;
-    let mut b = [0u8; 8];
-    if std::fs::File::open("/dev/urandom")
-        .and_then(|mut f| f.read_exact(&mut b))
-        .is_err()
-    {
-        let n = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        b = (n as u64).to_le_bytes();
-    }
-    crate::manifest::hex(&b)
-}
-
-/// Remove what runs that ended without cleanup left in `base`: folders of
-/// processes that no longer run, and the shared tree of older versions.
-/// Folders of live processes stay.
-fn clear_stale(base: &Path) {
-    for e in std::fs::read_dir(base).into_iter().flatten().flatten() {
-        let name = e.file_name().to_string_lossy().into_owned();
-        let live = name
-            .split_once('-')
-            .and_then(|(pid, _)| pid.parse::<i32>().ok())
-            .is_some_and(|pid| pid > 0 && process_alive(pid));
-        if !live {
-            let _ = crate::safefs::remove_tree_path(&e.path());
-        }
-    }
-}
-
-fn process_alive(pid: i32) -> bool {
-    // SAFETY: signal 0 only checks that the process exists.
-    let r = unsafe { libc::kill(pid, 0) };
-    r == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
-}
-
 /// Host-side git checks, run after the sandbox exits. The probe planted
 /// settings and hooks that would run a command on the host. These calls are
 /// the ones paddock makes after every run, so nothing may start.
@@ -1033,29 +965,10 @@ fn push_checks(r: &Recorder, remote: &std::path::Path) -> Vec<(&'static str, Opt
     ]
 }
 
-fn host_ipv4_addrs() -> Vec<String> {
-    let out = Command::new("ip")
-        .args(["-4", "-o", "addr", "show"])
-        .output();
-    let Ok(out) = out else { return vec![] };
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .filter_map(|l| l.split_whitespace().skip_while(|w| *w != "inet").nth(1))
-        .filter_map(|cidr| cidr.split('/').next())
-        .map(str::to_string)
-        .collect()
-}
-
-fn s_set_approvals(built: &mut build::Built, env: &HostEnv) {
-    let dir = crate::broker::approvals_dir(env);
-    built.spec.set_env(
-        "PADDOCK_PROBE_APPROVALS",
-        dir.display().to_string(),
-        "doctor",
-    );
-}
-
 pub mod macvm;
+mod tail_helpers;
+use tail_helpers::*;
+
 #[cfg(test)]
 #[path = "doctor_tests.rs"]
 mod tests;

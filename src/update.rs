@@ -22,10 +22,10 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::cmp::Ordering;
 use std::io::{Read, Write};
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use url::Url;
 
 pub const REPO: &str = env!("PADDOCK_RELEASE_REPO"); // set by build.rs
@@ -172,6 +172,10 @@ pub use release::{release_arch, Release, ARCHS};
 pub trait Source: Send + Sync {
     fn latest(&self) -> Result<Release>;
     fn download(&self, url: &str) -> Result<Vec<u8>>;
+    /// The size of a download in bytes, when the source can tell it.
+    fn size(&self, _url: &str) -> Option<u64> {
+        None
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -301,7 +305,15 @@ impl GitHub {
         }
     }
 
-    fn get_once(&self, url: &Url, accept: &str, max: usize) -> Result<Response> {
+    /// One request. The answer is the raw response, and whether the
+    /// connection ended with a TLS close_notify.
+    fn exchange(
+        &self,
+        method: &str,
+        url: &Url,
+        accept: &str,
+        cap: usize,
+    ) -> Result<(Vec<u8>, bool)> {
         let host = url.host_str().context("no host")?.to_string();
         let tcp = crate::proxy::host_connect(&self.proxy, &host, 443, self.timeout)?;
         let cfg = crate::proxy::tls::system_config()?;
@@ -312,19 +324,21 @@ impl GitHub {
         let ua = format!("paddock/{CURRENT}");
         write!(
             s,
-            "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: {ua}\r\nAccept: {accept}\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n"
+            "{method} {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: {ua}\r\nAccept: {accept}\r\nAccept-Encoding: identity\r\nConnection: close\r\n\r\n"
         )?;
         s.flush()?;
         let mut raw = Vec::new();
         let mut buf = [0u8; 64 << 10];
-        let cap = max + MAX_HEAD;
         let clean = loop {
             match s.read(&mut buf) {
                 Ok(0) => break true,
                 Ok(n) => {
                     raw.extend_from_slice(&buf[..n]);
                     if raw.len() > cap {
-                        bail!("the response from {host} is larger than {max} bytes");
+                        bail!(
+                            "the response from {host} is larger than {} bytes",
+                            cap - MAX_HEAD
+                        );
                     }
                 }
                 // No close_notify: parse_response then needs a length.
@@ -332,6 +346,11 @@ impl GitHub {
                 Err(e) => return Err(e).with_context(|| format!("reading from {host}")),
             }
         };
+        Ok((raw, clean))
+    }
+
+    fn get_once(&self, url: &Url, accept: &str, max: usize) -> Result<Response> {
+        let (raw, clean) = self.exchange("GET", url, accept, max + MAX_HEAD)?;
         parse_response(&raw, max, clean)
     }
 
@@ -418,6 +437,10 @@ impl Source for GitHub {
         }
         Ok(r.body)
     }
+
+    fn size(&self, url: &str) -> Option<u64> {
+        self.length(url)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -486,145 +509,12 @@ pub fn package_hint(owner: &str, version: &str) -> String {
     )
 }
 
-/// Run `bin --version` and check that it names `version`.
-pub fn check_version(bin: &Path, version: &str) -> Result<()> {
-    let mut cmd = Command::new(bin);
-    cmd.arg("--version").env_clear().stdin(Stdio::null());
-    cmd.stdout(Stdio::piped()).stderr(Stdio::null());
-    let mut child = crate::busy::spawn(&mut cmd)
-        .with_context(|| format!("cannot run the downloaded {}", bin.display()))?;
-    let start = Instant::now();
-    loop {
-        if child.try_wait()?.is_some() {
-            break;
-        }
-        if start.elapsed() > Duration::from_secs(10) {
-            let _ = child.kill();
-            let _ = child.wait();
-            bail!("the downloaded paddock did not answer --version");
-        }
-        std::thread::sleep(Duration::from_millis(20));
-    }
-    let mut out = String::new();
-    if let Some(s) = child.stdout.take() {
-        s.take(4096).read_to_string(&mut out)?;
-    }
-    let want = format!("paddock {version}");
-    if out.trim() != want {
-        bail!(
-            "the downloaded binary prints {:?} for --version, not {want:?}. Nothing was changed",
-            out.trim()
-        );
-    }
-    Ok(())
-}
-
-/// Extract one member of a .tar.gz to memory with the system `tar`. Nothing
-/// of the archive is written to the file system.
-pub fn extract_member(tar: &Path, tarball: &Path, member: &str) -> Result<Vec<u8>> {
-    let out = Command::new(tar)
-        .args(["-xzOf"])
-        .arg(tarball)
-        .arg("--")
-        .arg(member)
-        .stdin(Stdio::null())
-        .output()
-        .context("cannot run tar")?;
-    if !out.status.success() || out.stdout.is_empty() {
-        bail!(
-            "the tarball has no {member}: {}",
-            String::from_utf8_lossy(&out.stderr).trim()
-        );
-    }
-    Ok(out.stdout)
-}
-
-/// Replace `target` atomically: a new file next to it with mode 0755,
-/// synced to disk, then renamed over it. A running paddock keeps the old
-/// file open; the next start uses the new one.
-pub fn replace_binary(target: &Path, bytes: &[u8]) -> Result<()> {
-    let dir = target
-        .parent()
-        .context("the paddock binary has no folder")?;
-    let tmp = dir.join(format!(".paddock-update-{}", std::process::id()));
-    let write = || -> Result<()> {
-        let mut f = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o755)
-            .open(&tmp)
-            .with_context(|| format!("cannot write to {}", dir.display()))?;
-        f.write_all(bytes)?;
-        // The umask may have taken bits away.
-        f.set_permissions(std::fs::Permissions::from_mode(0o755))?;
-        f.sync_all()?;
-        drop(f);
-        std::fs::rename(&tmp, target)
-            .with_context(|| format!("cannot replace {}", target.display()))?;
-        std::fs::File::open(dir)?.sync_all()?;
-        Ok(())
-    };
-    let r = write();
-    if r.is_err() {
-        let _ = std::fs::remove_file(&tmp);
-    }
-    r
-}
-
-/// A private 0700 folder under paddock's cache, removed on drop.
-pub struct PrivTemp(PathBuf);
-
-impl PrivTemp {
-    pub fn new(env: &HostEnv) -> Result<Self> {
-        let p = env.paddock_cache().join("update").join(format!(
-            "{}-{}",
-            std::process::id(),
-            crate::state::now()
-        ));
-        if p.exists() {
-            std::fs::remove_dir_all(&p)?;
-        }
-        crate::privfs::dir(&p)?;
-        Ok(Self(p))
-    }
-    pub fn path(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl Drop for PrivTemp {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
-/// Download, check and install `rel` over `target`. `owner` is the package
-/// that owns `target`, if any: then nothing is downloaded.
-pub fn install(
-    env: &HostEnv,
-    source: &dyn Source,
-    rel: &Release,
-    target: &Path,
-    owner: Option<&str>,
-    tar: &Path,
-) -> Result<()> {
-    refuse_in_sandbox(env, "paddock update")?;
-    if let Some(o) = owner {
-        bail!("{}", package_hint(o, &rel.version));
-    }
-    let tmp = PrivTemp::new(env)?;
-    let tarball = source.download(&rel.tarball_url())?;
-    let sums = source.download(&rel.checksum_url())?;
-    verify_checksum(&tarball, &sums, &rel.tarball())?;
-    let tar_file = tmp.path().join(rel.tarball());
-    crate::privfs::write(&tar_file, &tarball)?;
-    let bin = extract_member(tar, &tar_file, &rel.member())?;
-    let probe = tmp.path().join("paddock");
-    crate::privfs::write(&probe, &bin)?;
-    std::fs::set_permissions(&probe, std::fs::Permissions::from_mode(0o700))?;
-    check_version(&probe, &rel.version)?;
-    replace_binary(target, &bin)
-}
+mod install;
+pub use install::{
+    check_program_version, check_version, extract_member, install, replace_binary, PrivTemp,
+    Tarball,
+};
+pub mod tui;
 
 /// The binary that `paddock update` replaces: this program.
 pub fn current_binary() -> Result<PathBuf> {

@@ -83,6 +83,10 @@ pub enum Action {
         worktree: PathBuf,
         folders: Vec<PathBuf>,
     },
+    /// The names in `/private/tmp` that an ended run left (tmpclaim.rs).
+    Tmp {
+        run: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]

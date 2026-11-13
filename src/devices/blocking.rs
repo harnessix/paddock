@@ -27,6 +27,9 @@ use std::time::{Duration, Instant};
 #[path = "blocking_info.rs"]
 mod info;
 pub use info::ask_info;
+#[path = "blocking_request.rs"]
+mod request;
+use request::{check_question, parse};
 
 /// How often a waiting read checks for its event and for a cancel.
 const POLL: Duration = Duration::from_millis(100);
@@ -60,48 +63,6 @@ fn limits(max_request: usize, max_response: usize) -> Limits {
         max_response,
         deadline_seconds: waiting::MAX_READ_TIMEOUT + 5,
     }
-}
-
-/// A request: plain text, or a JSON object. `field` names the main text in
-/// the JSON form.
-struct Parsed {
-    text: String,
-    timeout: u64,
-    json: serde_json::Value,
-}
-
-fn parse(request: &[u8], field: &str) -> Result<Parsed, DevError> {
-    let raw = std::str::from_utf8(request).map_err(|_| DevError::Invalid)?;
-    let t = raw.trim();
-    if t.starts_with('{') {
-        let json: serde_json::Value = serde_json::from_str(t).map_err(|_| DevError::Invalid)?;
-        let obj = json.as_object().ok_or(DevError::Invalid)?;
-        for k in obj.keys() {
-            if k != field && k != "timeout" && k != "choices" {
-                return Err(DevError::Invalid);
-            }
-        }
-        let text = obj
-            .get(field)
-            .and_then(|v| v.as_str())
-            .ok_or(DevError::Invalid)?
-            .to_string();
-        let asked = match obj.get("timeout") {
-            None => None,
-            Some(v) => Some(v.as_u64().ok_or(DevError::Invalid)?),
-        };
-        let timeout = waiting::read_timeout(asked).map_err(|_| DevError::Invalid)?;
-        return Ok(Parsed {
-            text,
-            timeout,
-            json,
-        });
-    }
-    Ok(Parsed {
-        text: t.to_string(),
-        timeout: waiting::DEFAULT_READ_TIMEOUT,
-        json: serde_json::Value::Null,
-    })
 }
 
 #[cfg(test)]
@@ -307,6 +268,8 @@ impl Ask {
             .collect();
         actions.push(("deny".into(), "Dismiss".into()));
         let note = broker::notify::Note {
+            what: "question".into(),
+            action: Some(p.id.clone()),
             summary: format!("paddock: {} asks you a question", p.harness),
             body: format!(
                 "{}{}\n\nType an answer in a terminal: paddock approvals answer {} --text -\n(type the answer, then Ctrl-D)",
@@ -471,40 +434,15 @@ impl Drop for Ask {
     }
 }
 
-fn check_question(p: &Parsed) -> Result<(String, Vec<String>), DevError> {
-    // Control and invisible format characters never reach the card, a
-    // notification or a terminal.
-    let q = broker::clean_text(p.text.trim()).trim().to_string();
-    if q.is_empty() || q.chars().count() > MAX_QUESTION {
-        return Err(DevError::Invalid);
-    }
-    let mut choices = Vec::new();
-    if let Some(c) = p.json.get("choices") {
-        let list = c.as_array().ok_or(DevError::Invalid)?;
-        if list.len() > MAX_CHOICES {
-            return Err(DevError::Invalid);
-        }
-        for v in list {
-            let s = v.as_str().ok_or(DevError::Invalid)?.trim();
-            if s.is_empty()
-                || s.chars().count() > MAX_CHOICE
-                || broker::clean_text(s) != s
-                || s.contains(['\n', '\t'])
-            {
-                return Err(DevError::Invalid);
-            }
-            choices.push(s.to_string());
-        }
-    }
-    Ok((q, choices))
-}
-
 impl Device for Ask {
     fn name(&self) -> &str {
         "ask"
     }
     fn info(&self) -> Info {
         ask_info()
+    }
+    fn asks(&self, _call: &Call) -> bool {
+        true
     }
     fn call(&self, call: &Call, request: &[u8]) -> Result<Vec<u8>, DevError> {
         let p = parse(request, "question")?;

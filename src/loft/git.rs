@@ -114,3 +114,41 @@ pub fn diff(loft: &Loft) -> Result<String> {
     stage(loft)?;
     ok(loft, &["diff", "--cached", "--no-color", "--no-ext-diff"])
 }
+
+/// The commits that the end of a run wrote: `Run ID (HARNESS)`, as
+/// `end_of_run` names them. By run id: the count and the commit time of
+/// the newest. Empty when the loft has no history. Reading only.
+pub fn run_commits(loft: &Loft) -> std::collections::HashMap<String, (u64, u64)> {
+    let mut by_run = std::collections::HashMap::new();
+    if !loft.initialized() {
+        return by_run;
+    }
+    let out = match run(loft, &["log", "--no-color", "--format=%ct %s"]) {
+        Ok((0, out)) => out,
+        Ok(_) => return by_run,
+        Err(e) => {
+            log::debug!("cannot read the loft history: {e:#}");
+            return by_run;
+        }
+    };
+    for line in out.lines() {
+        let Some((time, subject)) = line.split_once(' ') else {
+            continue;
+        };
+        let Some(id) = run_of_subject(subject) else {
+            continue;
+        };
+        let time = time.parse().unwrap_or(0);
+        let e: &mut (u64, u64) = by_run.entry(id.to_string()).or_default();
+        e.0 += 1;
+        e.1 = e.1.max(time);
+    }
+    by_run
+}
+
+/// The run id of a subject `Run ID (HARNESS)`.
+pub fn run_of_subject(subject: &str) -> Option<&str> {
+    let rest = subject.strip_prefix("Run ")?;
+    let (id, harness) = rest.split_once(" (")?;
+    (!id.is_empty() && !id.contains(' ') && harness.ends_with(')')).then_some(id)
+}

@@ -357,6 +357,7 @@ impl Broker {
                         arg_str(req, "title").unwrap_or("")
                     ),
                     body: arg_str(req, "body").unwrap_or("").to_string(),
+                    what: "agent".into(),
                     ..Default::default()
                 };
                 self.execute(req, serde_json::to_value(&n)?)

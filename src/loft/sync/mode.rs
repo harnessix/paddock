@@ -2,6 +2,7 @@
 //! that syncs while a run goes on.
 
 use super::*;
+use crate::note::Level::Warning;
 
 /// Make `.paddock` of the work tree a real folder in sync mode. From the
 /// link: the link goes, and the first sync copies the loft's notes into
@@ -212,7 +213,7 @@ pub fn apply_mode(env: &HostEnv, worktree: &Path, who: &str) -> Result<Option<St
 /// are warnings; the run goes on with what the folder has.
 pub fn start_of_run(env: &HostEnv, worktree: &Path, who: &str) {
     match apply_mode(env, worktree, who) {
-        Ok(Some(msg)) => eprintln!("paddock: {msg}"),
+        Ok(Some(msg)) => crate::note::info(msg),
         Ok(None) => {}
         Err(e) => log::warn!("loft mode of {}: {e:#}", worktree.display()),
     }
@@ -243,7 +244,7 @@ pub(super) fn report_with(r: Result<Report>, worktree: &Path, loud: bool) -> Vec
                 let notable =
                     l.starts_with("conflict") || l.starts_with("kept") || l.starts_with("skipped");
                 if notable && loud {
-                    eprintln!("paddock: loft sync: {l}");
+                    crate::note::say_line(Warning, &format!("paddock: loft sync: {l}"));
                 } else if notable {
                     log::warn!("loft sync of {}: {l}", worktree.display());
                 } else {
@@ -254,9 +255,12 @@ pub(super) fn report_with(r: Result<Report>, worktree: &Path, loud: bool) -> Vec
                 }
             }
         }
-        Err(e) if loud => eprintln!(
-            "paddock: cannot sync {}/{NOTES} with the loft: {e:#}",
-            worktree.display()
+        Err(e) if loud => crate::note::say_line(
+            Warning,
+            &format!(
+                "paddock: cannot sync {}/{NOTES} with the loft: {e:#}",
+                worktree.display()
+            ),
         ),
         Err(e) => log::warn!(
             "cannot sync {}/{NOTES} with the loft: {e:#}",
@@ -444,7 +448,7 @@ pub(super) fn last_sync(loft: &Loft, worktree: &Path, who: &str, loud: bool) -> 
             worktree.display()
         );
         match loud {
-            true => eprintln!("paddock: loft sync: {l}"),
+            true => crate::note::say_line(Warning, &format!("paddock: loft sync: {l}")),
             false => log::warn!("loft sync of {}: {l}", worktree.display()),
         }
         seen.push(l);
@@ -460,7 +464,7 @@ impl Drop for Watch {
             return;
         }
         for l in summary(&self.finish()) {
-            eprintln!("{l}");
+            crate::note::say_line(crate::note::Level::Info, &l);
         }
     }
 }

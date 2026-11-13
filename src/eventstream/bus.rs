@@ -13,6 +13,13 @@
 //!   `lost`, so the reader queries the state again.
 //! - A socket whose follower is dead goes. A live follower whose socket
 //!   refuses (a full backlog) is marked lost, never removed.
+//! - A follower that shows notices (`paddock events --follow --notify`,
+//!   paddock for Mac) also has `<pid>.notify`. [`Bus::send_notice`] tells
+//!   whether such a follower took the line; only then paddock on macOS
+//!   leaves the notification to it. The folder is private to the user
+//!   and lies in the host run directory, which no sandbox mounts, so an
+//!   agent cannot make a marker. A marker counts only next to a socket
+//!   that took the line: a dead launcher never hides a notification.
 
 use super::schema::{self, Event, Line};
 use crate::env::HostEnv;
@@ -73,10 +80,36 @@ impl Bus {
 
     /// Send one line to every follower: the count that took it.
     pub fn send(&self, text: &str) -> usize {
-        let mut sent = 0;
+        self.send_counted(text).0
+    }
+
+    /// Send a notice line to every follower: true when a follower that
+    /// shows notices took it.
+    pub fn send_notice(&self, text: &str) -> bool {
+        self.send_counted(text).1 > 0
+    }
+
+    /// The live followers that show notices: their pids.
+    pub fn notice_followers(&self) -> Vec<u32> {
+        self.followers()
+            .into_iter()
+            .filter(|(pid, path)| crate::state::alive(*pid) && shows_notices(path))
+            .map(|(pid, _)| pid)
+            .collect()
+    }
+
+    /// Send one line: the count of followers that took it, and the count
+    /// of those that show notices.
+    fn send_counted(&self, text: &str) -> (usize, usize) {
+        let (mut sent, mut notice) = (0, 0);
         for (pid, path) in self.followers() {
             match deliver(&path, text) {
-                Ok(()) => sent += 1,
+                Ok(()) => {
+                    sent += 1;
+                    if shows_notices(&path) {
+                        notice += 1;
+                    }
+                }
                 Err(e) if gone(&e) && !crate::state::alive(pid) => {
                     remove_follower(&path);
                 }
@@ -86,7 +119,7 @@ impl Bus {
                 }
             }
         }
-        sent
+        (sent, notice)
     }
 
     /// The sockets of the folder: `(pid, path)`, sorted.
@@ -200,9 +233,23 @@ fn mark_lost(socket: &Path) {
         .open(lost_marker(socket));
 }
 
+/// The notice marker of a follower socket: `<pid>.notify`.
+pub fn notice_marker(socket: &Path) -> PathBuf {
+    socket.with_extension("notify")
+}
+
+/// The follower of `socket` registered to show notices: its marker is a
+/// plain file of this user, not a link.
+fn shows_notices(socket: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::symlink_metadata(notice_marker(socket))
+        .is_ok_and(|m| m.file_type().is_file() && m.uid() == unsafe { libc::geteuid() })
+}
+
 fn remove_follower(socket: &Path) {
     let _ = std::fs::remove_file(socket);
     let _ = std::fs::remove_file(lost_marker(socket));
+    let _ = std::fs::remove_file(notice_marker(socket));
 }
 
 /// The listening side: one socket, removed on drop.
@@ -215,6 +262,12 @@ impl Follower {
     /// Listen as `pid` on `bus`. The folder is made private; the sockets
     /// of dead followers go first.
     pub fn bind(bus: &Bus, pid: u32) -> Result<Self> {
+        Self::bind_with(bus, pid, false)
+    }
+
+    /// [`Follower::bind`], and with `notices` the marker that says this
+    /// follower shows the notices, so paddock does not post them.
+    pub fn bind_with(bus: &Bus, pid: u32, notices: bool) -> Result<Self> {
         let name = format!("{pid}.sock");
         let path = match &bus.run {
             Some((run, uid)) => crate::sockpath::host_socket(run, *uid, SOCKET_ID, &name)?,
@@ -231,7 +284,9 @@ impl Follower {
         if let Ok(entries) = std::fs::read_dir(bus.dir()) {
             for entry in entries.flatten() {
                 let marker = entry.path();
-                if marker.extension().is_some_and(|e| e == "lost")
+                if marker
+                    .extension()
+                    .is_some_and(|e| e == "lost" || e == "notify")
                     && !marker.with_extension("sock").exists()
                 {
                     let _ = std::fs::remove_file(marker);
@@ -240,7 +295,18 @@ impl Follower {
         }
         let listener = UnixListener::bind(&path)
             .with_context(|| format!("cannot listen on {}", path.display()))?;
-        Ok(Self { path, listener })
+        let follower = Self { path, listener };
+        if notices {
+            // The marker comes after the socket: a publisher that sees it
+            // can already deliver. Drop removes both.
+            let marker = notice_marker(&follower.path);
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&marker)
+                .with_context(|| format!("cannot make {}", marker.display()))?;
+        }
+        Ok(follower)
     }
 
     pub fn path(&self) -> &Path {

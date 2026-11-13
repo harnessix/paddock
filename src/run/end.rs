@@ -24,6 +24,8 @@ pub(super) struct EndOfRun<'a> {
     pub mail: Option<crate::mail::events::RunMail>,
     pub trainer: Option<crate::trainer::monitor::Monitor>,
     pub code: Option<i32>,
+    /// The run works on a copy of the project (copy.rs).
+    pub copy: Option<crate::copy::end::End>,
 }
 
 impl<'a> EndOfRun<'a> {
@@ -93,6 +95,11 @@ impl<'a> EndOfRun<'a> {
                 .then(|| crate::trainer::monitor::start(env, &built.spec.id))
                 .flatten(),
             code: None,
+            copy: built.copy.run.as_ref().map(|_| crate::copy::end::End {
+                auto_approvals: built.approvals == Some(crate::approvals::Approvals::Auto),
+                launcher: built.copy.launcher,
+                quiet,
+            }),
         }
     }
 
@@ -116,6 +123,8 @@ impl<'a> EndOfRun<'a> {
 impl Drop for EndOfRun<'_> {
     fn drop(&mut self) {
         self.trainer.take();
+        // While the run folder is there: it proves which processes are the run's.
+        crate::tmpclaim::host::end_run(self.env, &self.id);
         // Unmount first: the removal must not walk into the device mount.
         self.devices.take();
         if let Some(k) = self.kv.take() {
@@ -134,6 +143,15 @@ impl Drop for EndOfRun<'_> {
         }
         if self.snapshot {
             crate::snapshot::after_end(self.env, &self.project, &self.id, self.quiet);
+        }
+        if let Some(e) = self.copy.take() {
+            // After the sandbox is gone: nothing writes the copy now.
+            crate::copy::end::of_run(self.env, &self.id, e, &mut |q| {
+                use crate::setup::Ask as _;
+                use std::io::IsTerminal as _;
+                (std::io::stdin().is_terminal() && std::io::stderr().is_terminal())
+                    .then(|| crate::setup::Terminal.yes_no(q, false))
+            });
         }
         crate::loft::end_of_run(self.env, &self.project, &self.id, &self.harness);
         // Last: a manager that reads `ended` finds the run cleaned up.

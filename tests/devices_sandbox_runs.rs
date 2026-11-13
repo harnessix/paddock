@@ -8,7 +8,8 @@
 
 mod common;
 
-use common::device_world::{alive, can_run, fuse_works, wait_for, World};
+use common::device_world::{alive, can_run, finish, fuse_works, wait_for, World};
+use common::scenarios::RUN_END;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
@@ -40,7 +41,10 @@ fn two_runs_get_their_own_instances_and_a_killed_run_leaves_none() {
     )
     .unwrap();
     w.script("up.sh", "tr a-z A-Z");
-    w.harness("waiter", "if [ ! -e /dev/paddock/ws ]; then echo NODEV; exit 0; fi\nwhile [ ! -e flags/go ]; do sleep 0.1; done");
+    w.harness(
+        "waiter",
+        "if [ ! -e /dev/paddock/ws ]; then echo NODEV; exit 0; fi\nawait flags/go",
+    );
     std::fs::create_dir_all(w.root.join("project/flags")).unwrap();
     let mut a = w.run("waiter");
     let b = w.run("waiter");
@@ -62,7 +66,7 @@ fn two_runs_get_their_own_instances_and_a_killed_run_leaves_none() {
     let both_gone = || pids.iter().filter(|p| !alive(**p)).count() == 1;
     wait_for("one instance to die", Duration::from_secs(2), both_gone);
     std::fs::write(w.root.join("project/flags/go"), "").unwrap();
-    let out = b.wait_with_output().unwrap();
+    let out = finish(b, RUN_END);
     assert!(
         out.status.success(),
         "{}",
@@ -98,9 +102,12 @@ fn freeze_reaches_the_device_scope() {
     )
     .unwrap();
     w.script("up.sh", "tr a-z A-Z");
-    w.harness("waiter", "if [ ! -e /dev/paddock/ws ]; then echo NODEV; exit 0; fi\nwhile [ ! -e flags/go ]; do sleep 0.1; done");
+    w.harness(
+        "waiter",
+        "if [ ! -e /dev/paddock/ws ]; then echo NODEV; exit 0; fi\nawait flags/go",
+    );
     std::fs::create_dir_all(w.root.join("project/flags")).unwrap();
-    let mut child = w
+    let child = w
         .paddock()
         .env(
             "DBUS_SESSION_BUS_ADDRESS",
@@ -116,6 +123,9 @@ fn freeze_reaches_the_device_scope() {
             "--env",
             "clean",
             "-y",
+            // A folder without git runs on a copy by default (COPY1). The
+            // harness waits for flags/go in the folder itself.
+            "--direct",
         ])
         .arg(w.root.join("project"))
         .stdin(Stdio::null())
@@ -180,5 +190,10 @@ fn freeze_reaches_the_device_scope() {
         !frozen()
     });
     std::fs::write(w.root.join("project/flags/go"), "").unwrap();
-    let _ = child.wait();
+    let out = finish(child, RUN_END);
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }

@@ -89,6 +89,12 @@ fn kind_word_is_the_serde_tag() {
         Event::Stream(Stream {
             state: StreamState::Started,
         }),
+        Event::Notice(Notice::new("info", "t", "x", false, None)),
+        Event::DeviceCall(DeviceCall {
+            run: "claude-a-1".into(),
+            device: "ask".into(),
+            ask: true,
+        }),
     ];
     assert_eq!(events.len(), KINDS.len());
     for (e, k) in events.iter().zip(KINDS) {
@@ -133,4 +139,38 @@ fn invalid_lines_are_refused() {
     }
     let long = format!(r#"{{"v":1,"kind":"x","p":"{}"}}"#, "a".repeat(MAX_LINE));
     assert!(!valid_line(&long));
+}
+
+/// A notice keeps its kind, title, text and action. A long text is cut,
+/// so the line always passes a follower; an empty kind is `info`.
+#[test]
+fn a_notice_line_is_complete_and_short() {
+    let n = Notice::new(
+        "approval",
+        "paddock: claude asks",
+        "detail",
+        true,
+        Some("r12"),
+    );
+    let v: serde_json::Value = serde_json::to_value(Line::at(0, Event::Notice(n))).unwrap();
+    assert_eq!(v["kind"], "notice");
+    assert_eq!(v["what"], "approval");
+    assert_eq!(v["title"], "paddock: claude asks");
+    assert_eq!(v["text"], "detail");
+    assert_eq!(v["critical"], true);
+    assert_eq!(v["action"], "r12");
+
+    let long = Notice::new(
+        "",
+        &"t".repeat(5000),
+        &"\u{e9}".repeat(MAX_LINE),
+        false,
+        Some(""),
+    );
+    assert_eq!(long.what, "info");
+    assert_eq!(long.title.chars().count(), NOTICE_TITLE_MAX);
+    assert_eq!(long.text.chars().count(), NOTICE_TEXT_MAX);
+    assert_eq!(long.action, None);
+    let text = Line::at(0, Event::Notice(long)).to_text();
+    assert!(valid_line(text.trim_end()), "{} bytes", text.len());
 }

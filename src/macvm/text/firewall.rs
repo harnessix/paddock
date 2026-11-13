@@ -108,6 +108,68 @@ pub fn rules_need_macvm(app: &str) -> String {
     format!("firewall rules are for desktop apps in paddock's macOS guest. {app} is not one, or this is not a Mac")
 }
 
+/// `--session` or `--minutes` while the app does not run.
+pub fn rule_session_not_running(app: &str) -> String {
+    format!("a rule for this session needs a running session of {app}. Start it with paddock app run {app}, or add the rule with --always")
+}
+
+/// A `grant rule add` line for a rule that is not a session rule.
+pub fn rule_not_session(id: &str) -> String {
+    format!(
+        "{id} is not a rule of this session. paddock app rules writes the rules file for --always"
+    )
+}
+
+/// `remove` of an id that the running session does not hold.
+pub fn no_session_rule(id: &str) -> String {
+    format!("no rule {id} in the running session. paddock app rules NAME list shows the rules")
+}
+
+/// The session rules of a list come from a snapshot of the session.
+pub fn session_rules_stale(app: &str) -> String {
+    format!("The rules of the running session of {app} come from its last snapshot, which can lag a change by a moment")
+}
+
+/// A rule went into the running session. `minutes`: a rule with an end.
+pub fn rule_added_session(id: &str, app: &str, minutes: Option<u64>) -> String {
+    match minutes {
+        Some(m) => format!("Added rule {id} to the running session of {app}. It ends in {m} minutes, or when the app stops"),
+        None => format!("Added rule {id} to the running session of {app}. It ends when the app stops"),
+    }
+}
+
+/// A rule left the running session.
+pub fn rule_removed_session(id: &str, app: &str) -> String {
+    format!("Removed rule {id} from the running session of {app}")
+}
+
+/// `--minutes 0` or a number past a day.
+pub fn bad_minutes(minutes: u64) -> String {
+    format!("{minutes} minutes is not a time from 1 to 1440 minutes")
+}
+
+/// `--site` for a host that has no site: an address, a wildcard, a name
+/// without a dot.
+pub fn rule_no_site(host: &str) -> String {
+    format!(
+        "{host} has no site to include. Leave out --site, or name a host such as api.example.com"
+    )
+}
+
+/// `paddock app connections NAME` with no line in the log.
+pub fn connections_empty(app: &str) -> String {
+    format!("{app} has no connections in the log. paddock app run {app} starts a session")
+}
+
+/// The header of `paddock app connections NAME`.
+pub fn connections_header(app: &str, running: bool) -> String {
+    if running {
+        format!("Recent connections of the running session of {app}:")
+    } else {
+        format!("Connections of the last session of {app}:")
+    }
+}
+
 // ---- The question --------------------------------------------------------
 
 /// The one line of a `connect` question in `paddock approvals`.

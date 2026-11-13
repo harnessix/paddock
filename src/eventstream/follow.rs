@@ -20,6 +20,9 @@ pub struct Opts {
     pub disk_every: Duration,
     /// How often the follower looks at the lost marker and the stop.
     pub tick: Duration,
+    /// `--notify`: this follower shows the `notice` lines, so paddock on
+    /// macOS does not post them itself while it runs.
+    pub notify: bool,
 }
 
 impl Default for Opts {
@@ -28,6 +31,7 @@ impl Default for Opts {
             json: true,
             disk_every: Duration::from_secs(30),
             tick: Duration::from_secs(1),
+            notify: false,
         }
     }
 }
@@ -42,7 +46,7 @@ pub fn follow(
     disk: &dyn Fn() -> Option<Disk>,
     opts: Opts,
 ) -> Result<()> {
-    let follower = Follower::bind(bus, std::process::id())?;
+    let follower = Follower::bind_with(bus, std::process::id(), opts.notify)?;
     let (tx, rx) = crate::eventstream::bus::queue();
     follower.serve(tx)?;
     let started = Line::now(Event::Stream(Stream {

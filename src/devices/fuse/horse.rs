@@ -533,6 +533,7 @@ impl Filesystem for DeviceFs {
             deadline: Instant::now() + Duration::from_secs(dev.info().limits.deadline_seconds),
             cancel: Arc::new(AtomicBool::new(false)),
         };
+        crate::devices::announce_call(crate::eventstream::default_bus(), &*dev, &call);
         let result = dev.call(&call, &request).map(Arc::new);
         let errno = result.as_ref().err().map(|e| Errno::from_i32(e.errno()));
         log::info!(

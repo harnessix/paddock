@@ -1,0 +1,40 @@
+
+
+
+
+
+
+
+
+            ▄█▄ ▄█▄ ▄█▄ ▄█▄     paddock 0.2.4
+           ▀███▀███▀███▀███▀    1 idle · 1 blocked · 3 requests wait for you
+           ▀███▀███▀███▀███▀    Your computer stays yours
+                                Each agent works in its own room. You approve its steps.
+
+        ╭─ › New agent ────────────────────────────────────╮╭─ Open an app ────────────────────────────────────╮
+        │ Start an agent in a folder.                      ││ Open a desktop app in a sandbox.                 │
+        │ Installed: claude, codex                         ││ No app is installed.                             │
+        │                                                  ││                                                  │
+        │ key n                                            ││ key o                                            │
+        ╰──────────────────────────────────────────────────╯╰──────────────────────────────────────────────────╯
+        ╭─ Requests ────────╮╭─ Runs ────────────╮╭─ World ───────────╮╭─ Settings ────────╮╭─ Help ───────────╮
+        │ ◆ 3 wait          ││ 4 live            ││ the ranch         ││ set up            ││ every key        │
+        │ for you           ││ 3 ended           ││ as a picture      ││ and check         ││                  │
+        │ key a             ││ key r             ││ key w             ││ key s             ││ key ?            │
+        ╰───────────────────╯╰───────────────────╯╰───────────────────╯╰───────────────────╯╰──────────────────╯
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+up to date
+←→↑↓ move  ↵ open  ? help  Q quit                                                              hold Shift to select text

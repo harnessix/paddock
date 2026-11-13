@@ -1,6 +1,7 @@
 #![cfg(target_os = "linux")]
 //! The deliver channel end to end, with bwrap: the harness does not start
-//! before the user answers both cards, only two yes answers hand the value
+//! before the user answers the card (ENV1: This run, Always in this
+//! project, or No), only a yes answer or a standing grant hands the value
 //! over, and a registered credential never passes with the environment.
 //! The answers go through `paddock approvals answer`, as from the panel.
 //! Temporary folders only; network mode none.
@@ -81,6 +82,8 @@ impl World {
                 "--network",
                 "none",
                 "-y",
+                // The harness writes what it saw in the project folder.
+                "--direct",
             ])
             .arg(self.root.join("project"))
             .stdin(Stdio::null())
@@ -123,6 +126,16 @@ impl World {
         assert!(out.status.success(), "{out:?}");
     }
 
+    /// Answer a card with one of its choices, as from the panel.
+    fn choose(&self, id: &str, choice: &str) {
+        let out = self
+            .cmd()
+            .args(["approvals", "answer", id, "--text", choice])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{out:?}");
+    }
+
     fn finish(&self, mut child: Child) -> String {
         let start = Instant::now();
         while child.try_wait().unwrap().is_none() {
@@ -137,43 +150,50 @@ impl World {
 }
 
 #[test]
-fn deliver_needs_two_answers_before_the_harness_starts() {
+fn deliver_needs_an_answer_before_the_harness_starts() {
     if !can_run() {
         eprintln!("skipped: needs bwrap");
         return;
     }
     let w = World::new();
 
-    // Allow, then confirm: the value is there, the host variable is not.
+    // ENV1: one question for each agent and project, with the choices This
+    // run, Always in this project, or No. This run: the value is there,
+    // the host variable is not.
     let child = w.start();
-    let first = w.card("give DB_PASSWORD");
+    let card = w.card("asks for DB_PASSWORD");
     std::thread::sleep(Duration::from_millis(500));
     assert!(
         !w.seen_file().exists(),
         "the harness started before the answer"
     );
-    w.answer(&first, "once");
-    let second = w.card("confirm");
-    assert!(
-        !w.seen_file().exists(),
-        "the harness started before the second answer"
-    );
-    w.answer(&second, "once");
+    w.choose(&card, "This run");
     let seen = w.finish(child);
     assert!(seen.contains(&format!("DB={SECRET}")), "{seen}");
     assert!(seen.contains("HOST=none"), "{seen}");
 
-    // Allow, then no: the sandbox starts without it.
+    // This run is no standing grant: the next start asks again. No: the
+    // sandbox starts without it.
     let child = w.start();
-    let first = w.card("give DB_PASSWORD");
-    w.answer(&first, "once");
-    let second = w.card("confirm");
-    w.answer(&second, "deny");
+    let card = w.card("asks for DB_PASSWORD");
+    w.answer(&card, "deny");
     let seen = w.finish(child);
     assert!(
         seen.contains("DB=none") && seen.contains("HOST=none"),
         "{seen}"
     );
+
+    // Always in this project: delivered now, and the next start in this
+    // project gets it without a question.
+    let child = w.start();
+    let card = w.card("asks for DB_PASSWORD");
+    w.choose(&card, "Always in this project");
+    let seen = w.finish(child);
+    assert!(seen.contains(&format!("DB={SECRET}")), "{seen}");
+    let child = w.start();
+    let seen = w.finish(child);
+    assert!(seen.contains(&format!("DB={SECRET}")), "{seen}");
+    assert!(seen.contains("HOST=none"), "{seen}");
 
     // The audit log and the list name it, never the value.
     let out = w
@@ -183,7 +203,7 @@ fn deliver_needs_two_answers_before_the_harness_starts() {
         .unwrap();
     let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
     assert_eq!(v["credentials"][0]["name"], "DB_PASSWORD");
-    assert_eq!(v["credentials"][0]["delivered"], 1);
+    assert_eq!(v["credentials"][0]["delivered"], 3);
     let log = w.cmd().args(["log", "--json"]).output().unwrap();
     let log = String::from_utf8_lossy(&log.stdout);
     assert!(log.contains("credentials DB_PASSWORD"), "{log}");

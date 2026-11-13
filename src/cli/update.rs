@@ -2,7 +2,7 @@ use anyhow::Result;
 use paddock::env::HostEnv;
 
 pub(crate) fn update_cmd(env: &HostEnv, check: bool, yes: bool) -> Result<i32> {
-    use paddock::update::{self, Source};
+    use paddock::update::{self, tui, Source};
     use std::io::{IsTerminal, Write};
     update::refuse_in_sandbox(env, "paddock update")?;
     let gh = update::GitHub::from_env(env, std::time::Duration::from_secs(30));
@@ -31,9 +31,10 @@ pub(crate) fn update_cmd(env: &HostEnv, check: bool, yes: bool) -> Result<i32> {
         match &owner {
             Some(o) => println!("{}", update::package_hint(o, &rel.version)),
             None => println!(
-                "An update downloads {} and its .sha256 from GitHub into a private folder, checks the checksum and the version of the new binary, and then replaces {}.",
+                "An update downloads {} and its .sha256 from GitHub into a private folder, checks the checksum and the version of the new programs, and then replaces {} and the {} next to it.",
                 rel.tarball(),
-                target.display()
+                target.display(),
+                tui::TUI
             ),
         }
     }
@@ -43,10 +44,24 @@ pub(crate) fn update_cmd(env: &HostEnv, check: bool, yes: bool) -> Result<i32> {
             update::PLUGIN_ID
         );
     }
+    // This is the latest release, but its terminal interface is missing.
+    let build = tui::Build::this(Some(&target));
+    let add_tui = !newer
+        && owner.is_none()
+        && tui::installed(env, Some(&target)).is_none()
+        && matches!(tui::plan(env, &build, true), tui::Plan::Download(_));
+    if add_tui {
+        println!(
+            "The paddock TUI is not installed. An update downloads the {} of paddock {} and puts it next to {}.",
+            tui::TUI,
+            update::CURRENT,
+            target.display()
+        );
+    }
     let binary = newer && owner.is_none();
     // A package-owned binary that is out of date: refused, see the hint.
     let code = i32::from(newer && owner.is_some());
-    if check || (!binary && !plugin) {
+    if check || (!binary && !plugin && !add_tui) {
         return Ok(if check { 0 } else { code });
     }
     if !yes {
@@ -69,7 +84,12 @@ pub(crate) fn update_cmd(env: &HostEnv, check: bool, yes: bool) -> Result<i32> {
             .which("tar")
             .ok_or_else(|| anyhow::anyhow!("paddock update needs tar"))?;
         update::install(env, &gh as &dyn Source, &rel, &target, None, &tar)?;
-        println!("Updated {} to paddock {}.", target.display(), rel.version);
+        println!(
+            "Updated {} and its {} to paddock {}.",
+            target.display(),
+            tui::TUI,
+            rel.version
+        );
         println!("Running sandboxes keep the old version until they exit.");
         if let Some(h) = paddock::tack::status::update_hint() {
             println!("{h}.");
@@ -79,6 +99,12 @@ pub(crate) fn update_cmd(env: &HostEnv, check: bool, yes: bool) -> Result<i32> {
             .arg("refresh")
             .stdin(std::process::Stdio::null())
             .status();
+    }
+    if add_tui {
+        match tui::obtain(env, &build, &gh, true, &mut |line| println!("{line}")) {
+            Ok(path) => println!("Installed {}.", path.display()),
+            Err(line) => anyhow::bail!("{line}"),
+        }
     }
     if plugin {
         update::update_plugin(env)?;
@@ -105,8 +131,31 @@ fn mac_update(latest: &str, check: bool, line: &str) -> i32 {
     i32::from(!check)
 }
 
-pub(crate) fn run(env: &HostEnv, check: bool, yes: bool) -> Result<i32> {
+pub(crate) fn run(env: &HostEnv, check: bool, yes: bool, tui: bool) -> Result<i32> {
+    if tui {
+        return tui_cmd(env);
+    }
     update_cmd(env, check, yes)
+}
+
+/// `paddock update --tui`: install the terminal interface of this paddock
+/// version again, also when `PADDOCK_NO_UPDATE_CHECK=1` is set.
+fn tui_cmd(env: &HostEnv) -> Result<i32> {
+    use paddock::update::{self, tui};
+    update::refuse_in_sandbox(env, "paddock update --tui")?;
+    let exe = update::current_binary()?;
+    let gh = update::GitHub::from_env(env, std::time::Duration::from_secs(30));
+    let build = tui::Build::this(Some(&exe));
+    match tui::obtain(env, &build, &gh, true, &mut |line| println!("{line}")) {
+        Ok(path) => {
+            println!("Installed {}.", path.display());
+            Ok(0)
+        }
+        Err(line) => {
+            eprintln!("{line}");
+            Ok(1)
+        }
+    }
 }
 
 /// True when Homebrew installed `path`: the binary is in a `Cellar` folder,

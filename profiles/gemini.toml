@@ -9,6 +9,8 @@ unverified = [
 [locate]
 mise = "gemini"
 commands = ["gemini"]
+# The folders of its installers, for a run with a thin PATH.
+dirs = ["~/.npm-global/bin", "~/.bun/bin"]
 
 [launch]
 # Logs in through a browser and a localhost callback.

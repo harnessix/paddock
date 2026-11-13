@@ -1,0 +1,34 @@
+[1mpaddock[22m · 2 running                                                              [7m[1m Runs [22m[27m  Board   Approvals      Mail
+ claude · webshop · running 4 min · copy: 4 changed, 2 new, 1 deleted
+ run  approvals  mail [1m[36m[files][39m[22m                                                                         [2mpointer: ● linked [22m
+[36m╭─ [39m[1mApply · claude · webshop[22m[36m ───────────────────────────────────────────────────────────────────────────────────────────╮[39m
+[36m│[39m [7m[1m[33m◆ Apply to your folder[39m[22m[27m[2m   1 file[22m                                                                                      [36m│[39m
+[36m│[39m [1mWrite these changes to ~/code/webshop?[22m                                                                               [36m│[39m
+[36m│[39m [2m ▏ [22m[31m- [39mlogo.png  [31mdeleted   [39m[2m47 KB[22m                                                                                       [36m│[39m
+[36m│[39m [33m1 file leaves your folder.[39m                                                                                           [36m│[39m
+[36m│[39m [2mpaddock makes a backup first. u undoes this apply.[22m                                                                   [36m│[39m
+[36m│[39m [2mCancel: Nothing changes.[22m                                                                                             [36m│[39m
+[36m│[39m [33m[y] Apply ⚠[39m  [7m[1m[n] Cancel[22m[27m                                                                                              [36m│[39m
+[36m│[39m [2m←→ choose · ↵ answer · y/n keys · Esc cancel[22m                                                                         [36m│[39m
+[36m╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯[39m
+[2m╭─ Files · changes ────────────╮╭─ logo.png · deleted · 47 KB ─────────────────────────────────────────────────────────╮[22m
+[2m│[22m  [1m▾ webshop/   !1 ~2[22m[2m +2 -1 =1[22m [2m││[22m An image. paddock gives its size on both sides.                                      [2m│[22m
+[2m│[22m  [1m▾ docs/           [22m[2m       !1[22m [2m││[22m original  47 KB · 4 Oct 14:05                                                        [2m│[22m
+[2m│[22m     [31m![39m README.md    [31mconflict [39m [2m││[22m copy      no file                                                                    [2m│[22m
+[2m│[22m  [1m▾ src/            [22m[2m ~2 +2 =1[22m [2m││[22m                                                                                      [2m│[22m
+[2m│[22m  [1m  ▾ lib/util/     [22m[2m       +1[22m [2m││[22m                                                                                      [2m│[22m
+[2m│[22m       [32m+[39m format.ts  [32mnew      [39m [2m││[22m                                                                                      [2m│[22m
+[2m│[22m     [33m~[39m cart.ts      [33mchanged  [39m [2m││[22m                                                                                      [2m│[22m
+[2m│[22m     [2m=[22m [2mold.ts       kept     [22m [2m││[22m                                                                                      [2m│[22m
+[2m│[22m     [33m~[39m price.ts     [33mchanged  [39m [2m││[22m                                                                                      [2m│[22m
+[2m│[22m     [32m+[39m tax.ts       [32mnew      [39m [2m││[22m                                                                                      [2m│[22m
+[2m│[22m [1m[36m▸[39m[22m [1m[31m-[39m[22m [1mlogo.png       [36m[A][K][D][39m[22m [2m││[22m                                                                                      [2m│[22m
+[2m│[22m                              [2m││[22m                                                                                      [2m│[22m
+[2m│[22m                              [2m││[22m                                                                                      [2m│[22m
+[2m│[22m                              [2m││[22m                                                                                      [2m│[22m
+[2m│[22m                              [2m││[22m                                                                                      [2m│[22m
+[2m│[22m                              [2m││[22m                                                                                      [2m│[22m
+[2m│[22m                              [2m││[22m                                                                                      [2m│[22m
+[2m╰─ 7 of 7 · 1 conflict ────────╯╰──────────────────────────────────────────────────────────────────────────────────────╯[22m
+[2mup to date · v opens a view window (no paddock split)[22m
+[1m[36m←→[39m[22m[2m choose  [22m[1m[36m↵[39m[22m[2m answer  [22m[1m[36mEsc[39m[22m[2m cancel  [22m[1m[36m?[39m[22m[2m help  [22m                                                      [2mhold Shift to select text[22m

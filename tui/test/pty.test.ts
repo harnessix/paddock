@@ -122,7 +122,7 @@ test('keys work in the real program, and q leaves a clean terminal', async () =>
   const row = s.screen().split('\n')[0] as string;
   const x = row.indexOf('Board');
   s.p.write(`\u001b[<0;${x + 2};1M\u001b[<0;${x + 2};1m`);
-  await waitScreen(s, '◇ open');
+  await waitScreen(s, 'codex ◆');
   s.p.write('q');
   await waitScreen(s, 'sandbox bwrap');
   s.p.write('q');
@@ -297,4 +297,50 @@ test('a new size of the terminal: the frame is drawn anew in it', async () => {
   s.p.write('Q');
   await waitScreen(s, 'EXIT=0');
   await restored(s);
+});
+
+test('the ranch in the real program: the painter draws it, Enter zooms in, Esc out, and q leaves a clean terminal', async () => {
+  const dir = fakeWorld();
+  const s = start([]);
+  await waitScreen(s, 'sandbox bwrap');
+  s.p.write('b');
+  const ranch = await waitScreen(s, 'codex ◆');
+  const lines = ranch.split('\n');
+  expect(lines.length).toBe(24);
+  expect(lines[1]).toMatch(/^Ranch +◆ 3 ask you/);
+  // The art: half blocks in the 256 colours of this terminal.
+  expect(ranch).toContain('▀');
+  expect(s.raw()).toMatch(/\u001b\[[\d;]*38;5;\d+/);
+  expect(ranch).toContain('codex ◆');
+  // The world reads its JSON while it shows.
+  await until(() => ['device', 'kv', 'files', 'forage', 'horse'].every((c) => actions(dir).length === 0 && readFileSync(join(dir, 'calls.jsonl'), 'utf8').includes(`"${c}"`)));
+  s.p.write('\r');
+  await waitScreen(s, 'Ranch › alpha');
+  await waitScreen(s, '› codex-0b0b0b ◆ asks you');
+  s.p.write('\r');
+  await waitScreen(s, 'Ranch › alpha › codex-0b0b0b');
+  // The zoom opens the picture in four frames: wait for its last words, not for a time.
+  await waitScreen(s, 'none unread');
+  const room = await waitScreen(s, 'git push');
+  expect(room).toMatch(/Internet +model only/);
+  expect(room).toMatch(/Asks you +git push/);
+  // The door: the card of the request, beside the room.
+  s.p.write('\r');
+  await waitScreen(s, '[1] Allow once');
+  s.p.write('1');
+  await until(() => actions(dir).length > 0);
+  expect(actions(dir)[0]?.args).toEqual(['approvals', 'answer', 'r-1-net', 'once']);
+  // The answer takes the card away. Then q goes out, one stop at a time.
+  await waitScreen(s, 'Asks you     nothing now');
+  expect(s.screen()).not.toContain('[1] Allow once');
+  s.p.write('q');
+  await waitScreen(s, 'No notes yet');
+  s.p.write('q');
+  await waitScreen(s, 'codex ◆');
+  s.p.write('q');
+  await waitScreen(s, 'sandbox bwrap');
+  s.p.write('q');
+  await waitScreen(s, 'EXIT=0');
+  await restored(s);
+  expect(s.stderr()).toBe('');
 });

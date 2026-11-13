@@ -1,0 +1,14 @@
+{
+  "api_version": "paddock.backup-files/v1",
+  "project": "/Users/demo/src/webshop",
+  "backup": {
+    "id": "1793448000-start-a1b2c3",
+    "short": "a1b2c3",
+    "kind": "start",
+    "created": 1793448000,
+    "harness": "claude"
+  },
+  "files": [
+    { "path": "src/cart.ts", "size": 14, "kind": "file" }
+  ]
+}

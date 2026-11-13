@@ -9,9 +9,11 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 mod closure;
+mod locate;
 mod mac_app;
 mod paths;
 pub use closure::{harness_closure, runtime_closure};
+pub use locate::{path_hint, Found, FoundBy};
 pub use mac_app::{MacApp, ProfileMacos};
 use paths::{canonical, is_shim};
 pub use paths::{install_root, is_system_path, HOME_BIN_DIRS};
@@ -56,6 +58,8 @@ pub struct Profile {
     pub screens: crate::screens::Screens,
     /// The idle screen of the TUI for horse mode (horse/live/pty.rs).
     pub horse: Option<crate::horse::live::pty::ProfileHorse>,
+    /// A gateway agent: paddock sandboxes its gateway too (agentgw.rs).
+    pub gateway: Option<crate::agentgw::Shape>,
 }
 
 /// `[detach]`: the arguments that give the interactive interface its first
@@ -161,6 +165,11 @@ pub struct Locate {
     /// Extra candidate paths. `~/` expands to the home directory.
     #[serde(default)]
     pub paths: Vec<String>,
+    /// The folders that the installers of this harness use, searched for
+    /// `commands` after PATH and `paths`, before the common folders
+    /// (locate.rs). `~/` expands to the home directory.
+    #[serde(default)]
+    pub dirs: Vec<String>,
     /// Helper programs that the harness starts from the folder of its
     /// binary, named `<exe>-<helper>`. In a system bin folder such as
     /// `/usr/bin` only these names are mounted (paths.rs, `bin_helpers`).
@@ -177,6 +186,11 @@ pub struct Launch {
     /// Arguments that are always passed.
     #[serde(default)]
     pub args: Vec<String>,
+    /// Flags that paddock passes after `args` only when the help output
+    /// (`probe_args`) names them, one flag per entry. An older harness
+    /// without the flag starts as before (run.rs, `supported_args`).
+    #[serde(default)]
+    pub args_if_supported: Vec<String>,
     /// Environment variables set inside the sandbox.
     #[serde(default)]
     pub env: BTreeMap<String, String>,
@@ -202,6 +216,7 @@ impl Default for Launch {
         Self {
             yolo_args: vec![],
             args: vec![],
+            args_if_supported: vec![],
             env: BTreeMap::new(),
             probe_args: default_probe(),
             login_callback: false,
@@ -588,133 +603,34 @@ pub struct Harness {
 pub struct HarnessFactory<'a> {
     env: &'a HostEnv,
     profiles: BTreeMap<String, (Profile, String)>,
+    /// The common folders of locate.rs, read once when PATH and a profile miss.
+    common: std::sync::OnceLock<Vec<PathBuf>>,
+    /// How each located harness was found, by profile name.
+    found: std::sync::Mutex<BTreeMap<String, Found>>,
 }
 
-impl<'a> HarnessFactory<'a> {
-    pub fn new(env: &'a HostEnv) -> Result<Self> {
-        let mut profiles = BTreeMap::new();
-        for (name, text) in BUILTIN {
-            let p: Profile = toml::from_str(text)
-                .with_context(|| format!("built-in profile '{name}' is invalid"))?;
-            profiles.insert(p.name.clone(), (p, "built-in".to_string()));
-        }
-        let user_dir = env.paddock_config().join("harness.d");
-        if let Ok(entries) = std::fs::read_dir(&user_dir) {
-            let mut files: Vec<PathBuf> = entries
-                .filter_map(|e| e.ok().map(|e| e.path()))
-                .filter(|p| p.extension().is_some_and(|x| x == "toml"))
-                .collect();
-            files.sort();
-            for file in files {
-                let text = std::fs::read_to_string(&file)?;
-                let p: Profile = toml::from_str(&text)
-                    .with_context(|| format!("profile {} is invalid", file.display()))?;
-                check_user_rules(&p, &file)?;
-                profiles.insert(p.name.clone(), (p, file.display().to_string()));
-            }
-        }
-        Ok(Self { env, profiles })
-    }
-
-    pub fn names(&self) -> Vec<String> {
-        self.profiles.keys().cloned().collect()
-    }
-
-    pub fn profile(&self, name: &str) -> Option<&Profile> {
-        self.profiles.get(name).map(|(p, _)| p)
-    }
-
-    /// The file of a user profile, None for a built-in one.
-    pub fn user_file(&self, name: &str) -> Option<PathBuf> {
-        self.profiles
-            .get(name)
-            .map(|(_, s)| PathBuf::from(s))
-            .filter(|s| s.is_absolute())
-    }
-
-    pub fn create(&self, name: &str) -> Result<Harness> {
-        let (profile, source) = self.profiles.get(name).ok_or_else(|| {
-            anyhow!(
-                "unknown harness '{name}'. Known harnesses: {}. Add a profile in {}",
-                self.names().join(", "),
-                self.env.paddock_config().join("harness.d").display()
-            )
-        })?;
-        let exe = self.locate(profile)?;
-        let (install_mounts, path_dirs) = harness_closure(self.env, &exe, &profile.locate.helpers)?;
-        Ok(Harness {
-            profile: profile.clone(),
-            exe,
-            install_mounts,
-            path_dirs,
-            source: source.clone(),
-        })
-    }
-
-    /// The program of a harness, without its install closure: the first
-    /// that `[locate]` finds. The VM guest asks it before a run starts.
-    pub fn program(&self, name: &str) -> Result<PathBuf> {
-        let (profile, _) = self
-            .profiles
-            .get(name)
-            .ok_or_else(|| anyhow!("unknown harness '{name}'"))?;
-        self.locate(profile)
-    }
-
-    /// A harness for a profile that paddock builds itself, such as the
-    /// workbench of a pasture.
-    pub fn adopt(&self, profile: Profile, source: &str) -> Result<Harness> {
-        let exe = self.locate(&profile)?;
-        let (install_mounts, path_dirs) = harness_closure(self.env, &exe, &profile.locate.helpers)?;
-        Ok(Harness {
-            profile,
-            exe,
-            install_mounts,
-            path_dirs,
-            source: source.into(),
-        })
-    }
-
-    fn locate(&self, p: &Profile) -> Result<PathBuf> {
-        let mut tried = Vec::new();
-        if let (Some(tool), Some(mise)) = (&p.locate.mise, self.env.which("mise")) {
-            tried.push(format!("mise which {tool}"));
-            if let Ok(out) = capture(crate::mise::host_command(&mise).args(["which", tool])) {
-                let path = PathBuf::from(out.lines().last().unwrap_or_default());
-                if is_executable(&path) {
-                    return canonical(&path);
-                }
-            }
-        }
-        for cmd in &p.locate.commands {
-            tried.push(format!("PATH lookup of {cmd}"));
-            // The first match that is not a version-manager shim: Omarchy
-            // puts mise's wrapper folder first on PATH.
-            let found = self
-                .env
-                .path
-                .iter()
-                .filter(|d| d.is_absolute())
-                .map(|d| d.join(cmd))
-                .find(|p| is_executable(p) && !is_shim(p));
-            if let Some(path) = found {
-                return canonical(&path);
-            }
-        }
-        for raw in &p.locate.paths {
-            let path = self.env.expand(raw, &self.env.home);
-            tried.push(path.display().to_string());
-            if is_executable(&path) {
-                return canonical(&path);
-            }
-        }
-        bail!(
-            "could not find the '{}' executable. Tried: {}",
-            p.name,
-            tried.join("; ")
-        )
-    }
+/// The real program of a mise tool, from `mise which`.
+fn mise_which(mise: &Path, tool: &str) -> Option<PathBuf> {
+    let out = capture(crate::mise::host_command(mise).args(["which", tool])).ok()?;
+    let path = PathBuf::from(out.lines().last().unwrap_or_default());
+    is_executable(&path).then_some(path)
 }
+
+/// The first `dir/cmd` that runs and is no shim, folder by folder.
+fn in_dirs(dirs: &[PathBuf], commands: &[String], tried: &mut Vec<String>) -> Option<PathBuf> {
+    for dir in dirs {
+        tried.push(dir.display().to_string());
+        for cmd in commands {
+            let path = dir.join(cmd);
+            if is_executable(&path) && !is_shim(&path) {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
+mod factory;
 
 #[cfg(test)]
 mod tests;

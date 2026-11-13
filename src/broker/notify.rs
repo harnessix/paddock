@@ -4,6 +4,12 @@
 //! visible to every local user in /proc, and a notification can hold request
 //! text such as clipboard content. The session bus belongs to the user, so
 //! the text stays with the user.
+//!
+//! Every notice also goes into the launcher event stream as a `notice`
+//! line ([`announce`]), on every platform and also when no launcher runs.
+//! On macOS, when paddock for Mac follows the stream with `--notify` and
+//! took the line, paddock does not post its own notification: the
+//! launcher shows it with paddock's name and icon.
 
 use crate::env::HostEnv;
 #[cfg(target_os = "linux")]
@@ -28,6 +34,44 @@ pub struct Note {
     pub body: String,
     pub actions: Vec<(String, String)>,
     pub critical: bool,
+    /// What the notice is about, the `what` of its `notice` line:
+    /// `approval`, `frozen`, `storage`. Empty means `info`.
+    #[serde(default)]
+    pub what: String,
+    /// What answers it, for example the id of a request.
+    #[serde(default)]
+    pub action: Option<String>,
+}
+
+/// paddock for Mac shows the notices that it takes. Only macOS has it.
+const LAUNCHER_SHOWS: bool = cfg!(target_os = "macos");
+
+/// The `notice` line of `n`.
+pub fn notice(n: &Note) -> crate::eventstream::schema::Notice {
+    crate::eventstream::schema::Notice::new(
+        &n.what,
+        &n.summary,
+        &n.body,
+        n.critical,
+        n.action.as_deref(),
+    )
+}
+
+/// Publish `n` on the event stream of `env`. True when a launcher that
+/// shows notices took it on macOS: then paddock does not post it too.
+pub fn announce(env: &HostEnv, n: &Note) -> bool {
+    use crate::eventstream::{schema::Event, Bus, Line};
+    let line = Line::now(Event::Notice(notice(n)));
+    Bus::of(env).send_notice(&line.to_text()) && LAUNCHER_SHOWS
+}
+
+/// Show a notification and return at once: publish it, and post it
+/// unless paddock for Mac shows it.
+pub fn show(env: &HostEnv, n: &Note) -> Result<()> {
+    if announce(env, n) {
+        return Ok(());
+    }
+    show_here(env, n)
 }
 
 /// The session bus of the host user. The address comes from the host
@@ -103,9 +147,9 @@ fn send(p: &Proxy<'_>, n: &Note) -> Result<u32> {
     Ok(id)
 }
 
-/// Show a notification and return at once.
+/// Post a notification on this desktop, without the event stream.
 #[cfg(target_os = "linux")]
-pub fn show(env: &HostEnv, n: &Note) -> Result<()> {
+fn show_here(env: &HostEnv, n: &Note) -> Result<()> {
     let conn = session(env)?;
     send(&proxy(&conn)?, n)?;
     Ok(())
@@ -121,6 +165,8 @@ pub fn ask(
     n: &Note,
     on_action: impl FnOnce(&str) + Send + 'static,
 ) -> Result<Handle> {
+    // No launcher shows notices on Linux: the line is for the stream only.
+    let _ = announce(env, n);
     let conn = session(env)?;
     let p = proxy(&conn)?;
     // Subscribe before the notification exists, so no answer is lost.
@@ -166,7 +212,8 @@ pub fn ask_or_show(
         Ok(h) => Some(h),
         Err(e) => {
             log::debug!("cannot show the question with buttons: {e:#}");
-            if let Err(e) = show(env, n) {
+            // `ask` published it already.
+            if let Err(e) = show_here(env, n) {
                 log::debug!("cannot show the question as a notification: {e:#}");
             }
             None
@@ -190,26 +237,34 @@ impl Handle {
     }
 }
 
-/// macOS: `osascript`, with the text as arguments of the script (see
-/// `onboard::notification_argv`), so no shell and no AppleScript parses it.
-/// The text is in the arguments of osascript while it runs. Actions are not
-/// offered: [`ask`] refuses. As on Linux, a run with a home that is not the
-/// user's own (a test) never reaches the real desktop.
+/// macOS without paddock for Mac: `terminal-notifier` or, as the last
+/// way, `osascript` (`onboard::mac_notifier`), with the text as plain
+/// arguments, so no shell and no AppleScript parses it. The text is in
+/// the arguments of that program while it runs. As on Linux, a run with a
+/// home that is not the user's own (a test) never reaches the real
+/// desktop.
 #[cfg(not(target_os = "linux"))]
-pub fn show(env: &HostEnv, n: &Note) -> Result<()> {
+fn show_here(env: &HostEnv, n: &Note) -> Result<()> {
     if !crate::launchers::home_is_real(env) {
         anyhow::bail!("no desktop notification: HOME is not the home of this user");
     }
-    crate::onboard::mac_notify(&n.summary, &n.body)
+    crate::onboard::mac_notify(env, &n.summary, &n.body)
 }
 
+/// macOS: paddock's own notifications have no buttons. When paddock for
+/// Mac took the notice, it shows it and the answer goes through `paddock
+/// approvals answer`: the returned handle never calls `on_action`. Else
+/// [`ask`] refuses and [`ask_or_show`] posts the plain text.
 #[cfg(not(target_os = "linux"))]
 pub fn ask(
     env: &HostEnv,
     n: &Note,
     on_action: impl FnOnce(&str) + Send + 'static,
 ) -> Result<Handle> {
-    let _ = (env, n, on_action);
+    let _ = on_action;
+    if announce(env, n) {
+        return Ok(Handle);
+    }
     Err(crate::platform::unavailable("a desktop notification"))
 }
 
@@ -220,6 +275,10 @@ pub struct Handle;
 impl Handle {
     pub fn close(&self) {}
 }
+
+#[cfg(test)]
+#[path = "notify_tests.rs"]
+mod tests;
 
 #[cfg(test)]
 mod markup_tests {

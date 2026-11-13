@@ -53,6 +53,8 @@ fn the_hooks_say_what_needs_attention() {
             "--env",
             "clean",
             "-y",
+            // The harness writes what it saw in the project folder.
+            "--direct",
         ])
         .arg(root.join("project"))
         .env("HOME", root.join("home"))

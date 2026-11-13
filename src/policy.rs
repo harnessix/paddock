@@ -261,6 +261,107 @@ pub fn inheritable(name: &str) -> bool {
         && !name.starts_with("PADDOCK_")
         && !name.starts_with("BASH_FUNC_")
         && !name.contains(['=', '\0'])
+        && !CODE_LOADER_ENV.contains(&name)
+        && !name.starts_with("DYLD_")
+        && !HISTORY_ENV.contains(&name)
+}
+
+/// Host variables that make a program load code: a shell start file, a
+/// command before each prompt, a library. `DYLD_*` counts too.
+pub const CODE_LOADER_ENV: &[&str] = &[
+    "BASH_ENV",
+    "ENV",
+    "PROMPT_COMMAND",
+    "LD_PRELOAD",
+    "LD_AUDIT",
+];
+
+/// Host variables that point at the shell history or the shell start files.
+pub const HISTORY_ENV: &[&str] = &["HISTFILE", "ZDOTDIR"];
+
+/// Host variables that the sandbox sets itself.
+const SANDBOX_SETS: &[&str] = &[
+    "HOME", "USER", "LOGNAME", "PATH", "SHELL", "PWD", "OLDPWD", "SHLVL", "_", "TMPDIR", "TMP",
+    "TEMP",
+];
+
+/// Why a host variable never passes. No setting changes it, also not in
+/// `inherit` mode, and `[env] pass` cannot name it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Never {
+    /// A socket or control channel of the host session.
+    Socket,
+    /// The sandbox sets its own value.
+    Sandbox,
+    /// It makes programs load code.
+    Loader,
+    /// It points at the shell history or the shell start files.
+    History,
+}
+
+impl Never {
+    pub fn name(self) -> &'static str {
+        match self {
+            Never::Socket => "socket",
+            Never::Sandbox => "sandbox",
+            Never::Loader => "loader",
+            Never::History => "history",
+        }
+    }
+}
+
+/// Whether a host variable is on the never-pass list, and why. `value`:
+/// its host value, when there is one; a value that is the path of a
+/// socket makes any name a socket.
+pub fn never_pass(name: &str, value: Option<&str>) -> Option<Never> {
+    if CODE_LOADER_ENV.contains(&name)
+        || name.starts_with("DYLD_")
+        || name.starts_with("BASH_FUNC_")
+    {
+        return Some(Never::Loader);
+    }
+    if HISTORY_ENV.contains(&name) {
+        return Some(Never::History);
+    }
+    if SANDBOX_SETS.contains(&name)
+        || name.starts_with("PADDOCK")
+        || name.starts_with("__MISE")
+        || name.contains(['=', '\0'])
+        || name.is_empty()
+    {
+        return Some(Never::Sandbox);
+    }
+    if HOST_ONLY_ENV.contains(&name) {
+        return Some(Never::Socket);
+    }
+    if CACHE_ENV.contains(&name) {
+        return None;
+    }
+    if !inheritable_var(name, value.unwrap_or("")) {
+        return Some(Never::Socket);
+    }
+    None
+}
+
+/// The sentence that refuses a variable on the never-pass list: the
+/// reason, then the safe way. The CLI, the screens and the sandbox use
+/// the same words.
+pub fn never_sentence(name: &str, why: Never) -> String {
+    let safe = match (name, why) {
+        ("SSH_AUTH_SOCK", _) => "To let the agent use ssh keys, add a key grant with via = \"agent\" and the public keys in [credentials.NAME]".to_string(),
+        (_, Never::Socket) => "A socket of the host gives control over this computer, so no setting passes it".to_string(),
+        (_, Never::Sandbox) => "The sandbox sets its own value. To change it, set the value in the project's own scripts".to_string(),
+        (_, Never::Loader) => "It makes programs load code from this computer. Put the code in the project instead".to_string(),
+        (_, Never::History) => "It points at your shell history or your shell start files. The sandbox keeps its own".to_string(),
+    };
+    let what = match why {
+        Never::Socket => "it is a socket or control channel of this computer",
+        Never::Sandbox => "the sandbox sets it",
+        Never::Loader => "it makes programs load code",
+        Never::History => "it points at your shell history",
+    };
+    format!("{name} stays on this computer: {what}. {safe}.")
 }
 
 /// Environment names that look like secrets. They pass only when a profile or

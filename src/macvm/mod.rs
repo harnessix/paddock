@@ -103,6 +103,7 @@ pub mod proxy_header;
 pub mod quit;
 pub mod report;
 pub mod reset;
+pub mod rules_cli;
 #[cfg(target_os = "macos")]
 pub mod run;
 #[cfg(target_os = "macos")]

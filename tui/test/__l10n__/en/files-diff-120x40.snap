@@ -1,0 +1,40 @@
+paddock · 2 running                                                               Runs   Board   Approvals      Mail
+ claude · webshop · running 4 min · copy: 4 changed, 2 new, 1 deleted
+ run  approvals  mail [files]                                                                         pointer: ● linked
+╭─ docs/README.md · conflict · +6 -2 · original ↔ copy ────────────────────────────────────────────────────────────────╮
+│  @@ line 1                                               │ @@ line 1                                                 │
+│  1 # webshop                                             │ 1 # webshop                                               │
+│  2                                                       │ 2                                                         │
+│ ~3 A small shop.                                         │~3 A small shop with a cart and taxes.                     │
+│ ~4 Run it with npm start.                                │~4                                                         │
+│                                                          │+5 ## Run it                                               │
+│                                                          │+6                                                         │
+│                                                          │+7 npm install                                             │
+│                                                          │+8 npm start                                               │
+│  5                                                       │ 9                                                         │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰─ change 1 of 1 · original │ copy · 1 original now · 2 copy · 3 merge proposal ───────────────────────────────────────╯
+up to date · v opens a view window (no paddock split)
+n next  N previous  t unified  A apply  K keep  D discard  Esc back  ? help                    hold Shift to select text

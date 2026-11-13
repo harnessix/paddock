@@ -45,8 +45,8 @@ pub(super) fn establish(
             match moved {
                 Ok(applied) => {
                     if !applied && !quiet {
-                        eprintln!(
-                            "paddock: memory.high is not applied: systemd refused the setting"
+                        crate::note::info(
+                            "memory.high is not applied: systemd refused the setting",
                         );
                     }
                     Some(name)
@@ -65,7 +65,7 @@ pub(super) fn establish(
         quiet,
         cfg!(target_os = "macos"),
     ) {
-        eprintln!("{line}");
+        crate::note::say_line(crate::note::Level::Info, line);
     }
     unit
 }

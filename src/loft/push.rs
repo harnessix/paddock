@@ -108,7 +108,7 @@ pub fn notice_lines(env: &HostEnv, cfg: &Cfg, project: &Path) -> Vec<String> {
 /// The start notice, on stderr.
 pub fn notice(env: &HostEnv, project: &Path) {
     for l in notice_lines(env, &Cfg::load(env), project) {
-        eprintln!("{l}");
+        crate::note::say_line(crate::note::Level::Info, &l);
     }
 }
 

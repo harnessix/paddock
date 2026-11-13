@@ -123,6 +123,8 @@ fn a_shadow_run_sees_the_host_data_and_changes_only_its_snapshot() {
             "--network",
             "none",
             "-y",
+            // The harness writes what it saw in the project folder.
+            "--direct",
         ])
         .arg(&project)
         .current_dir(&project)
@@ -260,6 +262,8 @@ fn codex_mcp_filter_changes_only_the_shadow_copy() {
             "--network",
             "none",
             "-y",
+            // The harness writes what it saw in the project folder.
+            "--direct",
         ])
         .arg(&project)
         .current_dir(&project)
@@ -332,6 +336,8 @@ fn gemini_mcp_filter_keeps_project_config_untouched() {
             "--network",
             "none",
             "-y",
+            // The harness writes what it saw in the project folder.
+            "--direct",
         ])
         .arg(&project)
         .current_dir(&project)

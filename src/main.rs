@@ -46,7 +46,9 @@ fn normal_main(argv: &[std::ffi::OsString]) -> i32 {
     if let Some(code) = cli::help_topics::handle(argv) {
         std::process::exit(code);
     }
-    match real_main() {
+    // `paddock` alone on a terminal opens the home screen of the interface.
+    let home = cli::tui::home(argv).unwrap_or_else(real_main);
+    match home {
         Ok(code) => code,
         Err(e) => {
             eprintln!("paddock: {e:#}");
@@ -62,6 +64,7 @@ fn real_main() -> Result<i32> {
     paddock::platform::nofile::raise();
     let cli = Cli::parse();
     paddock::logging::init(i32::from(cli.verbose) - i32::from(cli.quiet));
+    paddock::note::set_quiet(cli.quiet);
     if let Cmd::Inbound = &cli.cmd {
         return cli::app::inbound();
     }
@@ -114,8 +117,15 @@ fn real_main() -> Result<i32> {
         other => other,
     };
     let env = HostEnv::detect()?;
+    // First contact: a new installation gets manual approvals (MANUAL2).
+    paddock::approvals::note_new_installation(&env);
     paddock::eventstream::init(&env);
     paddock::privfs::secure_roots(&env);
+    // macOS: what a run that paddock could not end (kill -9) left in
+    // /private/tmp, and its processes, go at the next command (TMP1-F2).
+    if std::env::var_os("PADDOCK").is_none() && !matches!(cmd, Cmd::Tmp { .. }) {
+        paddock::tmpclaim::host::sweep(&env);
+    }
     // A harness start: bring the menu and the shims up to date in the
     // background when harnesses or paddock changed.
     if matches!(
@@ -179,6 +189,7 @@ fn real_main() -> Result<i32> {
         Cmd::Tools { cmd } => cli::tools::run(&env, cmd),
         Cmd::Gateway { cmd } => cli::gateway::run(&env, cmd),
         Cmd::Gatewayd { idle } => cli::gateway::gatewayd(&env, idle),
+        Cmd::GatewayServe { name } => paddock::agentgw::serve::main(&env, &name),
         Cmd::Deviced {
             name,
             socket,
@@ -204,7 +215,7 @@ fn real_main() -> Result<i32> {
             cli::status::freeze(&env, paddock::ids::resolve(&env, &id)?, tree, reason)
         }
         Cmd::Thaw { id, tree } => cli::status::thaw(&env, paddock::ids::resolve(&env, &id)?, tree),
-        Cmd::Tui { args } => cli::tui::run(args),
+        Cmd::Tui { args } => cli::tui::run(&env, args),
         Cmd::Board(a) => cli::board::run(&env, a),
         Cmd::Split(a) => cli::split::run(&env, a),
         Cmd::Ps { json, mem } => cli::status::ps(&env, json, mem),
@@ -216,14 +227,29 @@ fn real_main() -> Result<i32> {
                 .as_deref(),
             json,
         ),
+        Cmd::Copy(cmd) => cli::copy::run(&env, cmd),
         Cmd::Undo {
             session,
             list,
             yes,
             force,
-        } => cli::storage::undo(&env, session, list, yes, force),
+            json,
+        } => {
+            // The last apply of a copy first, when it is the newest action.
+            let copy = match session {
+                None => cli::copy::undo(&env, list, yes, force, json)?,
+                Some(_) => None,
+            };
+            match copy {
+                Some(code) => Ok(code),
+                None => cli::storage::undo(&env, session, list, yes, force),
+            }
+        }
         Cmd::Kv { cmd } => cli::kv::run(&env, cmd),
         Cmd::Mail { cmd } => cli::mail::run(&env, cmd),
+        Cmd::Tmp {
+            cmd: cli::TmpCmd::Debug { run },
+        } => paddock::tmpclaim::host::debug(&env, run.as_deref()).map(|()| 0),
         Cmd::Du { json } => cli::storage::du_cmd(&env, json),
         Cmd::Gc {
             yes,
@@ -270,8 +296,27 @@ fn real_main() -> Result<i32> {
             to.as_deref(),
             keep,
         ),
-        Cmd::Discard { id, paths, all } => {
-            cli::storage::discard_cmd(&env, &paddock::ids::resolve(&env, &id)?, paths, all)
+        Cmd::Discard {
+            id,
+            paths,
+            all,
+            home,
+            yes,
+            json,
+        } => {
+            let copy = match home {
+                false => cli::copy::discard(&env, &id, &paths, yes, json)?,
+                true => None,
+            };
+            match copy {
+                Some(code) => Ok(code),
+                None if paths.is_empty() && !all => {
+                    anyhow::bail!("name the files to delete, or --all")
+                }
+                None => {
+                    cli::storage::discard_cmd(&env, &paddock::ids::resolve(&env, &id)?, paths, all)
+                }
+            }
         }
         Cmd::Pasture { cmd } => cli::pasture::run(&env, cmd),
         Cmd::Forage {
@@ -344,7 +389,7 @@ fn real_main() -> Result<i32> {
             backend,
             apps,
         ),
-        Cmd::Update { check, yes } => cli::update::run(&env, check, yes),
+        Cmd::Update { check, yes, tui } => cli::update::run(&env, check, yes, tui),
         Cmd::Auth { cmd } => cli::auth::run(&env, cmd),
         Cmd::Approve { path } => cli::setup::approve(&env, path),
         Cmd::Init { path } => cli::setup::init(path),

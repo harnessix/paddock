@@ -11,6 +11,8 @@ unverified = [
 [locate]
 mise = "omp"
 commands = ["omp"]
+# The folders of its installers, for a run with a thin PATH.
+dirs = ["~/.bun/bin"]
 
 [launch]
 login_callback = true

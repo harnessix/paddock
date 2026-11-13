@@ -1,0 +1,24 @@
+paddock · 4 running · 3 wait for you      Runs   Board   Approvals ◆3   Mail ✉2
+╭─ New run · in a sandbox, detached · Tab next field · Ctrl+A approvals · ↵ … ─╮
+│ Harness                                                                      │
+│                                                                              │
+│   installed: claude, codex                                                   │
+│ Project                                                                      │
+│                                                                              │
+│   a folder; empty is the current folder                                      │
+│ Prompt file                                                                  │
+│                                                                              │
+│   a file with the task, relative to the project or absolute                  │
+│ Approvals    your default ([run] approvals, else auto)                       │
+│   Ctrl+A switches: default, manual, auto. The sandbox is the same.           │
+│  Start the run ↵    Cancel Esc                                               │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+╰──────────────────────────────────────────────────────────────────────────────╯
+up to date · v opens a view window (no paddock split)
+↵ open  n new  s stop  v split  a approvals  ? help    hold Shift to select text

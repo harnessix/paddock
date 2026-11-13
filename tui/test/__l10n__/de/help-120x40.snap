@@ -1,0 +1,40 @@
+paddock · 4 laufen · 3 warten auf dich                                       Läufe   Board   Genehmigungen ◆3   Post ✉2
+╭─ Hilfe · alle Tasten · ↑↓ scrollen 35/46 · Esc schließt ─────────────────────────────────────────────────────────────╮
+│ H         Startseite: neuer Agent, Apps, Anfragen, Läufe, Welt, Einstellungen                                        │
+│ ↵         ausgewähltes Element öffnen                                                                                │
+│ q Esc     zurück (auf dem ersten Bildschirm beenden)                                                                 │
+│ n         neuer Lauf: Harness, Projekt, Prompt-Datei                                                                 │
+│ s         ausgewählten Lauf stoppen (fragt vorher)                                                                   │
+│ v         Splitansicht der markierten Läufe oder Ansicht des gewählten Laufs                                         │
+│ Space     Lauf für die Splitansicht markieren                                                                        │
+│ o         Live-Ansicht des Laufs in einem neuen Terminalfenster öffnen                                               │
+│ w         Nachricht an den Agenten des Laufs schreiben                                                               │
+│ r         Läufe anzeigen                                                                                             │
+│ b         Board anzeigen: die Ranch oder die Liste                                                                   │
+│ a         wartende Genehmigungen anzeigen                                                                            │
+│ m         Post der Läufe anzeigen                                                                                    │
+│ Tab       nächster Tab oder Bereich (Shift+Tab zurück)                                                               │
+│ /         Liste filtern                                                                                              │
+│ : Ctrl+P  Befehlspalette: alle Aktionen                                                                              │
+│ ?         diese Hilfe                                                                                                │
+│ M         Maus an oder aus (aus: das Terminal markiert Text)                                                         │
+│ L         Läufe als Räume (Karte und Figur je Lauf) oder als Liste                                                   │
+│ W         Ranch anzeigen: das Board als Welt                                                                         │
+│ P         Ranch: Plumbing an oder aus (Glaswände, Tools, Kabel)                                                      │
+│ I         Ranch: der Inspektor (das paddock-Wort und der Befehl)                                                     │
+│ z         Ranch: gewählten Raum pausieren oder fortsetzen                                                            │
+│ f         Dateien dieses Laufs: was der Agent in seiner Kopie geändert hat                                           │
+│ Alle Änderungen dieses Laufs auf deinen Ordner anwenden (fragt vorher)                                               │
+│ Sicherungen des Projekts dieses Laufs                                                                                │
+│ Pointer-Status: der Speicher der Kopien und Sicherungen                                                              │
+│ R         paddock jetzt neu lesen                                                                                    │
+│ Ctrl+C Q  beenden                                                                                                    │
+│                                                                                                                      │
+│ ↑↓ j k bewegen · PgUp PgDn Seite · Home End erste und letzte                                                         │
+│ Räume: ←→ h l eine Karte, ↑↓ j k eine Kartenreihe; L die Liste                                                       │
+│ Ranch (b): ←→↑↓ bewegen, ↵ hineinzoomen (Gebäude, Raum), Esc eine Stufe hinaus                                       │
+│ Ranch: 1 2 3 springen zu Ranch, Gebäude, Raum; l der Dachboden; c kopiert den Befehl                                 │
+│ Ranch: L das Board als Liste (und die Ranch als Text ohne Farben)                                                    │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+aktuell · v öffnet ein Ansichtsfenster (kein paddock split)
+↵ öffnen  n neu  s stoppen  v Split  a Genehmigungen  ? Hilfe                         Shift halten, um Text zu markieren

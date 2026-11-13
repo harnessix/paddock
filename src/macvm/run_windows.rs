@@ -277,9 +277,14 @@ impl Session<'_> {
                 self.input_globe();
                 Vec::new()
             }
+            HostEvent::AppFocus => {
+                self.input_check();
+                Vec::new()
+            }
             HostEvent::Miniaturized(id) => self.shell.order.on_host_minimize(id, true),
             HostEvent::Deminiaturized(id) => self.shell.order.on_host_minimize(id, false),
             HostEvent::SpaceChanged => {
+                self.input_check();
                 let active = self.shell.windows.active_space_ids();
                 let requests = self.shell.order.on_space_change(&active);
                 for r in &requests {

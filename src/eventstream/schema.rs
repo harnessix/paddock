@@ -65,6 +65,8 @@ pub enum Event {
     Golden(Golden),
     Disk(Disk),
     Stream(Stream),
+    Notice(Notice),
+    DeviceCall(DeviceCall),
 }
 
 impl Event {
@@ -78,13 +80,23 @@ impl Event {
             Event::Golden(_) => "golden",
             Event::Disk(_) => "disk",
             Event::Stream(_) => "stream",
+            Event::Notice(_) => "notice",
+            Event::DeviceCall(_) => "device_call",
         }
     }
 }
 
 /// Every `kind` word, in the order of [`Event`].
-pub const KINDS: [&str; 7] = [
-    "session", "question", "grant", "setup", "golden", "disk", "stream",
+pub const KINDS: [&str; 9] = [
+    "session",
+    "question",
+    "grant",
+    "setup",
+    "golden",
+    "disk",
+    "stream",
+    "notice",
+    "device_call",
 ];
 
 /// The state of an app session in the macOS guest.
@@ -286,6 +298,61 @@ pub enum StreamState {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Stream {
     pub state: StreamState,
+}
+
+/// The longest `title` of a notice, in characters.
+pub const NOTICE_TITLE_MAX: usize = 200;
+/// The longest `text` of a notice, in characters. The line stays far
+/// below [`MAX_LINE`].
+pub const NOTICE_TEXT_MAX: usize = 4000;
+
+/// A desktop notification of paddock. paddock publishes each one, also
+/// when no launcher runs. A follower that started with `--notify` shows
+/// it, and then paddock on macOS does not post its own.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Notice {
+    /// What the notice is about, in snake case: `approval`, `question`,
+    /// `frozen`, `worktree`, `storage` and others. `info` when the caller
+    /// did not say.
+    pub what: String,
+    pub title: String,
+    pub text: String,
+    /// paddock asks for attention now: an approval or a failure.
+    #[serde(default)]
+    pub critical: bool,
+    /// What answers the notice, for example the request id that `paddock
+    /// approvals answer ID` takes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
+}
+
+impl Notice {
+    /// A notice with the title and the text cut to their limits.
+    pub fn new(what: &str, title: &str, text: &str, critical: bool, action: Option<&str>) -> Self {
+        let what = if what.is_empty() { "info" } else { what };
+        Self {
+            what: what.to_string(),
+            title: title.chars().take(NOTICE_TITLE_MAX).collect(),
+            text: text.chars().take(NOTICE_TEXT_MAX).collect(),
+            critical,
+            action: action.filter(|a| !a.is_empty()).map(str::to_string),
+        }
+    }
+}
+
+/// A sandbox called a device or a tool of `/dev/paddock`. paddock
+/// publishes one line when the call starts. The line names the call and
+/// never holds its arguments, its request or its response.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DeviceCall {
+    /// The full sandbox id of the caller. `remote:PEER` for a call that
+    /// another paddock forwarded.
+    pub run: String,
+    /// The device name, for example `ask`, `mail/out` or a user device.
+    pub device: String,
+    /// The call waits for an approval: a card or a question of the user.
+    #[serde(default)]
+    pub ask: bool,
 }
 
 /// A line that a follower passes on: a JSON object with a numeric `v`

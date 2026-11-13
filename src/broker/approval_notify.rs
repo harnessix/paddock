@@ -18,6 +18,8 @@ pub(super) fn notify_choices(env: &HostEnv, p: &Pending) -> Option<notify::Handl
         .collect();
     actions.push(("deny".into(), "Stop".into()));
     let note = notify::Note {
+        what: "approval".into(),
+        action: Some(p.id.clone()),
         summary: format!("paddock: {}", p.summary),
         body: p.detail.clone(),
         actions,
@@ -73,6 +75,8 @@ pub fn approval_note(p: &Pending) -> notify::Note {
         actions.push(("deny-session".into(), "Deny for this session".into()));
     }
     notify::Note {
+        what: "approval".into(),
+        action: Some(p.id.clone()),
         summary: format!("paddock: {} asks for {}", p.harness, p.capability),
         body: {
             let mut b = match crate::spawn::chain_text(&p.started_by) {

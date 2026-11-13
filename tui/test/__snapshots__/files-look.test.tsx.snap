@@ -1,0 +1,938 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`--plain > no boxes and no inverse: the selected row starts with > 1`] = `
+"paddock · 2 running                       Runs   Board   Approvals      Mail
+ claude · webshop · running 4 min · copy: 4 changed, 2 new, 1 deleted
+ run  approvals  mail [files]                                 pointer: ● linked
+> Files · changes               src/cart.ts · changed · +3 -2
+ ▾ webshop/     !1 ~2 +2 -1 =1   @@ line 38
+ ▾ docs/                    !1   38 export function total(items: Item[]): numbe…
+    ! README.md      conflict    39   if (items.length === 0) return 0;
+ ▾ src/               ~2 +2 =1   40
+   ▾ lib/util/              +1   41   const total = items.reduce(
+      + format.ts    new        -42     (s, i) => s + i.price, 0);
+>   ~ cart.ts        [A][K][D]  +42     (s, i) => s + i.price * i.qty,
+    = old.ts         kept       +43     0);
+    ~ price.ts       changed     44   return total;
+    + tax.ts         new         45 }
+  - logo.png         deleted     @@ line 62
+                                 62
+                                 63 export function label(item: Item): string {
+                                 64   const name = item.name.trim();
+                                -64   return name + ' x' + item.count + ' at th…
+                                +65   return name + ' x' + item.qty + ' at the …
+                                 66 }
+3 of 7 · 1 conflict             change 1 of 2 · unified
+up to date · v opens a view window (no paddock split)
+A apply  K keep  D discard  ↵ diff  c filter  b backups  i pointer  ? help"
+`;
+
+exports[`NO_COLOR > t1: no colour code, and each state is a glyph and a word 1`] = `
+"paddock · 2 running                       Runs   Board   Approvals      Mail
+ claude · webshop · running 4 min · copy: 4 changed, 2 new, 1 deleted
+ run  approvals  mail [files]                                 pointer: ● linked 
+╭─ Files · changes ────────────╮╭─ src/cart.ts · changed · +3 -2 ──────────────╮
+│  ▾ webshop/   !1 ~2 +2 -1 =1 ││  @@ line 38                                  │
+│  ▾ docs/                  !1 ││  38 export function total(items: Item[]): n… │
+│     ! README.md    conflict  ││  39   if (items.length === 0) return 0;      │
+│  ▾ src/             ~2 +2 =1 ││  40                                          │
+│    ▾ lib/util/            +1 ││  41   const total = items.reduce(            │
+│       + format.ts  new       ││ -42     (s, i) => s + i.price, 0);           │
+│ ▸   ~ cart.ts      [A][K][D] ││ +42     (s, i) => s + i.price * i.qty,       │
+│     = old.ts       kept      ││ +43     0);                                  │
+│     ~ price.ts     changed   ││  44   return total;                          │
+│     + tax.ts       new       ││  45 }                                        │
+│   - logo.png       deleted   ││  @@ line 62                                  │
+│                              ││  62                                          │
+│                              ││  63 export function label(item: Item): stri… │
+│                              ││  64   const name = item.name.trim();         │
+│                              ││ -64   return name + ' x' + item.count + ' a… │
+│                              ││ +65   return name + ' x' + item.qty + ' at … │
+│                              ││  66 }                                        │
+╰─ 3 of 7 · 1 conflict ────────╯╰─ change 1 of 2 · unified ────────────────────╯
+up to date · v opens a view window (no paddock split)
+A apply  K keep  D discard  ↵ diff  c filter  b backups  i pointer  ? help  "
+`;
+
+exports[`NO_COLOR > t2-diff: no colour code, and each state is a glyph and a word 1`] = `
+"paddock · 2 running                       Runs   Board   Approvals      Mail
+ claude · webshop · running 4 min · copy: 4 changed, 2 new, 1 deleted
+ run  approvals  mail [files]                                 pointer: ● linked 
+╭─ src/cart.ts · changed · +3 -2 · original ↔ copy ────────────────────────────╮
+│  @@ line 38                                                                  │
+│  38 export function total(items: Item[]): number {                           │
+│  39   if (items.length === 0) return 0;                                      │
+│  40                                                                          │
+│  41   const total = items.reduce(                                            │
+│ -42     (s, i) => s + i.price, 0);                                           │
+│ +42     (s, i) => s + i.price * i.qty,                                       │
+│ +43     0);                                                                  │
+│  44   return total;                                                          │
+│  45 }                                                                        │
+│  @@ line 62                                                                  │
+│  62                                                                          │
+│  63 export function label(item: Item): string {                              │
+│  64   const name = item.name.trim();                                         │
+│ -64   return name + ' x' + item.count + ' at the price of ' + format(item.p… │
+│ +65   return name + ' x' + item.qty + ' at the price of ' + format(item.pri… │
+│  66 }                                                                        │
+╰─ change 1 of 2 · unified ────────────────────────────────────────────────────╯
+up to date · v opens a view window (no paddock split)
+n next  N previous  t side by side  A apply  K keep  D discard  Esc back  ? help"
+`;
+
+exports[`NO_COLOR > t3-apply: no colour code, and each state is a glyph and a word 1`] = `
+"paddock · 2 running                       Runs   Board   Approvals      Mail
+ claude · webshop · running 4 min · copy: 4 changed, 2 new, 1 deleted
+ run  approvals  mail [files]                                 pointer: ● linked 
+╭─ Apply · claude · webshop ───────────────────────────────────────────────────╮
+│ ◆ Apply to your folder   4 files in src/                                     │
+│ Write these changes to ~/code/webshop?                                       │
+│  ▏ ~ src/cart.ts             changed   +3 -2                                 │
+│  ▏ + src/lib/util/format.ts  new       12 lines                              │
+│  ▏ ~ src/price.ts            changed   +8 -8                                 │
+│  ▏ + src/tax.ts              new       40 lines                              │
+│ paddock makes a backup first. u undoes this apply.                           │
+│ Cancel: Nothing changes.                                                     │
+│ [y] Apply 4 files  [k] Keep in the copy  [n] Cancel                          │
+│ ←→ choose · ↵ answer · y/k/n keys · Esc cancel                               │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Files · changes ────────────╮╭─ src/ · 5 files · ~2 +2 =1 ──────────────────╮
+│  ▾ webshop/   !1 ~2 +2 -1 =1 ││  + src/lib/util/format.ts new      12 lines  │
+│  ▾ docs/                  !1 ││  ~ src/cart.ts            changed  +3 -2     │
+│     ! README.md    conflict  ││  = src/old.ts             kept     +1 -1     │
+│ ▸▾ src/            [A][K][D] ││  ~ src/price.ts           changed  +8 -8     │
+│    ▾ lib/util/            +1 ││  + src/tax.ts             new      40 lines  │
+╰─ 5 files · 1 conflict ───────╯╰─ A K D act on all 5 ─────────────────────────╯
+up to date · v opens a view window (no paddock split)
+←→ choose  ↵ answer  Esc cancel  ? help                hold Shift to select text"
+`;
+
+exports[`NO_COLOR > t3-apply-deletes: no colour code, and each state is a glyph and a word 1`] = `
+"paddock · 2 running                       Runs   Board   Approvals      Mail
+ claude · webshop · running 4 min · copy: 4 changed, 2 new, 1 deleted
+ run  approvals  mail [files]                                 pointer: ● linked 
+╭─ Apply · claude · webshop ───────────────────────────────────────────────────╮
+│ ◆ Apply to your folder   1 file                                              │
+│ Write these changes to ~/code/webshop?                                       │
+│  ▏ - logo.png  deleted   47 KB                                               │
+│ 1 file leaves your folder.                                                   │
+│ paddock makes a backup first. u undoes this apply.                           │
+│ Cancel: Nothing changes.                                                     │
+│ [y] Apply ⚠  [n] Cancel                                                      │
+│ ←→ choose · ↵ answer · y/n keys · Esc cancel                                 │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Files · changes ────────────╮╭─ logo.png · deleted · 47 KB ─────────────────╮
+│    ▾ lib/util/            +1 ││ An image. paddock gives its size on both     │
+│       + format.ts  new       ││ sides.                                       │
+│     ~ cart.ts      changed   ││ original  47 KB · 4 Oct 14:05                │
+│     = old.ts       kept      ││ copy      no file                            │
+│     ~ price.ts     changed   ││                                              │
+│     + tax.ts       new       ││                                              │
+│ ▸ - logo.png       [A][K][D] ││                                              │
+╰─ 7 of 7 · 1 conflict ────────╯╰──────────────────────────────────────────────╯
+up to date · v opens a view window (no paddock split)
+←→ choose  ↵ answer  Esc cancel  ? help                hold Shift to select text"
+`;
+
+exports[`NO_COLOR > t3-conflict: no colour code, and each state is a glyph and a word 1`] = `
+"paddock · 2 running                       Runs   Board   Approvals      Mail
+ claude · webshop · running 4 min · copy: 4 changed, 2 new, 1 deleted
+ run  approvals  mail [files]                                 pointer: ● linked 
+╭─ Conflict · claude · webshop ────────────────────────────────────────────────╮
+│ ◆ Both sides changed   both sides changed it                                 │
+│ Which version of docs/README.md stays in ~/code/webshop?                     │
+│  ▏ original now  2 KB · 13:50                                                │
+│  ▏ copy          2 KB · 14:02 · +6 -2                                        │
+│ paddock never overwrites a conflict without your choice.                     │
+│ Cancel: Nothing changes.                                                     │
+│ [o] Keep original  [c] Take the copy ⚠  [b] Keep both  [m] Take the merge    │
+│ [n] Cancel                                                                   │
+│ ←→ choose · ↵ answer · o/c/b/m/n keys · Esc cancel                           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Files · changes ────────────╮╭─ docs/README.md · conflict · +6 -2 ──────────╮
+│  ▾ webshop/   !1 ~2 +2 -1 =1 ││ Reading the diff…                            │
+│  ▾ docs/                  !1 ││                                              │
+│ ▸   ! README.md    [A][K][D] ││                                              │
+│  ▾ src/             ~2 +2 =1 ││                                              │
+│    ▾ lib/util/            +1 ││                                              │
+│       + format.ts  new       ││                                              │
+╰─ 1 of 7 · 1 conflict ────────╯╰──────────────────────────────────────────────╯
+up to date · v opens a view window (no paddock split)
+←→ choose  ↵ answer  Esc cancel  ? help                hold Shift to select text"
+`;
+
+exports[`NO_COLOR > t3-discard: no colour code, and each state is a glyph and a word 1`] = `
+"paddock · 2 running                       Runs   Board   Approvals      Mail
+ claude · webshop · running 4 min · copy: 4 changed, 2 new, 1 deleted
+ run  approvals  mail [files]                                 pointer: ● linked 
+╭─ Discard · claude · webshop ─────────────────────────────────────────────────╮
+│ ◆ Discard from the copy   1 file                                             │
+│ Drop these changes from the copy of the agent?                               │
+│  ▏ ~ src/cart.ts  changed   +3 -2                                            │
+│ This has no undo. Your folder does not change.                               │
+│ Cancel: Nothing changes.                                                     │
+│ [y] Discard 1 file ⚠  [n] Cancel                                             │
+│ ←→ choose · ↵ answer · y/n keys · Esc cancel                                 │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Files · changes ────────────╮╭─ src/cart.ts · changed · +3 -2 ──────────────╮
+│  ▾ webshop/   !1 ~2 +2 -1 =1 ││  @@ line 38                                  │
+│  ▾ docs/                  !1 ││  38 export function total(items: Item[]): n… │
+│     ! README.md    conflict  ││  39   if (items.length === 0) return 0;      │
+│  ▾ src/             ~2 +2 =1 ││  40                                          │
+│    ▾ lib/util/            +1 ││  41   const total = items.reduce(            │
+│       + format.ts  new       ││ -42     (s, i) => s + i.price, 0);           │
+│ ▸   ~ cart.ts      [A][K][D] ││ +42     (s, i) => s + i.price * i.qty,       │
+│     = old.ts       kept      ││ +43     0);                                  │
+╰─ 3 of 7 · 1 conflict ────────╯╰─ change 1 of 2 · unified ────────────────────╯
+up to date · v opens a view window (no paddock split)
+←→ choose  ↵ answer  Esc cancel  ? help                hold Shift to select text"
+`;
+
+exports[`NO_COLOR > t3-restore: no colour code, and each state is a glyph and a word 1`] = `
+"paddock · 2 running                       Runs   Board   Approvals      Mail
+ claude · webshop · running 4 min · copy: 4 changed, 2 new, 1 deleted
+ run  approvals  mail [files]                                 pointer: ● linked 
+╭─ Restore · claude · webshop ─────────────────────────────────────────────────╮
+│ ◆ Restore a backup   today 14:02                                             │
+│ Bring the files of this backup back to ~/code/webshop?                       │
+│  ▏ before apply · 3 files · claude  12 KB                                    │
+│ Files that changed since the backup get its content again.                   │
+│ paddock makes a "before restore" backup first, so u undoes the restore.      │
+│ Cancel: Nothing changes.                                                     │
+│ [y] Restore ⚠  [n] Cancel                                                    │
+│ ←→ choose · ↵ answer · y/n keys · Esc cancel                                 │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Backups · webshop ──────────────────────────────────────────────────────────╮
+│ today                                                                        │
+│ ▸ 14:02  before apply     3 files    12 KB   claude                      [R] │
+│   13:41  start of run     412 files  shared  claude                      [R] │
+│ yesterday                                                                    │
+│   17:20  before restore   9 files    48 KB                               [R] │
+│   16:05  start of run     409 files  shared  codex                       [R] │
+│                                                                              │
+╰─ 1 of 4 · 60 KB on disk ─────────────────────────────────────────────────────╯
+up to date · v opens a view window (no paddock split)
+←→ choose  ↵ answer  Esc cancel  ? help                hold Shift to select text"
+`;
+
+exports[`NO_COLOR > t3-undo: no colour code, and each state is a glyph and a word 1`] = `
+"paddock · 2 running                       Runs   Board   Approvals      Mail
+ claude · webshop · running 4 min · copy: 4 changed, 2 new, 1 deleted
+ run  approvals  mail [files]                                 pointer: ● linked 
+╭─ Undo · claude · webshop ────────────────────────────────────────────────────╮
+│ ◆ Undo the last apply   today 14:02                                          │
+│ Bring ~/code/webshop back to the state from before it?                       │
+│  ▏ before apply · 3 files · claude  today 14:02                              │
+│ A file that you changed after the apply stays as it is.                      │
+│ Cancel: Nothing changes.                                                     │
+│ [y] Undo  [n] Cancel                                                         │
+│ ←→ choose · ↵ answer · y/n keys · Esc cancel                                 │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Files · changes ────────────╮╭─ src/cart.ts · changed · +3 -2 ──────────────╮
+│  ▾ webshop/   !1 ~2 +2 -1 =1 ││  @@ line 38                                  │
+│  ▾ docs/                  !1 ││  38 export function total(items: Item[]): n… │
+│     ! README.md    conflict  ││  39   if (items.length === 0) return 0;      │
+│  ▾ src/             ~2 +2 =1 ││  40                                          │
+│    ▾ lib/util/            +1 ││  41   const total = items.reduce(            │
+│       + format.ts  new       ││ -42     (s, i) => s + i.price, 0);           │
+│ ▸   ~ cart.ts      [A][K][D] ││ +42     (s, i) => s + i.price * i.qty,       │
+│     = old.ts       kept      ││ +43     0);                                  │
+╰─ 3 of 7 · 1 conflict ────────╯╰─ change 1 of 2 · unified ────────────────────╯
+up to date · v opens a view window (no paddock split)
+←→ choose  ↵ answer  Esc cancel  ? help                hold Shift to select text"
+`;
+
+exports[`NO_COLOR > t4-backups: no colour code, and each state is a glyph and a word 1`] = `
+"paddock · 2 running                       Runs   Board   Approvals      Mail
+ claude · webshop · running 4 min · copy: 4 changed, 2 new, 1 deleted
+ run  approvals  mail [files]                                 pointer: ● linked 
+╭─ Backups · webshop ──────────────────────────────────────────────────────────╮
+│ today                                                                        │
+│ ▸ 14:02  before apply     3 files    12 KB   claude                      [R] │
+│   13:41  start of run     412 files  shared  claude                      [R] │
+│ yesterday                                                                    │
+│   17:20  before restore   9 files    48 KB                               [R] │
+│   16:05  start of run     409 files  shared  codex                       [R] │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+╰─ 1 of 4 · 60 KB on disk ─────────────────────────────────────────────────────╯
+up to date · v opens a view window (no paddock split)
+R restore  u undo  i pointer  Esc back  ? help         hold Shift to select text"
+`;
+
+exports[`NO_COLOR > t5-pointer: no colour code, and each state is a glyph and a word 1`] = `
+"paddock · 2 running                       Runs   Board   Approvals      Mail
+ claude · webshop · running 4 min · copy: 4 changed, 2 new, 1 deleted
+ run  approvals  mail [files]                                 pointer: ● linked 
+╭─ Pointer · ~/code/webshop ───────────────────────────────────────────────────╮
+│ ● linked   The pointer and the store agree.                                  │
+│  ▏ Store     ~/.local/share/paddock/copies/7c1e42  ·  1 copy  ·  4 backups   │
+│  ▏ Size      60 KB of its own                                                │
+│  ▏ Disk      encrypted (LUKS)                                                │
+│ A copy of this folder carries only the pointer, not the files.               │
+│ [Esc] Close                                                                  │
+│ Esc closes the card                                                          │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Files · changes ────────────╮╭─ src/cart.ts · changed · +3 -2 ──────────────╮
+│  ▾ webshop/   !1 ~2 +2 -1 =1 ││  @@ line 38                                  │
+│  ▾ docs/                  !1 ││  38 export function total(items: Item[]): n… │
+│     ! README.md    conflict  ││  39   if (items.length === 0) return 0;      │
+│  ▾ src/             ~2 +2 =1 ││  40                                          │
+│    ▾ lib/util/            +1 ││  41   const total = items.reduce(            │
+│       + format.ts  new       ││ -42     (s, i) => s + i.price, 0);           │
+│ ▸   ~ cart.ts      [A][K][D] ││ +42     (s, i) => s + i.price * i.qty,       │
+│     = old.ts       kept      ││ +43     0);                                  │
+╰─ 3 of 7 · 1 conflict ────────╯╰─ change 1 of 2 · unified ────────────────────╯
+up to date · v opens a view window (no paddock split)
+←→ choose  ↵ answer  Esc close  ? help                 hold Shift to select text"
+`;
+
+exports[`the file manager at 80 x 24 > t1: the picture 1`] = `
+"paddock · 2 running                       Runs   Board   Approvals      Mail
+ claude · webshop · running 4 min · copy: 4 changed, 2 new, 1 deleted
+ run  approvals  mail [files]                                 pointer: ● linked 
+╭─ Files · changes ────────────╮╭─ src/cart.ts · changed · +3 -2 ──────────────╮
+│  ▾ webshop/   !1 ~2 +2 -1 =1 ││  @@ line 38                                  │
+│  ▾ docs/                  !1 ││  38 export function total(items: Item[]): n… │
+│     ! README.md    conflict  ││  39   if (items.length === 0) return 0;      │
+│  ▾ src/             ~2 +2 =1 ││  40                                          │
+│    ▾ lib/util/            +1 ││  41   const total = items.reduce(            │
+│       + format.ts  new       ││ -42     (s, i) => s + i.price, 0);           │
+│ ▸   ~ cart.ts      [A][K][D] ││ +42     (s, i) => s + i.price * i.qty,       │
+│     = old.ts       kept      ││ +43     0);                                  │
+│     ~ price.ts     changed   ││  44   return total;                          │
+│     + tax.ts       new       ││  45 }                                        │
+│   - logo.png       deleted   ││  @@ line 62                                  │
+│                              ││  62                                          │
+│                              ││  63 export function label(item: Item): stri… │
+│                              ││  64   const name = item.name.trim();         │
+│                              ││ -64   return name + ' x' + item.count + ' a… │
+│                              ││ +65   return name + ' x' + item.qty + ' at … │
+│                              ││  66 }                                        │
+╰─ 3 of 7 · 1 conflict ────────╯╰─ change 1 of 2 · unified ────────────────────╯
+up to date · v opens a view window (no paddock split)
+A apply  K keep  D discard  ↵ diff  c filter  b backups  i pointer  ? help  "
+`;
+
+exports[`the file manager at 80 x 24 > t2-diff: the picture 1`] = `
+"paddock · 2 running                       Runs   Board   Approvals      Mail
+ claude · webshop · running 4 min · copy: 4 changed, 2 new, 1 deleted
+ run  approvals  mail [files]                                 pointer: ● linked 
+╭─ src/cart.ts · changed · +3 -2 · original ↔ copy ────────────────────────────╮
+│  @@ line 38                                                                  │
+│  38 export function total(items: Item[]): number {                           │
+│  39   if (items.length === 0) return 0;                                      │
+│  40                                                                          │
+│  41   const total = items.reduce(                                            │
+│ -42     (s, i) => s + i.price, 0);                                           │
+│ +42     (s, i) => s + i.price * i.qty,                                       │
+│ +43     0);                                                                  │
+│  44   return total;                                                          │
+│  45 }                                                                        │
+│  @@ line 62                                                                  │
+│  62                                                                          │
+│  63 export function label(item: Item): string {                              │
+│  64   const name = item.name.trim();                                         │
+│ -64   return name + ' x' + item.count + ' at the price of ' + format(item.p… │
+│ +65   return name + ' x' + item.qty + ' at the price of ' + format(item.pri… │
+│  66 }                                                                        │
+╰─ change 1 of 2 · unified ────────────────────────────────────────────────────╯
+up to date · v opens a view window (no paddock split)
+n next  N previous  t side by side  A apply  K keep  D discard  Esc back  ? help"
+`;
+
+exports[`the file manager at 80 x 24 > t3-apply: the picture 1`] = `
+"paddock · 2 running                       Runs   Board   Approvals      Mail
+ claude · webshop · running 4 min · copy: 4 changed, 2 new, 1 deleted
+ run  approvals  mail [files]                                 pointer: ● linked 
+╭─ Apply · claude · webshop ───────────────────────────────────────────────────╮
+│ ◆ Apply to your folder   4 files in src/                                     │
+│ Write these changes to ~/code/webshop?                                       │
+│  ▏ ~ src/cart.ts             changed   +3 -2                                 │
+│  ▏ + src/lib/util/format.ts  new       12 lines                              │
+│  ▏ ~ src/price.ts            changed   +8 -8                                 │
+│  ▏ + src/tax.ts              new       40 lines                              │
+│ paddock makes a backup first. u undoes this apply.                           │
+│ Cancel: Nothing changes.                                                     │
+│ [y] Apply 4 files  [k] Keep in the copy  [n] Cancel                          │
+│ ←→ choose · ↵ answer · y/k/n keys · Esc cancel                               │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Files · changes ────────────╮╭─ src/ · 5 files · ~2 +2 =1 ──────────────────╮
+│  ▾ webshop/   !1 ~2 +2 -1 =1 ││  + src/lib/util/format.ts new      12 lines  │
+│  ▾ docs/                  !1 ││  ~ src/cart.ts            changed  +3 -2     │
+│     ! README.md    conflict  ││  = src/old.ts             kept     +1 -1     │
+│ ▸▾ src/            [A][K][D] ││  ~ src/price.ts           changed  +8 -8     │
+│    ▾ lib/util/            +1 ││  + src/tax.ts             new      40 lines  │
+╰─ 5 files · 1 conflict ───────╯╰─ A K D act on all 5 ─────────────────────────╯
+up to date · v opens a view window (no paddock split)
+←→ choose  ↵ answer  Esc cancel  ? help                hold Shift to select text"
+`;
+
+exports[`the file manager at 80 x 24 > t3-apply-deletes: the picture 1`] = `
+"paddock · 2 running                       Runs   Board   Approvals      Mail
+ claude · webshop · running 4 min · copy: 4 changed, 2 new, 1 deleted
+ run  approvals  mail [files]                                 pointer: ● linked 
+╭─ Apply · claude · webshop ───────────────────────────────────────────────────╮
+│ ◆ Apply to your folder   1 file                                              │
+│ Write these changes to ~/code/webshop?                                       │
+│  ▏ - logo.png  deleted   47 KB                                               │
+│ 1 file leaves your folder.                                                   │
+│ paddock makes a backup first. u undoes this apply.                           │
+│ Cancel: Nothing changes.                                                     │
+│ [y] Apply ⚠  [n] Cancel                                                      │
+│ ←→ choose · ↵ answer · y/n keys · Esc cancel                                 │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Files · changes ────────────╮╭─ logo.png · deleted · 47 KB ─────────────────╮
+│    ▾ lib/util/            +1 ││ An image. paddock gives its size on both     │
+│       + format.ts  new       ││ sides.                                       │
+│     ~ cart.ts      changed   ││ original  47 KB · 4 Oct 14:05                │
+│     = old.ts       kept      ││ copy      no file                            │
+│     ~ price.ts     changed   ││                                              │
+│     + tax.ts       new       ││                                              │
+│ ▸ - logo.png       [A][K][D] ││                                              │
+╰─ 7 of 7 · 1 conflict ────────╯╰──────────────────────────────────────────────╯
+up to date · v opens a view window (no paddock split)
+←→ choose  ↵ answer  Esc cancel  ? help                hold Shift to select text"
+`;
+
+exports[`the file manager at 80 x 24 > t3-conflict: the picture 1`] = `
+"paddock · 2 running                       Runs   Board   Approvals      Mail
+ claude · webshop · running 4 min · copy: 4 changed, 2 new, 1 deleted
+ run  approvals  mail [files]                                 pointer: ● linked 
+╭─ Conflict · claude · webshop ────────────────────────────────────────────────╮
+│ ◆ Both sides changed   both sides changed it                                 │
+│ Which version of docs/README.md stays in ~/code/webshop?                     │
+│  ▏ original now  2 KB · 13:50                                                │
+│  ▏ copy          2 KB · 14:02 · +6 -2                                        │
+│ paddock never overwrites a conflict without your choice.                     │
+│ Cancel: Nothing changes.                                                     │
+│ [o] Keep original  [c] Take the copy ⚠  [b] Keep both  [m] Take the merge    │
+│ [n] Cancel                                                                   │
+│ ←→ choose · ↵ answer · o/c/b/m/n keys · Esc cancel                           │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Files · changes ────────────╮╭─ docs/README.md · conflict · +6 -2 ──────────╮
+│  ▾ webshop/   !1 ~2 +2 -1 =1 ││ Reading the diff…                            │
+│  ▾ docs/                  !1 ││                                              │
+│ ▸   ! README.md    [A][K][D] ││                                              │
+│  ▾ src/             ~2 +2 =1 ││                                              │
+│    ▾ lib/util/            +1 ││                                              │
+│       + format.ts  new       ││                                              │
+╰─ 1 of 7 · 1 conflict ────────╯╰──────────────────────────────────────────────╯
+up to date · v opens a view window (no paddock split)
+←→ choose  ↵ answer  Esc cancel  ? help                hold Shift to select text"
+`;
+
+exports[`the file manager at 80 x 24 > t3-discard: the picture 1`] = `
+"paddock · 2 running                       Runs   Board   Approvals      Mail
+ claude · webshop · running 4 min · copy: 4 changed, 2 new, 1 deleted
+ run  approvals  mail [files]                                 pointer: ● linked 
+╭─ Discard · claude · webshop ─────────────────────────────────────────────────╮
+│ ◆ Discard from the copy   1 file                                             │
+│ Drop these changes from the copy of the agent?                               │
+│  ▏ ~ src/cart.ts  changed   +3 -2                                            │
+│ This has no undo. Your folder does not change.                               │
+│ Cancel: Nothing changes.                                                     │
+│ [y] Discard 1 file ⚠  [n] Cancel                                             │
+│ ←→ choose · ↵ answer · y/n keys · Esc cancel                                 │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Files · changes ────────────╮╭─ src/cart.ts · changed · +3 -2 ──────────────╮
+│  ▾ webshop/   !1 ~2 +2 -1 =1 ││  @@ line 38                                  │
+│  ▾ docs/                  !1 ││  38 export function total(items: Item[]): n… │
+│     ! README.md    conflict  ││  39   if (items.length === 0) return 0;      │
+│  ▾ src/             ~2 +2 =1 ││  40                                          │
+│    ▾ lib/util/            +1 ││  41   const total = items.reduce(            │
+│       + format.ts  new       ││ -42     (s, i) => s + i.price, 0);           │
+│ ▸   ~ cart.ts      [A][K][D] ││ +42     (s, i) => s + i.price * i.qty,       │
+│     = old.ts       kept      ││ +43     0);                                  │
+╰─ 3 of 7 · 1 conflict ────────╯╰─ change 1 of 2 · unified ────────────────────╯
+up to date · v opens a view window (no paddock split)
+←→ choose  ↵ answer  Esc cancel  ? help                hold Shift to select text"
+`;
+
+exports[`the file manager at 80 x 24 > t3-restore: the picture 1`] = `
+"paddock · 2 running                       Runs   Board   Approvals      Mail
+ claude · webshop · running 4 min · copy: 4 changed, 2 new, 1 deleted
+ run  approvals  mail [files]                                 pointer: ● linked 
+╭─ Restore · claude · webshop ─────────────────────────────────────────────────╮
+│ ◆ Restore a backup   today 14:02                                             │
+│ Bring the files of this backup back to ~/code/webshop?                       │
+│  ▏ before apply · 3 files · claude  12 KB                                    │
+│ Files that changed since the backup get its content again.                   │
+│ paddock makes a "before restore" backup first, so u undoes the restore.      │
+│ Cancel: Nothing changes.                                                     │
+│ [y] Restore ⚠  [n] Cancel                                                    │
+│ ←→ choose · ↵ answer · y/n keys · Esc cancel                                 │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Backups · webshop ──────────────────────────────────────────────────────────╮
+│ today                                                                        │
+│ ▸ 14:02  before apply     3 files    12 KB   claude                      [R] │
+│   13:41  start of run     412 files  shared  claude                      [R] │
+│ yesterday                                                                    │
+│   17:20  before restore   9 files    48 KB                               [R] │
+│   16:05  start of run     409 files  shared  codex                       [R] │
+│                                                                              │
+╰─ 1 of 4 · 60 KB on disk ─────────────────────────────────────────────────────╯
+up to date · v opens a view window (no paddock split)
+←→ choose  ↵ answer  Esc cancel  ? help                hold Shift to select text"
+`;
+
+exports[`the file manager at 80 x 24 > t3-undo: the picture 1`] = `
+"paddock · 2 running                       Runs   Board   Approvals      Mail
+ claude · webshop · running 4 min · copy: 4 changed, 2 new, 1 deleted
+ run  approvals  mail [files]                                 pointer: ● linked 
+╭─ Undo · claude · webshop ────────────────────────────────────────────────────╮
+│ ◆ Undo the last apply   today 14:02                                          │
+│ Bring ~/code/webshop back to the state from before it?                       │
+│  ▏ before apply · 3 files · claude  today 14:02                              │
+│ A file that you changed after the apply stays as it is.                      │
+│ Cancel: Nothing changes.                                                     │
+│ [y] Undo  [n] Cancel                                                         │
+│ ←→ choose · ↵ answer · y/n keys · Esc cancel                                 │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Files · changes ────────────╮╭─ src/cart.ts · changed · +3 -2 ──────────────╮
+│  ▾ webshop/   !1 ~2 +2 -1 =1 ││  @@ line 38                                  │
+│  ▾ docs/                  !1 ││  38 export function total(items: Item[]): n… │
+│     ! README.md    conflict  ││  39   if (items.length === 0) return 0;      │
+│  ▾ src/             ~2 +2 =1 ││  40                                          │
+│    ▾ lib/util/            +1 ││  41   const total = items.reduce(            │
+│       + format.ts  new       ││ -42     (s, i) => s + i.price, 0);           │
+│ ▸   ~ cart.ts      [A][K][D] ││ +42     (s, i) => s + i.price * i.qty,       │
+│     = old.ts       kept      ││ +43     0);                                  │
+╰─ 3 of 7 · 1 conflict ────────╯╰─ change 1 of 2 · unified ────────────────────╯
+up to date · v opens a view window (no paddock split)
+←→ choose  ↵ answer  Esc cancel  ? help                hold Shift to select text"
+`;
+
+exports[`the file manager at 80 x 24 > t4-backups: the picture 1`] = `
+"paddock · 2 running                       Runs   Board   Approvals      Mail
+ claude · webshop · running 4 min · copy: 4 changed, 2 new, 1 deleted
+ run  approvals  mail [files]                                 pointer: ● linked 
+╭─ Backups · webshop ──────────────────────────────────────────────────────────╮
+│ today                                                                        │
+│ ▸ 14:02  before apply     3 files    12 KB   claude                      [R] │
+│   13:41  start of run     412 files  shared  claude                      [R] │
+│ yesterday                                                                    │
+│   17:20  before restore   9 files    48 KB                               [R] │
+│   16:05  start of run     409 files  shared  codex                       [R] │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+╰─ 1 of 4 · 60 KB on disk ─────────────────────────────────────────────────────╯
+up to date · v opens a view window (no paddock split)
+R restore  u undo  i pointer  Esc back  ? help         hold Shift to select text"
+`;
+
+exports[`the file manager at 80 x 24 > t5-pointer: the picture 1`] = `
+"paddock · 2 running                       Runs   Board   Approvals      Mail
+ claude · webshop · running 4 min · copy: 4 changed, 2 new, 1 deleted
+ run  approvals  mail [files]                                 pointer: ● linked 
+╭─ Pointer · ~/code/webshop ───────────────────────────────────────────────────╮
+│ ● linked   The pointer and the store agree.                                  │
+│  ▏ Store     ~/.local/share/paddock/copies/7c1e42  ·  1 copy  ·  4 backups   │
+│  ▏ Size      60 KB of its own                                                │
+│  ▏ Disk      encrypted (LUKS)                                                │
+│ A copy of this folder carries only the pointer, not the files.               │
+│ [Esc] Close                                                                  │
+│ Esc closes the card                                                          │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ Files · changes ────────────╮╭─ src/cart.ts · changed · +3 -2 ──────────────╮
+│  ▾ webshop/   !1 ~2 +2 -1 =1 ││  @@ line 38                                  │
+│  ▾ docs/                  !1 ││  38 export function total(items: Item[]): n… │
+│     ! README.md    conflict  ││  39   if (items.length === 0) return 0;      │
+│  ▾ src/             ~2 +2 =1 ││  40                                          │
+│    ▾ lib/util/            +1 ││  41   const total = items.reduce(            │
+│       + format.ts  new       ││ -42     (s, i) => s + i.price, 0);           │
+│ ▸   ~ cart.ts      [A][K][D] ││ +42     (s, i) => s + i.price * i.qty,       │
+│     = old.ts       kept      ││ +43     0);                                  │
+╰─ 3 of 7 · 1 conflict ────────╯╰─ change 1 of 2 · unified ────────────────────╯
+up to date · v opens a view window (no paddock split)
+←→ choose  ↵ answer  Esc close  ? help                 hold Shift to select text"
+`;
+
+exports[`the file manager at 120 x 34 > t1: the picture 1`] = `
+"paddock · 2 running                                                               Runs   Board   Approvals      Mail
+ claude · webshop · running 4 min · copy: 4 changed, 2 new, 1 deleted
+ run  approvals  mail [files]                                                                         pointer: ● linked 
+╭─ Files · changes ────────────╮╭─ src/cart.ts · changed · +3 -2 ──────────────────────────────────────────────────────╮
+│  ▾ webshop/   !1 ~2 +2 -1 =1 ││  @@ line 38                              │ @@ line 38                                │
+│  ▾ docs/                  !1 ││  38 export function total(items: Item[])…│ 38 export function total(items: Item[]):… │
+│     ! README.md    conflict  ││  39   if (items.length === 0) return 0;  │ 39   if (items.length === 0) return 0;    │
+│  ▾ src/             ~2 +2 =1 ││  40                                      │ 40                                        │
+│    ▾ lib/util/            +1 ││  41   const total = items.reduce(        │ 41   const total = items.reduce(          │
+│       + format.ts  new       ││ ~42     (s, i) => s + i.price, 0);       │~42     (s, i) => s + i.price * i.qty,     │
+│ ▸   ~ cart.ts      [A][K][D] ││                                          │+43     0);                                │
+│     = old.ts       kept      ││  43   return total;                      │ 44   return total;                        │
+│     ~ price.ts     changed   ││  44 }                                    │ 45 }                                      │
+│     + tax.ts       new       ││  @@ line 61                              │ @@ line 62                                │
+│   - logo.png       deleted   ││  61                                      │ 62                                        │
+│                              ││  62 export function label(item: Item): s…│ 63 export function label(item: Item): st… │
+│                              ││  63   const name = item.name.trim();     │ 64   const name = item.name.trim();       │
+│                              ││ ~64   return name + ' x' + item.count + …│~65   return name + ' x' + item.qty + ' a… │
+│                              ││  65 }                                    │ 66 }                                      │
+│                              ││  66                                      │ 67                                        │
+│                              ││  67 export const EMPTY: Item[] = [];     │ 68 export const EMPTY: Item[] = [];       │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+╰─ 3 of 7 · 1 conflict ────────╯╰─ change 1 of 2 · original │ copy ────────────────────────────────────────────────────╯
+up to date · v opens a view window (no paddock split)
+A apply  K keep  D discard  ↵ diff  c filter  b backups  i pointer  ? help                     hold Shift to select text"
+`;
+
+exports[`the file manager at 120 x 34 > t2-diff: the picture 1`] = `
+"paddock · 2 running                                                               Runs   Board   Approvals      Mail
+ claude · webshop · running 4 min · copy: 4 changed, 2 new, 1 deleted
+ run  approvals  mail [files]                                                                         pointer: ● linked 
+╭─ src/cart.ts · changed · +3 -2 · original ↔ copy ────────────────────────────────────────────────────────────────────╮
+│  @@ line 38                                              │ @@ line 38                                                │
+│  38 export function total(items: Item[]): number {       │ 38 export function total(items: Item[]): number {         │
+│  39   if (items.length === 0) return 0;                  │ 39   if (items.length === 0) return 0;                    │
+│  40                                                      │ 40                                                        │
+│  41   const total = items.reduce(                        │ 41   const total = items.reduce(                          │
+│ ~42     (s, i) => s + i.price, 0);                       │~42     (s, i) => s + i.price * i.qty,                     │
+│                                                          │+43     0);                                                │
+│  43   return total;                                      │ 44   return total;                                        │
+│  44 }                                                    │ 45 }                                                      │
+│  @@ line 61                                              │ @@ line 62                                                │
+│  61                                                      │ 62                                                        │
+│  62 export function label(item: Item): string {          │ 63 export function label(item: Item): string {            │
+│  63   const name = item.name.trim();                     │ 64   const name = item.name.trim();                       │
+│ ~64   return name + ' x' + item.count + ' at the price o…│~65   return name + ' x' + item.qty + ' at the price of '… │
+│  65 }                                                    │ 66 }                                                      │
+│  66                                                      │ 67                                                        │
+│  67 export const EMPTY: Item[] = [];                     │ 68 export const EMPTY: Item[] = [];                       │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰─ change 1 of 2 · original │ copy ────────────────────────────────────────────────────────────────────────────────────╯
+up to date · v opens a view window (no paddock split)
+n next  N previous  t unified  A apply  K keep  D discard  Esc back  ? help                    hold Shift to select text"
+`;
+
+exports[`the file manager at 120 x 34 > t3-apply: the picture 1`] = `
+"paddock · 2 running                                                               Runs   Board   Approvals      Mail
+ claude · webshop · running 4 min · copy: 4 changed, 2 new, 1 deleted
+ run  approvals  mail [files]                                                                         pointer: ● linked 
+╭─ Apply · claude · webshop ───────────────────────────────────────────────────────────────────────────────────────────╮
+│ ◆ Apply to your folder   4 files in src/                                                                             │
+│ Write these changes to ~/code/webshop?                                                                               │
+│  ▏ ~ src/cart.ts             changed   +3 -2                                                                         │
+│  ▏ + src/lib/util/format.ts  new       12 lines                                                                      │
+│  ▏ ~ src/price.ts            changed   +8 -8                                                                         │
+│  ▏ + src/tax.ts              new       40 lines                                                                      │
+│ paddock makes a backup first. u undoes this apply.                                                                   │
+│ Cancel: Nothing changes.                                                                                             │
+│ [y] Apply 4 files  [k] Keep in the copy  [n] Cancel                                                                  │
+│ ←→ choose · ↵ answer · y/k/n keys · Esc cancel                                                                       │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Files · changes ────────────╮╭─ src/ · 5 files · ~2 +2 =1 ──────────────────────────────────────────────────────────╮
+│  ▾ webshop/   !1 ~2 +2 -1 =1 ││  + src/lib/util/format.ts new      12 lines                                          │
+│  ▾ docs/                  !1 ││  ~ src/cart.ts            changed  +3 -2                                             │
+│     ! README.md    conflict  ││  = src/old.ts             kept     +1 -1                                             │
+│ ▸▾ src/            [A][K][D] ││  ~ src/price.ts           changed  +8 -8                                             │
+│    ▾ lib/util/            +1 ││  + src/tax.ts             new      40 lines                                          │
+│       + format.ts  new       ││                                                                                      │
+│     ~ cart.ts      changed   ││                                                                                      │
+│     = old.ts       kept      ││                                                                                      │
+│     ~ price.ts     changed   ││                                                                                      │
+│     + tax.ts       new       ││                                                                                      │
+│   - logo.png       deleted   ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+╰─ 5 files · 1 conflict ───────╯╰─ A K D act on all 5 ─────────────────────────────────────────────────────────────────╯
+up to date · v opens a view window (no paddock split)
+←→ choose  ↵ answer  Esc cancel  ? help                                                        hold Shift to select text"
+`;
+
+exports[`the file manager at 120 x 34 > t3-apply-deletes: the picture 1`] = `
+"paddock · 2 running                                                               Runs   Board   Approvals      Mail
+ claude · webshop · running 4 min · copy: 4 changed, 2 new, 1 deleted
+ run  approvals  mail [files]                                                                         pointer: ● linked 
+╭─ Apply · claude · webshop ───────────────────────────────────────────────────────────────────────────────────────────╮
+│ ◆ Apply to your folder   1 file                                                                                      │
+│ Write these changes to ~/code/webshop?                                                                               │
+│  ▏ - logo.png  deleted   47 KB                                                                                       │
+│ 1 file leaves your folder.                                                                                           │
+│ paddock makes a backup first. u undoes this apply.                                                                   │
+│ Cancel: Nothing changes.                                                                                             │
+│ [y] Apply ⚠  [n] Cancel                                                                                              │
+│ ←→ choose · ↵ answer · y/n keys · Esc cancel                                                                         │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Files · changes ────────────╮╭─ logo.png · deleted · 47 KB ─────────────────────────────────────────────────────────╮
+│  ▾ webshop/   !1 ~2 +2 -1 =1 ││ An image. paddock gives its size on both sides.                                      │
+│  ▾ docs/                  !1 ││ original  47 KB · 4 Oct 14:05                                                        │
+│     ! README.md    conflict  ││ copy      no file                                                                    │
+│  ▾ src/             ~2 +2 =1 ││                                                                                      │
+│    ▾ lib/util/            +1 ││                                                                                      │
+│       + format.ts  new       ││                                                                                      │
+│     ~ cart.ts      changed   ││                                                                                      │
+│     = old.ts       kept      ││                                                                                      │
+│     ~ price.ts     changed   ││                                                                                      │
+│     + tax.ts       new       ││                                                                                      │
+│ ▸ - logo.png       [A][K][D] ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+╰─ 7 of 7 · 1 conflict ────────╯╰──────────────────────────────────────────────────────────────────────────────────────╯
+up to date · v opens a view window (no paddock split)
+←→ choose  ↵ answer  Esc cancel  ? help                                                        hold Shift to select text"
+`;
+
+exports[`the file manager at 120 x 34 > t3-conflict: the picture 1`] = `
+"paddock · 2 running                                                               Runs   Board   Approvals      Mail
+ claude · webshop · running 4 min · copy: 4 changed, 2 new, 1 deleted
+ run  approvals  mail [files]                                                                         pointer: ● linked 
+╭─ Conflict · claude · webshop ────────────────────────────────────────────────────────────────────────────────────────╮
+│ ◆ Both sides changed   both sides changed it                                                                         │
+│ Which version of docs/README.md stays in ~/code/webshop?                                                             │
+│  ▏ original now  2 KB · 13:50                                                                                        │
+│  ▏ copy          2 KB · 14:02 · +6 -2                                                                                │
+│ paddock never overwrites a conflict without your choice.                                                             │
+│ Cancel: Nothing changes.                                                                                             │
+│ [o] Keep original  [c] Take the copy ⚠  [b] Keep both  [m] Take the merge  [n] Cancel                                │
+│ ←→ choose · ↵ answer · o/c/b/m/n keys · Esc cancel                                                                   │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Files · changes ────────────╮╭─ docs/README.md · conflict · +6 -2 ──────────────────────────────────────────────────╮
+│  ▾ webshop/   !1 ~2 +2 -1 =1 ││ Reading the diff…                                                                    │
+│  ▾ docs/                  !1 ││                                                                                      │
+│ ▸   ! README.md    [A][K][D] ││                                                                                      │
+│  ▾ src/             ~2 +2 =1 ││                                                                                      │
+│    ▾ lib/util/            +1 ││                                                                                      │
+│       + format.ts  new       ││                                                                                      │
+│     ~ cart.ts      changed   ││                                                                                      │
+│     = old.ts       kept      ││                                                                                      │
+│     ~ price.ts     changed   ││                                                                                      │
+│     + tax.ts       new       ││                                                                                      │
+│   - logo.png       deleted   ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+╰─ 1 of 7 · 1 conflict ────────╯╰──────────────────────────────────────────────────────────────────────────────────────╯
+up to date · v opens a view window (no paddock split)
+←→ choose  ↵ answer  Esc cancel  ? help                                                        hold Shift to select text"
+`;
+
+exports[`the file manager at 120 x 34 > t3-discard: the picture 1`] = `
+"paddock · 2 running                                                               Runs   Board   Approvals      Mail
+ claude · webshop · running 4 min · copy: 4 changed, 2 new, 1 deleted
+ run  approvals  mail [files]                                                                         pointer: ● linked 
+╭─ Discard · claude · webshop ─────────────────────────────────────────────────────────────────────────────────────────╮
+│ ◆ Discard from the copy   1 file                                                                                     │
+│ Drop these changes from the copy of the agent?                                                                       │
+│  ▏ ~ src/cart.ts  changed   +3 -2                                                                                    │
+│ This has no undo. Your folder does not change.                                                                       │
+│ Cancel: Nothing changes.                                                                                             │
+│ [y] Discard 1 file ⚠  [n] Cancel                                                                                     │
+│ ←→ choose · ↵ answer · y/n keys · Esc cancel                                                                         │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Files · changes ────────────╮╭─ src/cart.ts · changed · +3 -2 ──────────────────────────────────────────────────────╮
+│  ▾ webshop/   !1 ~2 +2 -1 =1 ││  @@ line 38                              │ @@ line 38                                │
+│  ▾ docs/                  !1 ││  38 export function total(items: Item[])…│ 38 export function total(items: Item[]):… │
+│     ! README.md    conflict  ││  39   if (items.length === 0) return 0;  │ 39   if (items.length === 0) return 0;    │
+│  ▾ src/             ~2 +2 =1 ││  40                                      │ 40                                        │
+│    ▾ lib/util/            +1 ││  41   const total = items.reduce(        │ 41   const total = items.reduce(          │
+│       + format.ts  new       ││ ~42     (s, i) => s + i.price, 0);       │~42     (s, i) => s + i.price * i.qty,     │
+│ ▸   ~ cart.ts      [A][K][D] ││                                          │+43     0);                                │
+│     = old.ts       kept      ││  43   return total;                      │ 44   return total;                        │
+│     ~ price.ts     changed   ││  44 }                                    │ 45 }                                      │
+│     + tax.ts       new       ││  @@ line 61                              │ @@ line 62                                │
+│   - logo.png       deleted   ││  61                                      │ 62                                        │
+│                              ││  62 export function label(item: Item): s…│ 63 export function label(item: Item): st… │
+│                              ││  63   const name = item.name.trim();     │ 64   const name = item.name.trim();       │
+│                              ││ ~64   return name + ' x' + item.count + …│~65   return name + ' x' + item.qty + ' a… │
+│                              ││  65 }                                    │ 66 }                                      │
+│                              ││  66                                      │ 67                                        │
+│                              ││  67 export const EMPTY: Item[] = [];     │ 68 export const EMPTY: Item[] = [];       │
+│                              ││                                                                                      │
+╰─ 3 of 7 · 1 conflict ────────╯╰─ change 1 of 2 · original │ copy ────────────────────────────────────────────────────╯
+up to date · v opens a view window (no paddock split)
+←→ choose  ↵ answer  Esc cancel  ? help                                                        hold Shift to select text"
+`;
+
+exports[`the file manager at 120 x 34 > t3-restore: the picture 1`] = `
+"paddock · 2 running                                                               Runs   Board   Approvals      Mail
+ claude · webshop · running 4 min · copy: 4 changed, 2 new, 1 deleted
+ run  approvals  mail [files]                                                                         pointer: ● linked 
+╭─ Restore · claude · webshop ─────────────────────────────────────────────────────────────────────────────────────────╮
+│ ◆ Restore a backup   today 14:02                                                                                     │
+│ Bring the files of this backup back to ~/code/webshop?                                                               │
+│  ▏ before apply · 3 files · claude  12 KB                                                                            │
+│ Files that changed since the backup get its content again.                                                           │
+│ paddock makes a "before restore" backup first, so u undoes the restore.                                              │
+│ Cancel: Nothing changes.                                                                                             │
+│ [y] Restore ⚠  [n] Cancel                                                                                            │
+│ ←→ choose · ↵ answer · y/n keys · Esc cancel                                                                         │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Backups · webshop ──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ today                                                                                                                │
+│ ▸ 14:02  before apply     3 files    12 KB   claude                                                              [R] │
+│   13:41  start of run     412 files  shared  claude                                                              [R] │
+│ yesterday                                                                                                            │
+│   17:20  before restore   9 files    48 KB                                                                       [R] │
+│   16:05  start of run     409 files  shared  codex                                                               [R] │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰─ 1 of 4 · 60 KB on disk ─────────────────────────────────────────────────────────────────────────────────────────────╯
+up to date · v opens a view window (no paddock split)
+←→ choose  ↵ answer  Esc cancel  ? help                                                        hold Shift to select text"
+`;
+
+exports[`the file manager at 120 x 34 > t3-undo: the picture 1`] = `
+"paddock · 2 running                                                               Runs   Board   Approvals      Mail
+ claude · webshop · running 4 min · copy: 4 changed, 2 new, 1 deleted
+ run  approvals  mail [files]                                                                         pointer: ● linked 
+╭─ Undo · claude · webshop ────────────────────────────────────────────────────────────────────────────────────────────╮
+│ ◆ Undo the last apply   today 14:02                                                                                  │
+│ Bring ~/code/webshop back to the state from before it?                                                               │
+│  ▏ before apply · 3 files · claude  today 14:02                                                                      │
+│ A file that you changed after the apply stays as it is.                                                              │
+│ Cancel: Nothing changes.                                                                                             │
+│ [y] Undo  [n] Cancel                                                                                                 │
+│ ←→ choose · ↵ answer · y/n keys · Esc cancel                                                                         │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Files · changes ────────────╮╭─ src/cart.ts · changed · +3 -2 ──────────────────────────────────────────────────────╮
+│  ▾ webshop/   !1 ~2 +2 -1 =1 ││  @@ line 38                              │ @@ line 38                                │
+│  ▾ docs/                  !1 ││  38 export function total(items: Item[])…│ 38 export function total(items: Item[]):… │
+│     ! README.md    conflict  ││  39   if (items.length === 0) return 0;  │ 39   if (items.length === 0) return 0;    │
+│  ▾ src/             ~2 +2 =1 ││  40                                      │ 40                                        │
+│    ▾ lib/util/            +1 ││  41   const total = items.reduce(        │ 41   const total = items.reduce(          │
+│       + format.ts  new       ││ ~42     (s, i) => s + i.price, 0);       │~42     (s, i) => s + i.price * i.qty,     │
+│ ▸   ~ cart.ts      [A][K][D] ││                                          │+43     0);                                │
+│     = old.ts       kept      ││  43   return total;                      │ 44   return total;                        │
+│     ~ price.ts     changed   ││  44 }                                    │ 45 }                                      │
+│     + tax.ts       new       ││  @@ line 61                              │ @@ line 62                                │
+│   - logo.png       deleted   ││  61                                      │ 62                                        │
+│                              ││  62 export function label(item: Item): s…│ 63 export function label(item: Item): st… │
+│                              ││  63   const name = item.name.trim();     │ 64   const name = item.name.trim();       │
+│                              ││ ~64   return name + ' x' + item.count + …│~65   return name + ' x' + item.qty + ' a… │
+│                              ││  65 }                                    │ 66 }                                      │
+│                              ││  66                                      │ 67                                        │
+│                              ││  67 export const EMPTY: Item[] = [];     │ 68 export const EMPTY: Item[] = [];       │
+│                              ││                                                                                      │
+╰─ 3 of 7 · 1 conflict ────────╯╰─ change 1 of 2 · original │ copy ────────────────────────────────────────────────────╯
+up to date · v opens a view window (no paddock split)
+←→ choose  ↵ answer  Esc cancel  ? help                                                        hold Shift to select text"
+`;
+
+exports[`the file manager at 120 x 34 > t4-backups: the picture 1`] = `
+"paddock · 2 running                                                               Runs   Board   Approvals      Mail
+ claude · webshop · running 4 min · copy: 4 changed, 2 new, 1 deleted
+ run  approvals  mail [files]                                                                         pointer: ● linked 
+╭─ Backups · webshop ──────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ today                                                                                                                │
+│ ▸ 14:02  before apply     3 files    12 KB   claude                                                              [R] │
+│   13:41  start of run     412 files  shared  claude                                                              [R] │
+│ yesterday                                                                                                            │
+│   17:20  before restore   9 files    48 KB                                                                       [R] │
+│   16:05  start of run     409 files  shared  codex                                                               [R] │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰─ 1 of 4 · 60 KB on disk ─────────────────────────────────────────────────────────────────────────────────────────────╯
+up to date · v opens a view window (no paddock split)
+R restore  u undo  i pointer  Esc back  ? help                                                 hold Shift to select text"
+`;
+
+exports[`the file manager at 120 x 34 > t5-pointer: the picture 1`] = `
+"paddock · 2 running                                                               Runs   Board   Approvals      Mail
+ claude · webshop · running 4 min · copy: 4 changed, 2 new, 1 deleted
+ run  approvals  mail [files]                                                                         pointer: ● linked 
+╭─ Pointer · ~/code/webshop ───────────────────────────────────────────────────────────────────────────────────────────╮
+│ ● linked   The pointer and the store agree.                                                                          │
+│  ▏ Store     ~/.local/share/paddock/copies/7c1e42  ·  1 copy  ·  4 backups                                           │
+│  ▏ Size      60 KB of its own                                                                                        │
+│  ▏ Disk      encrypted (LUKS)                                                                                        │
+│ A copy of this folder carries only the pointer, not the files.                                                       │
+│ [Esc] Close                                                                                                          │
+│ Esc closes the card                                                                                                  │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Files · changes ────────────╮╭─ src/cart.ts · changed · +3 -2 ──────────────────────────────────────────────────────╮
+│  ▾ webshop/   !1 ~2 +2 -1 =1 ││  @@ line 38                              │ @@ line 38                                │
+│  ▾ docs/                  !1 ││  38 export function total(items: Item[])…│ 38 export function total(items: Item[]):… │
+│     ! README.md    conflict  ││  39   if (items.length === 0) return 0;  │ 39   if (items.length === 0) return 0;    │
+│  ▾ src/             ~2 +2 =1 ││  40                                      │ 40                                        │
+│    ▾ lib/util/            +1 ││  41   const total = items.reduce(        │ 41   const total = items.reduce(          │
+│       + format.ts  new       ││ ~42     (s, i) => s + i.price, 0);       │~42     (s, i) => s + i.price * i.qty,     │
+│ ▸   ~ cart.ts      [A][K][D] ││                                          │+43     0);                                │
+│     = old.ts       kept      ││  43   return total;                      │ 44   return total;                        │
+│     ~ price.ts     changed   ││  44 }                                    │ 45 }                                      │
+│     + tax.ts       new       ││  @@ line 61                              │ @@ line 62                                │
+│   - logo.png       deleted   ││  61                                      │ 62                                        │
+│                              ││  62 export function label(item: Item): s…│ 63 export function label(item: Item): st… │
+│                              ││  63   const name = item.name.trim();     │ 64   const name = item.name.trim();       │
+│                              ││ ~64   return name + ' x' + item.count + …│~65   return name + ' x' + item.qty + ' a… │
+│                              ││  65 }                                    │ 66 }                                      │
+│                              ││  66                                      │ 67                                        │
+│                              ││  67 export const EMPTY: Item[] = [];     │ 68 export const EMPTY: Item[] = [];       │
+│                              ││                                                                                      │
+╰─ 3 of 7 · 1 conflict ────────╯╰─ change 1 of 2 · original │ copy ────────────────────────────────────────────────────╯
+up to date · v opens a view window (no paddock split)
+←→ choose  ↵ answer  Esc close  ? help                                                         hold Shift to select text"
+`;

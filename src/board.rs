@@ -12,7 +12,7 @@
 //!   the field names and the state words do not change within a version.
 //!   A new optional field is additive and keeps the version: a reader of
 //!   version 1 must ignore fields that it does not know. `Project::loft`
-//!   is such a field.
+//!   is such a field, and so are `Run::loft_commits` and `Run::loft_last`.
 
 pub mod collect;
 pub mod origin;
@@ -100,6 +100,10 @@ pub struct Board {
     pub approvals_waiting: usize,
     pub compile_slots: Vec<Slot>,
     pub projects: Vec<Project>,
+    /// The sandboxed gateways of gateway agents (agentgw/report.rs).
+    /// Absent when paddock never started one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gateways: Vec<crate::agentgw::report::Gateway>,
 }
 
 /// A held compile slot: the kv lease `compile-slot-N` of the user scope.
@@ -152,6 +156,14 @@ pub struct Run {
     /// for an ended run.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub approvals: String,
+    /// The loft commits of this run: paddock commits the loft notes at
+    /// the end of each run (`[loft] commit = "run"`), so a running run has
+    /// 0 until it ends.
+    #[serde(default)]
+    pub loft_commits: u64,
+    /// The time of the newest of them, RFC 3339 in UTC. Absent without one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loft_last: Option<String>,
 }
 
 /// A message of a run: its time and its text.
@@ -192,6 +204,9 @@ pub struct Facts {
     /// The approvals mode of a running run (`Running::approvals`). Empty
     /// for an ended one: its record is gone.
     pub approvals: String,
+    /// The loft commits of the run, and the time of the newest.
+    pub loft_commits: u64,
+    pub loft_last: Option<u64>,
 }
 
 /// Put the facts together. Pure: the same input gives the same board.
@@ -229,6 +244,8 @@ pub fn build(
                     since: crate::waiting::format_rfc3339(since),
                     card: !f.cards.is_empty(),
                     approvals: rules::one_line(&f.approvals),
+                    loft_commits: f.loft_commits,
+                    loft_last: f.loft_last.map(crate::waiting::format_rfc3339),
                 };
                 match f.origin.as_ref().and_then(|o| tickets::owner(o, files)) {
                     Some(i) => by_ticket[i].push((state, since, run)),
@@ -276,6 +293,7 @@ pub fn build(
         approvals_waiting,
         compile_slots,
         projects,
+        gateways: Vec::new(),
     }
 }
 

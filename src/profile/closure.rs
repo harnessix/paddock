@@ -83,12 +83,34 @@ pub(super) fn helper_root(env: &HostEnv, real: &Path) -> PathBuf {
 /// when that folder is too wide (`exposes_home`). An npm install keeps its
 /// `node_modules` folder, a versioned install such as
 /// `~/.nvm/versions/node/v20/bin/node` keeps `~/.nvm/versions/node/v20`.
+///
+/// A folder directly in the home, such as `~/.grok` for
+/// `~/.grok/bin/grok`, holds the state and the login of the tool, so the
+/// mount is the folder of the file (`~/.grok/bin`) instead. A file directly
+/// in such a folder mounts only itself.
 pub(super) fn harness_root(env: &HostEnv, file: &Path) -> PathBuf {
     let root = install_root(file);
     if exposes_home(env, &root) {
         return file.to_path_buf();
     }
+    if in_home_top(env, &root) {
+        return match file.parent() {
+            Some(dir) if dir != root && !exposes_home(env, dir) && !in_home_top(env, dir) => {
+                dir.to_path_buf()
+            }
+            _ => file.to_path_buf(),
+        };
+    }
     root
+}
+
+/// Whether `dir` sits directly in the home, in its given or canonical spelling.
+fn in_home_top(env: &HostEnv, dir: &Path) -> bool {
+    let mut homes = vec![env.home.clone()];
+    if let Ok(real) = std::fs::canonicalize(&env.home) {
+        homes.push(real);
+    }
+    homes.iter().any(|h| dir.parent() == Some(h.as_path()))
 }
 
 /// Whether mounting `dir` as a folder shows more than one tool: the home or

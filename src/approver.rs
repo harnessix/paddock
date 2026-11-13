@@ -236,7 +236,7 @@ pub fn resolve(env: &HostEnv, interactive: bool) -> Result<Option<(HookConfig, S
         return Ok(None);
     };
     if !interactive {
-        eprintln!("paddock: the agent approver needs its password, and there is no terminal; host requests go to you this time");
+        crate::note::info("the agent approver needs its password, and there is no terminal; host requests go to you this time");
         return Ok(None);
     }
     let pw =

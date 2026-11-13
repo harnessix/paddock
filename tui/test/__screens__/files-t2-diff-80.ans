@@ -1,0 +1,24 @@
+[1mpaddock[22m · 2 running                      [7m[1m Runs [22m[27m  Board   Approvals      Mail
+ claude · webshop · running 4 min · copy: 4 changed, 2 new, 1 deleted
+ run  approvals  mail [1m[36m[files][39m[22m                                 [2mpointer: ● linked [22m
+[36m╭─ [39m[1msrc/cart.ts · changed · +3 -2 · original ↔ copy[22m[36m ────────────────────────────╮[39m
+[36m│[39m [1m[36m @@ line 38[39m[22m                                                                  [36m│[39m
+[36m│[39m  38 export function total(items: Item[]): number {                           [36m│[39m
+[36m│[39m  39   if (items.length === 0) return 0;                                      [36m│[39m
+[36m│[39m  40                                                                          [36m│[39m
+[36m│[39m  41   const total = items.reduce(                                            [36m│[39m
+[36m│[39m [1m[31m-42 [22m    (s, i) => s + i.price, 0);[39m                                           [36m│[39m
+[36m│[39m [1m[32m+42 [22m    (s, i) => s + i.price * i.qty,[39m                                       [36m│[39m
+[36m│[39m [1m[32m+43 [22m    0);[39m                                                                  [36m│[39m
+[36m│[39m  44   return total;                                                          [36m│[39m
+[36m│[39m  45 }                                                                        [36m│[39m
+[36m│[39m [36m @@ line 62[39m                                                                  [36m│[39m
+[36m│[39m  62                                                                          [36m│[39m
+[36m│[39m  63 export function label(item: Item): string {                              [36m│[39m
+[36m│[39m  64   const name = item.name.trim();                                         [36m│[39m
+[36m│[39m [1m[31m-64 [22m  return name + ' x' + item.count + ' at the price of ' + format(item.p…[39m [36m│[39m
+[36m│[39m [1m[32m+65 [22m  return name + ' x' + item.qty + ' at the price of ' + format(item.pri…[39m [36m│[39m
+[36m│[39m  66 }                                                                        [36m│[39m
+[36m╰─ [39mchange 1 of 2 · unified[36m ────────────────────────────────────────────────────╯[39m
+[2mup to date · v opens a view window (no paddock split)[22m
+[1m[36mn[39m[22m[2m next  [22m[1m[36mN[39m[22m[2m previous  [22m[1m[36mt[39m[22m[2m side by side  [22m[1m[36mA[39m[22m[2m apply  [22m[1m[36mK[39m[22m[2m keep  [22m[1m[36mD[39m[22m[2m discard  [22m[1m[36mEsc[39m[22m[2m back  [22m[1m[36m?[39m[22m[2m help[22m

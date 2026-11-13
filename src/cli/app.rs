@@ -124,6 +124,19 @@ pub(crate) enum AppCmd {
         #[command(subcommand)]
         cmd: Option<super::rules::RulesCmd>,
     },
+    /// The recent connections of an app in paddock's macOS guest, from
+    /// the connection log of the running session (or of the last one):
+    /// the host, the port, the answer, the rule, the count and the last
+    /// time, the newest first. It reads the log without a lock, so the
+    /// session never waits for it.
+    Connections {
+        name: String,
+        /// The most rows.
+        #[arg(long, default_value_t = 200)]
+        limit: usize,
+        #[arg(long)]
+        json: bool,
+    },
     /// Reset a profile of the macOS guest. Without a flag: the saved
     /// state, the app clone, the drops and the logs go; the disk pair
     /// with the login and the files stays. --data removes the pair after
@@ -401,6 +414,9 @@ pub(crate) fn app_cmd(env: &HostEnv, cmd: AppCmd) -> Result<i32> {
         AppCmd::Backups { name, inst } => super::app_guest::backups_cmd(env, &name, inst.n()),
         AppCmd::Grants(cmd) => super::grants::run(env, cmd),
         AppCmd::Rules { name, cmd } => super::rules::rules(env, &name, cmd),
+        AppCmd::Connections { name, limit, json } => {
+            super::rules::connections(env, &name, limit, json)
+        }
         AppCmd::Log {
             name,
             events,

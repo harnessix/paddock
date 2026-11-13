@@ -94,7 +94,7 @@ pub fn wanted(env: &HostEnv, built: &Built) -> Result<String> {
         return Ok(built.backend.clone());
     }
     let (choice, why) = decide(&facts(env, built)?)?;
-    eprintln!("paddock: backend {}: {why}", choice.name());
+    crate::note::info(format!("backend {}: {why}", choice.name()));
     Ok(choice.name().to_string())
 }
 

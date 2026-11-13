@@ -3,7 +3,14 @@
 // Ink imports react-devtools-core only when DEV=true. The bundler hoists
 // that import, so the plugin gives it an empty module.
 // Usage: bun scripts/bun-build.mjs TARGET OUTFILE
+// TARGET is linux-x64, linux-arm64, darwin-arm64 or darwin-x64. `native` is
+// the machine that builds: bun then copies its own runtime and downloads
+// nothing.
 const [target, outfile] = process.argv.slice(2);
+if (!target || !outfile) {
+  console.error('usage: bun scripts/bun-build.mjs TARGET OUTFILE');
+  process.exit(2);
+}
 const stub = {
   name: 'no-devtools',
   setup(build) {
@@ -16,7 +23,7 @@ const stub = {
 };
 const result = await Bun.build({
   entrypoints: [new URL('../dist/cli.js', import.meta.url).pathname],
-  compile: { target: `bun-${target}`, outfile },
+  compile: target === 'native' ? { outfile } : { target: `bun-${target}`, outfile },
   minify: true,
   // React's production code, as in cli.ts.
   define: { 'process.env.NODE_ENV': JSON.stringify('production') },

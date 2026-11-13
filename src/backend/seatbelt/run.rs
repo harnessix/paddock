@@ -272,6 +272,9 @@ pub fn policy(env: &HostEnv, spec: &SandboxSpec, tmp: &Path) -> Result<(Policy, 
         let cache = super::keychain::user_cache();
         super::keychain::allow(&mut p, Path::new(&kc.value), cache.as_deref());
     }
+    if let Some(dir) = super::suid_shim::for_run(env) {
+        super::suid_shim::allow(&mut p, &real(&dir));
+    }
     let mut moved = Vec::new();
     p.add(real(&spec.project), Access::ReadWrite, "the project");
     p.add(
@@ -380,13 +383,20 @@ fn into_home(spec: &SandboxSpec, kept: &[&Path], value: &str) -> String {
     }
 }
 
-/// The places that mounts allow at their own path.
+/// The places that the policy allows at their own path: the project, the
+/// sandbox home itself, and the mounts at their own path. A gateway keeps
+/// its project and its home under the host home (`<data>/gateways/NAME`)
+/// with no mount: moved once more into the sandbox home, they would name a
+/// folder that does not exist.
 fn kept(spec: &SandboxSpec) -> Vec<&Path> {
-    spec.mounts
-        .iter()
-        .filter(|m| m.src.as_deref() == Some(m.dst.as_path()))
-        .map(|m| m.dst.as_path())
-        .collect()
+    let mut v = vec![spec.project.as_path(), spec.home_src.as_path()];
+    v.extend(
+        spec.mounts
+            .iter()
+            .filter(|m| m.src.as_deref() == Some(m.dst.as_path()))
+            .map(|m| m.dst.as_path()),
+    );
+    v
 }
 
 /// The environment of a terminal run: the variables of every backend, with
@@ -471,6 +481,11 @@ pub fn run_env(env: &HostEnv, spec: &SandboxSpec, tmp: &Path) -> BTreeMap<String
             vars.entry("DEVELOPER_DIR".into())
                 .or_insert_with(|| dev.display().to_string());
         }
+    }
+    // paddock's signed copy of ps first: the sandbox cannot start the
+    // setuid /bin/ps (suid_shim.rs).
+    if let Some(dir) = super::suid_shim::for_run(env) {
+        path = super::suid_shim::path_first(&path, &dir);
     }
     vars.insert("PATH".into(), path);
     vars
@@ -561,10 +576,10 @@ pub fn start_pty(env: &HostEnv, spec: &mut SandboxSpec) -> Result<bool> {
         } else {
             ""
         };
-        eprintln!(
-            "paddock: no pty from paddock for {}: {why}. It can make its own ptys, but cannot open other terminals.{fix}",
+        crate::note::info(format!(
+            "no pty from paddock for {}: {why}. It can make its own ptys, but cannot open other terminals.{fix}",
             spec.harness
-        );
+        ));
         return Ok(false);
     }
     let run = env.paddock_run().join(&spec.id);
@@ -626,6 +641,32 @@ pub fn set_proxy(spec: &mut SandboxSpec, port: u16) {
     }
 }
 
+/// The host steps of a Seatbelt run before its start: its keychain and the
+/// fixed names in `/private/tmp` of its profile (tmpclaim.rs).
+pub fn host_start(env: &HostEnv, built: &mut crate::build::Built) {
+    if let Err(e) = super::keychain::start(env, &mut built.spec, &built.auth) {
+        crate::note::warn(format!("no keychain for this run: {e:#}"));
+    }
+    crate::tmpclaim::host::start_run(env, &mut built.spec, &built.profile, &built.harness_exe);
+}
+
+/// Give the run the short aliases of its home and its temporary folder:
+/// the environment names the aliases, and the policy allows Unix sockets
+/// through them. A home of an earlier version gets its alias here, at its
+/// next start: its data stays where it is.
+pub fn short_paths(
+    env: &HostEnv,
+    spec: &SandboxSpec,
+    tmp: &Path,
+    pol: &mut Policy,
+    vars: &mut BTreeMap<String, String>,
+) -> Result<crate::shorthome::Short> {
+    let short = crate::shorthome::Short::ensure(&env.home, &spec.home_src, tmp)?;
+    short.env(vars);
+    crate::shorthome::allow(pol, &short);
+    Ok(short)
+}
+
 impl Backend for SeatbeltRun {
     fn name(&self) -> &'static str {
         NAME
@@ -654,6 +695,7 @@ impl Backend for SeatbeltRun {
         Backend::prepare(&super::super::srt::Srt, env, spec, false)?;
         let tmp = private_tmp(spec);
         crate::safefs::Root::open(&spec.home_src)?.dir(tmp.strip_prefix(&spec.home_src)?, true)?;
+        super::suid_shim::prepare(env);
         let (_, notes) = policy(env, spec, &tmp)?;
         for n in notes {
             log::warn!("{n}");
@@ -677,12 +719,20 @@ impl Backend for SeatbeltRun {
         // In the sandbox home: a planted .paddock-tmp link must not make
         // paddock create a folder elsewhere and allow writes to it.
         crate::safefs::Root::open(&spec.home_src)?.dir(tmp.strip_prefix(&spec.home_src)?, true)?;
-        let (pol, _) = policy(env, spec, &tmp)?;
+        let (mut pol, _) = policy(env, spec, &tmp)?;
+        let mut vars = run_env(env, spec, &tmp);
+        // macOS: `$HOME` and `TMPDIR` are short aliases, so the Unix
+        // sockets that programs make there fit in 104 bytes (shorthome.rs).
+        if cfg!(target_os = "macos") {
+            short_paths(env, spec, &tmp, &mut pol, &mut vars)?;
+            // The fixed names in /private/tmp that the start claimed (tmpclaim.rs).
+            crate::tmpclaim::host::allow(env, &mut pol, &spec.id);
+        }
         let profile = env.paddock_run().join(&spec.id).join("seatbelt.sb");
         Ok(Launch {
             program: PathBuf::from(SANDBOX_EXEC),
             args: command(spec, &profile),
-            env: run_env(env, spec, &tmp),
+            env: vars,
             files: vec![(profile, crate::seatbelt::render(&pol)?, 0o600)],
             // The shell of the run starts here, before it enters the work
             // folder. In the folder of the caller (the real home, say) the

@@ -61,6 +61,8 @@ impl World {
                 "--auth",
                 auth,
                 "-y",
+                // The harness writes what it saw in the project folder.
+                "--direct",
             ])
             .arg(self.root.join("project"))
             .env("HOME", self.root.join("home"))

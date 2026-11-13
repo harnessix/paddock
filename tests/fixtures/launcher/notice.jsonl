@@ -1,0 +1,3 @@
+{"v":1,"t":"2026-11-06T12:20:00Z","kind":"notice","what":"approval","title":"paddock: claude asks for clipboard-read","text":"Read the clipboard of the host","critical":true,"action":"r12"}
+{"v":1,"t":"2026-11-06T12:21:00Z","kind":"notice","what":"new_host","title":"a sandbox reached a new host","text":"api.example.com:443. paddock log shows it. paddock stop 3f2a ends the sandbox.","critical":false}
+{"v":1,"t":"2026-11-06T12:22:00Z","kind":"notice","what":"info","title":"paddock","text":"claude waits for input: view it or stop it","critical":false}
