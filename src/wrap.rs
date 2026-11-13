@@ -157,6 +157,7 @@ fn tell_unsandboxed(env: &HostEnv, what: &str, why: &str) {
     let _ = crate::broker::notify::show(
         env,
         &crate::broker::notify::Note {
+            what: "unsandboxed".into(),
             summary: format!("{what} runs without a sandbox"),
             body: why.to_string(),
             ..Default::default()
@@ -302,16 +303,17 @@ pub fn main(env: HostEnv, argv: &[String]) -> Result<i32> {
         tell_unsandboxed(&env, &argv[0], "paddock does not know this form of command");
         return exec_unchanged(&env, argv);
     };
-    if let Some(why) = profile_for(&env, parsed.name()).and_then(|p| {
-        HarnessFactory::new(&env)
-            .ok()?
-            .profile(&p)?
-            .launch
-            .wrap_on_host
-            .clone()
-    }) {
-        tell_unsandboxed(&env, parsed.name(), &why);
-        return exec_unchanged(&env, argv);
+    let profile = profile_for(&env, parsed.name())
+        .and_then(|p| HarnessFactory::new(&env).ok()?.profile(&p).cloned());
+    if let Some(p) = &profile {
+        if let Some(shape) = p.gateway.clone() {
+            if let Some(code) = gateway(&env, p, &shape, &parsed, argv) {
+                return code;
+            }
+        } else if let Some(why) = &p.launch.wrap_on_host {
+            tell_unsandboxed(&env, parsed.name(), why);
+            return exec_unchanged(&env, argv);
+        }
     }
     let cwd = std::env::current_dir()?;
     let plan = match plan(&env, &parsed, &cwd) {
@@ -336,6 +338,50 @@ pub fn main(env: HostEnv, argv: &[String]) -> Result<i32> {
     }
 }
 
+/// A command of a gateway agent (agentgw.rs). A client attaches to the
+/// sandboxed gateway; with none running, paddock offers to start one. A
+/// gateway that the user started on the host, or a command that starts
+/// one, runs as before, with the notice and the way to move. None: the
+/// command is an ordinary agent start.
+fn gateway(
+    env: &HostEnv,
+    p: &crate::profile::Profile,
+    shape: &crate::agentgw::Shape,
+    parsed: &Parsed,
+    argv: &[String],
+) -> Option<Result<i32>> {
+    use crate::agentgw::{attach, form_of, state, Form};
+    let name = &p.name;
+    let why = p.launch.wrap_on_host.as_deref();
+    let (form, cmd, extra) = form_of(p, shape, parsed.name(), &parsed.args);
+    let ours = state::live(env, name).is_some_and(|s| s.phase == state::Phase::Running);
+    let host = |port: u16| attach::host_notice(name, why, shape, port);
+    match form {
+        Form::Other => None,
+        Form::Host => {
+            let port = shape.host_port.unwrap_or(shape.port);
+            tell_unsandboxed(env, parsed.name(), &host(port));
+            Some(exec_unchanged(env, argv))
+        }
+        Form::Client => {
+            if !ours {
+                if let Some(port) = attach::host_gateway(env, name, shape) {
+                    tell_unsandboxed(env, parsed.name(), &host(port));
+                    return Some(exec_unchanged(env, argv));
+                }
+                if let Err(e) = attach::ensure(env, name, shape, false) {
+                    tell_unsandboxed(env, parsed.name(), &format!("{e:#}"));
+                    return Some(exec_unchanged(env, argv));
+                }
+            }
+            Some(match attach::attach(env, name, &cmd, &extra, false) {
+                Ok(c) => Ok(c),
+                Err(e) => fail(env, name, e),
+            })
+        }
+    }
+}
+
 /// A start that paddock knows but cannot make: say why, and keep the window
 /// open long enough to read it. The agent does not start on the host.
 fn fail(env: &HostEnv, name: &str, e: anyhow::Error) -> Result<i32> {
@@ -343,6 +389,7 @@ fn fail(env: &HostEnv, name: &str, e: anyhow::Error) -> Result<i32> {
     let _ = crate::broker::notify::show(
         env,
         &crate::broker::notify::Note {
+            what: "start_failed".into(),
             summary: format!("paddock could not start {name} in a sandbox"),
             body: format!("{e:#}"),
             critical: true,

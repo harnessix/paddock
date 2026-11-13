@@ -99,6 +99,9 @@ public final class LauncherStore {
 
     // MARK: Plumbing
     @ObservationIgnored public private(set) var service: PaddockService?
+    /// Shows a notice of paddock as a notification. paddock does not post
+    /// it itself, so the launcher must show each one.
+    @ObservationIgnored public var onNotice: (@MainActor (NoticeEvent) -> Void)?
     @ObservationIgnored public let clock: LauncherClock
     @ObservationIgnored var gate = StatusGate()
     @ObservationIgnored var eventTask: Task<Void, Never>?
@@ -441,6 +444,8 @@ public final class LauncherStore {
                 gate.reset()
                 Task { await self.refreshAll() }
             }
+        case .notice(let n):
+            onNotice?(n)
         case .unknown:
             break
         }

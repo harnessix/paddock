@@ -24,6 +24,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 mod asking;
+mod cli_rules;
 mod decision;
 #[path = "gate_held.rs"]
 mod held;

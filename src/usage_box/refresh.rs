@@ -203,7 +203,8 @@ pub fn scratch(env: &HostEnv, harness: &str) -> PathBuf {
 }
 
 /// The `paddock run` arguments of a refresh: the shared login, network
-/// `api` with the hosts of the agent's collector, no auto-approval flags.
+/// `api` with the hosts of the agent's collector, no auto-approval flags,
+/// in the scratch folder itself.
 pub fn run_args(env: &HostEnv, d: &Due) -> Vec<String> {
     let mut a = vec![
         "run".to_string(),
@@ -215,6 +216,9 @@ pub fn run_args(env: &HostEnv, d: &Due) -> Vec<String> {
         "api".into(),
         "--no-yolo".into(),
         "--yes".into(),
+        // The scratch folder is paddock's own and has no git: without
+        // this, `[copy] default = "auto"` puts each refresh on a copy.
+        "--direct".into(),
     ];
     for c in super::COLLECTORS
         .iter()

@@ -31,22 +31,26 @@ export function Pane(props: {
   onWheel?: (dir: 1 | -1) => void;
   onClick?: () => void;
   onDoubleClick?: () => void;
+  /** Words in the bottom border: a position, a count. */
+  footer?: string;
 }): React.JSX.Element {
   const theme = useTheme();
   const ref = useRef<DOMElement>(null);
   const pointer = usePointer(ref, { onWheel: props.onWheel, onClick: props.onClick, onDoubleClick: props.onDoubleClick });
   const { width, height, focused } = props;
+  const foot = props.footer !== undefined;
   // A pane that a click selects (a card) lights up under the pointer.
   const lit = !focused && pointer.hovered && (props.onClick !== undefined || props.onDoubleClick !== undefined);
   if (theme.plain) {
     return (
       <Box ref={ref} flexDirection="column" width={width} height={height} overflow="hidden">
         <Text bold underline={lit}>{cut(`${focused ? '> ' : ''}${props.title}`, width)}</Text>
-        <Box flexDirection="column" height={height - 1} overflow="hidden">
+        <Box flexDirection="column" height={height - (foot ? 2 : 1)} overflow="hidden">
           <Box flexDirection="column" flexShrink={0}>
             {props.children}
           </Box>
         </Box>
+        {foot ? <Text dimColor>{cut(props.footer ?? '', width)}</Text> : null}
       </Box>
     );
   }
@@ -55,6 +59,7 @@ export function Pane(props: {
   const title = cut(props.title, Math.max(0, width - 6));
   const fill = Math.max(0, width - 5 - cells(title));
   const color = focused ? { color: accent } : lit ? {} : { dimColor: true };
+  const footer = cut(props.footer ?? '', Math.max(0, width - 6));
   return (
     <Box ref={ref} flexDirection="column" width={width} height={height} overflow="hidden">
       <Text wrap="truncate-end">
@@ -65,10 +70,11 @@ export function Pane(props: {
       <Box
         borderStyle="round"
         borderTop={false}
+        borderBottom={!foot}
         {...border}
         flexDirection="column"
         width={width}
-        height={height - 1}
+        height={height - (foot ? 2 : 1)}
         paddingX={1}
         overflow="hidden"
       >
@@ -77,6 +83,13 @@ export function Pane(props: {
           {props.children}
         </Box>
       </Box>
+      {foot ? (
+        <Text wrap="truncate-end">
+          <Text {...color}>{footer ? '╰─ ' : '╰'}</Text>
+          <Text dimColor={!focused}>{footer}</Text>
+          <Text {...color}>{footer ? ' ' + '─'.repeat(Math.max(0, width - 5 - cells(footer))) + '╯' : '─'.repeat(Math.max(0, width - 2)) + '╯'}</Text>
+        </Text>
+      ) : null}
     </Box>
   );
 }

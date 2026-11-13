@@ -1,0 +1,24 @@
+paddock · 2 件実行中                        実行   ボード   承認      メール
+ claude · webshop · 実行中 4 分 · コピー: 4 変更、2 新規、1 削除
+ 実行  承認  メール [ファイル]                             ポインター: ● linked
+╭─ ファイル · 変更 ────────────╮╭─ docs/README.md · 競合 · +6 -2 ──────────────╮
+│  ▾ webshop/   !1 ~2 +2 -1 =1 ││  @@ 1 行目                                   │
+│  ▾ docs/                  !1 ││  1 # webshop                                 │
+│ ▸   ! README.md    [A][K][D] ││  2                                           │
+│  ▾ src/             ~2 +2 =1 ││ -3 A small shop.                             │
+│    ▾ lib/util/            +1 ││ -4 Run it with npm start.                    │
+│       + format.ts  新 規     ││ +3 A small shop with a cart and taxes.       │
+│     ~ cart.ts      変 更     ││ +4                                           │
+│     = old.ts       保 持     ││ +5 ## Run it                                 │
+│     ~ price.ts     変 更     ││ +6                                           │
+│     + tax.ts       新 規     ││ +7 npm install                               │
+│   - logo.png       削 除     ││ +8 npm start                                 │
+│                              ││  9                                           │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+╰─ 1/7 · 1 件の競合 ───────────╯╰─ 変更 1/1 · 統合 · 1 2 3 各側 ───────────────╯
+最新 · v で表示ウィンドウを開く (paddock split なし)
+A 適用  K 保持  D 破棄  ↵ 差分  c フィルター  b バックアップ  ? ヘルプ

@@ -182,6 +182,36 @@ pub fn read_at(path: &Path) -> Vec<Entry> {
         .collect()
 }
 
+/// The most bytes that [`read_shared`] reads: the end of the file.
+pub const SHARED_MAX: u64 = 4 << 20;
+
+/// The lines of the log at `path` while the session writes it, for
+/// `paddock app connections`: no lock, so the session never waits. A
+/// rewrite renames a whole file into place, and an append can leave a
+/// half line at the end, which does not parse and is skipped. Only the
+/// last [`SHARED_MAX`] bytes count; the first line of a cut is skipped.
+pub fn read_shared(path: &Path) -> Vec<Entry> {
+    use std::io::{Read as _, Seek as _, SeekFrom};
+    let Ok(mut f) = std::fs::File::open(path) else {
+        return Vec::new();
+    };
+    let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+    let start = len.saturating_sub(SHARED_MAX);
+    if f.seek(SeekFrom::Start(start)).is_err() {
+        return Vec::new();
+    }
+    let mut bytes = Vec::new();
+    if f.take(SHARED_MAX).read_to_end(&mut bytes).is_err() {
+        return Vec::new();
+    }
+    let text = String::from_utf8_lossy(&bytes);
+    let mut lines = text.lines();
+    if start > 0 {
+        lines.next();
+    }
+    lines.filter_map(|l| serde_json::from_str(l).ok()).collect()
+}
+
 /// The counts by verdict, for the status line and the support bundle.
 pub fn counts(path: &Path) -> super::status::Counts {
     super::status::count_connections(&std::fs::read(path).unwrap_or_default())
@@ -313,6 +343,23 @@ mod tests {
         let e = Entry::new(1, "a\u{202E}b", None, &"x".repeat(400), 1, DENY, "mode");
         assert_eq!(e.app, "ab");
         assert_eq!(e.host.len(), MAX_TEXT);
+        // The shared reader skips a half line at the end and a cut start.
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        f.write_all(b"{\"t\":1,\"app\":\"x\",\"host\":\"half")
+            .unwrap();
+        drop(f);
+        assert_eq!(read_shared(&path), read_at(&path));
+        assert_eq!(read_shared(&path).len(), 4);
+        assert!(read_shared(&tmp.path().join("none.jsonl")).is_empty());
+        let long = tmp.path().join("long.jsonl");
+        let one = line(&entry(1, "a.example", ALLOW, "egress"));
+        let n = (SHARED_MAX as usize / (one.len() + 1)) + 10;
+        std::fs::write(&long, format!("{one}\n").repeat(n)).unwrap();
+        let got = read_shared(&long);
+        assert!(got.len() < n && got.len() + 12 >= n, "{} of {n}", got.len());
         // The session rotation.
         rotate_for_session(&path);
         assert!(!path.exists());

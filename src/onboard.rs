@@ -334,6 +334,14 @@ pub fn mac_doctor_deps(env: &HostEnv, probe: &MacProbe) -> bool {
     for l in crate::vm::doctor_lines(env) {
         println!("{l}");
     }
+    println!("\nNotifications:");
+    println!(
+        "{}",
+        mac_notifier_line(
+            &mac_notifier_here(env),
+            &crate::eventstream::Bus::of(env).notice_followers()
+        )
+    );
     println!();
     let view = crate::doctor::macvm::View::read(env, probe.version.as_deref());
     for l in crate::doctor::macvm::lines(&view) {
@@ -393,15 +401,145 @@ pub fn notification_argv(title: &str, body: &str) -> Vec<String> {
 
 pub const OSASCRIPT: &str = "/usr/bin/osascript";
 
-/// Show a notification on macOS and return at once.
-pub fn mac_notify(title: &str, body: &str) -> Result<()> {
-    let mut child = Command::new(OSASCRIPT)
-        .args(notification_argv(title, body))
+/// Where Homebrew puts `terminal-notifier`, on Apple silicon and on Intel.
+/// paddock looks only here, not on PATH: a PATH entry can be a folder that
+/// a sandbox writes.
+pub const TERMINAL_NOTIFIER_PATHS: &[&str] = &[
+    "/opt/homebrew/bin/terminal-notifier",
+    "/usr/local/bin/terminal-notifier",
+];
+
+/// The bundle of paddock for Mac and its bundle id.
+pub const LAUNCHER_APP: &str = "paddock for Mac.app";
+pub const LAUNCHER_BUNDLE_ID: &str = "dev.paddock.mac";
+
+/// How paddock posts a notification on macOS when paddock for Mac does
+/// not show it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MacNotifier {
+    /// `terminal-notifier`. With `sender`, the bundle id of an installed
+    /// paddock for Mac, macOS shows paddock's name and icon.
+    TerminalNotifier {
+        path: PathBuf,
+        sender: Option<&'static str>,
+    },
+    /// The last way: macOS shows the notification as from Script Editor.
+    Osascript,
+}
+
+/// The folders where paddock for Mac can be installed.
+pub fn launcher_app_paths(home: &Path) -> [PathBuf; 2] {
+    [
+        Path::new("/Applications").join(LAUNCHER_APP),
+        home.join("Applications").join(LAUNCHER_APP),
+    ]
+}
+
+/// The way to post. `is_there` says whether a path is there: a program
+/// that runs, or the folder of an app.
+pub fn mac_notifier(home: &Path, is_there: impl Fn(&Path) -> bool) -> MacNotifier {
+    let Some(path) = TERMINAL_NOTIFIER_PATHS
+        .iter()
+        .map(Path::new)
+        .find(|p| is_there(p))
+    else {
+        return MacNotifier::Osascript;
+    };
+    let sender = launcher_app_paths(home)
+        .iter()
+        .any(|p| is_there(p))
+        .then_some(LAUNCHER_BUNDLE_ID);
+    MacNotifier::TerminalNotifier {
+        path: path.to_path_buf(),
+        sender,
+    }
+}
+
+/// The way to post on this Mac.
+pub fn mac_notifier_here(env: &HostEnv) -> MacNotifier {
+    use std::os::unix::fs::PermissionsExt;
+    mac_notifier(&env.home, |p| match std::fs::metadata(p) {
+        Ok(m) if m.is_dir() => p.extension().is_some_and(|e| e == "app"),
+        Ok(m) => m.is_file() && m.permissions().mode() & 0o111 != 0,
+        Err(_) => false,
+    })
+}
+
+/// The program and the arguments that post `title` and `body` with `n`.
+/// The text is plain arguments: no shell reads them, and a leading "-"
+/// is gone, so neither program reads the text as an option.
+pub fn mac_notify_command(n: &MacNotifier, title: &str, body: &str) -> (PathBuf, Vec<String>) {
+    match n {
+        MacNotifier::Osascript => (PathBuf::from(OSASCRIPT), notification_argv(title, body)),
+        MacNotifier::TerminalNotifier { path, sender } => {
+            let mut title = applescript_arg(title, 200);
+            if title.is_empty() {
+                title = "paddock".into();
+            }
+            // Without -message, terminal-notifier reads stdin.
+            let mut message = applescript_arg(body, 1000);
+            if message.is_empty() {
+                message = title.clone();
+            }
+            let mut args = vec!["-title".to_string(), title, "-message".into(), message];
+            if let Some(id) = sender {
+                args.extend(["-sender".to_string(), id.to_string()]);
+            }
+            (path.clone(), args)
+        }
+    }
+}
+
+/// The doctor's line about notifications on macOS. `launcher` holds the
+/// pids of paddock for Mac that follow the events with `--notify`.
+pub fn mac_notifier_line(n: &MacNotifier, launcher: &[u32]) -> String {
+    const NAME: &str = "notifications";
+    if let Some(pid) = launcher.first() {
+        return format!("  ok       {NAME:<22} paddock for Mac shows them (pid {pid})");
+    }
+    match n {
+        MacNotifier::TerminalNotifier {
+            path,
+            sender: Some(_),
+        } => format!(
+            "  ok       {NAME:<22} {} with the name and icon of paddock for Mac",
+            path.display()
+        ),
+        MacNotifier::TerminalNotifier { path, sender: None } => format!(
+            "  ok       {NAME:<22} {}. Install paddock for Mac to show its name and icon",
+            path.display()
+        ),
+        MacNotifier::Osascript => format!(
+            "  fallback {NAME:<22} {OSASCRIPT}: macOS shows them as from Script Editor. \
+             Run paddock for Mac, or: brew install terminal-notifier"
+        ),
+    }
+}
+
+/// How long a notification program may run before paddock stops it.
+const NOTIFY_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Show a notification on macOS and return at once, the best way that
+/// [`mac_notifier_here`] finds.
+pub fn mac_notify(env: &HostEnv, title: &str, body: &str) -> Result<()> {
+    let (program, args) = mac_notify_command(&mac_notifier_here(env), title, body);
+    let mut child = Command::new(program)
+        .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()?;
-    std::thread::spawn(move || child.wait());
+    std::thread::spawn(move || {
+        let end = std::time::Instant::now() + NOTIFY_WAIT;
+        while std::time::Instant::now() < end {
+            if !matches!(child.try_wait(), Ok(None)) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+    });
     Ok(())
 }
 

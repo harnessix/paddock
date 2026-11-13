@@ -10,6 +10,8 @@ unverified = [
 [locate]
 mise = "claude"
 commands = ["claude"]
+# The folders of its installers, for a run with a thin PATH.
+dirs = ["~/.claude/local", "~/.local/share/claude/local", "~/.npm-global/bin", "~/.bun/bin"]
 paths = ["~/.local/share/claude/local/claude", "~/.claude/local/claude"]
 
 [launch]

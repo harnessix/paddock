@@ -8,6 +8,13 @@
 //! source back. The saved source goes into the session record, so `paddock
 //! app list` restores it after a crash (item 21 of the checklist).
 //!
+//! The shim holds the host's source only while two AppKit facts are true:
+//! the shim is the active app, and a session window is key ([`Focus`]).
+//! The shell reads both facts again at each event and at each tick, so a
+//! lost resign (a window that closed while key, 0 windows) cannot keep the
+//! host on the plain layout. A change of the source by the user while
+//! another app is active stays: the shim never switches it back (IME1).
+//!
 //! [`InputSync`] is the state machine. The AppKit side (`run_input.rs`,
 //! `tis.rs`) feeds it the host facts and runs the [`Action`]s: a
 //! `TISSelectInputSource` on the host, an `input.set` to the guest, the
@@ -15,6 +22,32 @@
 
 use super::text;
 use std::collections::BTreeMap;
+use std::time::{Duration, Instant};
+
+/// After the last session window resigned key while the shim stays the
+/// active app, the restore waits this long for another session window to
+/// become key, so a click from one window of the session to another does
+/// not flip the host's source twice. The Mac check `restore` allows 200 ms.
+/// When another app becomes active, the restore does not wait.
+pub const RESIGN_GRACE: Duration = Duration::from_millis(100);
+
+/// The two facts of AppKit that the shim reads again at each event and
+/// at each tick. A stored flag alone never holds the host's source.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Focus {
+    /// `NSApp.isActive`: the shim is the active app of macOS.
+    pub app_active: bool,
+    /// A session window is the key window, and it is visible, not
+    /// minimized, on the active Space and on a screen.
+    pub key_window: bool,
+}
+
+impl Focus {
+    /// The shim holds the host's source only while both facts are true.
+    pub fn holds(self) -> bool {
+        self.app_active && self.key_window
+    }
+}
 
 /// The plain layout of the input methods that type Latin letters.
 pub const ABC: &str = "com.apple.keylayout.ABC";
@@ -182,6 +215,9 @@ fn composes(id: &str, host: &[Source]) -> bool {
 #[derive(Debug, Default)]
 pub struct InputSync {
     key: bool,
+    /// When the check first saw the focus gone while the shim stays
+    /// active, for the grace.
+    lost_at: Option<Instant>,
     /// The host source to restore: Some while the host is on a plain
     /// layout that the shim selected.
     saved: Option<String>,
@@ -324,12 +360,14 @@ impl InputSync {
     /// back and the badge goes.
     pub fn on_resign(&mut self) -> Vec<Action> {
         self.key = false;
+        self.lost_at = None;
         self.release()
     }
 
     /// The shim ends: the same as a resign, also while key.
     pub fn on_exit(&mut self) -> Vec<Action> {
         self.key = false;
+        self.lost_at = None;
         self.release()
     }
 
@@ -344,6 +382,91 @@ impl InputSync {
             out.push(Action::Badge(None));
         }
         out
+    }
+
+    /// The check of the AppKit facts, at every event and at every tick.
+    /// The focus is there and the shim is not key: the same as
+    /// [`Self::on_key`]. The focus is gone while key: another app is
+    /// active, so the host gets its source back now; or the shim stays
+    /// active with no session window key (a close, a hide, a window off
+    /// screen, 0 windows), so the host gets it back after the grace.
+    /// `host` is read only when the state changes.
+    pub fn on_check(
+        &mut self,
+        focus: Focus,
+        now: Instant,
+        host: impl FnOnce() -> HostState,
+    ) -> Vec<Action> {
+        if focus.holds() {
+            self.lost_at = None;
+            if self.key {
+                return Vec::new();
+            }
+            return self.on_key(&host());
+        }
+        if !self.key {
+            self.lost_at = None;
+            return Vec::new();
+        }
+        if focus.app_active {
+            let since = *self.lost_at.get_or_insert(now);
+            if now.saturating_duration_since(since) < RESIGN_GRACE {
+                return Vec::new();
+            }
+        }
+        self.on_leave(&host())
+    }
+
+    /// The host's source changed, with the AppKit facts. Only while the
+    /// focus holds does the shim follow the change and keep the host on a
+    /// plain layout. Without the focus the change is the user's own: the
+    /// shim lets go at once and never switches it back.
+    pub fn on_host_change_at(
+        &mut self,
+        focus: Focus,
+        now: Instant,
+        host: &HostState,
+    ) -> Vec<Action> {
+        self.learn(host);
+        if self.key && !focus.holds() {
+            return self.on_leave(host);
+        }
+        let was = self.key;
+        let mut out = self.on_check(focus, now, || host.clone());
+        if was && self.key {
+            out.extend(self.on_host_change(host));
+        }
+        out
+    }
+
+    /// The Globe key, with the AppKit facts: only while the focus holds.
+    pub fn on_globe_at(&mut self, focus: Focus, now: Instant, host: &HostState) -> Vec<Action> {
+        let mut out = self.on_check(focus, now, || host.clone());
+        if self.key && focus.holds() {
+            out.extend(self.on_globe(host));
+        }
+        out
+    }
+
+    /// The resign or the end of the shim, with the host's current
+    /// source. When the host is still on the plain layout that the shim
+    /// selected, or the shim cannot read the current source, the host
+    /// gets the saved source back. When the user picked another source
+    /// in the meantime, that pick stays: the shim drops the saved source
+    /// and selects nothing.
+    pub fn on_leave(&mut self, host: &HostState) -> Vec<Action> {
+        self.learn(host);
+        self.key = false;
+        self.lost_at = None;
+        let picked = !host.current.is_empty()
+            && self.plain.is_some()
+            && self.plain.as_deref() != Some(host.current.as_str());
+        if picked {
+            self.saved = None;
+            self.plain = None;
+            self.host_shown = Some(host.current.clone());
+        }
+        self.release()
     }
 
     /// The reply of the guest to `input.set`: the ids it does not have.
@@ -513,3 +636,7 @@ impl Action {
 #[cfg(test)]
 #[path = "input_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "input_focus_tests.rs"]
+mod focus_tests;

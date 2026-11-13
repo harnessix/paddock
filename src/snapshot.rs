@@ -853,7 +853,7 @@ pub fn before_start(env: &HostEnv, project: &Path, id: &str, harness: &str, quie
         Ok(c) => c,
         Err(e) => {
             if !quiet {
-                eprintln!("paddock: no snapshot: {e:#}");
+                crate::note::info(format!("no snapshot: {e:#}"));
             }
             return;
         }
@@ -871,11 +871,11 @@ pub fn before_start(env: &HostEnv, project: &Path, id: &str, harness: &str, quie
     );
     match r {
         Ok(Taken::Done { .. }) => {}
-        Ok(Taken::Skipped(why)) if !quiet => {
-            eprintln!("paddock: no snapshot of the project, so `paddock undo` cannot help for this run: {why}")
-        }
+        Ok(Taken::Skipped(why)) if !quiet => crate::note::info(format!(
+            "no snapshot of the project, so `paddock undo` cannot help for this run: {why}"
+        )),
         Ok(Taken::Skipped(_)) => {}
-        Err(e) if !quiet => eprintln!("paddock: no snapshot of the project: {e:#}"),
+        Err(e) if !quiet => crate::note::info(format!("no snapshot of the project: {e:#}")),
         Err(_) => {}
     }
 }
@@ -884,9 +884,9 @@ pub fn before_start(env: &HostEnv, project: &Path, id: &str, harness: &str, quie
 /// `paddock undo` when the run changed files.
 pub fn after_end(env: &HostEnv, project: &Path, id: &str, quiet: bool) {
     match finish(&root(env), project, id, crate::state::now()) {
-        Ok(Some(n)) if n > 0 && !quiet => eprintln!(
-            "paddock: the run changed {n} file(s) in the project. `paddock undo` brings back the state before the start."
-        ),
+        Ok(Some(n)) if n > 0 && !quiet => crate::note::info(format!(
+            "the run changed {n} file(s) in the project. `paddock undo` brings back the state before the start."
+        )),
         Ok(_) => {}
         Err(e) => log::warn!("cannot record the end of the snapshot: {e:#}"),
     }

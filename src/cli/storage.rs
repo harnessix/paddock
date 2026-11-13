@@ -91,6 +91,7 @@ pub(crate) fn gc_cmd(env: &HostEnv, o: &paddock::storage::GcOptions, json: bool)
     items.extend(paddock::storage::auto::build_cache_items(env));
     items.extend(paddock::borrow::gc_items(env));
     items.extend(paddock::view::gc_items(env, state::now()));
+    items.extend(paddock::tmpclaim::host::gc_items(env));
     items.extend(paddock::loft::trash::gc_items(env, state::now()));
     items.extend(paddock::macvm::manage::gc_items(env, o));
     match paddock::kv::gc_items(env, state::now()) {
@@ -240,6 +241,11 @@ pub(crate) fn files_cmd(env: &HostEnv, id: Option<&str>, json: bool) -> Result<i
                     "id": s.id, "short": paddock::ids::short(&s.id), "harness": s.harness, "project": s.project, "home": s.home,
                     "started": s.started, "ended": s.ended, "running": running,
                     "files": items, "project_changes": changes,
+                    // A run on a copy: `paddock changes ID --json` has the list.
+                    "copy": paddock::copy::run::of_id(env, &s.id).map(|r| serde_json::json!({
+                        "original": r.rec.project, "tree": r.tree(),
+                        "counts": paddock::copy::changes::status(&r).ok().as_ref().map(paddock::copy::json::counts_doc),
+                    })),
                 })
             })
             .collect();

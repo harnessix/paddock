@@ -1,0 +1,24 @@
+paddock · 4 running · 3 wait for you      Runs   Board   Approvals ◆3   Mail ✉2
+╭─ Command palette · type to search · ↵ runs · Esc closes ─────────────────────╮
+│ :                                                                            │
+│ › H         the home screen: new agent, apps, requests, runs, world, settin… │
+│   ↵         open the selected item                                           │
+│   q Esc     go back (quit on the first screen)                               │
+│   n         new run: harness, project, prompt file                           │
+│   s         stop the selected run (asks first)                               │
+│   v         split view of the marked runs, or view the selected run          │
+│   Space     mark a run for the split view                                    │
+│   o         open the live view of the run in a new terminal window           │
+│   w         write a message to the agent of the run                          │
+│   r         show the runs                                                    │
+│   b         show the board: the ranch, or the list                           │
+│   a         show the approvals that wait                                     │
+│   m         show the mail of the runs                                        │
+│   Tab       next tab or pane (Shift+Tab back)                                │
+│   /         filter the list                                                  │
+│   : Ctrl+P  command palette: every action                                    │
+│   ?         this help                                                        │
+│   M         mouse on or off (off: the terminal selects text)                 │
+╰──────────────────────────────────────────────────────────────────────────────╯
+up to date · v opens a view window (no paddock split)
+↵ open  n new  s stop  v split  a approvals  ? help    hold Shift to select text

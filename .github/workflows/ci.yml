@@ -97,11 +97,25 @@ jobs:
           echo "::notice::Skipped docker, podman and srt probes: run bin/test on a workstation for these."
 
   # The terminal UI (tui/): typecheck, lint, the Ink tests, the PTY tests
-  # with node, and the same PTY tests against the bun single binary.
+  # with node, and the same PTY tests against the bun single binary. The
+  # binary is the paddock-tui of a release (release.yml), so both release
+  # targets build here, and a broken build fails before a tag. mise installs
+  # node and bun, and MISE_LOCKED makes it refuse a tool that tui/mise.lock
+  # does not pin with a checksum.
   tui:
-    name: terminal UI
-    runs-on: ubuntu-24.04
+    name: terminal UI (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x64
+            runner: ubuntu-24.04
+          - target: linux-arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
+    env:
+      MISE_LOCKED: "1"
     defaults:
       run:
         working-directory: tui
@@ -114,13 +128,24 @@ jobs:
         with:
           working_directory: tui
       - run: npm ci
+      # The checks of the source run once. The binary runs on each target.
       - run: npm run typecheck
+        if: matrix.target == 'linux-x64'
       - run: npm run lint
+        if: matrix.target == 'linux-x64'
       - run: npm test
-      - run: node scripts/compile.mjs linux-x64
+        if: matrix.target == 'linux-x64'
+      - run: node scripts/compile.mjs ${{ matrix.target }}
       - run: npx vitest run test/pty.test.ts
         env:
-          PADDOCK_TUI_UNDER_TEST: ${{ github.workspace }}/tui/bin/paddock-tui-linux-x64
+          PADDOCK_TUI_UNDER_TEST: ${{ github.workspace }}/tui/bin/paddock-tui-${{ matrix.target }}
+      # The script of bin/install, the Arch package and a development build.
+      - name: Build and install with tui/scripts/install.sh
+        run: |
+          scripts/install.sh "$RUNNER_TEMP/tui-bin"
+          out=$("$RUNNER_TEMP/tui-bin/paddock-tui" --version)
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' ../Cargo.toml | head -n 1)
+          [ "$out" = "paddock-tui $version" ] || { echo "::error::paddock-tui --version prints '$out', not 'paddock-tui $version'"; exit 1; }
 
   file-size:
     name: file size

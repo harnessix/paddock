@@ -94,6 +94,8 @@ fn a_sandboxed_tui_gets_mail_at_its_idle_prompt() {
         "--env",
         "clean",
         "-y",
+        // The fake TUI logs in the project folder and waits for its flag there.
+        "--direct",
     ])
     .stdin(Stdio::from(file(slave)))
     .stdout(Stdio::from(file(slave)))

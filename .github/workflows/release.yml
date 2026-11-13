@@ -1,6 +1,9 @@
 name: Release
 
 # Builds the paddock binaries for a version tag: x86_64 and aarch64 Linux.
+# Each tarball holds paddock and paddock-tui, the terminal interface as one
+# self-contained program (bun build --compile). `paddock update` and the
+# first `paddock tui` install it from the tarball (src/update/tui.rs).
 # GitHub runs no macOS job: its macOS runners often get no machine. macOS
 # users install with Homebrew, which builds from the source. It also packs the source, fills in the Homebrew
 # formula and builds the VM guest files (vm-assets.yml). When every build is
@@ -79,9 +82,11 @@ jobs:
           - arch: x86_64
             os: linux
             runner: ubuntu-22.04
+            tui: linux-x64
           - arch: aarch64
             os: linux
             runner: ubuntu-22.04-arm
+            tui: linux-arm64
     needs: commit
     runs-on: ${{ matrix.runner }}
     steps:
@@ -105,12 +110,43 @@ jobs:
         run: |
           out=$(target/release/paddock --version)
           [ "$out" = "paddock ${TAG#v}" ] || { echo "::error::paddock --version prints '$out', not 'paddock ${TAG#v}'"; exit 1; }
+      # node and bun for the terminal interface, in the versions of
+      # tui/mise.toml. MISE_LOCKED makes mise refuse a tool that
+      # tui/mise.lock does not pin: each download is checked against the
+      # sha256 there. npm ci checks each package against package-lock.json.
+      - uses: jdx/mise-action@c37c93293d6b742fc901e1406b8f764f6fb19dac # v2.4.4
+        with:
+          working_directory: tui
+        env:
+          MISE_LOCKED: "1"
+      # The target is the runner itself, so bun copies its own checked
+      # runtime into the program and downloads no other one.
+      - name: Build the terminal interface
+        working-directory: tui
+        env:
+          MISE_LOCKED: "1"
+        run: |
+          npm ci --ignore-scripts
+          npm run build
+          mkdir -p bin
+          bun scripts/bun-build.mjs native "bin/paddock-tui-${{ matrix.tui }}"
+      # paddock update and paddock tui make the same check before an install.
+      - name: Check the terminal interface
+        run: |
+          out=$(env -i "tui/bin/paddock-tui-${{ matrix.tui }}" --version)
+          [ "$out" = "paddock-tui ${TAG#v}" ] || { echo "::error::paddock-tui --version prints '$out', not 'paddock-tui ${TAG#v}'"; exit 1; }
+      # The attestation of the tarball in the publish job covers both
+      # programs: paddock checks the tarball, then takes them out of it.
       - name: Package
         run: |
           name="paddock-${TAG#v}-${{ matrix.arch }}-${{ matrix.os }}"
           mkdir -p "dist/$name"
           cp target/release/paddock README.md LICENSE CHANGELOG.md "dist/$name/"
+          install -m 755 "tui/bin/paddock-tui-${{ matrix.tui }}" "dist/$name/paddock-tui"
           tar -C dist -czf "dist/$name.tar.gz" "$name"
+          for program in paddock paddock-tui; do
+            tar -tzvf "dist/$name.tar.gz" "$name/$program" | grep -q '^-rwxr-xr-x ' || { echo "::error::$name.tar.gz has no executable $program"; exit 1; }
+          done
           (cd dist && sha256sum "$name.tar.gz" > "$name.tar.gz.sha256")
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

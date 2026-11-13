@@ -3,7 +3,8 @@
 // the toon art of the launch video (sprites/frames.json):
 // {"w":24,"h":24,"fps":8,"frames":[[[r,g,b] or null per pixel, row by row]]}.
 // The build puts the 35 files of the 7 colours and 5 states into the
-// program (src/sprite-files.ts).
+// program (src/sprite-files.ts), and beside them the layers of the world
+// (sprites/world, read by world/layers.ts with the same parser).
 
 import type { RunRow } from './model.js';
 import { SPRITE_FILES } from './sprite-files.js';

@@ -38,6 +38,14 @@ pub(crate) fn ps(env: &HostEnv, json: bool, mem: bool) -> Result<i32> {
                     if let Some(since) = paddock::detach::idle_since(env, &r.id) {
                         o.insert("idle_since".into(), since.into());
                     }
+                    // What paddock printed at the start, also when -q hid it.
+                    let notes = paddock::note::load(&env.paddock_run().join(&r.id));
+                    if !notes.is_empty() {
+                        o.insert(
+                            paddock::note::PS_FIELD.into(),
+                            serde_json::to_value(notes).unwrap_or_default(),
+                        );
+                    }
                     if let Some(rec) = paddock::detach::Record::load(env, &r.id) {
                         if !rec.notes.is_empty() {
                             o.insert("notes".into(), rec.notes.into());
@@ -72,6 +80,20 @@ pub(crate) fn ps(env: &HostEnv, json: bool, mem: bool) -> Result<i32> {
                 if let (Some(o), true) = (v.as_object_mut(), paddock::shadow::is_shadow(env, &r.id))
                 {
                     o.insert("profile".into(), paddock::shadow::DEFAULT.into());
+                }
+                // The run works on a copy of the project (copy.rs): the
+                // folder of the user, and the working copy.
+                if let Some(o) = v.as_object_mut() {
+                    let copy = paddock::copy::run::summary(env, &r.id);
+                    o.insert(
+                        "copy".into(),
+                        match copy {
+                            Some((original, tree)) => {
+                                serde_json::json!({ "original": original, "tree": tree })
+                            }
+                            None => serde_json::Value::Null,
+                        },
+                    );
                 }
                 if let Some(o) = v.as_object_mut() {
                     o.insert(
@@ -152,6 +174,7 @@ pub(crate) fn ps(env: &HostEnv, json: bool, mem: bool) -> Result<i32> {
             serde_json::json!({
                 "api_version": "paddock.ps/v1",
                 "shared_devices": shared,
+                "gateways": paddock::agentgw::report::all(env),
                 "sandboxes": rows,
                 "ended": paddock::detach::recent_ended(env, state::now()),
             })
@@ -176,6 +199,12 @@ pub(crate) fn ps(env: &HostEnv, json: bool, mem: bool) -> Result<i32> {
                 }
             );
         }
+        // A sandboxed gateway serves its clients, so it stands at the top too.
+        for g in paddock::agentgw::report::all(env) {
+            if g.state != "stopped" {
+                println!("{}", paddock::agentgw::report::line(&g));
+            }
+        }
         if list.is_empty() {
             println!("No running sandboxes.");
         }
@@ -193,13 +222,20 @@ pub(crate) fn ps(env: &HostEnv, json: bool, mem: bool) -> Result<i32> {
             let task = spec_task(env, &r.id)
                 .map(|t| format!("  task {}", t.id))
                 .unwrap_or_default();
+            let copy = match paddock::copy::run::summary(env, &r.id) {
+                Some((original, _)) if original != r.project => {
+                    format!("  copy of {}", original.display())
+                }
+                Some(_) => "  copy".to_string(),
+                None => String::new(),
+            };
             let rec = paddock::detach::Record::load(env, &r.id);
             let stuck = match rec.as_ref().and_then(|d| d.stuck.as_ref()) {
                 Some(s) => format!("  stuck {}m", now.saturating_sub(s.since) / 60),
                 None => String::new(),
             };
             println!(
-                "{:<28} {:<8} {:<7} {:<7} {:>5}m  {}{pasture}{task}{frozen}{stuck}",
+                "{:<28} {:<8} {:<7} {:<7} {:>5}m  {}{copy}{pasture}{task}{frozen}{stuck}",
                 id,
                 r.harness,
                 r.backend,

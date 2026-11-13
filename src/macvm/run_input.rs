@@ -4,26 +4,22 @@
 //! `input.set` request, the badge goes on the session windows, and after
 //! every batch the saved host source goes into the session record, so
 //! `paddock app list` restores it when the shim dies (item 21 of the
-//! checklist). `run.rs` holds the session.
+//! checklist). `run.rs` holds the session. The shim holds the host's
+//! source only while it is the active app and a session window is key:
+//! [`Session::input_check`] reads both facts from AppKit at each event and
+//! at each tick (IME1).
 
-use super::input::{Action, HostState, InputSync};
+use super::input::{Action, Focus, HostState, InputSync};
 use super::proto::Request;
 use super::run::{Session, Why};
 use super::tis;
-use objc2_app_kit::NSWorkspace;
-use std::time::{Duration, Instant};
-
-/// After the last session window resigned key, the restore waits this
-/// long for another session window to become key, so a click from one
-/// window of the session to another does not flip the host's source
-/// twice. The Mac check `restore` allows 200 ms.
-pub const RESIGN_GRACE: Duration = Duration::from_millis(100);
+use objc2::MainThreadMarker;
+use objc2_app_kit::{NSApplication, NSWorkspace};
+use std::time::Instant;
 
 /// The input state of the session, in the shell.
 pub(super) struct InputShell {
     pub(super) sync: InputSync,
-    /// When the pending resign fires.
-    resign_at: Option<Instant>,
     /// The badge this side set, so a clear touches only its own.
     badge: Option<String>,
 }
@@ -32,7 +28,6 @@ impl InputShell {
     pub(super) fn new() -> Self {
         InputShell {
             sync: InputSync::new(),
-            resign_at: None,
             badge: None,
         }
     }
@@ -58,58 +53,83 @@ impl Session<'_> {
         self.run_input(actions);
     }
 
+    /// The two AppKit facts, read now: the shim is the active app of
+    /// macOS, and a session window is key, visible and on screen.
+    fn focus(&self) -> Focus {
+        if self.suspend.active || self.exit.is_some() {
+            // A suspended or ending session holds nothing.
+            return Focus::default();
+        }
+        let app_active = MainThreadMarker::new()
+            .map(|mtm| NSApplication::sharedApplication(mtm).isActive())
+            .unwrap_or(false);
+        Focus {
+            app_active,
+            key_window: app_active && self.shell.windows.key_shown().is_some(),
+        }
+    }
+
+    /// The check of the AppKit facts: a session window became key or
+    /// resigned, another app became active, the shim resigned active, a
+    /// window closed, and every tick of the run loop. The state follows
+    /// the facts, never a stored flag alone.
+    pub(super) fn input_check(&mut self) {
+        let focus = self.focus();
+        let actions = self
+            .shell
+            .input
+            .sync
+            .on_check(focus, Instant::now(), host_state);
+        self.run_input(actions);
+    }
+
     /// A session window became key.
     pub(super) fn input_became_key(&mut self) {
-        self.shell.input.resign_at = None;
-        if self.shell.input.sync.is_key() {
-            return;
-        }
-        let host = host_state();
-        let actions = self.shell.input.sync.on_key(&host);
-        self.run_input(actions);
+        self.input_check();
     }
 
-    /// A session window resigned key: the restore follows after the
-    /// grace, unless another session window takes the key.
+    /// A session window resigned key: with another app active the host
+    /// gets its source back now, else after the grace (`input_tick`).
     pub(super) fn input_resigned(&mut self) {
-        if self.shell.input.sync.is_key() {
-            self.shell.input.resign_at = Some(Instant::now() + RESIGN_GRACE);
-        }
+        self.input_check();
     }
 
-    /// The pending resign, from the tick of the run loop.
+    /// The tick of the run loop.
     pub(super) fn input_tick(&mut self) {
-        let Some(at) = self.shell.input.resign_at else {
-            return;
-        };
-        if Instant::now() < at {
-            return;
-        }
-        self.shell.input.resign_at = None;
-        if self.shell.windows.key_id().is_some() {
-            return;
-        }
-        let actions = self.shell.input.sync.on_resign();
-        self.run_input(actions);
+        self.input_check();
     }
 
     /// The host's current source changed.
     pub(super) fn input_host_changed(&mut self) {
         if !self.shell.input.sync.is_key() {
+            // Not held: the change is the user's own, and the check may
+            // start a hold only when the focus is there.
+            self.input_check();
             return;
         }
+        let focus = self.focus();
         let host = host_state();
-        let actions = self.shell.input.sync.on_host_change(&host);
+        let actions = self
+            .shell
+            .input
+            .sync
+            .on_host_change_at(focus, Instant::now(), &host);
         self.run_input(actions);
     }
 
     /// A lone Globe key on a session window.
     pub(super) fn input_globe(&mut self) {
-        if !self.shell.input.sync.is_key() {
+        let focus = self.focus();
+        if !focus.holds() {
+            self.input_check();
             return;
         }
         let host = host_state();
-        let actions = self.shell.input.sync.on_globe(&host);
+        let actions = self
+            .shell
+            .input
+            .sync
+            .on_globe_at(focus, Instant::now(), &host);
         self.run_input(actions);
     }
 
@@ -134,7 +154,8 @@ impl Session<'_> {
 
     /// The end of the shim: the host gets its source back.
     pub(super) fn input_exit(&mut self) {
-        let actions = self.shell.input.sync.on_exit();
+        let host = host_state();
+        let actions = self.shell.input.sync.on_leave(&host);
         self.run_input(actions);
     }
 

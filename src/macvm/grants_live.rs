@@ -12,6 +12,8 @@
 //! - `network ask|allowlist|none`
 //! - `clipboard on|off on|off` (to the app, from the app)
 //! - `list`
+//! - `rule add JSON` (a [`RuleAdd`]: a rule of this session only, also
+//!   one with an end time), `rule remove ID`
 //!
 //! The answer is `ok JSON` ([`Answer`]) or `error TEXT`. The path comes
 //! last and may hold spaces.
@@ -52,13 +54,39 @@ pub const PREFIX: &str = "grant";
 /// One `grant` line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Op {
-    ShareAdd { path: PathBuf, read_only: bool },
-    ShareRemove { path: PathBuf },
-    ShareMode { path: PathBuf, read_only: bool },
-    Network { mode: String },
+    ShareAdd {
+        path: PathBuf,
+        read_only: bool,
+    },
+    ShareRemove {
+        path: PathBuf,
+    },
+    ShareMode {
+        path: PathBuf,
+        read_only: bool,
+    },
+    Network {
+        mode: String,
+    },
     Clipboard(Clipboard),
     List,
     ListFresh,
+    /// A rule of the running session only: the firewall of the shim
+    /// takes it, the rules file does not.
+    RuleAdd(RuleAdd),
+    /// Remove a rule of the running session by its id.
+    RuleRemove {
+        id: String,
+    },
+}
+
+/// The rule of `grant rule add`, with the confirmation of a rule for
+/// every host.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuleAdd {
+    pub rule: super::firewall::Rule,
+    #[serde(default)]
+    pub yes_all_hosts: bool,
 }
 
 fn mode_word(read_only: bool) -> &'static str {
@@ -128,6 +156,18 @@ impl Op {
                     _ => Err(bad()),
                 }
             }
+            "rule" => {
+                let (verb, rest) = tail.split_once(' ').ok_or_else(bad)?;
+                match verb {
+                    "add" => serde_json::from_str(rest)
+                        .map(Op::RuleAdd)
+                        .map_err(|_| bad()),
+                    "remove" if !rest.is_empty() && !rest.contains(' ') => Ok(Op::RuleRemove {
+                        id: rest.to_string(),
+                    }),
+                    _ => Err(bad()),
+                }
+            }
             "share" => {
                 let (verb, rest) = tail.split_once(' ').ok_or_else(bad)?;
                 match verb {
@@ -167,6 +207,11 @@ impl Op {
             Op::Clipboard(c) => format!("clipboard {} {}", on_off(c.to_app), on_off(c.from_app)), // not user text
             Op::List => "list".into(),
             Op::ListFresh => "list fresh".into(),
+            Op::RuleAdd(r) => {
+                let json = serde_json::to_string(r).unwrap_or_default();
+                format!("rule add {json}") // not user text
+            }
+            Op::RuleRemove { id } => format!("rule remove {id}"), // not user text
         };
         format!("{PREFIX} {rest}") // not user text
     }
@@ -213,6 +258,9 @@ pub struct Answer {
     pub clipboard: Option<Clipboard>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub network: Option<String>,
+    /// The rule that `rule add` or `rule remove` changed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rule: Option<super::firewall::Rule>,
 }
 
 impl Answer {
@@ -227,6 +275,7 @@ impl Answer {
             shares: Vec::new(),
             clipboard: None,
             network: None,
+            rule: None,
         }
     }
 }
@@ -398,6 +447,8 @@ impl Live {
                 live.clipboard = *c;
                 answer.clipboard = Some(*c);
             }
+            // The firewall takes these: `gate::Firewall::rule_op`.
+            Op::RuleAdd(_) | Op::RuleRemove { .. } => {}
             Op::List | Op::ListFresh => {
                 answer.shares = self.list(now);
                 answer.clipboard = Some(self.clipboard);

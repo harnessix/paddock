@@ -1,0 +1,2 @@
+{"v":1,"t":"2026-11-06T12:30:00Z","kind":"device_call","run":"claude-webshop-3f2a9c","device":"mail/out","ask":false}
+{"v":1,"t":"2026-11-06T12:31:00Z","kind":"device_call","run":"claude-webshop-3f2a9c","device":"ask","ask":true}

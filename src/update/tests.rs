@@ -1,6 +1,8 @@
 use super::*;
 use std::collections::BTreeMap;
+use std::os::unix::fs::PermissionsExt;
 use std::sync::Mutex;
+use std::time::Instant;
 
 pub(crate) fn env_in(t: &Path, sandbox: bool) -> HostEnv {
     let mut vars = BTreeMap::new();
@@ -54,21 +56,31 @@ impl Source for Fake {
     }
 }
 
-fn sha(b: &[u8]) -> String {
+pub(crate) fn sha(b: &[u8]) -> String {
     Sha256::digest(b)
         .iter()
         .map(|x| format!("{x:02x}"))
         .collect()
 }
 
-/// A release tarball whose `paddock` is a script that prints `prints`.
+/// A release tarball whose `paddock` is a script that prints `prints`,
+/// with the `paddock-tui` of the same version next to it.
 fn tarball(t: &Path, version: &str, prints: &str) -> Vec<u8> {
+    tarball_with(t, version, prints, Some(&format!("paddock-tui {version}")))
+}
+
+/// A release tarball whose `paddock` prints `prints`. Its `paddock-tui`
+/// prints `tui`, or the tarball has none.
+pub(crate) fn tarball_with(t: &Path, version: &str, prints: &str, tui: Option<&str>) -> Vec<u8> {
     let name = format!("paddock-{version}-x86_64-linux");
     let dir = t.join("build").join(&name);
     std::fs::create_dir_all(&dir).unwrap();
-    let bin = dir.join("paddock");
-    std::fs::write(&bin, format!("#!/bin/sh\necho '{prints}'\n")).unwrap();
-    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    for (file, prints) in [("paddock", Some(prints)), ("paddock-tui", tui)] {
+        let Some(prints) = prints else { continue };
+        let bin = dir.join(file);
+        std::fs::write(&bin, format!("#!/bin/sh\necho '{prints}'\n")).unwrap();
+        std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
     let out = t.join(format!("{name}.tar.gz"));
     let st = Command::new("tar")
         .arg("-C")
@@ -330,13 +342,14 @@ fn update_replaces_the_binary_after_every_check() {
         std::fs::metadata(&bin).unwrap().permissions().mode() & 0o777,
         0o755
     );
-    // No temporary file stays next to it.
-    let left: Vec<_> = std::fs::read_dir(bin.parent().unwrap())
+    // No temporary file stays next to it: only the two programs.
+    let mut left: Vec<_> = std::fs::read_dir(bin.parent().unwrap())
         .unwrap()
         .flatten()
         .map(|e| e.file_name())
         .collect();
-    assert_eq!(left.len(), 1, "{left:?}");
+    left.sort();
+    assert_eq!(left, ["paddock", "paddock-tui"], "{left:?}");
 }
 
 #[test]

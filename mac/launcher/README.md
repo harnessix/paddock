@@ -59,7 +59,7 @@ This folder builds and tests without the rest of paddock core. `Fixtures/core` h
 
 To move the pin:
 
-1. Copy `tests/fixtures/launcher/*.jsonl` of the new core commit into `Fixtures/core/launcher`.
+1. Copy `tests/fixtures/launcher/*.jsonl` of the new core commit into `Fixtures/core/launcher`, and `tests/fixtures/launcher/json/*.json` into `Fixtures/core/launcher/json`.
 2. Copy `tests/fixtures/launcher-protocol/*.json` and `*.err` into `Fixtures/core/launcher-protocol`.
 3. Change `version` and `commit` in `core.pin`.
 4. Run the PaddockKit tests.

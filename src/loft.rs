@@ -423,7 +423,7 @@ pub fn mount_with(
     let loft = Loft::of(env, repo);
     if cfg.auto && !loft.initialized() && !loft.off() {
         match host::init(env, repo) {
-            Ok(msg) => eprintln!("paddock: {msg}"),
+            Ok(msg) => crate::note::info(msg),
             Err(e) => log::warn!("cannot make the loft of {}: {e:#}", repo.display()),
         }
     }
@@ -483,6 +483,21 @@ fn notes(spec: &mut SandboxSpec, loft: &Loft, project: &Path, in_place: bool) ->
         return Ok(());
     }
     let dst = project.join(NOTES);
+    // The pointer folder of a project with copies (copy/pointer.rs) holds
+    // no note and no inbox: both are in the loft. The loft is also at its
+    // own path, where the host puts the results of requests
+    // (broker::inbox_for).
+    if crate::copy::pointer::read(project).is_ok_and(|p| p.is_some()) {
+        if in_place {
+            spec.add_mount(Mount::bind(&notes, &dst, true, "loft notes"));
+        }
+        spec.add_mount(Mount::same(
+            &notes,
+            true,
+            "loft notes: the host request inbox",
+        ));
+        return Ok(());
+    }
     match std::fs::symlink_metadata(&dst) {
         Ok(m) if m.file_type().is_symlink() => {
             anyhow::ensure!(

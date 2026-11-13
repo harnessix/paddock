@@ -8,6 +8,7 @@ import { App } from '../src/app.js';
 import { paddock } from '../src/paddock.js';
 import { makeTheme, ThemeContext } from '../src/theme.js';
 import { ArtContext, ArtLayer } from '../src/art-layer.js';
+import { HostContext, type Host } from '../src/host.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 export const FAKE = join(here, 'fake-paddock.mjs');
@@ -16,6 +17,8 @@ export const FIXTURES = join(here, 'fixtures');
 export interface Call {
   args: string[];
   stdin: string;
+  /** The folder that the command ran in, for `paddock undo`. */
+  cwd?: string;
 }
 
 /** A folder with the fixture JSON, and the fake paddock pointed at it. */
@@ -63,12 +66,27 @@ export function calls(dir: string): Call[] {
 
 /** The calls that change something (not the reads of the refresh). */
 export function actions(dir: string): Call[] {
-  const reads = new Set(['ps --json', 'board --json', 'approvals --json', 'mail ls --json', 'list --json', 'split --help']);
+  const reads = new Set([
+    'ps --json',
+    'board --json',
+    'approvals --json',
+    'mail ls --json',
+    'list --json',
+    'split --help',
+    // The reads of the world.
+    'device ls --json',
+    'kv overview --json',
+    'files --json',
+    'forage --json',
+    'horse list --json',
+  ]);
   return calls(dir).filter((c) => {
     const a = c.args.join(' ');
     if (reads.has(a)) return false;
     if (c.args[0] === 'view' && c.args.includes('--tail')) return false;
     if (c.args[0] === 'mail' && (c.args[1] === 'ls' || c.args[1] === 'show')) return false;
+    // The reads of the copies: the changes, a diff, the backups, the pointer state.
+    if (c.args[0] === 'changes' || (c.args[0] === 'backups' && c.args.includes('--json')) || (c.args[0] === 'pointer' && c.args[1] === 'status')) return false;
     return true;
   });
 }
@@ -91,6 +109,8 @@ export interface Rendered {
 }
 
 export async function renderApp(opts: {
+  /** What the program around the interface gives it: the home screen, the handover of the terminal. */
+  host?: Host;
   columns?: number;
   rows?: number;
   readonly?: boolean;
@@ -103,16 +123,22 @@ export async function renderApp(opts: {
   api?: typeof paddock;
   /** The art layer: none by default, so the runs show as the list. */
   art?: ArtLayer;
+  /** Reduced motion in the world. */
+  reduceMotion?: boolean;
+  /** Gets what the interface copies. */
+  onCopy?: (text: string) => void;
 }): Promise<Rendered> {
   const columns = opts.columns ?? 80;
   const rows = opts.rows ?? 24;
   const art = opts.art ?? new ArtLayer({ mode: 'none', sink: null, screen: () => ({ columns, rows }) });
   const inst = render(
+    <HostContext.Provider value={opts.host ?? { home: false }}>
     <ThemeContext.Provider value={makeTheme(opts.theme ?? 'dark', opts.plain ?? false, opts.mono ?? false)}>
       <ArtContext.Provider value={art}>
-        <App api={opts.api ?? paddock} readonly={opts.readonly} initialMouse={opts.mouse ?? true} intervalMs={300} cwd={opts.cwd} size={{ columns, rows }} />
+        <App api={opts.api ?? paddock} readonly={opts.readonly} initialMouse={opts.mouse ?? true} intervalMs={300} cwd={opts.cwd} size={{ columns, rows }} reduceMotion={opts.reduceMotion} onCopy={opts.onCopy} />
       </ArtContext.Provider>
-    </ThemeContext.Provider>,
+    </ThemeContext.Provider>
+    </HostContext.Provider>,
   );
   Object.defineProperty(inst.stdout, 'columns', { value: columns, configurable: true });
   Object.defineProperty(inst.stdout, 'rows', { value: rows, configurable: true });

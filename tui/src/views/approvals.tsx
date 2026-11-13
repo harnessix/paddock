@@ -1,6 +1,7 @@
 import React from 'react';
 import { Box, Text } from 'ink';
 import { cells, cut, fit, oneLine } from '../clean.js';
+import { t as tr } from '../i18n/index.js';
 import { age, now } from '../model.js';
 import { choicesOf, GUTTER, requestLines, takesText, type Choice } from '../approval.js';
 import { Button, Clickable, Pane, T, inner } from '../ui.js';
@@ -18,11 +19,11 @@ export interface CardState {
 
 function chainText(p: Pending): string {
   const chain = (p.started_by ?? []).map(oneLine).filter((x) => x.length > 0);
-  return chain.length > 0 ? `started by ${chain.join(' → ')}` : '';
+  return chain.length > 0 ? tr('view.approvals.startedBy', { chain: chain.join(' → ') }) : '';
 }
 
 export function cardTitle(p: Pending): string {
-  return `Approval · ${oneLine(p.sandbox || p.harness || '?')} · sandbox`;
+  return tr('view.approvals.cardTitle', { name: oneLine(p.sandbox || p.harness || '?') });
 }
 
 type LineKind = 'pill' | 'question' | 'code' | 'text';
@@ -35,23 +36,29 @@ interface BodyLine {
   rest?: string;
 }
 
+/** The pill of a card in English. The card shows `pill()`, in the language of the interface. */
 export const PILL = '◆ Approval needed';
+
+/** The pill on top of a card: the glyph and "Approval needed". */
+export function pill(): string {
+  return `◆ ${tr('view.approvals.pill')}`;
+}
 
 /** The question of a card, in words: who asks for what. */
 export function questionOf(p: Pending): string {
-  const who = oneLine(p.harness || p.sandbox || 'The agent');
+  const who = oneLine(p.harness || p.sandbox || tr('view.approvals.theAgent'));
   const cap = oneLine(p.capability ?? '');
   switch (cap) {
     case 'exec':
-      return `${who} wants to run a command:`;
+      return tr('view.approvals.q.exec', { who });
     case 'connect':
-      return `${who} wants to connect to a host:`;
+      return tr('view.approvals.q.connect', { who });
     case 'ask':
-      return `${who} asks you:`;
+      return tr('view.approvals.q.ask', { who });
     case '':
-      return `${who} asks for this:`;
+      return tr('view.approvals.q.none', { who });
     default:
-      return `${who} asks for ${cap}:`;
+      return tr('view.approvals.q.other', { who, capability: cap });
   }
 }
 
@@ -68,8 +75,8 @@ export function timeLeft(p: Pending, t = now()): { left: number; total: number }
 export function timeBar(p: Pending, width: number, t = now()): string {
   const tl = timeLeft(p, t);
   if (!tl || width < 8) return '';
-  const label = ` ${age(tl.left)} left`;
-  const bar = Math.max(1, width - label.length);
+  const label = ` ${tr('view.approvals.left', { age: age(tl.left) })}`;
+  const bar = Math.max(1, width - cells(label));
   const full = Math.round((bar * tl.left) / tl.total);
   return '━'.repeat(full) + '─'.repeat(bar - full) + label;
 }
@@ -79,18 +86,19 @@ function bodyLines(p: Pending, focus: Choice | undefined, width: number, maxRequ
   const out: BodyLine[] = [];
   const asked = p.age_s !== undefined ? p.age_s : p.created ? now() - p.created : 0;
   const tl = timeLeft(p);
-  out.push({ kind: 'pill', text: PILL, rest: cut(`  ${tl ? `times out in ${age(tl.left)}` : 'no time limit'} · asked ${age(asked)} ago`, Math.max(0, width - cells(PILL))) });
+  const head0 = pill();
+  out.push({ kind: 'pill', text: head0, rest: cut(`  ${tl ? tr('view.approvals.timesOut', { age: age(tl.left) }) : tr('view.approvals.noLimit')} · ${tr('view.approvals.asked', { age: age(asked) })}`, Math.max(0, width - cells(head0))) });
   out.push({ kind: 'question', text: cut(questionOf(p), width) });
   const req = requestLines(p);
   // The sandbox writes the request and its line breaks: each line gets the
   // gutter, so a line such as "[1] Deny" cannot pass for a button.
   const head = `${oneLine(p.capability ?? '?')}: `;
   req.slice(0, maxRequest).forEach((l, i) => out.push({ kind: 'code', text: fit(cut(GUTTER + (i === 0 ? head : '') + l, width), width) }));
-  if (req.length > maxRequest) out.push({ kind: 'text', text: `  … ${req.length - maxRequest} more lines: Enter on the card shows all`, role: 'muted' });
-  if (p.reason) out.push({ kind: 'text', text: cut(`reason given by the agent: ${oneLine(p.reason)}`, width), role: 'muted' });
+  if (req.length > maxRequest) out.push({ kind: 'text', text: cut(`  ${tr('view.approvals.moreLines', { n: req.length - maxRequest })}`, width), role: 'muted' });
+  if (p.reason) out.push({ kind: 'text', text: cut(tr('view.approvals.reason', { reason: oneLine(p.reason) }), width), role: 'muted' });
   const chain = chainText(p);
   if (chain) out.push({ kind: 'text', text: cut(chain, width), role: 'muted' });
-  if (focus) out.push({ kind: 'text', text: cut(`remember: ${focus.scope}`, width), role: 'muted' });
+  if (focus) out.push({ kind: 'text', text: cut(tr('view.approvals.remember', { scope: focus.scope }), width), role: 'muted' });
   return out;
 }
 
@@ -139,17 +147,23 @@ export function ApprovalCard(props: {
   const armed = props.state.armed ? choices.find((c) => c.key === props.state.armed?.key) : undefined;
   let hint: React.JSX.Element;
   if (props.readonly) {
-    hint = <T role="muted">{cut(`read-only: paddock approvals answer ${oneLine(p.id)}`, w)}</T>;
+    hint = <T role="muted">{cut(tr('view.approvals.readonly', { id: oneLine(p.id) }), w)}</T>;
   } else if (!props.focused) {
-    hint = <T role="warning">{cut('Tab or a click puts the focus here; a click on a button answers', w)}</T>;
+    hint = <T role="warning">{cut(tr('view.approvals.focusHere'), w)}</T>;
   } else if (armed) {
-    hint = <T role="warning" bold>{cut(`Press ${armed.key} again within 3 s, or hold Enter, to confirm: ${armed.scope}`, w)}</T>;
+    hint = <T role="warning" bold>{cut(tr('view.approvals.confirm', { key: armed.key, scope: armed.scope }), w)}</T>;
   } else if (props.state.typing !== undefined) {
-    hint = <T role="muted">{cut('↵ send the answer · Esc stop typing', w)}</T>;
+    hint = <T role="muted">{cut(tr('view.approvals.typing'), w)}</T>;
   } else {
     hint = (
       <T role="muted">
-        {cut(`←→ choose · ↵ answer · ${choices.map((c) => c.key).join('/')} keys${takesText(p) ? ' · t type an answer' : ''} · Esc ${choices.find((c) => c.deny)?.label.toLowerCase() ?? 'deny'}`, w)}
+        {cut(
+          tr(takesText(p) ? 'view.approvals.hintType' : 'view.approvals.hint', {
+            keys: choices.map((c) => c.key).join('/'),
+            deny: choices.find((c) => c.deny)?.label.toLowerCase() ?? tr('view.approvals.deny'),
+          }),
+          w,
+        )}
       </T>
     );
   }
@@ -175,8 +189,8 @@ export function ApprovalCard(props: {
           ))}
       {props.state.typing !== undefined ? (
         <T>
-          {'answer: '}
-          {cut(props.state.typing, Math.max(0, w - 10))}
+          {`${tr('view.approvals.answer')} `}
+          {cut(props.state.typing, Math.max(0, w - cells(tr('view.approvals.answer')) - 3))}
           <T inverse> </T>
         </T>
       ) : null}
@@ -227,8 +241,8 @@ export function ApprovalsView(props: {
   const { pending, width, height } = props;
   if (pending.length === 0) {
     return (
-      <Pane title="Approvals · nothing waits" focused width={width} height={height} onWheel={props.onWheel}>
-        <T role="muted">No request waits for an answer. New cards show here and in the header.</T>
+      <Pane title={tr('view.approvals.nothingTitle')} focused width={width} height={height} onWheel={props.onWheel}>
+        <T role="muted">{tr('view.approvals.nothing')}</T>
       </Pane>
     );
   }
@@ -253,7 +267,7 @@ export function ApprovalsView(props: {
       {(hovered, pointer) => (
         <T role="warning" underline={hovered} inverse={pointer.pressed}>
           {/* In line with the text of the card over it. */}
-          {cut(`${theme.plain ? '' : '  '}◆ waits  ${fit(oneLine(q.sandbox ?? '?'), 22)} ${oneLine(q.capability ?? '')}: ${oneLine(q.summary || q.detail || '')}`, width)}
+          {cut(`${theme.plain ? '' : '  '}◆ ${tr('view.approvals.waits')}  ${fit(oneLine(q.sandbox ?? '?'), 22)} ${oneLine(q.capability ?? '')}: ${oneLine(q.summary || q.detail || '')}`, width)}
         </T>
       )}
     </Clickable>

@@ -139,6 +139,8 @@ fn the_sandbox_uses_a_stand_in_and_the_bound_host_gets_the_value() {
             "--network",
             "none",
             "-y",
+            // The harness writes what it saw in the project folder.
+            "--direct",
         ])
         .arg(root.join("project"))
         .stdin(Stdio::null())
@@ -146,30 +148,32 @@ fn the_sandbox_uses_a_stand_in_and_the_bound_host_gets_the_value() {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap();
-    // Two answers, as from the panel.
-    for what in ["give GH", "confirm"] {
-        let start = Instant::now();
-        let id = loop {
-            let out = cmd().args(["approvals", "--json"]).output().unwrap();
-            let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_default();
-            let found = v["pending"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .find(|p| p["summary"].as_str().is_some_and(|s| s.contains(what)));
-            if let Some(p) = found {
-                assert!(!p.to_string().contains(SECRET));
-                break p["id"].as_str().unwrap().to_string();
-            }
-            assert!(start.elapsed() < Duration::from_secs(30), "no card: {what}");
-            std::thread::sleep(Duration::from_millis(100));
-        };
-        assert!(cmd()
-            .args(["approvals", "answer", &id, "once"])
-            .status()
-            .unwrap()
-            .success());
-    }
+    // One answer, as from the panel (ENV1: This run, Always in this
+    // project, or No).
+    let start = Instant::now();
+    let id = loop {
+        let out = cmd().args(["approvals", "--json"]).output().unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_default();
+        let found = v["pending"].as_array().into_iter().flatten().find(|p| {
+            p["summary"]
+                .as_str()
+                .is_some_and(|s| s.contains("asks for GH"))
+        });
+        if let Some(p) = found {
+            assert!(!p.to_string().contains(SECRET));
+            break p["id"].as_str().unwrap().to_string();
+        }
+        assert!(
+            start.elapsed() < Duration::from_secs(30),
+            "no card: asks for GH"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    assert!(cmd()
+        .args(["approvals", "answer", &id, "--text", "This run"])
+        .status()
+        .unwrap()
+        .success());
     let start = Instant::now();
     while child.try_wait().unwrap().is_none() {
         assert!(

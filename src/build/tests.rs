@@ -123,7 +123,8 @@ fn manual_approvals_leave_the_agents_own_questions_alone() {
     let (tm, _p, manual) = claude_with("", None, Some(Approvals::Manual), true);
     let manual = manual.unwrap();
     assert_eq!(auto.approvals, Some(Approvals::Auto));
-    assert_eq!(auto.approvals_origin, "default");
+    // A user configuration and no marker: a current installation keeps auto.
+    assert_eq!(auto.approvals_origin, crate::approvals::CURRENT);
     assert!(auto.spec.command.contains(&flag));
     assert!(auto
         .spec
@@ -229,6 +230,8 @@ fn claude_starts_without_its_trust_and_bypass_questions() {
             project: Some(proj.clone()),
             assume_yes: true,
             no_yolo,
+            // A fresh home is a new installation (manual): ask for auto.
+            approvals: Some(crate::approvals::Approvals::Auto),
             ..Default::default()
         };
         let b = build_with(&env, &opts, h).unwrap();
@@ -548,7 +551,7 @@ fn an_app_worktree_has_its_own_branch_and_report() {
     let w = create_worktree(&env, &repo, Some("vscode")).unwrap();
     assert!(w
         .branch
-        .starts_with(&format!("paddock/vscode-{}-", today())));
+        .starts_with(&format!("paddock/vscode-{}-", worktree::today())));
     assert!(w
         .path
         .starts_with(tmp.path().join("data/paddock/worktrees")));
@@ -652,4 +655,76 @@ fn a_failed_build_does_not_leave_a_worktree() {
         .unwrap();
     let branches = String::from_utf8_lossy(&branches.stdout);
     assert!(branches.trim().is_empty(), "leftover branch:\n{branches}");
+}
+
+/// A codex build with a stand-in executable whose `--help` prints `help`,
+/// and the user arguments `args`.
+fn codex_argv(help: &str, args: &[&str]) -> Vec<String> {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let proj = tmp.path().join("proj");
+    let bin = tmp.path().join("bin");
+    std::fs::create_dir_all(home.join(".config/paddock")).unwrap();
+    std::fs::create_dir_all(&proj).unwrap();
+    std::fs::create_dir_all(&bin).unwrap();
+    std::fs::write(
+        home.join(".config/paddock/config.toml"),
+        "[compaction]\nenabled = false\n",
+    )
+    .unwrap();
+    let exe = bin.join("codex");
+    std::fs::write(&exe, format!("#!/bin/sh\ncat <<'END'\n{help}\nEND\n")).unwrap();
+    std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let env = HostEnv::from_parts(home, "t".into(), 1000, 1000, Default::default());
+    let h = Harness {
+        profile: crate::profile::builtin("codex").unwrap(),
+        exe: exe.clone(),
+        install_mounts: vec![],
+        path_dirs: vec![],
+        source: "test".into(),
+    };
+    let opts = Options {
+        harness: "codex".into(),
+        project: Some(proj),
+        assume_yes: true,
+        args: args.iter().map(|a| a.to_string()).collect(),
+        ..Default::default()
+    };
+    let mut c = build_with(&env, &opts, h).unwrap().spec.command;
+    assert_eq!(c.remove(0), exe.display().to_string());
+    c
+}
+
+const CODEX_HELP: &str = "Usage: codex [OPTIONS] [PROMPT]\n      --no-alt-screen  Disable alternate screen mode\n      --no-daemon  Run without the shared background server, even if it is already running\n";
+
+#[test]
+fn codex_starts_without_its_daemon_when_the_help_names_the_flag() {
+    let flag = "--no-daemon".to_string();
+    // The start, resume, fork and exec: the flag is a root option, before
+    // the subcommand and its arguments.
+    for args in [
+        vec![],
+        vec!["resume", "--last"],
+        vec!["fork", "--last"],
+        vec!["exec", "hi"],
+    ] {
+        let c = codex_argv(CODEX_HELP, &args);
+        assert_eq!(c.iter().filter(|a| **a == flag).count(), 1, "{c:?}");
+        let at = c.iter().position(|a| *a == flag).unwrap();
+        let user: Vec<&str> = c[at + 1..].iter().map(String::as_str).collect();
+        assert_eq!(user, args, "{c:?}");
+    }
+    // An older codex without the flag starts as before.
+    let old = CODEX_HELP.replace("--no-daemon", "--no-other");
+    for args in [vec![], vec!["resume", "--last"], vec!["exec", "hi"]] {
+        let c = codex_argv(&old, &args);
+        assert!(!c.contains(&flag), "{c:?}");
+    }
+    // The one-shot command never gets it.
+    let p = crate::profile::builtin("codex").unwrap();
+    let o = p.oneshot.as_ref().unwrap();
+    assert_eq!(o.args[0], "exec");
+    assert!(!o.render(Path::new("/p")).contains(&flag));
+    assert_eq!(p.launch.args_if_supported, vec![flag]);
 }

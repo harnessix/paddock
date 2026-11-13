@@ -67,7 +67,9 @@ pub(super) fn scan(dir: &Dir, prefix: &str, depth: usize, side: &mut Side) {
             ));
             continue;
         };
-        if prefix.is_empty() && (n == "inbox" || n == ".gitignore" || n == MARK) {
+        if prefix.is_empty()
+            && (n == "inbox" || n == ".gitignore" || n == MARK || n == crate::copy::pointer::FILE)
+        {
             continue;
         }
         let rel = format!("{prefix}{n}");

@@ -10,7 +10,7 @@ pub fn notice(env: &HostEnv, id: &str, home: &Path, started: u64) {
     let cfg = match RecoveryCfg::load(env) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("paddock: warning: {e:#}");
+            crate::note::warn(format!("{e:#}"));
             return;
         }
     };
@@ -21,17 +21,18 @@ pub fn notice(env: &HostEnv, id: &str, home: &Path, started: u64) {
     if items.is_empty() {
         return;
     }
-    eprintln!(
-        "paddock: the sandbox saved {} file(s) outside the project. They stay in the sandbox until you recover them:",
+    let mut t = format!(
+        "the sandbox saved {} file(s) outside the project. They stay in the sandbox until you recover them:",
         items.len()
     );
     for i in items.iter().take(10) {
-        eprintln!("  {}", i.path);
+        t += &format!("\n  {}", i.path);
     }
     if items.len() > 10 {
-        eprintln!("  ... and {} more", items.len() - 10);
+        t += &format!("\n  ... and {} more", items.len() - 10);
     }
-    eprintln!(
-        "paddock: list them with `paddock files {id}`, copy them with `paddock recover {id} PATH`"
-    );
+    crate::note::info(t);
+    crate::note::info(format!(
+        "list them with `paddock files {id}`, copy them with `paddock recover {id} PATH`"
+    ));
 }

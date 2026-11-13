@@ -288,7 +288,7 @@ impl Backend for Docker {
         if present {
             return Ok(());
         }
-        eprintln!("paddock: building image {tag}");
+        crate::note::info(format!("building image {tag}"));
         let mut child = Command::new(&exe)
             .args(["build", "-t", &tag, "-"])
             .stdin(Stdio::piped())

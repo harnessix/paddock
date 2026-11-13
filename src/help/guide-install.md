@@ -32,7 +32,7 @@ cd paddock
 bin/install
 ```
 
-Without a Rust toolchain, use the prebuilt binary of the release. It is one file. Download it with its checksum, check the checksum, copy the binary to `~/.local/bin`, and run `paddock doctor`, which prints the command that installs the system packages below:
+Without a Rust toolchain, use the prebuilt release. The tarball holds two programs: the `paddock` binary, and `paddock-tui`, the terminal interface that `paddock tui` starts. Download the tarball with its checksum, check the checksum, copy both programs to `~/.local/bin`, and run `paddock doctor`, which prints the command that installs the system packages below:
 
 ```sh
 curl -fLO https://github.com/harnessix/paddock/releases/download/v0.2.1/paddock-0.2.1-x86_64-linux.tar.gz
@@ -40,6 +40,7 @@ curl -fLO https://github.com/harnessix/paddock/releases/download/v0.2.1/paddock-
 sha256sum -c paddock-0.2.1-x86_64-linux.tar.gz.sha256
 tar -xzf paddock-0.2.1-x86_64-linux.tar.gz
 install -m 755 paddock-0.2.1-x86_64-linux/paddock ~/.local/bin/paddock
+install -m 755 paddock-0.2.1-x86_64-linux/paddock-tui ~/.local/bin/paddock-tui
 paddock doctor
 ```
 
@@ -56,6 +57,8 @@ If the command prints no `Verification succeeded!`, do not install the file. Eac
 `paddock --version` of a release prints only the version, for example `paddock 0.2.1`. A build from a git checkout that is not a clean checkout of a release tag prints `-dev`, the commit and a dirty mark, for example `paddock 0.2.1-dev (commit 1a2b3c4, dirty)`. `paddock doctor --report` names the build kind and the full commit. Add it to a bug report.
 
 All releases are on the [releases page](https://github.com/harnessix/paddock/releases).
+
+If `paddock-tui` is missing, paddock installs it at the first `paddock tui`: see The terminal interface below.
 
 On Arch Linux, the installer installs a package with makepkg. It also knows apt and dnf, and then copies the binary to `~/.local/bin`; that path is best effort and is not tested on every release (see Support scope (`paddock help support`)). Use `bin/install --minimal` to skip the desktop packages.
 
@@ -128,9 +131,10 @@ These parts are Linux only. On macOS, the command refuses with one line, or `pad
 - `paddock launchers` (XDG desktop entries).
 - `paddock shims install --scope omarchy-agent` and the Omarchy bar widget.
 - `paddock update` replaces no binary. It says when a release is out. Then you run `brew upgrade paddock`, or you update the clone and run `cargo install --path .` again.
+- paddock downloads no terminal interface. Homebrew builds `paddock-tui` together with paddock. In a clone, `tui/scripts/install.sh` builds and installs it.
 - The devices are not files in `/dev/paddock` on macOS: Seatbelt runs reach them with `paddock-host device` (see On macOS (`paddock help device-guide`)).
 
-`paddock setup` names the missing programs with the command that installs them, and installs nothing itself. Notifications use `osascript`. `paddock view` opens a Terminal window when `$TERMINAL` is not set.
+`paddock setup` names the missing programs with the command that installs them, and installs nothing itself. Notifications of paddock appear through paddock for Mac while that app runs. Without it, paddock uses `terminal-notifier` from Homebrew, with the name and icon of paddock for Mac when that app is installed. If `terminal-notifier` is not installed, paddock uses `osascript`, and macOS shows the notification as from Script Editor. `paddock doctor` says which way paddock uses. `paddock view` opens a Terminal window when `$TERMINAL` is not set.
 
 The widget lists running sandboxes with their backend, network, display and login. Press Enter on a sandbox to go to the terminal that runs it (Hyprland). The row actions open the project folder, copy its path, show the display window of a sandbox in `window` mode, and stop the sandbox after a second press. The New button starts a sandbox in two steps: pick a recent project, then a harness that is installed on this machine, and paddock opens a terminal that runs it. The Checks button runs `paddock doctor`. Every action has a key, and the panel footer lists them.
 
@@ -141,11 +145,28 @@ paddock update --check    # is there a newer release, and what an update would d
 paddock update            # asks first; --yes updates without asking
 ```
 
-`paddock update` asks the GitHub API for the latest release. It downloads the tarball and its `.sha256` into a private folder, checks the checksum, and checks that the new binary prints the expected version. Then it writes the new binary next to the old one and renames it into place, so a cut download never leaves half a binary. It talks only to `api.github.com`, `github.com` and GitHub's download hosts over HTTPS, follows no redirect to another host, and uses your `HTTPS_PROXY`. If the bar widget is installed, it also runs `omarchy plugin update harnessix.paddock --yes`.
+`paddock update` asks the GitHub API for the latest release. It downloads the tarball and its `.sha256` into a private folder, checks the checksum, and checks that the new `paddock` binary and the new `paddock-tui` each print the expected version. Then it writes each new binary next to the old one and renames it into place, so a cut download never leaves half a binary. If one check fails, no file changes. It talks only to `api.github.com`, `github.com` and GitHub's download hosts over HTTPS, follows no redirect to another host, and uses your `HTTPS_PROXY`. If the bar widget is installed, it also runs `omarchy plugin update harnessix.paddock --yes`.
 
 If a package owns the binary (the Arch package that `bin/install` builds), `paddock update` does not overwrite it. In your clone, check out the new release tag and run `bin/install` again, for example `git fetch --tags && git checkout vX.Y.Z && bin/install`, with the tag that `paddock update --check` names. `paddock update` runs only on the host, never in a sandbox.
 
 `paddock doctor` says when a newer release exists. It checks at most once a day and waits at most two seconds; `PADDOCK_NO_UPDATE_CHECK=1` turns the check off. It also says when a desktop app was updated on the host while its sandbox runs, so that you restart it.
+
+### The terminal interface
+
+`paddock tui` starts `paddock-tui`, a separate program. You never build it by hand:
+
+- A release tarball holds it, and `paddock update` installs it next to `paddock`.
+- `bin/install`, the Arch package and the Homebrew formula build it together with paddock.
+- If it is missing, the first `paddock tui` prints one line, for example `Installing the paddock TUI 1.2.3 (52 MB)…`, downloads the tarball of paddock's own version from the GitHub release, makes the same checks as `paddock update`, and starts the interface. The program goes next to `paddock`. If paddock cannot write there, or a package owns that folder, it goes to `~/.local/share/paddock/tui/VERSION/`.
+
+paddock does not download it in these cases. It prints one line with the one command to run:
+
+- `PADDOCK_NO_UPDATE_CHECK=1` is set. Run `paddock update --tui`, which installs the terminal interface of this paddock version and nothing else.
+- The host is offline. Run `paddock tui` again later.
+- The paddock binary is a development build (`paddock --version` prints `-dev`). No release has its version. Run `tui/scripts/install.sh` in the source tree. The script needs mise, or Node.js 22 and bun.
+- The command runs in a sandbox. Run `paddock tui` on the host.
+
+`PADDOCK_TUI=/absolute/path/to/program` starts another program instead, for example `tui/dist/cli.js` of a clone during development. paddock never starts the interface with `npx`.
 
 ### Let your agent set it up
 

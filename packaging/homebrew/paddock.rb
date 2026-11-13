@@ -9,6 +9,16 @@ class Paddock < Formula
   sha256 "@SHA256@"
   license "MIT"
 
+  # The terminal interface (tui/) becomes one self-contained program,
+  # paddock-tui, with `bun build --compile`: the same form as in a Linux
+  # release, so paddock finds and starts it in the same way. bun and node
+  # are in homebrew-core, and both are needed for the build only: node has
+  # npm, which installs the packages of tui/package-lock.json with their
+  # checksums, and it runs the TypeScript compiler. bun then puts the result
+  # and its own runtime into one file. With node alone, paddock-tui would
+  # be a script, and node would become a dependency of every install.
+  depends_on "bun" => :build
+  depends_on "node" => :build
   depends_on "rust" => :build
 
   # The guest files of the VM backend. The release workflow takes the URLs
@@ -34,6 +44,14 @@ class Paddock < Formula
     # build as the release, so `paddock --version` prints only the version.
     ENV["PADDOCK_RELEASE_BUILD"] = "1"
     system "cargo", "install", *std_cargo_args
+
+    # paddock-tui next to paddock. No package script runs. The target is
+    # this machine, so bun copies its own runtime and downloads no other.
+    cd "tui" do
+      system "npm", "ci", "--ignore-scripts"
+      system "npm", "run", "build"
+      system "bun", "scripts/bun-build.mjs", "native", bin/"paddock-tui"
+    end
     return unless OS.mac?
 
     # paddock-vm owns the Linux VM of the VM backend. The Virtualization
@@ -61,6 +79,8 @@ class Paddock < Formula
 
   test do
     assert_match "paddock #{version}", shell_output("#{bin}/paddock --version")
+    # A paddock-tui that lost its code prints the version of bun instead.
+    assert_equal "paddock-tui #{version}", shell_output("#{bin}/paddock-tui --version").strip
     if OS.mac?
       assert_match "com.apple.security.virtualization",
                    shell_output("codesign -d --entitlements - #{bin}/paddock-vm 2>&1")

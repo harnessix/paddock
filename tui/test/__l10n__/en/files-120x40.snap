@@ -1,0 +1,40 @@
+paddock · 2 running                                                               Runs   Board   Approvals      Mail
+ claude · webshop · running 4 min · copy: 4 changed, 2 new, 1 deleted
+ run  approvals  mail [files]                                                                         pointer: ● linked
+╭─ Files · changes ────────────╮╭─ docs/README.md · conflict · +6 -2 ──────────────────────────────────────────────────╮
+│  ▾ webshop/   !1 ~2 +2 -1 =1 ││  @@ line 1                               │ @@ line 1                                 │
+│  ▾ docs/                  !1 ││  1 # webshop                             │ 1 # webshop                               │
+│ ▸   ! README.md    [A][K][D] ││  2                                       │ 2                                         │
+│  ▾ src/             ~2 +2 =1 ││ ~3 A small shop.                         │~3 A small shop with a cart and taxes.     │
+│    ▾ lib/util/            +1 ││ ~4 Run it with npm start.                │~4                                         │
+│       + format.ts  new       ││                                          │+5 ## Run it                               │
+│     ~ cart.ts      changed   ││                                          │+6                                         │
+│     = old.ts       kept      ││                                          │+7 npm install                             │
+│     ~ price.ts     changed   ││                                          │+8 npm start                               │
+│     + tax.ts       new       ││  5                                       │ 9                                         │
+│   - logo.png       deleted   ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+│                              ││                                                                                      │
+╰─ 1 of 7 · 1 conflict ────────╯╰─ change 1 of 1 · original │ copy · 1 2 3 sides ──────────────────────────────────────╯
+up to date · v opens a view window (no paddock split)
+A apply  K keep  D discard  ↵ diff  c filter  b backups  i pointer  ? help                     hold Shift to select text

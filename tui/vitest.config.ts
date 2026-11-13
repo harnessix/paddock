@@ -8,5 +8,8 @@ export default defineConfig({
     testTimeout: 180_000,
     // The PTY test starts the built program; the others render in memory.
     pool: 'forks',
+    // The interface speaks the language of the environment: the tests
+    // read English unless a test picks another language.
+    env: { PADDOCK_LANG: 'en' },
   },
 });

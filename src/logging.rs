@@ -1,7 +1,8 @@
 //! One logging facility for paddock, on top of the `log` crate macros.
 //!
 //! - stderr: warnings and errors by default, in the old `paddock: warning: ...`
-//!   form. `-v` adds info, `-vv` debug, `-vvv` trace; `-q` keeps only errors.
+//!   form. `-v` adds info, `-vv` debug, `-vvv` trace; `-q` keeps only errors,
+//!   `-qq` shows none. A run keeps its warnings and errors (note.rs).
 //! - `PADDOCK_LOG` overrides the level, for everything or per module:
 //!   `PADDOCK_LOG=debug`, `PADDOCK_LOG=broker=debug,proxy=trace`.
 //! - the systemd journal, identifier `paddock`, when a journal socket exists:
@@ -29,7 +30,8 @@ impl Filter {
     /// optional `PADDOCK_LOG` value. Unknown parts of `PADDOCK_LOG` are ignored.
     pub fn new(verbosity: i32, spec: Option<&str>) -> Self {
         let default = match verbosity {
-            i32::MIN..=-1 => LevelFilter::Error,
+            i32::MIN..=-2 => LevelFilter::Off,
+            -1 => LevelFilter::Error,
             0 => LevelFilter::Warn,
             1 => LevelFilter::Info,
             2 => LevelFilter::Debug,
@@ -116,7 +118,13 @@ pub fn journal_datagram(level: Level, target: &str, msg: &str) -> Vec<u8> {
 
 struct Logger {
     filter: Filter,
-    journal: Option<UnixDatagram>,
+}
+
+/// The journal socket, once `init` connected it.
+static JOURNAL: std::sync::OnceLock<Option<UnixDatagram>> = std::sync::OnceLock::new();
+
+fn journal_socket() -> Option<&'static UnixDatagram> {
+    JOURNAL.get().and_then(Option::as_ref)
 }
 
 impl Logger {
@@ -125,10 +133,20 @@ impl Logger {
     }
 }
 
+/// Send one record to the journal only, as the logger would: for the
+/// notes of a run (note.rs), which print their own stderr line.
+pub fn journal(level: Level, target: &str, msg: &str) {
+    if let Some(sock) = journal_socket() {
+        let _ = sock.send(&journal_datagram(level, target, msg));
+    }
+}
+
 impl Log for Logger {
     fn enabled(&self, m: &Metadata) -> bool {
+        // Warnings always pass: a run keeps them, also with -q.
         m.level() <= self.filter.level(m.target())
-            || (self.journal.is_some() && m.level() <= self.journal_level(m.target()))
+            || m.level() <= Level::Warn
+            || (journal_socket().is_some() && m.level() <= self.journal_level(m.target()))
     }
 
     fn log(&self, r: &Record) {
@@ -137,9 +155,10 @@ impl Log for Logger {
         }
         let msg = r.args().to_string();
         if r.level() <= self.filter.level(r.target()) {
-            eprintln!("{}", stderr_line(r.level(), r.target(), &msg));
+            crate::note::err_line(&stderr_line(r.level(), r.target(), &msg));
         }
-        if let Some(sock) = &self.journal {
+        crate::note::keep_log(r.level(), &msg);
+        if let Some(sock) = journal_socket() {
             if r.level() <= self.journal_level(r.target()) {
                 let _ = sock.send(&journal_datagram(r.level(), r.target(), &msg));
             }
@@ -162,13 +181,14 @@ fn connect_journal() -> Option<UnixDatagram> {
 /// `-q`. Call once, early in `main`.
 pub fn init(verbosity: i32) {
     let filter = Filter::new(verbosity, std::env::var("PADDOCK_LOG").ok().as_deref());
-    let journal = connect_journal();
-    let max = if journal.is_some() {
+    let journal = JOURNAL.get_or_init(connect_journal).is_some();
+    // Warnings always reach the logger: a run keeps them (note.rs).
+    let max = if journal {
         filter.max().max(LevelFilter::Info)
     } else {
-        filter.max()
+        filter.max().max(LevelFilter::Warn)
     };
-    if log::set_boxed_logger(Box::new(Logger { filter, journal })).is_ok() {
+    if log::set_boxed_logger(Box::new(Logger { filter })).is_ok() {
         log::set_max_level(max);
     }
 }
@@ -181,6 +201,7 @@ mod tests {
     fn default_is_warn_and_flags_shift_it() {
         assert_eq!(Filter::new(0, None).default, LevelFilter::Warn);
         assert_eq!(Filter::new(-1, None).default, LevelFilter::Error);
+        assert_eq!(Filter::new(-2, None).default, LevelFilter::Off);
         assert_eq!(Filter::new(2, None).default, LevelFilter::Debug);
         assert_eq!(Filter::new(9, None).default, LevelFilter::Trace);
     }

@@ -339,11 +339,33 @@ pub trait Device: Send + Sync {
     fn details(&self) -> Option<serde_json::Value> {
         None
     }
+    /// The call `call` waits for an approval of the user: a card or a
+    /// question. The `device_call` line of the event stream says it. A
+    /// guess before the call: it never blocks and never asks.
+    fn asks(&self, _call: &Call) -> bool {
+        false
+    }
     /// A write without a read sends the request when the file closes
     /// (`echo TEXT > /dev/paddock/mail/out`). The response is dropped.
     fn sends_on_close(&self) -> bool {
         false
     }
+}
+
+/// Publish the `device_call` line of a call that starts, on `bus`: the
+/// sandbox, the device name, and whether the call waits for an approval.
+/// Never the request. Without a follower it reads one folder and stops.
+pub fn announce_call(bus: Option<&crate::eventstream::Bus>, dev: &dyn Device, call: &Call) {
+    use crate::eventstream::schema::{DeviceCall, Event};
+    let Some(bus) = bus else { return };
+    if bus.followers().is_empty() {
+        return;
+    }
+    bus.publish(Event::DeviceCall(DeviceCall {
+        run: call.sandbox.clone(),
+        device: dev.name().to_string(),
+        ask: dev.asks(call),
+    }));
 }
 
 /// The built-in test device: the response is the request.

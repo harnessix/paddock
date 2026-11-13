@@ -1,0 +1,24 @@
+[1mpaddock[22m · 2 running                      [7m[1m Runs [22m[27m  Board   Approvals      Mail
+ claude · webshop · running 4 min · copy: 4 changed, 2 new, 1 deleted
+ run  approvals  mail [1m[files][22m                                 [2mpointer: ● linked [22m
+╭─ [1mDiscard · claude · webshop[22m ─────────────────────────────────────────────────╮
+│ [7m[1m◆ Discard from the copy[22m[27m[2m   1 file[22m                                             │
+│ [1mDrop these changes from the copy of the agent?[22m                               │
+│ [2m ▏ [22m[1m~ [22msrc/cart.ts  [1mchanged   [22m[2m+3 -2[22m                                            │
+│ [1mThis has no undo. Your folder does not change.[22m                               │
+│ [2mCancel: Nothing changes.[22m                                                     │
+│ [1m[y] Discard 1 file ⚠[22m  [7m[1m[n] Cancel[22m[27m                                             │
+│ [2m←→ choose · ↵ answer · y/n keys · Esc cancel[22m                                 │
+╰──────────────────────────────────────────────────────────────────────────────╯
+[2m╭─ Files · changes ────────────╮╭─ src/cart.ts · changed · +3 -2 ──────────────╮[22m
+[2m│[22m  [1m▾ webshop/   !1 ~2[22m[2m +2 -1 =1[22m [2m││[22m [1m @@ line 38[22m                                  [2m│[22m
+[2m│[22m  [1m▾ docs/           [22m[2m       !1[22m [2m││[22m  38 export function total(items: Item[]): n… [2m│[22m
+[2m│[22m     [7m[1m![22m[27m README.md    [7m[1mconflict [22m[27m [2m││[22m  39   if (items.length === 0) return 0;      [2m│[22m
+[2m│[22m  [1m▾ src/            [22m[2m ~2 +2 =1[22m [2m││[22m  40                                          [2m│[22m
+[2m│[22m  [1m  ▾ lib/util/     [22m[2m       +1[22m [2m││[22m  41   const total = items.reduce(            [2m│[22m
+[2m│[22m       + format.ts  new       [2m││[22m [1m-42     (s, i) => s + i.price, 0);[22m           [2m│[22m
+[2m│[22m [1m▸[22m   [1m~[22m [1mcart.ts      [A][K][D][22m [2m││[22m [1m+42 [22m    (s, i) => s + i.price * i.qty,       [2m│[22m
+[2m│[22m     [2m=[22m [2mold.ts       kept     [22m [2m││[22m [1m+43 [22m    0);                                  [2m│[22m
+[2m╰─ 3 of 7 · 1 conflict ────────╯╰─ change 1 of 2 · unified ────────────────────╯[22m
+[2mup to date · v opens a view window (no paddock split)[22m
+[1m←→[22m[2m choose  [22m[1m↵[22m[2m answer  [22m[1mEsc[22m[2m cancel  [22m[1m?[22m[2m help  [22m              [2mhold Shift to select text[22m

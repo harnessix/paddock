@@ -21,8 +21,9 @@ pub(crate) struct RunArgs {
     /// Bind GPU render nodes.
     #[arg(long)]
     pub(super) gpu: bool,
-    /// inherit (default) passes the host environment; clean passes only the allowlist.
-    #[arg(long, value_parser = ["inherit", "clean"])]
+    /// listed passes only the lists of paddock env show (the default of a new
+    /// installation); inherit passes the host environment. clean is listed.
+    #[arg(long, value_parser = ["listed", "inherit", "clean"])]
     pub(super) env: Option<String>,
     /// shared (default) reuses your login; isolated or isolated:NAME uses a separate one.
     #[arg(long)]
@@ -34,6 +35,21 @@ pub(crate) struct RunArgs {
     /// Work in a new git worktree on its own branch, and review the diff afterwards.
     #[arg(long)]
     pub(super) worktree: bool,
+    /// Work on a copy of the project. Your folder changes only when you
+    /// apply: `paddock changes` lists what the agent did, `paddock apply`
+    /// writes it. The default for a folder without git and for a launcher
+    /// run ([copy] default).
+    #[arg(long, conflicts_with_all = ["direct", "worktree"])]
+    #[serde(default)]
+    pub(super) copy: bool,
+    /// Work in the project folder itself, without a copy.
+    #[arg(long)]
+    #[serde(default)]
+    pub(super) direct: bool,
+    /// The run comes from a launcher entry.
+    #[arg(long, hide = true)]
+    #[serde(default)]
+    pub(super) launcher: bool,
     /// Join this pasture of the project: [pastures.NAME] of the user
     /// configuration. Its members share the pasture scope of paddock kv.
     /// Without it, the sandbox shares paddock kv with no other.
@@ -55,7 +71,8 @@ pub(crate) struct RunArgs {
     /// interface. paddock adds no auto-approval flags and does not answer
     /// the agent's trust question. The sandbox stays the same.
     /// `--no-yolo` is the old name. The default comes from `[run]
-    /// approvals` (paddock.toml, then the user configuration), else auto.
+    /// approvals` (paddock.toml, then the user configuration), else manual
+    /// on a new installation and auto on one that ran agents before.
     #[arg(long, visible_alias = "no-yolo", conflicts_with = "auto")]
     #[serde(default, alias = "no_yolo")]
     pub(super) manual: bool,
@@ -64,6 +81,14 @@ pub(crate) struct RunArgs {
     #[arg(long)]
     #[serde(default)]
     pub(super) auto: bool,
+    /// Start in a wide folder: a folder of projects, Documents, a cloud
+    /// sync folder, a folder with keys, or one with more than 200 000
+    /// files or 50 GB. `[run] allow_wide` of the user configuration
+    /// confirms a folder for good. `/`, the home folder and the system
+    /// folders are refused all the same.
+    #[arg(long)]
+    #[serde(default)]
+    pub(super) yes_wide_folder: bool,
     /// Approve the project's paddock.toml without asking.
     #[arg(long, short = 'y')]
     pub(super) yes: bool,

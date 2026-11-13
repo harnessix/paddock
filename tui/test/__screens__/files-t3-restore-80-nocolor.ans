@@ -1,0 +1,24 @@
+[1mpaddock[22m · 2 running                      [7m[1m Runs [22m[27m  Board   Approvals      Mail
+ claude · webshop · running 4 min · copy: 4 changed, 2 new, 1 deleted
+ run  approvals  mail [1m[files][22m                                 [2mpointer: ● linked [22m
+╭─ [1mRestore · claude · webshop[22m ─────────────────────────────────────────────────╮
+│ [7m[1m◆ Restore a backup[22m[27m[2m   today 14:02[22m                                             │
+│ [1mBring the files of this backup back to ~/code/webshop?[22m                       │
+│ [2m ▏ [22mbefore apply · 3 files · claude  [2m12 KB[22m                                    │
+│ [1mFiles that changed since the backup get its content again.[22m                   │
+│ [2mpaddock makes a "before restore" backup first, so u undoes the restore.[22m      │
+│ [2mCancel: Nothing changes.[22m                                                     │
+│ [1m[y] Restore ⚠[22m  [7m[1m[n] Cancel[22m[27m                                                    │
+│ [2m←→ choose · ↵ answer · y/n keys · Esc cancel[22m                                 │
+╰──────────────────────────────────────────────────────────────────────────────╯
+╭─ [1mBackups · webshop[22m ──────────────────────────────────────────────────────────╮
+│ [1m[2mtoday[22m                                                                        │
+│ [7m[1m▸ 14:02  before apply     3 files    12 KB   claude                      [R][22m[27m │
+│   13:41  start of run     412 files  shared  claude                      [1m[R][22m │
+│ [1m[2myesterday[22m                                                                    │
+│   17:20  before restore   9 files    48 KB                               [1m[R][22m │
+│   16:05  start of run     409 files  shared  codex                       [1m[R][22m │
+│                                                                              │
+╰─ 1 of 4 · 60 KB on disk ─────────────────────────────────────────────────────╯
+[2mup to date · v opens a view window (no paddock split)[22m
+[1m←→[22m[2m choose  [22m[1m↵[22m[2m answer  [22m[1mEsc[22m[2m cancel  [22m[1m?[22m[2m help  [22m              [2mhold Shift to select text[22m

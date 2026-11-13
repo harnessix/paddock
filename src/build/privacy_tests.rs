@@ -63,7 +63,10 @@ fn privacy_defaults_are_in_the_spec_with_their_origin() {
 #[test]
 fn vendor_mode_removes_the_privacy_defaults() {
     let user = "[privacy]\ntelemetry = \"vendor\"\n";
-    let (_t, b) = privacy_spec("claude", user, "");
+    // The host value passes as it is: an installation in inherit mode
+    // (ENV1: a new installation passes only the lists).
+    let inherit = format!("{user}[env]\nmode = \"inherit\"\n");
+    let (_t, b) = privacy_spec("claude", &inherit, "");
     assert!(!b.spec.env.values().any(|v| v.origin.contains("privacy")));
     assert_eq!(b.spec.env["DISABLE_TELEMETRY"].value, "");
     let (_t, b) = privacy_spec("codex", user, "");

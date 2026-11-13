@@ -28,6 +28,17 @@ pub enum Access {
     /// Connect to the Unix socket (a file) or to the Unix sockets in a
     /// folder. No other right: the socket cannot be removed or replaced.
     Connect,
+    /// Bind and connect Unix sockets below the folder, and no file right:
+    /// a short alias of a writable folder (shorthome.rs). Seatbelt checks
+    /// the files on their resolved paths, in the folder that the alias
+    /// points to.
+    Sockets,
+    /// One file or Unix socket: read, write, bind and connect at this name
+    /// only (an entry of this run in `/private/tmp`, tmpclaim.rs).
+    SocketFile,
+    /// Create only: the entry may be made again, never read or changed (a
+    /// `/private/tmp` folder of all runs).
+    CreateOnly,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -567,6 +578,26 @@ pub fn render(policy: &Policy) -> Result<String> {
             }
             Access::Deny => {
                 out.push(format!("(deny file-read* file-write* {filter})"));
+            }
+            Access::Sockets => {
+                out.push(format!(
+                    "(allow network-bind (local unix-socket (subpath {q})))"
+                ));
+                out.push(format!(
+                    "(allow network-outbound (remote unix-socket (subpath {q})))"
+                ));
+            }
+            Access::SocketFile => {
+                out.push(format!("(allow file-read* file-write* (literal {q}))"));
+                out.push(format!(
+                    "(allow network-bind (local unix-socket (path-literal {q})))"
+                ));
+                out.push(format!(
+                    "(allow network-outbound (remote unix-socket (path-literal {q})))"
+                ));
+            }
+            Access::CreateOnly => {
+                out.push(format!("(allow file-write-create {filter})"));
             }
             Access::Connect => {
                 let target = if r.file {

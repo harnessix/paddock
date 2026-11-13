@@ -3,8 +3,10 @@ description = "OpenClaw"
 
 # Entries that come from documentation, not from a test. paddock doctor lists them.
 unverified = [
-  "every entry: openclaw was not installed when this profile was written",
+  "every entry before [gateway]: openclaw was not installed when they were written",
   "`paddock openclaw`: the embedded runtime with its own state in the sandbox home",
+  "[gateway]: the flags come from the help of OpenClaw 2026.11.3; paddock's tests use a fake gateway",
+  "[gateway.client]: `openclaw tui` reads --url and --token; agent, acp and attach run as the embedded runtime",
 ]
 
 # Not a mise tool. omarchy-agent starts its launcher, omarchy-launch-openclaw.
@@ -13,11 +15,14 @@ commands = ["openclaw", "omarchy-launch-openclaw"]
 
 [launch]
 # omarchy-agent starts `omarchy-launch-openclaw --tui`. The terminal UI
-# attaches to the OpenClaw gateway, a systemd user service on the host that
-# owns ~/.openclaw and runs the agent's tools. A sandbox around the terminal
-# UI would protect nothing, so those starts run as before, with a notice.
+# attaches to the OpenClaw gateway, which owns ~/.openclaw and runs the
+# agent's tools. A sandbox around the terminal UI alone would protect
+# nothing. So paddock runs the gateway itself in a sandbox ([gateway]
+# below), and the terminal UI attaches to that one from a small sandbox of
+# its own. Only a gateway that the user started on the host without
+# paddock runs as before, with this notice.
 # https://docs.openclaw.ai/cli/tui and https://docs.openclaw.ai/gateway/sandboxing
-wrap_on_host = "its agent runs in the OpenClaw gateway, a service on the host; paddock can sandbox only `paddock openclaw`, which runs OpenClaw's embedded runtime"
+wrap_on_host = "its agent runs in an OpenClaw gateway on the host, outside paddock"
 # `paddock openclaw` runs the embedded runtime (`openclaw chat`) instead. It
 # needs its own state folder, so it uses ~/.openclaw in the sandbox home and
 # never shares the gateway's. Onboard it inside the sandbox.
@@ -35,3 +40,22 @@ env = { CLAWHUB_DISABLE_TELEMETRY = "1" }
 [privacy.training]
 setting = "the data settings of the model provider you configure"
 url = "https://docs.openclaw.ai/gateway/security/secrets-and-storage"
+
+# `paddock gateway openclaw start` runs `openclaw gateway run` in a sandbox
+# of its own: its own home with its own ~/.openclaw, never the host's, and
+# 127.0.0.1 only, with a token that paddock makes and keeps. paddock never
+# runs `openclaw daemon`, which installs the gateway as a host service.
+[gateway]
+args = ["gateway", "run", "--port", "{port}", "--bind", "loopback", "--auth", "token", "--allow-unconfigured"]
+env = { OPENCLAW_GATEWAY_TOKEN = "{token}" }
+# Another port than OpenClaw's own default, so that both can run.
+port = 19101
+host_port = 19001
+host_commands = ["gateway", "daemon"]
+state = ".openclaw"
+
+# `paddock openclaw tui` (and the `openclaw tui` shim) run the real client
+# in a small sandbox, attached to the sandboxed gateway.
+[gateway.client]
+commands = ["tui"]
+args = ["--url", "{url}", "--token", "{token}"]

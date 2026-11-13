@@ -1,6 +1,7 @@
 import React from 'react';
 import { Box } from 'ink';
 import { cells, cut, fit } from '../clean.js';
+import { t as tr, type Key } from '../i18n/index.js';
 import { searchActions, visibleActions, type Action } from '../actions.js';
 import { Button, Clickable, List, Pane, T, inner } from '../ui.js';
 import { useTheme } from '../theme.js';
@@ -10,14 +11,23 @@ export function helpLines(readonly: boolean, mouse: boolean): { key: string; tex
   const lines = visibleActions(readonly).map((a) => ({ key: a.key, text: a.label }));
   lines.push({ key: '', text: '' });
   for (const t of [
-    '↑↓ j k move · PgUp PgDn page · Home End first and last',
-    'Rooms: ←→ h l one card, ↑↓ j k one row of cards; L the list',
-    'Approval card: 1-7 or y s n answer, ←→ choose, ↵ answer, Esc deny',
-    'Wide grants (⚠: always, or every host) need the key again within 3 s',
-    readonly ? '' : 'New run: Ctrl+A switches the approvals mode (default, manual, auto)',
-    'R reads paddock again and draws the whole screen again, Ctrl+L only draws',
-    mouse ? 'Mouse: click selects, double-click opens, wheel scrolls; hold Shift to select text' : 'The mouse is off: M turns it on',
-    readonly ? 'Read-only: the actions that change something are hidden' : '',
+    tr('view.help.move'),
+    tr('view.help.rooms'),
+    tr('view.help.ranchMove'),
+    tr('view.help.ranchJump'),
+    tr('view.help.ranchList'),
+    tr('view.help.amber'),
+    tr('view.help.files1'),
+    tr('view.help.files2'),
+    tr('view.help.files3'),
+    tr('view.help.diff'),
+    tr('view.help.fileCard'),
+    tr('view.help.card'),
+    tr('view.help.wide'),
+    readonly ? '' : tr('view.help.newRun'),
+    tr('view.help.redraw'),
+    mouse ? tr('view.help.mouseOn') : tr('view.help.mouseOff'),
+    readonly ? tr('view.help.readonly') : '',
   ]) {
     if (t) lines.push({ key: '', text: t });
   }
@@ -30,7 +40,7 @@ export function HelpOverlay(props: { width: number; height: number; readonly: bo
   const lines = helpLines(props.readonly, props.mouse);
   const top = Math.max(0, Math.min(props.scroll, lines.length - box.height));
   const more = lines.length > box.height;
-  const title = `Help · every key${more ? ` · ↑↓ scroll ${top + Math.min(box.height, lines.length)}/${lines.length}` : ''} · Esc closes`;
+  const title = more ? tr('view.help.titleScroll', { at: top + Math.min(box.height, lines.length), total: lines.length }) : tr('view.help.title');
   return (
     <Pane title={title} focused width={props.width} height={props.height} onWheel={props.onWheel}>
       {lines.slice(top, top + box.height).map((l, i) =>
@@ -64,7 +74,7 @@ export function PaletteOverlay(props: {
   const box = inner(theme.plain, props.width, props.height);
   const found = searchActions(visibleActions(props.readonly), props.query);
   return (
-    <Pane title="Command palette · type to search · ↵ runs · Esc closes" focused width={props.width} height={props.height}>
+    <Pane title={tr('view.palette.title')} focused width={props.width} height={props.height}>
       <T>
         <T role="accent">{': '}</T>
         {cut(props.query, Math.max(0, box.width - 3))}
@@ -76,7 +86,7 @@ export function PaletteOverlay(props: {
         width={box.width}
         height={Math.max(0, box.height - 1)}
         focused
-        empty="No action matches."
+        empty={tr('view.palette.empty')}
         onSelect={props.onSelect}
         onOpen={(i) => {
           const a = found[i];
@@ -102,12 +112,18 @@ export function nextApprovals(a: ApprovalsMode | undefined): ApprovalsMode {
 }
 
 export function formApprovalsLabel(a: ApprovalsMode | undefined): string {
-  if (a === 'manual') return 'manual: you approve each step in the agent';
-  if (a === 'auto') return 'auto: the agent approves its own steps in the sandbox';
-  return 'your default ([run] approvals, else auto)';
+  if (a === 'manual') return tr('view.form.approvals.manual');
+  if (a === 'auto') return tr('view.form.approvals.auto');
+  return tr('view.form.approvals.default');
 }
 
-export const FORM_FIELDS = ['Harness', 'Project', 'Prompt file'] as const;
+/** The fields of the New run form. Their names are in the catalog: `view.form.field.ID`. */
+export const FORM_FIELDS = ['harness', 'project', 'promptFile'] as const;
+
+/** The name of a field of the form in the language of the interface. */
+export function fieldName(id: (typeof FORM_FIELDS)[number] | 'approvals'): string {
+  return tr(`view.form.field.${id}` as Key);
+}
 
 export function NewRunForm(props: {
   width: number;
@@ -123,15 +139,17 @@ export function NewRunForm(props: {
   const f = props.form;
   const fieldWidth = Math.max(8, Math.min(60, box.width - 4));
   const hints = [
-    props.harnesses.length > 0 ? `installed: ${props.harnesses.join(', ')}` : 'paddock list shows the harnesses',
-    'a folder; empty is the current folder',
-    'a file with the task, relative to the project or absolute',
+    props.harnesses.length > 0 ? tr('view.form.installed', { list: props.harnesses.join(', ') }) : tr('view.form.listHarnesses'),
+    tr('view.form.folderHint'),
+    tr('view.form.fileHint'),
   ];
+  // The names take 12 cells, or more when the words of the language are longer (at most a third of the box).
+  const nameW = Math.max(12, Math.min(Math.floor(box.width / 3), Math.max(...[...FORM_FIELDS, 'approvals' as const].map((id) => cells(fieldName(id)) + 2))));
   return (
-    <Pane title="New run · in a sandbox, detached · Tab next field · Ctrl+A approvals · ↵ start · Esc cancel" focused width={props.width} height={props.height}>
-      {FORM_FIELDS.map((name, i) => (
-        <Box key={name} flexDirection="column">
-          <Button label={`${fit(name, 12)}`} focused={f.field === i} onClick={() => props.onField(i)} />
+    <Pane title={tr('view.form.title')} focused width={props.width} height={props.height}>
+      {FORM_FIELDS.map((id, i) => (
+        <Box key={id} flexDirection="column">
+          <Button label={`${fit(fieldName(id), nameW)}`} focused={f.field === i} onClick={() => props.onField(i)} />
           {/* The field shows as a line to write on, so an empty one is not an empty row. */}
           <Clickable onClick={() => props.onField(i)}>
             {() => (
@@ -151,13 +169,13 @@ export function NewRunForm(props: {
         </Box>
       ))}
       <T>
-        {fit('Approvals', 12)}
-        <T role={f.approvals === 'manual' ? 'warning' : 'normal'}>{cut(formApprovalsLabel(f.approvals), Math.max(0, box.width - 12))}</T>
+        {fit(fieldName('approvals'), nameW)}
+        <T role={f.approvals === 'manual' ? 'warning' : 'normal'}>{cut(formApprovalsLabel(f.approvals), Math.max(0, box.width - nameW))}</T>
       </T>
-      <T role="muted">{cut('  Ctrl+A switches: default, manual, auto. The sandbox is the same.', box.width)}</T>
+      <T role="muted">{cut(`  ${tr('view.form.switches')}`, box.width)}</T>
       <Box flexDirection="row" gap={2}>
-        <Button label={f.busy ? ' Starting… ' : ' Start the run ↵ '} focused={false} role="accent" onClick={props.onSubmit} />
-        <Button label=" Cancel Esc " focused={false} onClick={props.onCancel} />
+        <Button label={` ${f.busy ? tr('view.form.starting') : tr('view.form.start')} `} focused={false} role="accent" onClick={props.onSubmit} />
+        <Button label={` ${tr('view.form.cancel')} `} focused={false} onClick={props.onCancel} />
       </Box>
       {f.error ? <T role="error">{cut(f.error, box.width)}</T> : null}
     </Pane>

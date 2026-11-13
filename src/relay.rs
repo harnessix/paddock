@@ -351,10 +351,18 @@ fn copy_in(
             break;
         }
         if fds[0].revents & libc::POLLIN == 0 {
+            if fds[0].revents & (libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0 {
+                crate::run::caller_terminal_gone();
+                break;
+            }
             continue;
         }
         match read_fd(caller, &mut buf) {
-            Ok(0) => break,
+            // A terminal in raw mode reads 0 only when it is gone.
+            Ok(0) => {
+                crate::run::caller_terminal_gone();
+                break;
+            }
             Ok(n) => {
                 // A terminal reply (reply.rs) is not a user key.
                 let sent = match &gate {
@@ -366,7 +374,11 @@ fn copy_in(
                 }
             }
             Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-            Err(_) => break,
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock => continue,
+            Err(_) => {
+                crate::run::caller_terminal_gone();
+                break;
+            }
         }
     }
     // SAFETY: this thread owns the read end.
@@ -427,47 +439,8 @@ fn copy_out(
     }
 }
 
-enum Forward {
-    Data,
-    Idle,
-    End,
-}
-
-/// Read what is already buffered.
-fn forward_out(
-    master: RawFd,
-    caller_out: RawFd,
-    caller_ok: &mut bool,
-    log: &impl Fn(&[u8]),
-    buf: &mut [u8],
-) -> Forward {
-    match read_fd(master, buf) {
-        Ok(0) => Forward::End,
-        Ok(n) => {
-            let data = &buf[..n];
-            if *caller_ok && write_all_fd(caller_out, data).is_err() {
-                *caller_ok = false;
-            }
-            log(data);
-            Forward::Data
-        }
-        Err(e) if e.kind() == io::ErrorKind::Interrupted => Forward::Idle,
-        Err(e) if e.kind() == io::ErrorKind::WouldBlock => Forward::Idle,
-        // The slave is gone. A pty master then returns EIO.
-        Err(e) if e.raw_os_error() == Some(libc::EIO) => Forward::End,
-        Err(_) => Forward::End,
-    }
-}
-
-fn drain_out(
-    master: RawFd,
-    caller_out: RawFd,
-    caller_ok: &mut bool,
-    log: &impl Fn(&[u8]),
-    buf: &mut [u8],
-) {
-    while let Forward::Data = forward_out(master, caller_out, caller_ok, log, buf) {}
-}
+mod forward;
+use forward::*;
 
 #[cfg(test)]
 mod tests;

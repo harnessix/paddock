@@ -13,7 +13,9 @@ blocked, stuck, working, idle, open (a ticket without a run), done, ended.\n\n\
 A run belongs to a ticket when its prompt file is .paddock/tickets/NAME.md of \
 the project. `paddock help board-guide` explains the rules.")]
 pub(crate) struct BoardArgs {
-    /// Print JSON (version 1), the data of the Omarchy panel.
+    /// Print JSON (version 1), the data of the Omarchy panel. Each run has
+    /// `loft_commits`, the count of loft commits that the end of the run
+    /// wrote, and `loft_last`, the time of the newest (absent without one).
     #[arg(long)]
     json: bool,
     /// Draw the board again when it changes. With --json, print one line

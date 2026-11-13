@@ -66,6 +66,11 @@ pub(crate) enum MailCmd {
         timeout: Option<String>,
     },
     /// List the runs that have a mailbox, or the messages of one run.
+    ///
+    /// With --json and no run: one object per run with `id`, `short`,
+    /// `state`, `starter`, `parent`, `up`, `unread_up`, `unread_ask`,
+    /// `unread_down` and `last`. `unread_ask` is the count of the unread
+    /// messages of the agent that ask a question (kind `ask`).
     Ls {
         run: Option<String>,
         #[arg(long)]
@@ -377,10 +382,11 @@ fn list_runs(env: &HostEnv, json: bool) -> Result<i32> {
     for id in mail::list(env) {
         let s = mail::starter(env, &id);
         let up = mail::read(env, &id, Dir::Up);
-        let unread_up = up
-            .iter()
-            .filter(|m| m.seq > mail::cursor(env, &id, Dir::Up, mail::STARTER))
-            .count();
+        let read_up = mail::cursor(env, &id, Dir::Up, mail::STARTER);
+        let unread: Vec<&Message> = up.iter().filter(|m| m.seq > read_up).collect();
+        let unread_up = unread.len();
+        // The questions of the agent that the starter did not read yet.
+        let unread_ask = unread.iter().filter(|m| m.kind == Kind::Ask).count();
         rows.push(serde_json::json!({
             "id": id,
             "short": paddock::ids::short(&id),
@@ -389,6 +395,7 @@ fn list_runs(env: &HostEnv, json: bool) -> Result<i32> {
             "parent": s.and_then(|s| s.parent),
             "up": up.len(),
             "unread_up": unread_up,
+            "unread_ask": unread_ask,
             "unread_down": mail::unread_down(env, &id).len(),
             "last": up.last().map(|m| m.ts),
         }));

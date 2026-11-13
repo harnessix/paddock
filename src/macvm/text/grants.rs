@@ -236,6 +236,10 @@ pub fn grant_done(app: &str, what: &str, o: &Outcome) -> String {
             };
             format!("Removed {what} from {app}.{tail}{open}")
         }
+        (What::Folder, "keep") => format!(
+            "Kept {what} for the next starts of {app}, {}. The running session does not change.",
+            mode_text(&c.value)
+        ),
         (What::Folder, _) => format!(
             "{what} is now {} for {app}.{}",
             mode_text(&c.value),
@@ -281,6 +285,42 @@ fn on_off(b: bool) -> &'static str {
 }
 
 /// The clipboard directions of a profile.
+/// The saved clipboard directions and, while the app runs, the ones of
+/// the session.
+pub fn grant_clipboard_both(app: &str, profile: Clipboard, session: Option<Clipboard>) -> String {
+    let mut line = format!(
+        "Saved clipboard of {app}: paste from this Mac into the app {}, copy from the app to this Mac {}",
+        on_off(profile.to_app),
+        on_off(profile.from_app)
+    );
+    if let Some(s) = session {
+        line.push_str(&format!(
+            "\nThis session: paste into the app {}, copy from the app {}. It ends when the app stops",
+            on_off(s.to_app),
+            on_off(s.from_app)
+        ));
+    }
+    line
+}
+
+/// A change of the running session while the app does not run.
+pub fn grant_session_not_running(app: &str) -> String {
+    format!("{app} is not running. Start it with paddock app run {app}, or leave out --session to change the profile")
+}
+
+/// `share keep` while the app does not run: no folder of a session.
+pub fn grant_keep_not_running(app: &str) -> String {
+    format!("{app} is not running, so it has no folder of a session to keep. paddock app share {app} add PATH saves a folder for the next start")
+}
+
+/// `share keep` of a folder that the profile keeps already.
+pub fn grant_already_kept(app: &str, path: &Path) -> String {
+    format!(
+        "{} is kept for the next starts of {app} already. paddock app share {app} list shows the folders",
+        shown(path)
+    )
+}
+
 pub fn grant_clipboard_now(app: &str, c: Clipboard) -> String {
     format!(
         "Clipboard of {app}: paste from this Mac into the app {}, copy from the app to this Mac {}",

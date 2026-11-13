@@ -496,3 +496,35 @@ fn setup_offers_the_loft() {
     let text = std::fs::read_to_string(env.paddock_config().join("config.toml")).unwrap();
     assert!(text.starts_with("backend = \"bwrap\""), "{text}");
 }
+
+/// The board reads the commits of each run from the subjects that
+/// `end_of_run` writes: `Run ID (HARNESS)`, exact ids only.
+#[test]
+fn the_commits_of_each_run_by_their_subject() {
+    assert_eq!(git::run_of_subject("Run s-1 (claude)"), Some("s-1"));
+    for other in [
+        "by hand",
+        "Run  (claude)",
+        "Run s-1",
+        "Run a b (x)",
+        "Run s-1 (x",
+    ] {
+        assert_eq!(git::run_of_subject(other), None, "{other}");
+    }
+    let (t, env) = temp_env();
+    let repo = repo(t.path());
+    let loft = Loft::of(&env, &repo);
+    assert!(git::run_commits(&loft).is_empty(), "no history yet");
+    host::init(&env, &repo).unwrap();
+    for (n, id) in ["s-1", "s-2", "s-1"].iter().enumerate() {
+        std::fs::write(loft.notes().join("plan.md"), n.to_string()).unwrap();
+        end_of_run(&env, &repo, id, "claude");
+    }
+    std::fs::write(loft.notes().join("plan.md"), "by hand").unwrap();
+    assert!(git::commit(&loft, "by hand").unwrap());
+    let by_run = git::run_commits(&loft);
+    assert_eq!(by_run.len(), 2, "{by_run:?}");
+    assert_eq!(by_run["s-1"].0, 2);
+    assert_eq!(by_run["s-2"].0, 1);
+    assert!(by_run["s-1"].1 >= by_run["s-2"].1 && by_run["s-2"].1 > 0);
+}

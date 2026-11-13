@@ -3,12 +3,12 @@ use crate::backend::{self, Backend, Launch};
 use crate::build::Built;
 use crate::env::HostEnv;
 use crate::gui::{self, WindowCompositor};
-use crate::manifest::hex;
 use crate::spec::{GuiMode, Network, SandboxSpec};
 use crate::state::{self, AuthSync, Running};
 use anyhow::{bail, Context, Result};
-use sha2::{Digest, Sha256};
+use api_proxy::start_api_proxy;
 use std::io::IsTerminal;
+mod api_proxy;
 mod capped;
 mod end;
 mod host_tools;
@@ -20,8 +20,7 @@ mod help;
 mod live_sync;
 use live_sync::{HistorySync, LoginSync, HISTORY_EVERY};
 mod sshagent;
-use help::help_text;
-use std::os::unix::fs::MetadataExt;
+pub use help::{names_in_help, probe_args, probe_flags, supported_args};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -29,71 +28,6 @@ pub fn write_files(launch: &Launch) -> Result<()> {
     for (path, text, mode) in &launch.files {
         gui::write_file(path, text, *mode)?;
     }
-    Ok(())
-}
-
-/// Make sure that the harness still accepts its auto-approval flags. Flags get
-/// renamed between versions; without this check a harness could start in a
-/// mode that waits for approvals that nobody gives.
-pub fn probe_flags(env: &HostEnv, built: &Built) -> Result<()> {
-    probe_args(
-        env,
-        &built.harness_exe,
-        &built.profile.launch.yolo_args,
-        &built.profile.launch.probe_args,
-        "yolo_args",
-    )
-}
-
-/// Make sure that the help output (`exe probe`) still mentions every flag
-/// in `args`. `what` names the profile entry in the error.
-pub fn probe_args(
-    env: &HostEnv,
-    exe: &Path,
-    args: &[String],
-    probe: &[String],
-    what: &str,
-) -> Result<()> {
-    let flags: Vec<&String> = args
-        .iter()
-        .filter(|a| a.starts_with('-') && a.len() > 1)
-        .collect();
-    if flags.is_empty() {
-        return Ok(());
-    }
-    let meta = std::fs::metadata(exe)?;
-    let key = format!(
-        "{}|{}|{}|{:?}|{:?}",
-        exe.display(),
-        meta.len(),
-        meta.mtime(),
-        flags,
-        probe
-    );
-    let cache = env
-        .paddock_state()
-        .join("probe")
-        .join(&hex(&Sha256::digest(key.as_bytes()))[..16]);
-    if cache.is_file() {
-        return Ok(());
-    }
-    let text = help_text(exe, probe)?;
-    let missing: Vec<&str> = flags
-        .iter()
-        .filter(|f| !text.contains(f.as_str()))
-        .map(|f| f.as_str())
-        .collect();
-    if !missing.is_empty() {
-        bail!(
-            "{} {} no longer mentions {}. The harness may have renamed a flag. \
-             Update {what} in a profile override under {}",
-            exe.display(),
-            probe.join(" "),
-            missing.join(", "),
-            env.paddock_config().join("harness.d").display()
-        );
-    }
-    crate::privfs::write(&cache, "ok")?;
     Ok(())
 }
 
@@ -158,7 +92,7 @@ fn setup_credentials(
     use crate::credentials::{gateway, DeliverAs, Via};
     let say = |m: &str| {
         if !quiet {
-            eprintln!("paddock: {m}");
+            crate::note::info(m);
         }
     };
     let mut plan = match crate::credentials::plan(env, &built.spec.harness, built.spawn.is_some()) {
@@ -203,15 +137,26 @@ fn setup_credentials(
     let wait = crate::broker::HostPolicy::load(env)
         .map(|p| p.wait)
         .unwrap_or(120);
-    say("waiting for your answer on the approval card before the harness starts (credentials)");
-    if !crate::credentials::ask(
+    // One question for the keys without a grant for this agent in this
+    // project (credentials/keys.rs); keys with a grant pass without one.
+    let needs_card = plan.deliver.iter().any(|(n, c)| {
+        crate::credentials::keys::grant(env, n, c, &built.spec.harness, &built.spec.project)
+            == crate::credentials::keys::Grant::Ask
+    });
+    // The user must answer the card: -q does not hide this line (note.rs).
+    if needs_card && !quiet {
+        crate::note::ask("waiting for your answer on the approval card before the harness starts (keys: This run, Always in this project, or No)");
+    }
+    let asked = crate::credentials::keys::ask_once(
         env,
         &built.spec,
         approver.as_ref(),
         Duration::from_secs(wait),
         &plan,
-    ) {
-        say("the sandbox starts without the credentials");
+    );
+    plan.deliver.retain(|(n, _)| asked.allowed.contains(n));
+    if plan.deliver.is_empty() {
+        say("the sandbox starts without the keys");
         return Ok(RunCredentials::default());
     }
     let (values, notices) = crate::credentials::read(env, &plan);
@@ -319,6 +264,8 @@ fn setup_credentials(
                 let _ = crate::broker::notify::show(
                     &e2,
                     &crate::broker::notify::Note {
+                        what: "frozen".into(),
+                        action: Some(id.clone()),
                         summary: "paddock froze a sandbox".into(),
                         body: format!(
                             "{id}: {reason}. Read paddock log, then run paddock thaw {s} or paddock stop {s}.",
@@ -353,47 +300,6 @@ fn setup_credentials(
         );
     }
     Ok(out)
-}
-
-/// Network mode `api` on bwrap, docker and podman: the sandbox has no
-/// network. The paddock proxy (proxy.rs) on a Unix socket lets through TLS to
-/// the allowed hosts, and `paddock relay` offers it on 127.0.0.1:3131 in the
-/// sandbox. srt enforces the list with its own proxy, and seatbelt starts
-/// its proxy with `backend::start_host_proxy`.
-fn start_api_proxy(env: &HostEnv, built: &mut Built, backend: &str) -> Result<()> {
-    if built.spec.network != Network::Api || matches!(backend, "srt" | "seatbelt" | "vm") {
-        return Ok(());
-    }
-    use crate::proxy::{allow, API_PORT, API_SOCKET_IN_SANDBOX};
-    let run_dir = env.paddock_run().join(&built.spec.id);
-    crate::privfs::dir(&run_dir)?;
-    let sock = crate::sockpath::named(env, &built.spec.id, "api-proxy.sock")?;
-    let (list, _) = allow::Allowlist::parse(&built.spec.allow_domains);
-    let refusals = backend::api_refusals(env, &built.spec);
-    let mut cfg = backend::host_proxy_cfg(env, &built.spec);
-    // The api proxy reaches no host loopback port.
-    cfg.allow_loopback = Vec::new();
-    cfg.api = Some(allow::ApiPolicy::api(list, Some(refusals)));
-    let sock = crate::vm::agent::api_proxy(sock, cfg)?;
-    built.spec.add_mount(crate::spec::Mount::bind(
-        &sock,
-        API_SOCKET_IN_SANDBOX,
-        false,
-        "network: api proxy",
-    ));
-    let me = std::env::current_exe()
-        .and_then(std::fs::canonicalize)
-        .context("cannot find the paddock executable")?;
-    built
-        .spec
-        .add_tool("paddock", me, "network: api proxy relay");
-    built.spec.setup.insert(
-        0,
-        format!(
-            "paddock relay --listen 127.0.0.1:{API_PORT} --socket {API_SOCKET_IN_SANDBOX} --ready-file /tmp/.paddock-api >/dev/null 2>&1 &\ni=0; while [ ! -e /tmp/.paddock-api ] && [ $i -lt 100 ]; do sleep 0.05; i=$((i+1)); done"
-        ),
-    );
-    Ok(())
 }
 
 /// The docker and aws credential channels (credentials/channels.rs): the
@@ -503,14 +409,14 @@ pub fn run(
     if let Some(ShadowRun(p)) = &shadow {
         let copied = p.fill(&env.home, crate::shadow::copy_limit(env), None)?;
         if !quiet {
-            eprintln!("paddock: {}", copied.line());
+            crate::note::info(copied.line());
             let host = crate::shadow::host_copies(&built.profile, &built.harness_exe);
             if !host.is_empty() {
-                eprintln!(
-                    "paddock: {} runs on the host too (pid {}). The snapshot is private: nothing of this run goes back, and nothing of that one comes in",
+                crate::note::info(format!(
+                    "{} runs on the host too (pid {}). The snapshot is private: nothing of this run goes back, and nothing of that one comes in",
                     built.spec.harness,
                     host.iter().map(u32::to_string).collect::<Vec<_>>().join(", ")
-                );
+                ));
             }
         }
     }
@@ -616,9 +522,7 @@ pub fn run(
     };
     backend::start_host_proxy(env, &mut built.spec, backend.name())?;
     if backend.name() == backend::seatbelt::NAME {
-        if let Err(e) = backend::seatbelt::keychain::start(env, &mut built.spec, &built.auth) {
-            eprintln!("paddock: warning: no keychain for this run: {e:#}");
-        }
+        backend::seatbelt::run::host_start(env, &mut built);
     }
     // The shared install step: a clean sandbox without the project installs
     // registry tools into the shared mise installs. srt cannot mount the
@@ -641,8 +545,8 @@ pub fn run(
         let result = provision(env, backend, &p, quiet, &format!("shared tools: {what}"));
         let _ = std::fs::remove_dir_all(&scratch);
         if !result? && !quiet {
-            eprintln!(
-                "paddock: warning: the shared install failed; the project installs the tools in its own home"
+            crate::note::warn(
+                "the shared install failed; the project installs the tools in its own home",
             );
         }
     }
@@ -650,7 +554,7 @@ pub fn run(
     if let Some(p) = built.spec.provision_spec() {
         let what = built.spec.provision.join("; ");
         if !provision(env, backend, &p, quiet, &what)? && !quiet {
-            eprintln!("paddock: warning: provisioning failed; the harness starts anyway");
+            crate::note::warn("provisioning failed; the harness starts anyway");
         }
     }
     // Registered credentials (credentials.rs): after the install steps, which never get them, and
@@ -736,8 +640,7 @@ pub fn run(
     // `paddock undo`: a copy of the project files. A worktree run has its
     // own branch, and a spawned child shares the project of its parent,
     // whose snapshot covers it.
-    let project_snapshot =
-        built.worktree.is_none() && built.spawn.is_none() && built.parent.is_none();
+    let project_snapshot = built.takes_snapshot();
     if project_snapshot {
         crate::snapshot::before_start(env, &spec.project, &spec.id, &spec.harness, quiet);
     }
@@ -772,24 +675,26 @@ pub fn run(
     end.snapshot = project_snapshot;
 
     crate::boundary::record_start(env, spec);
+    // What this run got, by group: names and origins, never values.
+    let env_mode = if built.inherit_env {
+        crate::envset::Mode::Inherit
+    } else {
+        crate::envset::Mode::Listed
+    };
+    if let Err(e) = crate::envset::save(env, &crate::envset::record(env, spec, env_mode)) {
+        log::warn!("cannot write the environment record of {}: {e:#}", spec.id);
+    }
     if !quiet {
-        eprintln!(
-            "paddock: {}",
-            start_line(
-                &spec.harness,
-                &spec.project,
-                backend.name(),
-                spec.network,
-                spec.gui.mode,
-                built.approvals,
-            )
-        );
-        for n in &spec.notices {
-            eprintln!("paddock: {n}");
-        }
-        for w in &spec.warnings {
-            log::warn!("{w}");
-        }
+        crate::note::info(start_line(
+            &spec.harness,
+            &spec.project,
+            backend.name(),
+            spec.network,
+            spec.gui.mode,
+            (built.approvals, &built.approvals_origin),
+        ));
+        crate::note::each(crate::note::Level::Info, &spec.notices);
+        crate::note::each(crate::note::Level::Warning, &spec.warnings);
     }
 
     // What paddock itself put into the upper folder is not news at the end.
@@ -839,7 +744,7 @@ pub fn run(
     let policy = crate::training::policy(&built.manifest);
     let gate = crate::training::prepare(env, &built.profile, policy, spec, caller_terminal)?;
     if gate.is_some() && !quiet {
-        eprintln!("paddock: {}", crate::training::notice(&spec.harness));
+        crate::note::info(crate::training::notice(&spec.harness));
     }
     let screens = crate::screens::prepare(
         env,
@@ -1009,6 +914,7 @@ pub fn run(
     if let Err(e) = running.register(env) {
         log::warn!("cannot register the running sandbox: {e:#}");
     }
+    crate::note::attach(&env.paddock_run().join(&spec.id));
     // The ration of a pasture member: after the registration, so that its
     // quota counts from the start.
     if let Some(p) = &running.pasture {
@@ -1017,7 +923,7 @@ pub fn run(
             .and_then(|all| all.get(p)?.rations.get(&spec.harness).cloned());
         if let Some(r) = ration {
             match crate::pasture::apply_ration(env, &spec.id, &spec.harness, &r) {
-                Ok(notes) if !quiet => notes.iter().for_each(|n| eprintln!("paddock: {n}")),
+                Ok(notes) if !quiet => notes.into_iter().for_each(crate::note::info),
                 Ok(_) => {}
                 Err(e) => log::warn!("cannot set the ration of {}: {e:#}", spec.harness),
             }
@@ -1094,7 +1000,7 @@ pub fn run(
         crate::training::summary(&g.result()?, setting.map(|t| t.setting.as_str()))
     });
     if let Some(line) = gate_line.filter(|_| !quiet) {
-        eprintln!("paddock: {line}");
+        crate::note::info(line);
     }
     if let Some(l) = view.take() {
         let kept = l.finish(code);
@@ -1115,10 +1021,10 @@ pub fn run(
     drop(monitor);
     let late = new_addrs.lock().unwrap().clone();
     if !late.is_empty() && !quiet {
-        eprintln!(
-            "paddock: warning: the host got new addresses while the sandbox ran ({}). Services on them were reachable from the sandbox. The next start hides them.",
+        crate::note::warn(format!(
+            "the host got new addresses while the sandbox ran ({}). Services on them were reachable from the sandbox. The next start hides them.",
             late.join(", ")
-        );
+        ));
     }
     let (history, copied) = live.finish();
     let auth = login_sync.finish();
@@ -1142,20 +1048,21 @@ pub fn run(
     }
     if !quiet {
         for f in &synced.saved {
-            eprintln!("paddock: saved updated credentials to {}", f.display());
+            crate::note::info(format!("saved updated credentials to {}", f.display()));
         }
         for f in &synced.conflicts {
-            eprintln!(
-                "paddock: warning: {} changed on the host while the sandbox ran, so the host version was kept. Log in again if a harness asks.",
+            crate::note::warn(format!(
+                "{} changed on the host while the sandbox ran, so the host version was kept. Log in again if a harness asks.",
                 f.display()
-            );
+            ));
         }
         let changed = state::changed(&watched);
         if !changed.is_empty() {
-            eprintln!("paddock: warning: these files changed. Host tools run them automatically, so review them before you use them on the host:");
-            for f in changed {
-                eprintln!("  {}", f.display());
-            }
+            let mut t = "these files changed. Host tools run them automatically, so review them before you use them on the host:".to_string();
+            changed
+                .iter()
+                .for_each(|f| t += &format!("\n  {}", f.display()));
+            crate::note::warn(t);
         }
     }
     let out = crate::horse::lifecycle::end(_horse_lifecycle, code, out);
@@ -1170,9 +1077,10 @@ pub fn run(
                 .filter_map(|m| m.dst.strip_prefix(&spec.home).ok())
                 .map(Path::to_path_buf)
                 .collect();
-            for l in p.end_summary(base, &skip).lines() {
-                eprintln!("paddock: {l}");
-            }
+            crate::note::each(
+                crate::note::Level::Info,
+                &p.end_summary(base, &skip).lines(),
+            );
         }
         drop(shadow);
         return Ok(Outcome { code, stdout: out });
@@ -1187,17 +1095,17 @@ pub fn run(
 }
 
 /// The start line of a run, after `paddock: `: "codex in /p (backend
-/// seatbelt, network egress, display off, manual approvals)".
+/// seatbelt, network egress, display off, manual approvals: default)".
 pub fn start_line(
     harness: &str,
     project: &std::path::Path,
     backend: &str,
     network: crate::spec::Network,
     display: crate::spec::GuiMode,
-    approvals: Option<crate::approvals::Approvals>,
+    (approvals, origin): (Option<crate::approvals::Approvals>, &str),
 ) -> String {
     let approvals = match approvals {
-        Some(a) => format!("{a} approvals"),
+        Some(a) => format!("{a} approvals: {origin}"),
         None => "approvals by the command".into(),
     };
     format!(
@@ -1253,10 +1161,10 @@ fn start_broker(
         Some(a) => a,
         None => match crate::approver::resolve(env, interactive) {
             Ok(Some((hook, source))) => {
-                eprintln!(
-                    "paddock: the agent approver answers host requests for: {}",
+                crate::note::info(format!(
+                    "the agent approver answers host requests for: {}",
                     hook.capabilities.join(", ")
-                );
+                ));
                 std::sync::Arc::new(crate::approver::Chain {
                     hook,
                     source,
@@ -1265,7 +1173,7 @@ fn start_broker(
             }
             Ok(None) => human,
             Err(e) => {
-                eprintln!("paddock: the agent approver is off for this run: {e:#}");
+                crate::note::info(format!("the agent approver is off for this run: {e:#}"));
                 human
             }
         },
@@ -1312,7 +1220,7 @@ fn start_broker(
             }
         }
         Err(e) => {
-            eprintln!("paddock: spawn is off for this run: {e:#}");
+            crate::note::info(format!("spawn is off for this run: {e:#}"));
             None
         }
     };
@@ -1357,7 +1265,7 @@ fn provision(
     let l = backend.render(env, spec, false)?;
     write_files(&l)?;
     if !quiet {
-        eprintln!("paddock: provisioning: {what}");
+        crate::note::info(format!("provisioning: {what}"));
     }
     let mut cmd = Command::new(&l.program);
     cmd.args(&l.args)
@@ -1386,11 +1294,28 @@ static STOP_BEFORE_START: std::sync::atomic::AtomicBool = std::sync::atomic::Ato
 /// thaws a frozen sandbox. The signal handler cannot call the freezer.
 static STOP_ASKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 static HUNG_UP: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// The handlers of `Forward` are in place: a run is in progress.
+static FORWARDING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The relay (relay.rs) lost the caller's terminal: it read EOF, an error
+/// or a hangup. That is a hangup even when no SIGHUP reaches paddock, so
+/// the run stops as after SIGHUP and its end steps run. Outside a run,
+/// nothing happens.
+pub(crate) fn caller_terminal_gone() {
+    if FORWARDING.load(std::sync::atomic::Ordering::SeqCst) {
+        forward_signal(libc::SIGHUP);
+    }
+}
 
 extern "C" fn forward_signal(sig: libc::c_int) {
     use std::sync::atomic::Ordering;
     if sig == libc::SIGHUP {
         HUNG_UP.store(true, Ordering::SeqCst);
+        // The terminal is gone. Every later write of any thread goes to
+        // /dev/null now: a write to a closed pty gets EIO, and that must
+        // not end paddock before its end steps. open and dup2 are
+        // async-signal-safe.
+        crate::platform::quiet_stdio();
     }
     STOP_ASKED.store(true, Ordering::SeqCst);
     let pid = FORWARD_PID.load(Ordering::SeqCst);
@@ -1402,8 +1327,13 @@ extern "C" fn forward_signal(sig: libc::c_int) {
     }
 }
 
-/// The handlers for SIGTERM and SIGHUP during one run. Dropping it puts the
-/// previous handlers back.
+/// SIGPIPE during a run: a write to a closed pipe or socket fails with
+/// EPIPE instead of killing paddock before its end steps. A handler, not
+/// SIG_IGN: exec puts the default back, so the sandbox does not inherit it.
+extern "C" fn ignore_signal(_: libc::c_int) {}
+
+/// The handlers for SIGTERM, SIGHUP and SIGPIPE during one run. Dropping it
+/// puts the previous handlers back.
 struct Forward {
     old: Vec<(libc::c_int, libc::sigaction)>,
 }
@@ -1416,12 +1346,16 @@ impl Forward {
         STOP_ASKED.store(false, Ordering::SeqCst);
         FORWARD_PID.store(0, Ordering::SeqCst);
         let mut old = Vec::new();
-        for sig in [libc::SIGTERM, libc::SIGHUP] {
+        for sig in [libc::SIGTERM, libc::SIGHUP, libc::SIGPIPE] {
+            let handler = match sig {
+                libc::SIGPIPE => ignore_signal as extern "C" fn(libc::c_int),
+                _ => forward_signal as extern "C" fn(libc::c_int),
+            };
             // SAFETY: a plain sigaction(2) with a handler that only calls
             // async-signal-safe functions.
             unsafe {
                 let mut sa: libc::sigaction = std::mem::zeroed();
-                sa.sa_sigaction = forward_signal as extern "C" fn(libc::c_int) as usize;
+                sa.sa_sigaction = handler as usize;
                 sa.sa_flags = libc::SA_RESTART;
                 libc::sigemptyset(&mut sa.sa_mask);
                 let mut prev: libc::sigaction = std::mem::zeroed();
@@ -1429,6 +1363,7 @@ impl Forward {
                 old.push((sig, prev));
             }
         }
+        FORWARDING.store(true, Ordering::SeqCst);
         Self { old }
     }
 
@@ -1454,6 +1389,7 @@ impl Forward {
 
 impl Drop for Forward {
     fn drop(&mut self) {
+        FORWARDING.store(false, std::sync::atomic::Ordering::SeqCst);
         for (sig, prev) in &self.old {
             // SAFETY: restores the handler that `install` saved.
             unsafe { libc::sigaction(*sig, prev, std::ptr::null_mut()) };

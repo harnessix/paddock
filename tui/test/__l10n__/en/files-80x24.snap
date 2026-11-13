@@ -1,0 +1,24 @@
+paddock · 2 running                       Runs   Board   Approvals      Mail
+ claude · webshop · running 4 min · copy: 4 changed, 2 new, 1 deleted
+ run  approvals  mail [files]                                 pointer: ● linked
+╭─ Files · changes ────────────╮╭─ docs/README.md · conflict · +6 -2 ──────────╮
+│  ▾ webshop/   !1 ~2 +2 -1 =1 ││  @@ line 1                                   │
+│  ▾ docs/                  !1 ││  1 # webshop                                 │
+│ ▸   ! README.md    [A][K][D] ││  2                                           │
+│  ▾ src/             ~2 +2 =1 ││ -3 A small shop.                             │
+│    ▾ lib/util/            +1 ││ -4 Run it with npm start.                    │
+│       + format.ts  new       ││ +3 A small shop with a cart and taxes.       │
+│     ~ cart.ts      changed   ││ +4                                           │
+│     = old.ts       kept      ││ +5 ## Run it                                 │
+│     ~ price.ts     changed   ││ +6                                           │
+│     + tax.ts       new       ││ +7 npm install                               │
+│   - logo.png       deleted   ││ +8 npm start                                 │
+│                              ││  9                                           │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+╰─ 1 of 7 · 1 conflict ────────╯╰─ change 1 of 1 · unified · 1 2 3 sides ──────╯
+up to date · v opens a view window (no paddock split)
+A apply  K keep  D discard  ↵ diff  c filter  b backups  i pointer  ? help

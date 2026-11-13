@@ -124,6 +124,9 @@ pub struct Keyring {
     tool: Tool,
     timeout: Duration,
     prepare: Option<Prepare>,
+    /// The service attribute of the items: `SERVICE` for tack, another
+    /// one for the keys of `[credentials]` (credentials/keys.rs).
+    service: &'static str,
 }
 
 impl Keyring {
@@ -156,6 +159,32 @@ impl Keyring {
             tool,
             timeout: TIMEOUT,
             prepare: None,
+            service: SERVICE,
+        }
+    }
+
+    /// Items under another service attribute.
+    pub fn service(mut self, service: &'static str) -> Self {
+        self.service = service;
+        self
+    }
+
+    /// Delete the item NAME. A missing item is not an error.
+    pub fn delete(&self, name: &str) -> Result<(), StoreError> {
+        let service = self.service;
+        let (prog, args): (&Path, Vec<&str>) = match &self.tool {
+            Tool::SecretTool(p) => (p, vec!["clear", "service", service, "name", name]),
+            Tool::Security(p) => (
+                p,
+                vec!["delete-generic-password", "-s", service, "-a", name],
+            ),
+        };
+        let out = run(prog, &args, None, self.timeout, self.prepare.as_ref())?;
+        match (&self.tool, out.code) {
+            (_, 0) => Ok(()),
+            (Tool::Security(_), 44) => Ok(()),
+            (Tool::SecretTool(_), _) if out.stderr.trim().is_empty() => Ok(()),
+            _ => Err(classify(&out.stderr, out.code)),
         }
     }
 
@@ -183,11 +212,12 @@ impl Store for Keyring {
     }
 
     fn get(&self, name: &str) -> Result<Secret, StoreError> {
+        let service = self.service;
         let (prog, args): (&Path, Vec<&str>) = match &self.tool {
-            Tool::SecretTool(p) => (p, vec!["lookup", "service", SERVICE, "name", name]),
+            Tool::SecretTool(p) => (p, vec!["lookup", "service", service, "name", name]),
             Tool::Security(p) => (
                 p,
-                vec!["find-generic-password", "-s", SERVICE, "-a", name, "-w"],
+                vec!["find-generic-password", "-s", service, "-a", name, "-w"],
             ),
         };
         let out = run(prog, &args, None, self.timeout, self.prepare.as_ref())?;
@@ -217,10 +247,14 @@ impl Store for Keyring {
         }
         let out = match &self.tool {
             Tool::SecretTool(p) => {
-                let label = format!("--label=paddock tack {name}");
+                let label = if self.service == SERVICE {
+                    format!("--label=paddock tack {name}")
+                } else {
+                    format!("--label=paddock key {name}")
+                };
                 run(
                     p,
-                    &["store", &label, "service", SERVICE, "name", name],
+                    &["store", &label, "service", self.service, "name", name],
                     Some(value),
                     self.timeout,
                     self.prepare.as_ref(),
@@ -231,7 +265,9 @@ impl Store for Keyring {
                 // value is not in the arguments; -X takes it as hex, so it
                 // needs no quoting.
                 let line = format!(
-                    "add-generic-password -U -s {SERVICE} -a {name} -l paddock-tack-{name} -X {}\n",
+                    "add-generic-password -U -s {} -a {name} -l {}-{name} -X {}\n",
+                    self.service,
+                    self.service,
                     crate::manifest::hex(value.as_bytes())
                 );
                 let line = Secret::from(line);
@@ -471,6 +507,7 @@ cmd=$1; shift
 case "$cmd" in
   store) shift; f="$items/$2-$4"; if [ '{mode}' = forget ]; then cat >/dev/null; else cat > "$f"; fi ;;
   lookup) f="$items/$2-$4"; [ -f "$f" ] || exit 1; cat "$f" ;;
+  clear) rm -f "$items/$2-$4" ;;
   *) printf '%s\n' "unknown $cmd" >&2; exit 2 ;;
 esac
 "#,

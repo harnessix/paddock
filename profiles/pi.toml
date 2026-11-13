@@ -10,6 +10,8 @@ unverified = [
 [locate]
 mise = "pi"
 commands = ["pi"]
+# The folders of its installers, for a run with a thin PATH.
+dirs = ["~/.npm-global/bin", "~/.bun/bin"]
 
 [launch]
 # pi asks no approvals. OAuth logins (/login) return to a localhost callback.

@@ -236,6 +236,8 @@ pub struct Server {
     /// a request reach the devices as `Call::remote`, and `op: secret` is
     /// refused.
     remote: bool,
+    /// Where the `device_call` lines go: the bus of this paddock.
+    events: Option<crate::eventstream::Bus>,
 }
 
 /// Decrements a counter when it goes.
@@ -262,6 +264,22 @@ impl Server {
         devices: Vec<Arc<dyn Device>>,
         secrets: Arc<SecretFiles>,
     ) -> Arc<Self> {
+        Self::with_events(
+            sandbox,
+            devices,
+            secrets,
+            crate::eventstream::default_bus().cloned(),
+        )
+    }
+
+    /// A server whose `device_call` lines go to `events`, not to the bus
+    /// of this process. Tests use a temporary bus.
+    pub fn with_events(
+        sandbox: &str,
+        devices: Vec<Arc<dyn Device>>,
+        secrets: Arc<SecretFiles>,
+        events: Option<crate::eventstream::Bus>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             sandbox: sandbox.to_string(),
             devices,
@@ -269,6 +287,7 @@ impl Server {
             open: AtomicUsize::new(0),
             running: AtomicUsize::new(0),
             remote: false,
+            events,
         })
     }
 
@@ -283,6 +302,7 @@ impl Server {
             open: AtomicUsize::new(0),
             running: AtomicUsize::new(0),
             remote: true,
+            events: crate::eventstream::default_bus().cloned(),
         })
     }
 
@@ -398,6 +418,7 @@ impl Server {
             cancel: cancel.clone(),
             remote,
         };
+        super::announce_call(self.events.as_ref(), &*dev, &call);
         let req_len = request.len();
         let (tx, rx) = std::sync::mpsc::channel();
         let worker = dev.clone();
@@ -503,6 +524,7 @@ impl Server {
             cancel: cancel.clone(),
             remote,
         };
+        super::announce_call(self.events.as_ref(), &*dev, &call);
         let req_len = request.len();
         let (tx, rx) = sync_channel(STREAM_QUEUE);
         let mut sink = ChanSink {

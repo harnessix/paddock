@@ -226,6 +226,69 @@ fn the_command_enters_the_work_folder_and_moves_home_paths() {
     assert_eq!(a[9], format!("{}/.paddock/prompt.md", s.home_src.display()));
 }
 
+/// A gateway (agentgw/spec.rs) keeps its project and its home under the
+/// host home, in the data folder, with no mount. Both stay at their own
+/// paths: moved once more into the sandbox home, the shell cannot enter
+/// the work folder (GATEWAY1-F2).
+#[test]
+fn a_project_and_a_home_under_the_host_home_keep_their_paths() {
+    let home = PathBuf::from("/Users/u");
+    let env = HostEnv::from_parts(home.clone(), "u".into(), 501, 20, BTreeMap::new());
+    let gw = PathBuf::from("/Users/u/.local/share/paddock/gateways/openclaw");
+    let project = gw.join("project");
+    let mut s = SandboxSpec::new(
+        "gw-openclaw".into(),
+        "openclaw",
+        &project,
+        gw.join("home"),
+        &home,
+        501,
+        20,
+        "u",
+    );
+    s.network = Network::Egress;
+    s.command = vec![
+        "/opt/homebrew/bin/openclaw".into(),
+        "--state".into(),
+        gw.join("home/.openclaw").display().to_string(),
+        "--config".into(),
+        "/Users/u/.openclaw/openclaw.json".into(),
+    ];
+    s.set_env(
+        "OPENCLAW_STATE_DIR",
+        gw.join("home/.openclaw").display().to_string(),
+        "t",
+    );
+    let a = command(&s, Path::new("/run/x/seatbelt.sb"));
+    assert_eq!(a[6], project.display().to_string());
+    assert_eq!(a[7], "/opt/homebrew/bin/openclaw");
+    assert_eq!(a[9], gw.join("home/.openclaw").display().to_string());
+    // A path of the host home still moves into the sandbox home.
+    assert_eq!(
+        a[11],
+        gw.join("home/.openclaw/openclaw.json")
+            .display()
+            .to_string()
+    );
+    let vars = run_env(&env, &s, &private_tmp(&s));
+    assert_eq!(vars["HOME"], gw.join("home").display().to_string());
+    assert_eq!(
+        vars["OPENCLAW_STATE_DIR"],
+        gw.join("home/.openclaw").display().to_string()
+    );
+    // The short alias of the home (shorthome.rs) replaces the real home
+    // once, and leaves the project alone.
+    let short = crate::shorthome::Short {
+        home: (gw.join("home"), PathBuf::from("/Users/u/.pdk/h/0123abcd")),
+        tmp: (private_tmp(&s), PathBuf::from("/Users/u/.pdk/t/0123abcd")),
+    };
+    assert_eq!(
+        short.path(&vars["OPENCLAW_STATE_DIR"]),
+        "/Users/u/.pdk/h/0123abcd/.openclaw"
+    );
+    assert_eq!(short.path(&a[6]), project.display().to_string());
+}
+
 #[test]
 fn each_feature_seatbelt_cannot_give_is_refused() {
     type Change = Box<dyn Fn(&mut SandboxSpec)>;
@@ -659,5 +722,16 @@ fn the_run_starts_in_its_private_temporary_folder() {
     let tmp = private_tmp(&s);
     assert_eq!(l.cwd.as_deref(), Some(tmp.as_path()));
     assert!(tmp.is_dir());
-    assert_eq!(l.env["TMPDIR"], tmp.display().to_string());
+    if cfg!(target_os = "macos") {
+        // SOCK1: a short alias of the same folder.
+        let alias = Path::new(&l.env["TMPDIR"]);
+        assert_eq!(std::fs::read_link(alias).unwrap(), tmp);
+        assert!(alias.as_os_str().len() < tmp.as_os_str().len());
+        assert_eq!(
+            Path::new(&l.env["HOME"]),
+            crate::shorthome::candidate(&env.home, crate::shorthome::HOMES, &s.home_src, 0)
+        );
+    } else {
+        assert_eq!(l.env["TMPDIR"], tmp.display().to_string());
+    }
 }

@@ -1,6 +1,6 @@
 {
   "name": "@harnessix/paddock-tui",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "A terminal interface for paddock: runs, approvals, mail and the board, with the keyboard or the mouse",
   "license": "MIT",
   "repository": {

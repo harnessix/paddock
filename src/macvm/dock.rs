@@ -17,10 +17,11 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObject, NSObjectProtocol, ProtocolObject};
 use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadMarker, MainThreadOnly};
 use objc2_app_kit::{
-    NSApplication, NSApplicationDelegate, NSApplicationDidChangeScreenParametersNotification,
+    NSApplication, NSApplicationDelegate, NSApplicationDidBecomeActiveNotification,
+    NSApplicationDidChangeScreenParametersNotification, NSApplicationDidResignActiveNotification,
     NSApplicationTerminateReply, NSControlStateValueOff, NSControlStateValueOn,
     NSEventModifierFlags, NSMenu, NSMenuItem, NSWorkspace,
-    NSWorkspaceActiveSpaceDidChangeNotification,
+    NSWorkspaceActiveSpaceDidChangeNotification, NSWorkspaceDidActivateApplicationNotification,
 };
 use objc2_foundation::{
     NSDistributedNotificationCenter, NSNotification, NSNotificationCenter, NSString,
@@ -172,6 +173,11 @@ define_class!(
             (self.ivars().sink)(HostEvent::ScreensChanged);
         }
 
+        #[unsafe(method(appFocus:))]
+        fn app_focus(&self, _note: &NSNotification) {
+            (self.ivars().sink)(HostEvent::AppFocus);
+        }
+
         #[unsafe(method(inputSourceChanged:))]
         fn input_source_changed(&self, _note: &NSNotification) {
             (self.ivars().sink)(HostEvent::InputSourceChanged);
@@ -217,6 +223,29 @@ impl AppDelegate {
                 Some(NSApplicationDidChangeScreenParametersNotification),
                 None,
             );
+        }
+        // Another app became active, or the shim became or resigned the
+        // active app: the input check reads the focus again (IME1).
+        // SAFETY: the delegate answers `appFocus:` and lives as long as
+        // the session; the names are constants of AppKit.
+        unsafe {
+            center.addObserver_selector_name_object(
+                this.as_ref(),
+                sel!(appFocus:),
+                Some(NSWorkspaceDidActivateApplicationNotification),
+                None,
+            );
+            for name in [
+                NSApplicationDidBecomeActiveNotification,
+                NSApplicationDidResignActiveNotification,
+            ] {
+                NSNotificationCenter::defaultCenter().addObserver_selector_name_object(
+                    this.as_ref(),
+                    sel!(appFocus:),
+                    Some(name),
+                    None,
+                );
+            }
         }
         // The change of the host's input source is a distributed
         // notification of the Text Input Sources.

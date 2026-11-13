@@ -78,6 +78,8 @@ impl World {
             "--env",
             "clean",
             "-y",
+            // The test is about the view: a copy adds its own end notes.
+            "--direct",
         ])
         .arg(self.root.join("project"))
         .stdin(Stdio::null());

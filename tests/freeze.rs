@@ -116,6 +116,8 @@ fn a_frozen_sandbox_stops_and_a_thawed_one_continues() {
             "--pasture",
             "team",
             "-y",
+            // The counter is a file in the project folder.
+            "--direct",
         ])
         .arg(w.root.join("project"))
         .stdin(Stdio::null())

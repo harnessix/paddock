@@ -1,0 +1,24 @@
+paddock · 4 running · 3 wait for you      Runs   Board   Approvals ◆3   Mail ✉2
+╭─ Approval · codex-alpha-0b0b0b11 · sandbox ──────────────────────────────────╮
+│ ◆ Approval needed  no time limit · asked 11 min ago                          │
+│ codex wants to run a command:                                                │
+│ │ exec: git push origin main --force-with-lease                              │
+│ reason given by the agent: publish the branch                                │
+│ remember: this request only                                                  │
+│ [1] Allow once  [2] Allow for this run  [3] Deny  [4] Deny for this run      │
+│ ←→ choose · ↵ answer · 1/2/3/4 keys · Esc deny                               │
+╰──────────────────────────────────────────────────────────────────────────────╯
+  ◆ waits  app-mac-123456         connect: connect api.example.com:443
+  ◆ waits  claude-alpha-71c3ac9d  ask: Which ledger format?
+
+
+
+
+
+
+
+
+
+
+up to date · v opens a view window (no paddock split)
+1-7 answer  ←→ choose  Esc deny  r runs  ? help        hold Shift to select text

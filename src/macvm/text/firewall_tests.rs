@@ -243,3 +243,83 @@ fn connection_refused() {
 fn rule_time_left() {
     assert_eq!(t::rule_time_left(42), " (42 seconds left)");
 }
+
+#[test]
+fn rule_session_not_running() {
+    has(
+        &t::rule_session_not_running("notes"),
+        &[
+            "running session of notes",
+            "paddock app run notes",
+            "--always",
+        ],
+    );
+}
+
+#[test]
+fn rule_not_session() {
+    has(&t::rule_not_session("rule-1"), &["rule-1", "--always"]);
+}
+
+#[test]
+fn no_session_rule() {
+    has(&t::no_session_rule("session-1"), &["session-1", "list"]);
+}
+
+#[test]
+fn session_rules_stale() {
+    has(
+        &t::session_rules_stale("notes"),
+        &["running session of notes", "snapshot"],
+    );
+}
+
+#[test]
+fn rule_added_session() {
+    has(
+        &t::rule_added_session("session-1", "notes", Some(10)),
+        &["session-1", "notes", "10 minutes"],
+    );
+    has(
+        &t::rule_added_session("session-1", "notes", None),
+        &["session-1", "when the app stops"],
+    );
+}
+
+#[test]
+fn rule_removed_session() {
+    has(
+        &t::rule_removed_session("session-1", "notes"),
+        &["session-1", "notes"],
+    );
+}
+
+#[test]
+fn bad_minutes() {
+    has(&t::bad_minutes(0), &["0 minutes", "1440"]);
+}
+
+#[test]
+fn rule_no_site() {
+    has(&t::rule_no_site("10.0.0.1"), &["10.0.0.1", "--site"]);
+}
+
+#[test]
+fn connections_empty() {
+    has(
+        &t::connections_empty("notes"),
+        &["notes", "paddock app run notes"],
+    );
+}
+
+#[test]
+fn connections_header() {
+    has(
+        &t::connections_header("notes", true),
+        &["running session of notes"],
+    );
+    has(
+        &t::connections_header("notes", false),
+        &["last session of notes"],
+    );
+}

@@ -15,4 +15,4 @@
 
 ## Agents without a sandbox
 
-Every agent that `omarchy-agent` can start has a profile. muse and openclaw still start on the host, with a notice: muse needs its own sandbox, and the agent of openclaw runs in a host service. Do not try to turn off muse's sandbox to make it fit. Many profiles come from documentation. `paddock doctor` lists what is not verified.
+Every agent that `omarchy-agent` can start has a profile. muse still starts on the host, with a notice, because it needs its own sandbox. Do not try to turn off muse's sandbox to make it fit. The agent of openclaw runs in its gateway. `paddock gateway openclaw start` runs that gateway in a sandbox of its own, and `omarchy-launch-openclaw --tui` and `openclaw tui` then attach to it from a small sandbox. Only a gateway that the user started on the host without paddock still runs as before, with a notice that says how to move. Many profiles come from documentation. `paddock doctor` lists what is not verified.

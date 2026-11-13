@@ -1,0 +1,24 @@
+paddock · 2 件実行中                        実行   ボード   承認      メール
+ claude · webshop · 実行中 4 分 · コピー: 4 変更、2 新規、1 削除
+ 実行  承認  メール [ファイル]                             ポインター: ● linked
+╭─ docs/README.md · 競合 · +6 -2 · 元 ↔ コピー ────────────────────────────────╮
+│  @@ 1 行目                                                                   │
+│  1 # webshop                                                                 │
+│  2                                                                           │
+│ -3 A small shop.                                                             │
+│ -4 Run it with npm start.                                                    │
+│ +3 A small shop with a cart and taxes.                                       │
+│ +4                                                                           │
+│ +5 ## Run it                                                                 │
+│ +6                                                                           │
+│ +7 npm install                                                               │
+│ +8 npm start                                                                 │
+│  9                                                                           │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+╰─ 変更 1/1 · 統合 · 1 現在の元 · 2 コピー · 3 マージ案 ───────────────────────╯
+最新 · v で表示ウィンドウを開く (paddock split なし)
+n 次  N 前  t 並べて表示  A 適用  K 保持  D 破棄  Esc 戻る  ? ヘルプ

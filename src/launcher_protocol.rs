@@ -27,9 +27,32 @@
 //!   `started` and `lost`.
 //! - `macvm-status-v1`: `paddock macvm status --json` prints one object with
 //!   `"v":1`.
+//! - `notices-v1`: `paddock events --follow --json --notify` takes the
+//!   option `--notify`, and the stream has lines of kind `notice`. While
+//!   such a follower runs, paddock does not post its own notifications:
+//!   the launcher shows each `notice` line. An older CLI rejects
+//!   `--notify`, so the launcher passes it only with this feature.
 //! - `setup-progress-v1`: `paddock macvm setup --json` prints lines of kind
 //!   `setup` with `"v":1`. Lines of the helper pass through as they are, so
 //!   a reader checks the `v` of each line.
+//! - `mail-unread-ask-v1`: each run of `paddock mail ls --json` has
+//!   `unread_ask`, the count of unread `ask` messages of the agent.
+//! - `board-loft-v1`: each run of `paddock board --json` has `loft_commits`
+//!   and, with a commit, `loft_last` (RFC 3339).
+//! - `device-call-v1`: the stream of `paddock events --follow --json` has
+//!   lines of kind `device_call` with `run`, `device` and `ask`. They never
+//!   hold the request or the response of the call.
+//! - `backup-files-v1`: `paddock backups --files BACKUP --json` prints one
+//!   object with `"api_version":"paddock.backup-files/v1"` and `files`, each
+//!   with `path`, `size` and `kind` (`file`, `link` or `absent`).
+//! - `restore-plan-v1`: `paddock restore BACKUP --plan --json` prints one
+//!   object with `"api_version":"paddock.restore-plan/v1"` and the lists
+//!   `write`, `remove` and `keep`, and changes nothing.
+//! - `merge-preview-v1`: with a clean merge, a change of `paddock changes
+//!   RUN --json` has `merge_preview`, the merged text (at most 64 KiB), and
+//!   `merge_preview_cut`.
+//!
+//! The shapes of these outputs are in `tests/fixtures/launcher/json/`.
 //!
 //! These outputs exist only where app mode runs: macOS on Apple silicon.
 //! Other builds answer with the same protocol and no features, so the
@@ -51,8 +74,15 @@ pub const MAX_REPLY: usize = 1024;
 pub const MAC_FEATURES: &[&str] = &[
     "app-list-v1",
     "approvals-v1",
+    "backup-files-v1",
+    "board-loft-v1",
+    "device-call-v1",
     "events-v1",
     "macvm-status-v1",
+    "mail-unread-ask-v1",
+    "merge-preview-v1",
+    "notices-v1",
+    "restore-plan-v1",
     "setup-progress-v1",
 ];
 

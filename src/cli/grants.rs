@@ -45,6 +45,11 @@ pub(crate) enum GrantsCmd {
         /// Copy from the app to this Mac.
         #[arg(long, value_parser = ["on", "off"])]
         from_app: Option<String>,
+        /// The running session only: without a direction, print its
+        /// directions next to the saved ones; with one, change the
+        /// session and keep the profile as it is.
+        #[arg(long)]
+        session: bool,
         #[arg(long)]
         json: bool,
     },
@@ -82,6 +87,13 @@ pub(crate) enum ShareCmd {
         #[arg(long)]
         json: bool,
     },
+    /// Keep a folder that only the running session shares (one of `paddock
+    /// app run NAME PATH`) for the next starts, with its mode now.
+    Keep {
+        path: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
     /// List the folders with their mode, status, open files and last use.
     List {
         #[arg(long)]
@@ -105,13 +117,31 @@ pub(crate) fn run(env: &HostEnv, cmd: GrantsCmd) -> Result<i32> {
                 grants_cli::share_mode(env, &name, &path, mode == "ro", json)
             }
             ShareCmd::List { json } => grants_cli::share_list(env, &name, json),
+            ShareCmd::Keep { path, json } => grants_cli::share_keep(env, &name, &path, json),
         },
         GrantsCmd::Network { name, mode, json } => grants_cli::network(env, &name, &mode, json),
         GrantsCmd::Clipboard {
             name,
             to_app,
             from_app,
+            session,
             json,
+        } if session => match (to_app, from_app) {
+            (None, None) => grants_cli::clipboard_show(env, &name, json),
+            (to_app, from_app) => grants_cli::clipboard_session(
+                env,
+                &name,
+                to_app.map(|w| w == "on"),
+                from_app.map(|w| w == "on"),
+                json,
+            ),
+        },
+        GrantsCmd::Clipboard {
+            name,
+            to_app,
+            from_app,
+            json,
+            ..
         } => grants_cli::clipboard(
             env,
             &name,

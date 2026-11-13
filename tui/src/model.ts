@@ -4,6 +4,7 @@
 
 import { oneLine } from './clean.js';
 import type { Role } from './theme.js';
+import { t, type Key } from './i18n/index.js';
 import type { Board, BoardRun, MailBox, Pending, Ps } from './types.js';
 
 export type RunState =
@@ -16,15 +17,34 @@ export type RunState =
   | 'failed'
   | 'ended';
 
-export const STATE: Record<RunState, { glyph: string; word: string; role: Role; order: number }> = {
-  waiting: { glyph: '◆', word: 'waits for you', role: 'warning', order: 0 },
-  blocked: { glyph: '■', word: 'blocked', role: 'error', order: 1 },
-  stuck: { glyph: '▲', word: 'stuck', role: 'warning', order: 2 },
-  running: { glyph: '●', word: 'running', role: 'success', order: 3 },
-  idle: { glyph: '○', word: 'idle', role: 'muted', order: 4 },
-  done: { glyph: '✓', word: 'done', role: 'success', order: 5 },
-  failed: { glyph: '✖', word: 'failed', role: 'error', order: 6 },
-  ended: { glyph: '✓', word: 'ended', role: 'muted', order: 7 },
+interface StateInfo {
+  glyph: string;
+  /** The word of the state, in the language of the interface. */
+  readonly word: string;
+  role: Role;
+  order: number;
+}
+
+function stateInfo(glyph: string, key: Key, role: Role, order: number): StateInfo {
+  return {
+    glyph,
+    get word() {
+      return t(key);
+    },
+    role,
+    order,
+  };
+}
+
+export const STATE: Record<RunState, StateInfo> = {
+  waiting: stateInfo('◆', 'state.waiting', 'warning', 0),
+  blocked: stateInfo('■', 'state.blocked', 'error', 1),
+  stuck: stateInfo('▲', 'state.stuck', 'warning', 2),
+  running: stateInfo('●', 'state.running', 'success', 3),
+  idle: stateInfo('○', 'state.idle', 'muted', 4),
+  done: stateInfo('✓', 'state.done', 'success', 5),
+  failed: stateInfo('✖', 'state.failed', 'error', 6),
+  ended: stateInfo('✓', 'state.ended', 'muted', 7),
 };
 
 export function stateLabel(s: RunState): string {
@@ -53,6 +73,8 @@ export interface RunRow {
   ticket: string;
   cards: number;
   unreadMail: number;
+  /** The unread messages that are a question, when paddock reports them. */
+  unreadAsk?: number;
   frozen: boolean;
   detached: boolean;
   view: boolean;
@@ -106,15 +128,19 @@ export function buildRuns(
   const cards = new Map<string, number>();
   // The oldest card of a run: it waits for you since then.
   const asked = new Map<string, number>();
-  const t = now();
+  const nowS = now();
   for (const p of pending) {
     if (!p.sandbox) continue;
     cards.set(p.sandbox, (cards.get(p.sandbox) ?? 0) + 1);
-    const at = p.age_s !== undefined ? t - p.age_s : (p.created ?? 0);
+    const at = p.age_s !== undefined ? nowS - p.age_s : (p.created ?? 0);
     if (at > 0) asked.set(p.sandbox, Math.min(asked.get(p.sandbox) ?? Infinity, at));
   }
   const unread = new Map<string, number>();
-  for (const m of mail) unread.set(m.id, m.unread_up ?? 0);
+  const asks = new Map<string, number>();
+  for (const m of mail) {
+    unread.set(m.id, m.unread_up ?? 0);
+    if (m.unread_ask !== undefined) asks.set(m.id, m.unread_ask);
+  }
   const rows: RunRow[] = [];
   const seen = new Set<string>();
   for (const s of ps?.sandboxes ?? []) {
@@ -152,6 +178,7 @@ export function buildRuns(
       ticket: b?.ticket ?? '',
       cards: n,
       unreadMail: unread.get(s.id) ?? 0,
+      unreadAsk: asks.get(s.id),
       frozen: s.frozen_since !== undefined,
       detached: s.detached === true,
       view: s.view === true,
@@ -178,11 +205,12 @@ export function buildRuns(
       live: false,
       since: e.ended ?? 0,
       stateSince: e.ended ?? 0,
-      last: oneLine(e.text || b?.run.last || (e.status === 'stopped' ? 'stopped' : '')),
+      last: oneLine(e.text || b?.run.last || (e.status === 'stopped' ? t('state.stopped') : '')),
       model: oneLine(b?.run.model ?? ''),
       ticket: b?.ticket ?? '',
       cards: 0,
       unreadMail: unread.get(e.id) ?? 0,
+      unreadAsk: asks.get(e.id),
       frozen: false,
       detached: false,
       view: false,
@@ -197,10 +225,10 @@ export function buildRuns(
 /** "12 s", "4 min", "3 h", "2 d". */
 export function age(seconds: number): string {
   const s = Math.max(0, Math.floor(seconds));
-  if (s < 60) return `${s} s`;
-  if (s < 3600) return `${Math.floor(s / 60)} min`;
-  if (s < 86400) return `${Math.floor(s / 3600)} h`;
-  return `${Math.floor(s / 86400)} d`;
+  if (s < 60) return t('age.s', { n: s });
+  if (s < 3600) return t('age.min', { n: Math.floor(s / 60) });
+  if (s < 86400) return t('age.h', { n: Math.floor(s / 3600) });
+  return t('age.d', { n: Math.floor(s / 86400) });
 }
 
 export function now(): number {
@@ -209,7 +237,7 @@ export function now(): number {
 
 /** Where a run runs: always a sandbox, with its backend (SPLIT1 rule). */
 export function placeLabel(r: RunRow): string {
-  return r.backend ? `sandbox ${r.backend}` : 'sandbox';
+  return r.backend ? t('place.sandboxBackend', { backend: r.backend }) : t('place.sandbox');
 }
 
 /** Unread mail of the runs that still run: an ended run's mailbox no longer counts. */

@@ -42,6 +42,27 @@ final class StateTests: XCTestCase {
         }
     }
 
+    // paddock's notice lines decode and reach the hook that posts them:
+    // paddock does not post them itself while the launcher follows.
+    func testNoticeEventsReachTheLauncher() throws {
+        XCTAssertTrue(PaddockArgs.events.contains("--notify"))
+        let lines = try ReplayRunner.streamLines(Fixtures.core("launcher/notice.jsonl"))
+        let notices = lines.compactMap { line -> NoticeEvent? in
+            if case .notice(let n)? = PaddockEvent.decode(line: line) { return n }
+            return nil
+        }
+        XCTAssertEqual(notices.count, lines.count, "every notice line of paddock decodes")
+        XCTAssertEqual(notices[0].what, "approval")
+        XCTAssertEqual(notices[0].action, "r12")
+        XCTAssertEqual(notices[0].critical, true)
+        XCTAssertNil(notices[1].action)
+        let store = LauncherStore(service: nil)
+        var shown: [NoticeEvent] = []
+        store.onNotice = { shown.append($0) }
+        for notice in notices { store.apply(.notice(notice)) }
+        XCTAssertEqual(shown, notices)
+    }
+
     func testProducerApprovalSnapshotKeepsPresentationAndNoticeIDs() throws {
         let approvals = try Fixtures.decode(ApprovalsJSON.self, "approvals-paddock-v1.json")
         XCTAssertEqual(approvals.questions.map(\.id), ["r-shown-g1"])

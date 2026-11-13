@@ -5,11 +5,12 @@
 import React, { useRef } from 'react';
 import { Box, type DOMElement } from 'ink';
 import { cut } from '../clean.js';
+import { t as tr } from '../i18n/index.js';
 import { age, now, placeLabel, STATE, stateLabel, type RunRow } from '../model.js';
 import { useClickable } from '../mouse.js';
 import { artState, colorOf, spriteFor, SPRITE_H, SPRITE_W } from '../sprites.js';
 import { SpriteView } from '../art-layer.js';
-import { Pane, T, scrollTop } from '../ui.js';
+import { Clickable, Pane, T, scrollTop } from '../ui.js';
 import type { Role } from '../theme.js';
 
 /** A card: the border, the 24 columns of the sprite, a space on each side. */
@@ -40,21 +41,27 @@ export function gridCols(width: number): number {
 }
 
 /** The grid of the cards in an area of the screen. */
-export function roomsGrid(width: number, height: number, art: boolean): Grid {
+/** `more`: one more row of text in each card, the line of the copy. */
+export function roomsGrid(width: number, height: number, art: boolean, more = 0): Grid {
   const cols = gridCols(width);
   const base = Math.floor(width / cols);
   const extra = width - base * cols;
   const widths = Array.from({ length: cols }, (_, i) => base + (i < extra ? 1 : 0));
-  const withArt = art && height >= CARD_H;
-  const cardH = withArt ? CARD_H : COMPACT_H;
+  const withArt = art && height >= CARD_H + more;
+  const cardH = (withArt ? CARD_H : COMPACT_H) + more;
   return { cols, widths, cardH, art: withArt, rows: Math.max(1, Math.floor(height / cardH)) };
+}
+
+/** One more row in every card, when a run of the grid has changes in its copy. */
+export function copyRow(runs: RunRow[], changes: Map<string, string> | undefined): number {
+  return changes && runs.some((r) => changes.has(r.id)) ? 1 : 0;
 }
 
 /** The lines of text of a card, each cut to the width. */
 export function cardLines(r: RunRow, width: number, marked: boolean, t = now()): { text: string; role: Role; bold?: boolean }[] {
   const s = STATE[r.state];
   const inState = r.stateSince > 0 ? ` · ${age(t - r.stateSince)}` : '';
-  const extra = [r.frozen ? 'frozen' : '', r.cards > 0 ? `${r.cards} card${r.cards > 1 ? 's' : ''}` : '', r.unreadMail > 0 ? `✉ ${r.unreadMail}` : '']
+  const extra = [r.frozen ? tr('view.runs.frozen') : '', r.cards > 0 ? tr('view.runs.cards', { n: r.cards }) : '', r.unreadMail > 0 ? `✉ ${r.unreadMail}` : '']
     .filter((x) => x.length > 0)
     .join(' · ');
   return [
@@ -73,8 +80,11 @@ function RoomCard(props: {
   selected: boolean;
   focused: boolean;
   marked: boolean;
+  /** The line of the copy: "7 changes · 1 conflict". Undefined: no card of the grid has one. */
+  changes?: string;
   onSelect: () => void;
   onOpen: () => void;
+  onFiles: () => void;
 }): React.JSX.Element {
   const r = props.run;
   const iw = Math.max(0, props.width - 4);
@@ -98,6 +108,18 @@ function RoomCard(props: {
           {l.text}
         </T>
       ))}
+      {props.changes === undefined ? null : props.changes ? (
+        // The changes of the copy wait for you: a click, or f, opens the files.
+        <Clickable onClick={props.onFiles} width={iw}>
+          {(hovered, pointer) => (
+            <T role="warning" bold underline={hovered} inverse={pointer.pressed}>
+              {cut(`◆ ${props.changes}`, iw)}
+            </T>
+          )}
+        </Clickable>
+      ) : (
+        <T> </T>
+      )}
     </Pane>
   );
 }
@@ -112,24 +134,28 @@ export function RoomsPane(props: {
   filter: string;
   art: boolean;
   title?: string;
+  /** The line of the copy of each run that has open changes. */
+  changes?: Map<string, string>;
   onSelect: (i: number) => void;
   onOpen: (i: number) => void;
+  onFiles?: (i: number) => void;
   onWheel: (d: 1 | -1) => void;
 }): React.JSX.Element {
   const ref = useRef<DOMElement>(null);
   useClickable(ref, { onWheel: props.onWheel });
+  const extra = copyRow(props.runs, props.changes);
   const top = useRef(0);
   const { runs, width } = props;
-  const grid = roomsGrid(width, Math.max(0, props.height - 1), props.art);
+  const grid = roomsGrid(width, Math.max(0, props.height - 1), props.art, extra);
   const total = Math.ceil(runs.length / grid.cols);
   const selRow = Math.floor(props.selected / grid.cols);
   top.current = scrollTop(top.current, selRow, grid.rows, total);
   const live = runs.filter((r) => r.live).length;
   const title =
-    (props.title ?? `Runs · ${live} live, ${runs.length - live} ended`) +
-    (props.filter ? ` · filter "${cut(props.filter, 20)}"` : '') +
+    (props.title ?? tr('view.runs.title', { live, ended: runs.length - live })) +
+    (props.filter ? tr('view.runs.filter', { filter: cut(props.filter, 20) }) : '') +
     (runs.length > 0 ? ` · ${props.selected + 1}/${runs.length}` : '') +
-    ' · ←→↑↓ move · L list';
+    tr('view.rooms.keys');
   const rows: RunRow[][] = [];
   for (let i = top.current; i < Math.min(total, top.current + grid.rows); i++) rows.push(runs.slice(i * grid.cols, (i + 1) * grid.cols));
   return (
@@ -137,7 +163,7 @@ export function RoomsPane(props: {
       <T bold={props.focused} role={props.focused ? 'accent' : 'muted'}>
         {cut(title, width)}
       </T>
-      {runs.length === 0 ? <T role="muted">{cut(props.filter ? 'No run matches the filter. Esc clears it.' : 'No runs. Press n to start one.', width)}</T> : null}
+      {runs.length === 0 ? <T role="muted">{cut(props.filter ? tr('view.runs.noMatch') : tr('view.runs.none'), width)}</T> : null}
       {rows.map((row, ri) => (
         <Box key={top.current + ri} flexDirection="row" width={width} height={grid.cardH} flexShrink={0}>
           {row.map((r, ci) => {
@@ -152,6 +178,8 @@ export function RoomsPane(props: {
                 selected={index === props.selected}
                 focused={props.focused}
                 marked={props.marked.has(r.id)}
+                changes={extra ? (props.changes?.get(r.id) ?? '') : undefined}
+                onFiles={() => props.onFiles?.(index)}
                 onSelect={() => props.onSelect(index)}
                 onOpen={() => props.onOpen(index)}
               />

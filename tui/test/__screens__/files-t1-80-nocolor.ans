@@ -1,0 +1,24 @@
+[1mpaddock[22m · 2 running                      [7m[1m Runs [22m[27m  Board   Approvals      Mail
+ claude · webshop · running 4 min · copy: 4 changed, 2 new, 1 deleted
+ run  approvals  mail [1m[files][22m                                 [2mpointer: ● linked [22m
+╭─ [1mFiles · changes[22m ────────────╮[2m╭─ src/cart.ts · changed · +3 -2 ──────────────╮[22m
+│  [1m▾ webshop/   !1 ~2[22m[2m +2 -1 =1[22m │[2m│[22m [1m @@ line 38[22m                                  [2m│[22m
+│  [1m▾ docs/           [22m[2m       !1[22m │[2m│[22m  38 export function total(items: Item[]): n… [2m│[22m
+│     [7m[1m![22m[27m README.md    [7m[1mconflict [22m[27m │[2m│[22m  39   if (items.length === 0) return 0;      [2m│[22m
+│  [1m▾ src/            [22m[2m ~2 +2 =1[22m │[2m│[22m  40                                          [2m│[22m
+│  [1m  ▾ lib/util/     [22m[2m       +1[22m │[2m│[22m  41   const total = items.reduce(            [2m│[22m
+│       + format.ts  new       │[2m│[22m [1m-42     (s, i) => s + i.price, 0);[22m           [2m│[22m
+│ [7m[1m▸[22m   [1m~[22m [1mcart.ts      [A][K][D][22m[27m │[2m│[22m [1m+42 [22m    (s, i) => s + i.price * i.qty,       [2m│[22m
+│     [2m=[22m [2mold.ts       kept     [22m │[2m│[22m [1m+43 [22m    0);                                  [2m│[22m
+│     [1m~[22m price.ts     [1mchanged  [22m │[2m│[22m  44   return total;                          [2m│[22m
+│     + tax.ts       new       │[2m│[22m  45 }                                        [2m│[22m
+│   [1m-[22m logo.png       [1mdeleted  [22m │[2m│[22m  @@ line 62                                  [2m│[22m
+│                              │[2m│[22m  62                                          [2m│[22m
+│                              │[2m│[22m  63 export function label(item: Item): stri… [2m│[22m
+│                              │[2m│[22m  64   const name = item.name.trim();         [2m│[22m
+│                              │[2m│[22m [1m-64   return name + ' x' + item.count + ' a…[22m [2m│[22m
+│                              │[2m│[22m [1m+65 [22m  return name + ' x' + item.qty + ' at … [2m│[22m
+│                              │[2m│[22m  66 }                                        [2m│[22m
+╰─ 3 of 7 · 1 conflict ────────╯[2m╰─ change 1 of 2 · unified ────────────────────╯[22m
+[2mup to date · v opens a view window (no paddock split)[22m
+[1mA[22m[2m apply  [22m[1mK[22m[2m keep  [22m[1mD[22m[2m discard  [22m[1m↵[22m[2m diff  [22m[1mc[22m[2m filter  [22m[1mb[22m[2m backups  [22m[1mi[22m[2m pointer  [22m[1m?[22m[2m help  [22m

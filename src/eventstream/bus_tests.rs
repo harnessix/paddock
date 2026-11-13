@@ -224,3 +224,105 @@ fn a_full_backlog_does_not_block_the_publisher() {
     assert!(start.elapsed() < Duration::from_secs(2));
     assert!(lost_marker(&path).exists());
 }
+
+fn notice_line() -> String {
+    Line::at(
+        1,
+        Event::Notice(crate::eventstream::schema::Notice::new(
+            "approval",
+            "paddock: claude asks",
+            "the detail",
+            true,
+            Some("r1"),
+        )),
+    )
+    .to_text()
+}
+
+/// Only a follower that registered with `--notify` takes a notice for the
+/// launcher. A plain follower gets the line too, but paddock still posts.
+#[test]
+fn a_notice_counts_as_shown_only_for_a_notify_follower() {
+    let (_t, b) = bus();
+    assert!(!b.send_notice(&notice_line()), "no follower");
+
+    let plain = Follower::bind(&b, std::process::id()).unwrap();
+    let (tx, rx) = queue();
+    plain.serve(tx).unwrap();
+    assert!(!b.send_notice(&notice_line()));
+    assert!(b.notice_followers().is_empty());
+    let got = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert_eq!(got, notice_line().trim_end(), "the stream is complete");
+
+    let mut other = std::process::Command::new("sleep")
+        .arg("30")
+        .spawn()
+        .unwrap();
+    let launcher = Follower::bind_with(&b, other.id(), true).unwrap();
+    let (tx2, rx2) = queue();
+    launcher.serve(tx2).unwrap();
+    assert!(notice_marker(launcher.path()).exists());
+    assert_eq!(b.notice_followers(), vec![other.id()]);
+    assert!(b.send_notice(&notice_line()));
+    assert_eq!(
+        rx2.recv_timeout(Duration::from_secs(5)).unwrap(),
+        notice_line().trim_end()
+    );
+
+    // The launcher quits: the marker goes with the socket.
+    let marker = notice_marker(launcher.path());
+    drop(launcher);
+    assert!(!marker.exists());
+    assert!(!b.send_notice(&notice_line()));
+    let _ = other.kill();
+    let _ = other.wait();
+}
+
+/// A marker without a listening socket (a launcher that was killed, or a
+/// marker that someone made by hand) never hides a notification.
+#[test]
+fn a_marker_without_a_listener_does_not_count() {
+    let (_t, b) = bus();
+    std::fs::create_dir_all(b.dir()).unwrap();
+    // A live pid (this test) whose socket has no listener.
+    let path = b.dir().join(format!("{}.sock", std::process::id()));
+    drop(std::os::unix::net::UnixListener::bind(&path).unwrap());
+    std::fs::write(notice_marker(&path), "").unwrap();
+    assert!(!b.send_notice(&notice_line()));
+
+    // A dead pid with a marker and a socket file: both go.
+    let mut dead = std::process::Command::new("true").spawn().unwrap();
+    let pid = dead.id();
+    dead.wait().unwrap();
+    let gone = b.dir().join(format!("{pid}.sock"));
+    drop(std::os::unix::net::UnixListener::bind(&gone).unwrap());
+    std::fs::write(notice_marker(&gone), "").unwrap();
+    assert!(!b.send_notice(&notice_line()));
+    assert!(!gone.exists() && !notice_marker(&gone).exists());
+}
+
+/// A marker that is a link does not count, also when the socket takes
+/// the line.
+#[test]
+fn a_linked_marker_does_not_count() {
+    let (t, b) = bus();
+    let f = Follower::bind(&b, std::process::id()).unwrap();
+    let (tx, _rx) = queue();
+    f.serve(tx).unwrap();
+    let target = t.path().join("elsewhere");
+    std::fs::write(&target, "").unwrap();
+    std::os::unix::fs::symlink(&target, notice_marker(f.path())).unwrap();
+    assert!(!b.send_notice(&notice_line()));
+    assert!(b.notice_followers().is_empty());
+}
+
+/// bind removes the notice marker of a socket that is gone.
+#[test]
+fn bind_clears_orphaned_notice_markers() {
+    let (_t, b) = bus();
+    std::fs::create_dir_all(b.dir()).unwrap();
+    let orphan = b.dir().join("424242.notify");
+    std::fs::write(&orphan, "").unwrap();
+    let _f = Follower::bind(&b, std::process::id()).unwrap();
+    assert!(!orphan.exists());
+}

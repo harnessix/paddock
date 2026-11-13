@@ -28,7 +28,7 @@ use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
-mod clone;
+pub(crate) mod clone;
 mod summary;
 
 pub use summary::{Baseline, Change, Summary};

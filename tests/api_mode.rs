@@ -108,6 +108,8 @@ fn a_bwrap_sandbox_in_api_mode_has_only_the_proxy() {
             "--network",
             "api",
             "-y",
+            // The script writes what it saw in the project folder.
+            "--direct",
         ])
         .arg(root.join("project"))
         .output()

@@ -504,3 +504,77 @@ fn a_client_that_closes_a_stream_cancels_the_device() {
         std::thread::sleep(Duration::from_millis(5));
     }
 }
+
+/// A device whose calls wait for the user.
+struct Asking;
+
+impl Device for Asking {
+    fn name(&self) -> &str {
+        "asking"
+    }
+    fn info(&self) -> Info {
+        Echo.info()
+    }
+    fn asks(&self, _call: &Call) -> bool {
+        true
+    }
+    fn call(&self, _call: &Call, request: &[u8]) -> Result<Vec<u8>, DevError> {
+        Ok(request.to_vec())
+    }
+}
+
+/// Each call is one `device_call` line on the bus: the sandbox, the
+/// device and `ask`. The request and the response never go there.
+#[test]
+fn each_call_is_a_device_call_line_without_its_data() {
+    use crate::eventstream::bus::{queue, Follower};
+    use crate::eventstream::{Bus, Event, Line};
+    let dir = tempfile::tempdir().unwrap();
+    let bus = Bus::at(dir.path().join("events"));
+    let follower = Follower::bind(&bus, std::process::id()).unwrap();
+    let (tx, rx) = queue();
+    follower.serve(tx).unwrap();
+    let path = dir.path().join("devices.sock");
+    let devices: Vec<Arc<dyn Device>> = vec![Arc::new(Echo), Arc::new(Asking)];
+    let server = Server::with_events(
+        "claude-proj-1a2b3c",
+        devices,
+        SecretFiles::new(None, None),
+        Some(bus),
+    );
+    let _serving = serve(&path, server).unwrap();
+    let secret = b"secret-argument-42";
+    for dev in ["echo", "asking"] {
+        let req = Request::call(dev, secret.len());
+        assert_eq!(request_at(&path, &req, secret).unwrap(), secret);
+    }
+    let mut got = Vec::new();
+    for _ in 0..2 {
+        let text = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(!text.contains("secret-argument"), "{text}");
+        let line: Line = serde_json::from_str(&text).unwrap();
+        let Event::DeviceCall(c) = line.event else {
+            panic!("{text}")
+        };
+        assert_eq!(c.run, "claude-proj-1a2b3c");
+        got.push((c.device, c.ask));
+    }
+    assert_eq!(
+        got,
+        [("echo".to_string(), false), ("asking".to_string(), true)]
+    );
+    // Without a bus a call publishes nothing and still works.
+    let quiet = dir.path().join("quiet.sock");
+    let server = Server::with_events(
+        "claude-proj-1a2b3c",
+        vec![Arc::new(Echo)],
+        SecretFiles::new(None, None),
+        None,
+    );
+    let _quiet = serve(&quiet, server).unwrap();
+    assert_eq!(
+        request_at(&quiet, &Request::call("echo", 2), b"hi").unwrap(),
+        b"hi"
+    );
+    assert!(rx.recv_timeout(Duration::from_millis(300)).is_err());
+}

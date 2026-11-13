@@ -1,0 +1,24 @@
+[1mpaddock[22m · 2 running                      [7m[1m Runs [22m[27m  Board   Approvals      Mail
+ claude · webshop · running 4 min · copy: 4 changed, 2 new, 1 deleted
+ run  approvals  mail [1m[files][22m                                 pointer: ● linked
+[1m> Files · changes[22m               [1msrc/cart.ts · changed · +3 -2[22m
+ [1m▾ webshop/     !1 ~2[22m +2 -1 =1  [1m @@ line 38[22m
+ [1m▾ docs/             [22m       !1   38 export function total(items: Item[]): numbe…
+    ! README.md      conflict    39   if (items.length === 0) return 0;
+ [1m▾ src/              [22m ~2 +2 =1   40
+ [1m  ▾ lib/util/       [22m       +1   41   const total = items.reduce(
+      + format.ts    new        [1m-42 [22m    (s, i) => s + i.price, 0);
+[1m>[22m   [1m~[22m [1mcart.ts        [A][K][D][22m  [1m+42 [22m    (s, i) => s + i.price * i.qty,
+    = old.ts         kept       [1m+43 [22m    0);
+    ~ price.ts       changed     44   return total;
+    + tax.ts         new         45 }
+  - logo.png         deleted     @@ line 62
+                                 62
+                                 63 export function label(item: Item): string {
+                                 64   const name = item.name.trim();
+                                [1m-64 [22m  return name + ' x' + item.count + ' at th…
+                                [1m+65 [22m  return name + ' x' + item.qty + ' at the …
+                                 66 }
+[2m3 of 7 · 1 conflict[22m             [2mchange 1 of 2 · unified[22m
+up to date · v opens a view window (no paddock split)
+[1mA[22m apply  [1mK[22m keep  [1mD[22m discard  [1m↵[22m diff  [1mc[22m filter  [1mb[22m backups  [1mi[22m pointer  [1m?[22m help

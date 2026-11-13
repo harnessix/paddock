@@ -69,7 +69,9 @@ public enum PaddockArgs {
     public static let doctor = ["doctor", "--json"]
     public static let appList = ["app", "list", "--json"]
     public static let approvals = ["approvals", "--json"]
-    public static let events = ["events", "--follow", "--json"]
+    /// `--notify`: the launcher shows paddock's notices, so paddock on this
+    /// Mac does not post its own while the stream runs (`notices-v1`).
+    public static let events = ["events", "--follow", "--json", "--notify"]
     public static let macvmRemove = ["macvm", "remove", "--json"]
     public static let macvmLatest = ["macvm", "latest", "--json"]
     public static let setupPause = ["macvm", "setup", "--pause-download"]

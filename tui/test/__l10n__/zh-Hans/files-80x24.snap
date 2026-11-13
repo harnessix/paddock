@@ -1,0 +1,24 @@
+paddock · 2 个运行中                            运行   看板   批准      邮件
+ claude · webshop · 运行中 4 分 · 副本：4 个已改、2 个新增、1 个已删
+ 运行  批准  邮件 [文件]                                         指针：● linked
+╭─ 文件 · 更改 ────────────────╮╭─ docs/README.md · 冲突 · +6 -2 ──────────────╮
+│  ▾ webshop/   !1 ~2 +2 -1 =1 ││  @@ 第 1 行                                  │
+│  ▾ docs/                  !1 ││  1 # webshop                                 │
+│ ▸   ! README.md    [A][K][D] ││  2                                           │
+│  ▾ src/             ~2 +2 =1 ││ -3 A small shop.                             │
+│    ▾ lib/util/            +1 ││ -4 Run it with npm start.                    │
+│       + format.ts  新 增     ││ +3 A small shop with a cart and taxes.       │
+│     ~ cart.ts      已 改     ││ +4                                           │
+│     = old.ts       已 留     ││ +5 ## Run it                                 │
+│     ~ price.ts     已 改     ││ +6                                           │
+│     + tax.ts       新 增     ││ +7 npm install                               │
+│   - logo.png       已 删     ││ +8 npm start                                 │
+│                              ││  9                                           │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+│                              ││                                              │
+╰─ 第 1 个，共 7 个 · 1 个冲… ─╯╰─ 第 1 处更改，共 1 处 · 统一 · 1 2 3 各方 ───╯
+已是最新 · v 打开视图窗口（无 paddock split）
+A 应用  K 保留  D 丢弃  ↵ 差异  c 筛选  b 备份  i 指针  ? 帮助

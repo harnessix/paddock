@@ -515,3 +515,73 @@ fn a_failed_undo_is_reported() {
     assert!(error.contains("until the app stops"), "{error}");
     assert_eq!(fake.live.lock().unwrap().network, "none");
 }
+
+#[test]
+fn clipboard_of_the_session_next_to_the_profile() {
+    let w = world();
+    // Stopped: the profile only, also at the top for older readers.
+    let s = serde_json::to_value(clipboard_state(&w.env, APP).unwrap()).unwrap();
+    assert_eq!(s["running"], false);
+    assert!(s.get("session").is_none());
+    assert_eq!(s["profile"]["to_app"], s["to_app"]);
+    assert_eq!(s["profile"]["from_app"], s["from_app"]);
+    let e = clipboard_session(&w.env, APP, Some(false), None, true)
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("is not running"), "{e}");
+    // Running: the session changes, the profile stays.
+    let fake = run(&w);
+    let before = saved(&w).clipboard;
+    assert_eq!(
+        clipboard_session(&w.env, APP, Some(false), None, true).unwrap(),
+        0
+    );
+    let live = fake.live.lock().unwrap().clipboard;
+    assert!(!live.to_app);
+    assert_eq!(live.from_app, Clipboard::default().from_app);
+    assert_eq!(saved(&w).clipboard, before);
+    assert!(saved(&w).changes.is_empty());
+    let s = serde_json::to_value(clipboard_state(&w.env, APP).unwrap()).unwrap();
+    assert_eq!(s["running"], true);
+    assert_eq!(s["session"]["to_app"], false);
+    assert_eq!(s["profile"]["to_app"], before.to_app);
+    assert_eq!(s["to_app"], before.to_app);
+    assert_eq!(clipboard_show(&w.env, APP, true).unwrap(), 0);
+}
+
+#[test]
+fn keep_makes_a_folder_of_the_session_a_grant() {
+    let w = world();
+    let e = share_keep(&w.env, APP, &w.web, true)
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("is not running"), "{e}");
+    let fake = run(&w);
+    // ws-1 (~/src/web) is a folder of `app run`: keep saves it, read and
+    // write as the session has it, and the session does not change.
+    let lines = fake.lines.lock().unwrap().len();
+    assert_eq!(share_keep(&w.env, APP, &w.web, true).unwrap(), 0);
+    let g = saved(&w);
+    assert_eq!(g.shares.len(), 1);
+    assert_eq!(g.shares[0].path, w.web);
+    assert!(!g.shares[0].read_only);
+    assert_eq!(g.changes[0].action, "keep");
+    assert_eq!(g.changes[0].applies, Applies::NextStart);
+    assert!(fake.lock_lines()[lines..].iter().all(|l| l == "list"));
+    // Twice, or a folder that the session does not share: refused.
+    let e = share_keep(&w.env, APP, &w.web, true)
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("already"), "{e}");
+    let e = share_keep(&w.env, APP, &w.docs, true)
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("is not shared"), "{e}");
+    assert_eq!(saved(&w).shares.len(), 1);
+}
+
+impl Fake {
+    fn lock_lines(&self) -> Vec<String> {
+        self.lines.lock().unwrap().clone()
+    }
+}

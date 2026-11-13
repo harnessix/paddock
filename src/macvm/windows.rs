@@ -69,6 +69,12 @@ pub enum HostEvent {
     InputSourceChanged,
     /// A lone press of the Globe key on a session window.
     Globe,
+    /// Another app became active
+    /// (`NSWorkspaceDidActivateApplicationNotification`), or the shim
+    /// became or resigned the active app
+    /// (`NSApplicationDidBecomeActiveNotification`,
+    /// `NSApplicationDidResignActiveNotification`).
+    AppFocus,
     /// Cmd-Q on a session window, or `Quit` of the Dock or the app menu.
     Quit,
     Dock(DockAction),
@@ -720,6 +726,23 @@ impl HostWindows {
         self.windows
             .iter()
             .find(|(_, w)| w.isKeyWindow())
+            .map(|(id, _)| *id)
+    }
+
+    /// The key window of the session while it is shown: visible, not
+    /// minimized, on the active Space and on a screen. A window that
+    /// closed, hid or went off screen does not count, also when AppKit
+    /// sent no resign (IME1).
+    pub fn key_shown(&self) -> Option<u32> {
+        self.windows
+            .iter()
+            .find(|(_, w)| {
+                w.isKeyWindow()
+                    && w.isVisible()
+                    && !w.isMiniaturized()
+                    && w.isOnActiveSpace()
+                    && w.screen().is_some()
+            })
             .map(|(id, _)| *id)
     }
 

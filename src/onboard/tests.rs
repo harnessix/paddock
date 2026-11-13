@@ -109,6 +109,108 @@ fn notification_text_is_an_argument_not_code() {
     assert_eq!(notification_argv("", "")[n - 2], "paddock");
 }
 
+/// Without paddock for Mac running, paddock posts with terminal-notifier
+/// from Homebrew, as paddock for Mac when that app is installed, and with
+/// osascript only when nothing else is there.
+#[test]
+fn macos_notifies_with_terminal_notifier_before_osascript() {
+    let home = Path::new("/Users/demo");
+    let none = |_: &Path| false;
+    assert_eq!(mac_notifier(home, none), MacNotifier::Osascript);
+
+    let intel = |p: &Path| p == Path::new("/usr/local/bin/terminal-notifier");
+    assert_eq!(
+        mac_notifier(home, intel),
+        MacNotifier::TerminalNotifier {
+            path: "/usr/local/bin/terminal-notifier".into(),
+            sender: None
+        }
+    );
+
+    for app in launcher_app_paths(home) {
+        let both = |p: &Path| {
+            p == Path::new("/opt/homebrew/bin/terminal-notifier")
+                || p == Path::new("/usr/local/bin/terminal-notifier")
+                || p == app
+        };
+        assert_eq!(
+            mac_notifier(home, both),
+            MacNotifier::TerminalNotifier {
+                path: "/opt/homebrew/bin/terminal-notifier".into(),
+                sender: Some(LAUNCHER_BUNDLE_ID)
+            },
+            "{}",
+            app.display()
+        );
+    }
+    // The app alone does not post: it shows notices only while it runs.
+    let app_only = |p: &Path| p == Path::new("/Applications/paddock for Mac.app");
+    assert_eq!(mac_notifier(home, app_only), MacNotifier::Osascript);
+}
+
+/// terminal-notifier gets the text as plain values: no leading "-" that
+/// it could read as an option, no control characters, and never an empty
+/// message, so it does not read stdin.
+#[test]
+fn terminal_notifier_text_is_a_value_not_an_option() {
+    let n = MacNotifier::TerminalNotifier {
+        path: "/opt/homebrew/bin/terminal-notifier".into(),
+        sender: Some(LAUNCHER_BUNDLE_ID),
+    };
+    let (prog, args) = mac_notify_command(&n, "-execute \"id\"", "-open\nhttp://x");
+    assert_eq!(prog, Path::new("/opt/homebrew/bin/terminal-notifier"));
+    assert_eq!(
+        args,
+        [
+            "-title",
+            "execute \"id\"",
+            "-message",
+            "open http://x",
+            "-sender",
+            "dev.paddock.mac"
+        ]
+    );
+    let plain = MacNotifier::TerminalNotifier {
+        path: "/usr/local/bin/terminal-notifier".into(),
+        sender: None,
+    };
+    let (_, args) = mac_notify_command(&plain, "", "");
+    assert_eq!(args, ["-title", "paddock", "-message", "paddock"]);
+    let (prog, args) = mac_notify_command(&MacNotifier::Osascript, "t", "b");
+    assert_eq!(prog, Path::new(OSASCRIPT));
+    assert_eq!(args, notification_argv("t", "b"));
+}
+
+/// The doctor names the way, and says when it is the osascript fallback.
+#[test]
+fn doctor_says_how_macos_notifies() {
+    let tn = MacNotifier::TerminalNotifier {
+        path: "/opt/homebrew/bin/terminal-notifier".into(),
+        sender: None,
+    };
+    let running = mac_notifier_line(&MacNotifier::Osascript, &[4321]);
+    assert!(
+        running.contains("paddock for Mac shows them (pid 4321)"),
+        "{running}"
+    );
+    assert!(running.starts_with("  ok "), "{running}");
+    let plain = mac_notifier_line(&tn, &[]);
+    assert!(
+        plain.contains("terminal-notifier") && plain.contains("Install paddock for Mac"),
+        "{plain}"
+    );
+    let fallback = mac_notifier_line(&MacNotifier::Osascript, &[]);
+    assert!(fallback.starts_with("  fallback "), "{fallback}");
+    assert!(
+        fallback.contains("osascript") && fallback.contains("Script Editor"),
+        "{fallback}"
+    );
+    assert!(
+        fallback.contains("brew install terminal-notifier"),
+        "{fallback}"
+    );
+}
+
 #[test]
 fn macos_opens_terminal_and_linux_needs_a_terminal() {
     let e = terminal_command(None, None, Os::Linux).unwrap_err();

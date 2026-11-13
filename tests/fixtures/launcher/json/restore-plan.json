@@ -1,0 +1,10 @@
+{
+  "api_version": "paddock.restore-plan/v1",
+  "project": "/Users/demo/src/webshop",
+  "of": "1793448000-start-a1b2c3",
+  "kind": "start",
+  "exact": false,
+  "write": ["src/cart.ts"],
+  "remove": [],
+  "keep": ["docs/new.md"]
+}

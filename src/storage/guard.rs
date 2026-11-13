@@ -171,6 +171,8 @@ fn notify(env: &HostEnv, key: &str, summary: &str, body: &str, critical: bool) {
         body: body.into(),
         actions: vec![],
         critical,
+        what: "storage".into(),
+        action: None,
     };
     if let Err(e) = crate::broker::notify::show(env, &n) {
         log::debug!("no desktop notification: {e:#}");
@@ -198,7 +200,7 @@ pub fn before_run(env: &HostEnv, project: Option<&Path>, quiet: bool) -> Result<
     let (s, warnings) = Settings::load(env);
     if !quiet {
         for w in &warnings {
-            eprintln!("paddock: {w}");
+            crate::note::info(w.as_str());
         }
     }
     super::auto::start_background(env, &s);
@@ -206,7 +208,7 @@ pub fn before_run(env: &HostEnv, project: Option<&Path>, quiet: bool) -> Result<
     let mut vols = volumes(&dirs);
     if worst(&vols, &s) == Level::Full {
         if !quiet {
-            eprintln!("paddock: the disk is almost full. paddock removes merged worktrees and old data first, for at most {FOREGROUND_SECS} seconds.");
+            crate::note::info(format!("the disk is almost full. paddock removes merged worktrees and old data first, for at most {FOREGROUND_SECS} seconds."));
         }
         let deadline = Instant::now() + Duration::from_secs(FOREGROUND_SECS);
         foreground_pass(env, &s, deadline);
@@ -225,7 +227,7 @@ pub fn before_run(env: &HostEnv, project: Option<&Path>, quiet: bool) -> Result<
                 low.join("; ")
             );
             if !quiet {
-                eprintln!("paddock: warning: {line}");
+                crate::note::warn(line.as_str());
             }
             notify(env, "low", "paddock: free space is low", &line, false);
         }
@@ -341,6 +343,8 @@ pub fn doctor_lines(env: &HostEnv) -> Vec<String> {
     for w in warnings {
         out.push(format!("  note     {w}"));
     }
+    // The copies and backups of projects rely on the encryption of the disk.
+    out.push(crate::copy::disk::doctor_text(env));
     let off = !s.auto_gc || env.var("PADDOCK_AUTO_GC") == Some("0");
     match super::auto::load(env) {
         _ if off => out.push(

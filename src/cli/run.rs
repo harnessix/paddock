@@ -77,6 +77,17 @@ impl RunArgs {
             workbench: false,
             detach: None,
             profile_default: self.profile.as_deref() == Some(paddock::shadow::DEFAULT),
+            wide_folder: self.yes_wide_folder,
+            copy: paddock::copy::Ask {
+                allowed: true,
+                choice: match (self.copy, self.direct) {
+                    (true, _) => Some(true),
+                    (_, true) => Some(false),
+                    _ => None,
+                },
+                launcher: self.launcher,
+                plan_only: false,
+            },
         })
     }
 }
@@ -116,6 +127,9 @@ pub(crate) fn start_detached(env: &HostEnv, a: &RunArgs) -> Result<i32> {
         bail!("--detach needs tmux on PATH: paddock runs the harness in a tmux session of its own. Install tmux, or run without --detach")
     };
     let project = build::resolve_project(opts.project.as_deref())?;
+    // The pane starts the run later: the guard answers now, where the
+    // caller (a terminal, the TUI) sees the reason.
+    paddock::folder_check::enforce(env, &project, opts.wide_folder, true)?;
     let id = state::new_id(&opts.harness, &project);
     let job = paddock::detach::Job {
         id: id.clone(),
@@ -179,6 +193,11 @@ pub(crate) fn detach_run(job: &std::path::Path) -> Result<i32> {
 }
 
 fn start(env: &HostEnv, a: &RunArgs, shell: bool) -> Result<i32> {
+    if let (false, false, Some(h)) = (shell, a.detach, a.harness.as_deref()) {
+        if let Some(code) = gateway_form(env, h, &a.args, a.yes)? {
+            return Ok(code);
+        }
+    }
     if a.detach {
         if shell {
             bail!("--detach is for `paddock run`, not for `paddock shell`");
@@ -195,12 +214,24 @@ fn start_with(
     shell: bool,
     detach: Option<(String, Vec<u8>)>,
 ) -> Result<i32> {
+    // The notes of the run go to its record too, also with -q (note.rs).
+    paddock::note::record();
     let horse =
         !shell && (a.horse || a.horse_id.is_some() || paddock::horse::live::settings(env)?.enabled);
     let mut opts = a.options(env, shell)?;
     opts.detach = detach.as_ref().map(|(id, _)| id.clone());
     let project = build::resolve_project(opts.project.as_deref()).ok();
     paddock::storage::guard::before_run(env, project.as_deref(), false)?;
+    // A current installation keeps auto approvals, written down once (MANUAL2).
+    match paddock::approvals::settle(env) {
+        Ok(Some(line)) => paddock::note::info(line.strip_prefix("paddock: ").unwrap_or(line)),
+        Ok(None) => {}
+        Err(e) => log::warn!("cannot write the approvals mode: {e:#}"),
+    }
+    // Write down the environment mode of this installation once (ENV1).
+    if let Err(e) = paddock::envset::settle(env) {
+        log::warn!("cannot write the environment mode: {e:#}");
+    }
     let mut built = build::build(env, &opts)?;
     built.horse = horse;
     // The VM backend starts the same run with paddock in the guest.
@@ -230,31 +261,60 @@ fn start_with(
 }
 
 fn start_built(env: &HostEnv, built: build::Built, shell: bool) -> Result<i32> {
+    // A start that fails before the sandbox leaves no copy behind.
+    let no_copy = |built: &build::Built| {
+        if let Some(r) = &built.copy.run {
+            paddock::copy::start::discard_failed(r);
+        }
+    };
     if !shell && built.approvals == Some(paddock::approvals::Approvals::Auto) {
         if let Err(e) = run::probe_flags(env, &built) {
             if let Some(w) = &built.worktree {
                 build::discard_worktree(env, w);
             }
             paddock::shadow::discard(&built.spec);
+            no_copy(&built);
             return Err(e);
         }
     }
-    let backend = match run::select_backend(env, &built) {
+    let backend = match run::select_backend(env, &built).and_then(|b| {
+        // The copy is mounted at the path of the project. A backend that
+        // cannot mount would let the agent write the folder itself.
+        let in_place = built.spec.copy.as_ref().is_some_and(|c| c.in_place);
+        if in_place && !paddock::copy::start::mounts(b.name()) {
+            bail!(
+                "the {} backend cannot show a copy at the path of the project. Start with --direct to work in the folder itself",
+                b.name()
+            );
+        }
+        Ok(b)
+    }) {
         Ok(b) => b,
         Err(e) => {
             if let Some(w) = &built.worktree {
                 build::discard_worktree(env, w);
             }
             paddock::shadow::discard(&built.spec);
+            no_copy(&built);
             return Err(e);
         }
     };
     let wt = built.worktree.clone();
     let code = run::run(env, built, backend.as_ref(), false, false)?.code;
     if let Some(w) = wt {
-        eprintln!("\n{}", paddock::worktree::finish(env, &w).0);
+        let line = format!("\n{}", paddock::worktree::finish(env, &w).0);
+        paddock::note::say_line(paddock::note::Level::Info, &line);
     }
     Ok(code)
+}
+
+/// The environment mode of a built run.
+fn explain_env_mode(built: &build::Built) -> paddock::envset::Mode {
+    if built.inherit_env {
+        paddock::envset::Mode::Inherit
+    } else {
+        paddock::envset::Mode::Listed
+    }
 }
 
 /// The approvals line of `paddock explain`, in plain words.
@@ -269,8 +329,36 @@ fn explain_approvals(a: Option<paddock::approvals::Approvals>) -> &'static str {
     }
 }
 
+/// The `folder_check` object of `paddock explain --json`.
+fn folder_json(
+    c: &paddock::folder_check::Check,
+    ctx: &paddock::folder_check::Ctx,
+) -> serde_json::Value {
+    let mut v = serde_json::to_value(c).unwrap_or_default();
+    if let Some(line) = c.explain_line(ctx) {
+        v["message"] = line.into();
+    }
+    v
+}
+
 pub(crate) fn explain(env: &HostEnv, a: &RunArgs, json: bool) -> Result<()> {
-    let opts = a.options(env, false)?;
+    let mut opts = a.options(env, false)?;
+    // An explain makes no copy: it says what a run does.
+    opts.copy.plan_only = true;
+    // The folder guard first: the launcher and the TUI read its reason
+    // even when the start would be refused.
+    let project = build::resolve_project(opts.project.as_deref())?;
+    let (ctx, folder) = paddock::folder_check::check(env, &project, opts.wide_folder, true)?;
+    if let Some(line) = folder.error_line(&ctx) {
+        if json {
+            let v = serde_json::json!({
+                "project": project,
+                "folder_check": folder_json(&folder, &ctx),
+            });
+            println!("{}", serde_json::to_string_pretty(&v)?);
+        }
+        bail!("{line}");
+    }
     let built = build::build(env, &opts)?;
     let backend = run::select_backend(env, &built);
     let s = &built.spec;
@@ -321,10 +409,18 @@ pub(crate) fn explain(env: &HostEnv, a: &RunArgs, json: bool) -> Result<()> {
         if let Some(note) = cache_note {
             v["cache_backend_note"] = note.into();
         }
+        v["folder_check"] = folder_json(&folder, &ctx);
+        v["copy"] = serde_json::json!({
+            "use": built.copy.plan.is_some(),
+            "why": built.copy.why,
+            "text": built.copy.plan,
+        });
         v["approvals"] = paddock::approvals::shown(built.approvals).into();
         v["approvals_origin"] = built.approvals_origin.clone().into();
         v["screens"] = paddock::screens::explain(&built.profile).into();
         v["tack"] = paddock::tack::report::explain(env, &s.env).into();
+        v["environment"] =
+            serde_json::to_value(paddock::envset::record(env, s, explain_env_mode(&built)))?;
         v["backend"] = match &backend {
             Ok(b) => b.name().into(),
             Err(e) => format!("unavailable: {e}").into(),
@@ -335,6 +431,15 @@ pub(crate) fn explain(env: &HostEnv, a: &RunArgs, json: bool) -> Result<()> {
     }
     println!("harness   {}  ({})", s.harness, built.harness_exe.display());
     println!("project   {}", s.project.display());
+    if let Some(line) = folder.explain_line(&ctx) {
+        println!("folder    {line}");
+    }
+    match &built.copy.plan {
+        Some(plan) => println!("copy      {plan}"),
+        None => println!(
+            "copy      no: the agent works in the folder itself. `--copy` gives it a copy, and your folder changes only when you apply"
+        ),
+    }
     println!(
         "home      {}  (from {})",
         s.home.display(),
@@ -428,6 +533,24 @@ pub(crate) fn explain(env: &HostEnv, a: &RunArgs, json: bool) -> Result<()> {
             v.value.clone()
         };
         println!("  {k}={val}\n         {}", v.origin);
+    }
+    let env_record = paddock::envset::record(env, s, explain_env_mode(&built));
+    println!(
+        "\nenvironment by group (mode {}; `paddock env show` lists what you can change):",
+        env_record.mode.name()
+    );
+    for g in &env_record.groups {
+        let names: Vec<&str> = g.items.iter().map(|i| i.name.as_str()).collect();
+        let head = format!("  {} ({}):", g.title, names.len());
+        if names.is_empty() {
+            println!("{head}");
+        } else {
+            println!("{head} {}", names.join(" "));
+        }
+    }
+    if !env_record.held.is_empty() {
+        let names: Vec<&str> = env_record.held.iter().map(|h| h.name.as_str()).collect();
+        println!("  Held back ({}): {}", names.len(), names.join(" "));
     }
     let tack = paddock::tack::report::explain(env, &s.env);
     if !tack.is_empty() {
@@ -550,7 +673,36 @@ pub(crate) fn wrap(env: HostEnv, command: Vec<String>) -> Result<i32> {
     paddock::wrap::main(env, &command)
 }
 
+/// A command of a gateway agent that is not an agent sandbox: a client
+/// (`openclaw tui`) attaches to the sandboxed gateway, and a command that
+/// starts a gateway on the host is refused. None: an ordinary run.
+fn gateway_form(env: &HostEnv, harness: &str, args: &[String], yes: bool) -> Result<Option<i32>> {
+    use paddock::agentgw::{self, Form};
+    let Ok(f) = HarnessFactory::new(env) else {
+        return Ok(None);
+    };
+    let Some(shape) = f.profile(harness).and_then(|p| p.gateway.clone()) else {
+        return Ok(None);
+    };
+    match (shape.classify(args), args.split_first()) {
+        (Form::Client, Some((cmd, extra))) => Ok(Some(agentgw::attach::attach(
+            env, harness, cmd, extra, yes,
+        )?)),
+        (Form::Host, Some((cmd, _))) => bail!(agentgw::host_refusal(harness, cmd)),
+        _ => Ok(None),
+    }
+}
+
 pub(crate) fn external(env: &HostEnv, argv: Vec<String>) -> Result<i32> {
+    // `paddock openclaw tui ARGS`: the client command takes the place of
+    // the project folder of `paddock run`.
+    if let [harness, rest @ ..] = argv.as_slice() {
+        if rest.first().is_some_and(|a| !a.starts_with('-')) {
+            if let Some(code) = gateway_form(env, harness, rest, false)? {
+                return Ok(code);
+            }
+        }
+    }
     let mut full = vec!["paddock run".to_string()];
     full.extend(argv);
     let a = <RunArgsCli as Parser>::try_parse_from(full).unwrap_or_else(|e| e.exit());

@@ -1,0 +1,24 @@
+[1mpaddock[22m · 2 running                      [7m[1m Runs [22m[27m  Board   Approvals      Mail
+ claude · webshop · running 4 min · copy: 4 changed, 2 new, 1 deleted
+ run  approvals  mail [1m[36m[files][39m[22m                                 [2mpointer: ● linked [22m
+[36m╭─ [39m[1mConflict · claude · webshop[22m[36m ────────────────────────────────────────────────╮[39m
+[36m│[39m [7m[1m[33m◆ Both sides changed[39m[22m[27m[2m   both sides changed it[22m                                 [36m│[39m
+[36m│[39m [1mWhich version of docs/README.md stays in ~/code/webshop?[22m                     [36m│[39m
+[36m│[39m [2m ▏ [22moriginal now  [2m2 KB · 13:50[22m                                                [36m│[39m
+[36m│[39m [2m ▏ [22mcopy          [2m2 KB · 14:02 · +6 -2[22m                                        [36m│[39m
+[36m│[39m [2mpaddock never overwrites a conflict without your choice.[22m                     [36m│[39m
+[36m│[39m [2mCancel: Nothing changes.[22m                                                     [36m│[39m
+[36m│[39m [o] Keep original  [33m[c] Take the copy ⚠[39m  [b] Keep both  [32m[m] Take the merge[39m    [36m│[39m
+[36m│[39m [7m[1m[n] Cancel[22m[27m                                                                   [36m│[39m
+[36m│[39m [2m←→ choose · ↵ answer · o/c/b/m/n keys · Esc cancel[22m                           [36m│[39m
+[36m╰──────────────────────────────────────────────────────────────────────────────╯[39m
+[2m╭─ Files · changes ────────────╮╭─ docs/README.md · conflict · +6 -2 ──────────╮[22m
+[2m│[22m  [1m▾ webshop/   !1 ~2[22m[2m +2 -1 =1[22m [2m││[22m [2mReading the diff…[22m                            [2m│[22m
+[2m│[22m  [1m▾ docs/           [22m[2m       !1[22m [2m││[22m                                              [2m│[22m
+[2m│[22m [1m[36m▸[39m[22m   [1m[31m![39m[22m [1mREADME.md    [36m[A][K][D][39m[22m [2m││[22m                                              [2m│[22m
+[2m│[22m  [1m▾ src/            [22m[2m ~2 +2 =1[22m [2m││[22m                                              [2m│[22m
+[2m│[22m  [1m  ▾ lib/util/     [22m[2m       +1[22m [2m││[22m                                              [2m│[22m
+[2m│[22m       [32m+[39m format.ts  [32mnew      [39m [2m││[22m                                              [2m│[22m
+[2m╰─ 1 of 7 · 1 conflict ────────╯╰──────────────────────────────────────────────╯[22m
+[2mup to date · v opens a view window (no paddock split)[22m
+[1m[36m←→[39m[22m[2m choose  [22m[1m[36m↵[39m[22m[2m answer  [22m[1m[36mEsc[39m[22m[2m cancel  [22m[1m[36m?[39m[22m[2m help  [22m              [2mhold Shift to select text[22m

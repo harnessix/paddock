@@ -26,7 +26,14 @@ pub(crate) fn inbox(project: &Path) -> Result<crate::safefs::Dir> {
 /// The inbox of a sandbox of `project`. With the `.paddock` link of the
 /// loft, it is in the loft's notes, opened from the loft, not the link.
 pub(crate) fn inbox_for(env: &HostEnv, project: &Path) -> Result<crate::safefs::Dir> {
-    if crate::loft::host::linked(env, project) {
+    // A run on a copy at its own path: the loft of the original folder.
+    // The record of the run names it, never a link in the copy.
+    let original = crate::copy::run::original_of_tree(env, project);
+    let project = original.as_deref().unwrap_or(project);
+    // A project with copies has only the pointer in `.paddock`.
+    let pointer = || crate::copy::pointer::read(project).is_ok_and(|p| p.is_some());
+    let synced = || crate::loft::sync::synced(&crate::loft::Loft::of(env, project), project);
+    if crate::loft::host::linked(env, project) || original.is_some() || (pointer() && !synced()) {
         let tree = crate::loft::Loft::of(env, project).tree();
         return crate::safefs::Root::open(&tree)?.dir(Path::new(INBOX), true);
     }

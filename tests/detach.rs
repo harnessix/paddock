@@ -105,6 +105,8 @@ impl World {
                 "--env",
                 "clean",
                 "-y",
+                // The script writes its result in the project folder.
+                "--direct",
                 "--detach",
                 "--prompt",
                 task,

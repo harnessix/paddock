@@ -667,6 +667,8 @@ impl Ctl {
             &self.env,
             &crate::broker::notify::Note {
                 summary: "paddock".into(),
+                what: "idle".into(),
+                action: Some(self.id.clone()),
                 body: format!("{} waits for input: view it or stop it", who(rec)),
                 actions: Vec::new(),
                 critical: false,

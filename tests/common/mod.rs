@@ -10,6 +10,10 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 
+/// The world of the copy tests.
+#[allow(dead_code)]
+pub mod copy_world;
+
 /// The world of the device sandbox tests.
 #[allow(dead_code)]
 pub mod device_world;
@@ -25,6 +29,10 @@ pub mod scenarios;
 /// The shared device under the systemd user manager, as a function.
 #[allow(dead_code)]
 pub mod unit_scenario;
+
+/// A real terminal for a test: a pty that closes as a tmux pane closes.
+#[allow(dead_code)]
+pub mod pty;
 
 /// The stand-in Mac of the worked example tests: an sshd of the test user.
 #[allow(dead_code)]

@@ -52,6 +52,7 @@ fn fast(json: bool) -> Opts {
         json,
         disk_every: Duration::from_millis(200),
         tick: Duration::from_millis(50),
+        notify: false,
     }
 }
 
@@ -199,4 +200,58 @@ fn detects_a_closed_pipe_without_writing() {
     assert!(!reader_gone(write.as_raw_fd()));
     drop(read);
     assert!(reader_gone(write.as_raw_fd()));
+}
+
+/// `--notify`: the follower registers for notices while it runs, prints
+/// the notice line as it is, and the registration ends with it.
+#[test]
+fn a_notify_follower_registers_and_prints_the_notice() {
+    let t = tempfile::tempdir().unwrap();
+    let bus = Bus::at(t.path().join("events"));
+    let out = Shared::default();
+    let stop = Arc::new(AtomicBool::new(false));
+    let worker = {
+        let (bus, mut out, stop) = (bus.clone(), out.clone(), stop.clone());
+        std::thread::spawn(move || {
+            let opts = Opts {
+                notify: true,
+                ..fast(true)
+            };
+            follow(
+                &bus,
+                &mut out,
+                &|| stop.load(Ordering::SeqCst),
+                &|| None,
+                opts,
+            )
+        })
+    };
+    wait_for("the socket", || bus.followers().len() == 1);
+    wait_for("the marker", || !bus.notice_followers().is_empty());
+    let line = Line::at(
+        3,
+        Event::Notice(schema::Notice::new(
+            "frozen",
+            "paddock froze a sandbox",
+            "x",
+            true,
+            Some("ab12"),
+        )),
+    );
+    assert!(bus.send_notice(&line.to_text()));
+    wait_for("the notice line", || {
+        out.lines().iter().any(|l| l.contains("\"notice\""))
+    });
+    stop.store(true, Ordering::SeqCst);
+    worker.join().unwrap().unwrap();
+    assert!(bus.notice_followers().is_empty());
+    assert!(!bus.send_notice(&line.to_text()));
+    let got: Line = serde_json::from_str(
+        out.lines()
+            .iter()
+            .find(|l| l.contains("\"notice\""))
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(got, line);
 }

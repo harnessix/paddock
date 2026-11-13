@@ -436,6 +436,9 @@ impl Device for Http {
     fn name(&self) -> &str {
         &self.def.name
     }
+    fn asks(&self, _call: &Call) -> bool {
+        self.gate.asks()
+    }
     fn info(&self) -> Info {
         info(&self.def, &self.proxy)
     }

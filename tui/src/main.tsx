@@ -5,76 +5,120 @@ import React from 'react';
 import { format } from 'node:util';
 import { render } from 'ink';
 import { App } from './app.js';
-import { paddock } from './paddock.js';
+import { spawnSync } from 'node:child_process';
+import { paddock, paddockBin } from './paddock.js';
+import { HostContext, type Host, type Notice } from './host.js';
+import type { Job } from './launch.js';
 import { detectTheme, makeTheme, noColor, ThemeContext } from './theme.js';
-import { ALT_ON, CURSOR_OFF, installExitHandlers, newTerminalState, restore, setFocusReports, setMouse } from './terminal.js';
+import { ALT_ON, CURSOR_OFF, holdSignals, installExitHandlers, newTerminalState, restore, setFocusReports, setMouse } from './terminal.js';
 import { Painter } from './screen.js';
 import { frameStream } from './frame-stream.js';
 import { detectArt } from './art.js';
 import { ArtContext, ArtLayer } from './art-layer.js';
 import { VERSION } from './version.js';
+import { wantsReducedMotion } from './motion-pref.js';
+import { t } from './i18n/index.js';
 
-const HELP = `paddock tui: runs, approvals, mail and the board of paddock in the terminal.
+/** The text of --help, in the language of the interface. */
+function help(): string {
+  return t('main.help');
+}
 
-Usage: paddock tui [--plain] [--readonly] [--no-mouse] [--theme dark|light]
-
-  --plain        no boxes, no colours, no mouse, no alternate screen (screen
-                 readers, logs)
-  --readonly     hide every action: only look
-  --no-mouse     start with the mouse off (M turns it on). PADDOCK_TUI_MOUSE=0
-                 does the same
-  --theme NAME   dark or light. Default: PADDOCK_TUI_THEME, then COLORFGBG,
-                 then dark
-
-The runs show as rooms, one card per run with its character, when the
-terminal has 80 columns or more and 256 or 24-bit colours. L switches to the
-list and back. PADDOCK_TUI_ART=off, NO_COLOR or --plain: no art, the list.
-  --version      print the version
-
-Keys: ? shows every key, : or Ctrl+P opens the command palette.
-The interface calls paddock (PADDOCK_BIN, else paddock on PATH) for every read
-and every action.`;
+export { reducedMotion } from './motion-pref.js';
 
 interface Options {
   plain: boolean;
   readonly: boolean;
   mouse: boolean;
+  /** --reduce-motion: the world shows each change without motion. */
+  reduceMotion: boolean;
   theme?: string;
+  /** Start on the home screen (--home, or PADDOCK_TUI_START=home from `paddock` alone). */
+  home: boolean;
 }
 
+/** PADDOCK_TUI_START=home: `paddock` alone started the interface. */
+const startsHome = process.env.PADDOCK_TUI_START === 'home';
+// The agents that the interface starts must not get the variable.
+delete process.env.PADDOCK_TUI_START;
+
 function parse(argv: string[]): Options | number {
-  const o: Options = { plain: false, readonly: false, mouse: process.env.PADDOCK_TUI_MOUSE !== '0' };
+  const o: Options = { plain: false, readonly: false, mouse: process.env.PADDOCK_TUI_MOUSE !== '0', reduceMotion: false, home: startsHome };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--plain') o.plain = true;
     else if (a === '--readonly' || a === '--read-only') o.readonly = true;
     else if (a === '--no-mouse') o.mouse = false;
+    else if (a === '--reduce-motion' || a === '--reduced-motion') o.reduceMotion = true;
+    else if (a === '--home') o.home = true;
     else if (a === '--theme') o.theme = argv[++i];
     else if (a?.startsWith('--theme=')) o.theme = a.slice('--theme='.length);
     else if (a === '-h' || a === '--help') {
-      process.stdout.write(HELP + '\n');
+      process.stdout.write(help() + '\n');
       return 0;
     } else if (a === '-V' || a === '--version') {
       process.stdout.write(`paddock-tui ${VERSION}\n`);
       return 0;
     } else {
-      process.stderr.write(`paddock tui: unknown option ${JSON.stringify(a)}\n\n${HELP}\n`);
+      process.stderr.write(`paddock tui: ${t('main.unknownOption', { option: JSON.stringify(a) })}\n\n${help()}\n`);
       return 2;
     }
   }
   if (o.theme !== undefined && o.theme !== 'dark' && o.theme !== 'light') {
-    process.stderr.write('paddock tui: --theme takes dark or light\n');
+    process.stderr.write(`paddock tui: ${t('main.themeValue')}\n`);
     return 2;
   }
   if (o.plain) o.mouse = false;
   return o;
 }
 
-async function main(): Promise<number> {
+/** The number of a signal that ended a command, for its exit code. */
+const SIGNAL_CODES: Record<string, number> = { SIGHUP: 1, SIGINT: 2, SIGQUIT: 3, SIGKILL: 9, SIGTERM: 15 };
+
+/**
+ * A paddock command gets the terminal: the interface is gone, and the
+ * command reads the keys and writes the screen until it ends. This
+ * program waits and reads nothing meanwhile. Returns what to say on the
+ * home screen.
+ */
+async function handOver(job: Job, alt: boolean): Promise<Notice> {
+  const stdin = process.stdin;
+  // Stop reading the terminal: every key is for the command.
+  stdin.pause();
+  process.stdout.write(`${job.bin ?? 'paddock'} ${job.args.join(' ')}\n`);
+  holdSignals(true);
+  const r = spawnSync(job.bin ?? paddockBin(), job.args, { stdio: 'inherit' });
+  // A Ctrl+C that the command got is in this program's queue too: let it pass first.
+  await new Promise((done) => setTimeout(done, 50));
+  holdSignals(false);
+  const code = r.error ? 127 : (r.status ?? 128 + (SIGNAL_CODES[r.signal ?? ''] ?? 0));
+  const notice: Notice = r.error
+    ? { text: t('main.couldNotStart', { bin: job.bin ?? 'paddock', error: r.error.message }), role: 'error' }
+    : code === 0
+      ? { text: t('main.jobEnded', { title: job.title }), role: 'muted' }
+      : { text: t('main.jobEndedCode', { title: job.title, code }), role: 'warning' };
+  // The alternate screen hides what the command wrote. So wait for Enter
+  // when that is the result, or when the command failed.
+  if (alt && (job.pause === 'always' || code !== 0)) {
+    process.stdout.write(`\n${t('main.pressEnter', { notice: notice.text })}`);
+    await new Promise<void>((done) => {
+      stdin.once('data', () => {
+        stdin.pause();
+        done();
+      });
+      // Ink let go of the terminal input when it left: without this, the program would end here.
+      stdin.ref();
+      stdin.resume();
+    });
+  }
+  return notice;
+}
+
+async function main(notice?: Notice, resume?: Job['resume']): Promise<number> {
   const o = parse(process.argv.slice(2));
   if (typeof o === 'number') return o;
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
-    process.stderr.write('paddock tui needs a terminal. paddock ps, paddock board and paddock approvals print the same state as text or JSON.\n');
+    process.stderr.write(`${t('main.needsTerminal')}\n`);
     return 2;
   }
   const term = newTerminalState(1);
@@ -93,6 +137,8 @@ async function main(): Promise<number> {
   const painter = alt ? new Painter({ write: hostWrite, size, overlays: () => art?.overlays() ?? [] }) : null;
   art = new ArtLayer({ mode: detectArt(process.env, out.isTTY === true, o.plain), sink: null, screen: size, painter });
   const layer = art;
+  // Without art nothing moves: then the setting of the desktop is not read.
+  const reduceMotion = layer.enabled ? wantsReducedMotion(o.reduceMotion, process.env) : true;
   const stop = () => {
     painter?.stop();
     layer.stop();
@@ -111,13 +157,26 @@ async function main(): Promise<number> {
       };
     }
   }
+  // What the interface asks of this program: the home screen, and the terminal for a paddock command.
+  let job: Job | null = null;
+  const host: Host = { home: o.home, show: resume ? false : o.home || notice !== undefined, notice, resume, run: (j) => (job = j) };
   if (o.mouse) setMouse(term, true);
   // Focus reports: in the background the animation stops and nothing stays lit under the pointer.
   if (alt) setFocusReports(term, true);
   const tree = (
     <ThemeContext.Provider value={theme}>
       <ArtContext.Provider value={layer}>
-        <App api={paddock} readonly={o.readonly} initialMouse={o.mouse} cwd={process.cwd()} onMouseChange={(on) => setMouse(term, on)} onRedraw={() => painter?.invalidate()} />
+        <App
+          api={paddock}
+          readonly={o.readonly}
+          initialMouse={o.mouse}
+          cwd={process.cwd()}
+          onMouseChange={(on) => setMouse(term, on)}
+          onRedraw={() => painter?.invalidate()}
+          reduceMotion={reduceMotion}
+          // OSC 52: the terminal puts the text on the clipboard. Only with the alternate screen, where nothing else writes.
+          onCopy={painter ? (text) => void hostWrite(`\u001b]52;c;${Buffer.from(text, 'utf8').toString('base64')}\u0007`) : undefined}
+        />
       </ArtContext.Provider>
     </ThemeContext.Provider>
   );
@@ -125,8 +184,8 @@ async function main(): Promise<number> {
   // check also says no when CI is set, and then draws nothing until exit.
   const instance = painter
     ? // debug: Ink writes each frame whole and at once, as text. The painter does the rest.
-      render(tree, { stdout: frameStream(out, painter, hostWrite), debug: true, exitOnCtrlC: false, patchConsole: false, interactive: true })
-    : render(tree, { alternateScreen: false, exitOnCtrlC: false, patchConsole: true, maxFps: 30, interactive: true });
+      render(<HostContext.Provider value={host}>{tree}</HostContext.Provider>, { stdout: frameStream(out, painter, hostWrite), debug: true, exitOnCtrlC: false, patchConsole: false, interactive: true })
+    : render(<HostContext.Provider value={host}>{tree}</HostContext.Provider>, { alternateScreen: false, exitOnCtrlC: false, patchConsole: true, maxFps: 30, interactive: true });
   unmount = () => instance.unmount();
   try {
     await instance.waitUntilExit();
@@ -134,7 +193,10 @@ async function main(): Promise<number> {
     stop();
     restore(term);
   }
-  return 0;
+  // The interface left for a command: run it, then start again on the home screen.
+  const next = job as Job | null;
+  if (next === null) return 0;
+  return main(await handOver(next, alt), next.resume);
 }
 
 /** Run the interface and end the process with its exit code. */

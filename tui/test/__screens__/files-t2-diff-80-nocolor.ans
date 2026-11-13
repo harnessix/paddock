@@ -1,0 +1,24 @@
+[1mpaddock[22m · 2 running                      [7m[1m Runs [22m[27m  Board   Approvals      Mail
+ claude · webshop · running 4 min · copy: 4 changed, 2 new, 1 deleted
+ run  approvals  mail [1m[files][22m                                 [2mpointer: ● linked [22m
+╭─ [1msrc/cart.ts · changed · +3 -2 · original ↔ copy[22m ────────────────────────────╮
+│ [1m @@ line 38[22m                                                                  │
+│  38 export function total(items: Item[]): number {                           │
+│  39   if (items.length === 0) return 0;                                      │
+│  40                                                                          │
+│  41   const total = items.reduce(                                            │
+│ [1m-42     (s, i) => s + i.price, 0);[22m                                           │
+│ [1m+42 [22m    (s, i) => s + i.price * i.qty,                                       │
+│ [1m+43 [22m    0);                                                                  │
+│  44   return total;                                                          │
+│  45 }                                                                        │
+│  @@ line 62                                                                  │
+│  62                                                                          │
+│  63 export function label(item: Item): string {                              │
+│  64   const name = item.name.trim();                                         │
+│ [1m-64   return name + ' x' + item.count + ' at the price of ' + format(item.p…[22m │
+│ [1m+65 [22m  return name + ' x' + item.qty + ' at the price of ' + format(item.pri… │
+│  66 }                                                                        │
+╰─ change 1 of 2 · unified ────────────────────────────────────────────────────╯
+[2mup to date · v opens a view window (no paddock split)[22m
+[1mn[22m[2m next  [22m[1mN[22m[2m previous  [22m[1mt[22m[2m side by side  [22m[1mA[22m[2m apply  [22m[1mK[22m[2m keep  [22m[1mD[22m[2m discard  [22m[1mEsc[22m[2m back  [22m[1m?[22m[2m help[22m

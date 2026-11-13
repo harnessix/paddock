@@ -1,0 +1,40 @@
+paddock · 4 running · 3 wait for you                                              Runs   Board   Approvals ◆3   Mail ✉2
+╭─ Help · every key · ↑↓ scroll 35/46 · Esc closes ────────────────────────────────────────────────────────────────────╮
+│ H         the home screen: new agent, apps, requests, runs, world, settings                                          │
+│ ↵         open the selected item                                                                                     │
+│ q Esc     go back (quit on the first screen)                                                                         │
+│ n         new run: harness, project, prompt file                                                                     │
+│ s         stop the selected run (asks first)                                                                         │
+│ v         split view of the marked runs, or view the selected run                                                    │
+│ Space     mark a run for the split view                                                                              │
+│ o         open the live view of the run in a new terminal window                                                     │
+│ w         write a message to the agent of the run                                                                    │
+│ r         show the runs                                                                                              │
+│ b         show the board: the ranch, or the list                                                                     │
+│ a         show the approvals that wait                                                                               │
+│ m         show the mail of the runs                                                                                  │
+│ Tab       next tab or pane (Shift+Tab back)                                                                          │
+│ /         filter the list                                                                                            │
+│ : Ctrl+P  command palette: every action                                                                              │
+│ ?         this help                                                                                                  │
+│ M         mouse on or off (off: the terminal selects text)                                                           │
+│ L         runs as rooms (a card and a character per run) or as a list                                                │
+│ W         show the ranch: the board as a world                                                                       │
+│ P         ranch: Plumbing on or off (glass walls, tools, cables)                                                     │
+│ I         ranch: the Inspector (the paddock word and command)                                                        │
+│ z         ranch: pause or resume the selected room                                                                   │
+│ f         Files of this run: what the agent changed in its copy                                                      │
+│ Apply all changes of this run to your folder (asks first)                                                            │
+│ Backups of the project of this run                                                                                   │
+│ Pointer state: the store of the copies and backups                                                                   │
+│ R         read paddock again now                                                                                     │
+│ Ctrl+C Q  quit                                                                                                       │
+│                                                                                                                      │
+│ ↑↓ j k move · PgUp PgDn page · Home End first and last                                                               │
+│ Rooms: ←→ h l one card, ↑↓ j k one row of cards; L the list                                                          │
+│ Ranch (b): ←→↑↓ move, ↵ zoom in (building, room), Esc one stop out                                                   │
+│ Ranch: 1 2 3 jump to ranch, building, room; l the loft; c copies the command                                         │
+│ Ranch: L the board as a list (and the ranch in plain text without colours)                                           │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+up to date · v opens a view window (no paddock split)
+↵ open  n new  s stop  v split  a approvals  ? help                                            hold Shift to select text

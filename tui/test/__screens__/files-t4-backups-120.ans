@@ -1,0 +1,34 @@
+[1mpaddock[22m · 2 running                                                              [7m[1m Runs [22m[27m  Board   Approvals      Mail
+ claude · webshop · running 4 min · copy: 4 changed, 2 new, 1 deleted
+ run  approvals  mail [1m[36m[files][39m[22m                                                                         [2mpointer: ● linked [22m
+[36m╭─ [39m[1mBackups · webshop[22m[36m ──────────────────────────────────────────────────────────────────────────────────────────────────╮[39m
+[36m│[39m [1m[2mtoday[22m                                                                                                                [36m│[39m
+[36m│[39m [7m[1m▸ 14:02  before apply     3 files    12 KB   claude                                                              [36m[R][39m[22m[27m [36m│[39m
+[36m│[39m   13:41  start of run     412 files  shared  claude                                                              [36m[R][39m [36m│[39m
+[36m│[39m [1m[2myesterday[22m                                                                                                            [36m│[39m
+[36m│[39m   17:20  before restore   9 files    48 KB                                                                       [36m[R][39m [36m│[39m
+[36m│[39m   16:05  start of run     409 files  shared  codex                                                               [36m[R][39m [36m│[39m
+[36m│[39m                                                                                                                      [36m│[39m
+[36m│[39m                                                                                                                      [36m│[39m
+[36m│[39m                                                                                                                      [36m│[39m
+[36m│[39m                                                                                                                      [36m│[39m
+[36m│[39m                                                                                                                      [36m│[39m
+[36m│[39m                                                                                                                      [36m│[39m
+[36m│[39m                                                                                                                      [36m│[39m
+[36m│[39m                                                                                                                      [36m│[39m
+[36m│[39m                                                                                                                      [36m│[39m
+[36m│[39m                                                                                                                      [36m│[39m
+[36m│[39m                                                                                                                      [36m│[39m
+[36m│[39m                                                                                                                      [36m│[39m
+[36m│[39m                                                                                                                      [36m│[39m
+[36m│[39m                                                                                                                      [36m│[39m
+[36m│[39m                                                                                                                      [36m│[39m
+[36m│[39m                                                                                                                      [36m│[39m
+[36m│[39m                                                                                                                      [36m│[39m
+[36m│[39m                                                                                                                      [36m│[39m
+[36m│[39m                                                                                                                      [36m│[39m
+[36m│[39m                                                                                                                      [36m│[39m
+[36m│[39m                                                                                                                      [36m│[39m
+[36m╰─ [39m1 of 4 · 60 KB on disk[36m ─────────────────────────────────────────────────────────────────────────────────────────────╯[39m
+[2mup to date · v opens a view window (no paddock split)[22m
+[1m[36mR[39m[22m[2m restore  [22m[1m[36mu[39m[22m[2m undo  [22m[1m[36mi[39m[22m[2m pointer  [22m[1m[36mEsc[39m[22m[2m back  [22m[1m[36m?[39m[22m[2m help  [22m                                               [2mhold Shift to select text[22m

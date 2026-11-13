@@ -398,6 +398,10 @@ pub struct SandboxSpec {
     /// bwrap and Seatbelt run it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shadow: Option<crate::shadow::Plan>,
+    /// The run works on a copy of the project (copy.rs). `project` is the
+    /// path that the sandbox sees.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub copy: Option<crate::copy::CopyOf>,
     /// What the user asked for, before paddock turned it into `command`.
     /// The VM backend starts the same run with paddock in the guest.
     #[serde(skip)]
@@ -479,6 +483,7 @@ impl SandboxSpec {
             hooks: Vec::new(),
             uploads: Vec::new(),
             shadow: None,
+            copy: None,
             intent: Intent::default(),
         }
     }

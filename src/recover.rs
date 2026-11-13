@@ -454,7 +454,7 @@ fn no_symlinks(base: &Path, rel: &Path) -> bool {
 
 /// The host folder for an XDG user directory name, from
 /// `~/.config/user-dirs.dirs`, so `Desktop` maps to a localized desktop.
-fn host_user_dir(env: &HostEnv, folder: &str) -> Option<PathBuf> {
+pub(crate) fn host_user_dir(env: &HostEnv, folder: &str) -> Option<PathBuf> {
     let key = match folder {
         "Desktop" => "XDG_DESKTOP_DIR",
         "Documents" => "XDG_DOCUMENTS_DIR",

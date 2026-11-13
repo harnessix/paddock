@@ -108,6 +108,8 @@ fn paddock_unchecks_the_training_box_of_a_fake_agy_dialog() {
         "--gui",
         "off",
         "-y",
+        // The fake agy writes its screens and files in the project folder.
+        "--direct",
     ])
     .arg(&project)
     .env("HOME", root.join("home"))

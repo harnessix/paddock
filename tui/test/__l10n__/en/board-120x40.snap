@@ -1,0 +1,40 @@
+paddock · 4 running · 3 wait for you                                              Runs   Board   Approvals ◆3   Mail ✉2
+╭─ Board · projects, tickets and runs ─────────────────────────────────────────────────────────────────────────────────╮
+│ › ◆ 2 approvals wait for you: press a                                                                                │
+│   compile slots: 1 claude-alpha-71c3ac                                                                               │
+│   alpha (4)  /src/alpha                                                                                              │
+│     ◆ waiting  T-101    mail hooks             0b0b0b,0c0c0c   git push to origin/main                               │
+│     ● working  T-102    named kv namespaces    71c3ac          T-102: code and 14 tests pass                         │
+│     ◇ open     T-103    login refresh                          open                                                  │
+│     ▲ stuck    0e0e0e   evil (no ticket)                       idle with unread mail                                 │
+│   beta (1)  /src/beta                                                                                                │
+│     ○ idle     0f0f0f   grok (no ticket)                                                                             │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+up to date · v opens a view window (no paddock split)
+↵ open  n new  s stop  v split  a approvals  ? help                                            hold Shift to select text

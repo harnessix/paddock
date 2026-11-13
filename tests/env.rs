@@ -259,3 +259,128 @@ fn profile_env_beats_the_host_and_account_and_cache_vars_stay_out() {
         "XDG_CACHE_HOME must not bypass the package caches"
     );
 }
+
+/// A new installation (no earlier runs, no `[env]` choice) passes only the
+/// lists (ENV1). The scopes of an agent and a project apply only there.
+#[test]
+fn a_new_installation_passes_only_the_lists_with_their_scopes() {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = tmp.path().join("home");
+    let project = home.join("src/app");
+    let other = home.join("src/other");
+    std::fs::create_dir_all(&project).unwrap();
+    std::fs::create_dir_all(&other).unwrap();
+    let cfg = home.join(".config/paddock");
+    std::fs::create_dir_all(&cfg).unwrap();
+    std::fs::write(
+        cfg.join("config.toml"),
+        r#"
+[env]
+pass = ["JAVA_HOME", "SSH_AUTH_SOCK", "HISTFILE"]
+
+[env.agent.t]
+pass = ["AGENT_ONLY"]
+
+[env.agent.other]
+pass = ["OTHER_AGENT"]
+
+[env.project."~/src/app"]
+set = { APP_ENV = "test" }
+"#,
+    )
+    .unwrap();
+    let mut vars = BTreeMap::new();
+    vars.insert("PATH".into(), std::env::var("PATH").unwrap_or_default());
+    for (k, v) in [
+        ("PLAIN_SETTING", "1"),
+        ("JAVA_HOME", "/jvm"),
+        ("AGENT_ONLY", "a"),
+        ("OTHER_AGENT", "o"),
+        ("SSH_AUTH_SOCK", "/nowhere"),
+        ("HISTFILE", "/h"),
+        ("BASH_ENV", "/b"),
+    ] {
+        vars.insert(k.into(), v.into());
+    }
+    let env = HostEnv::from_parts(home, "tester".into(), 1000, 1000, vars);
+    let opts = |p: &std::path::Path| Options {
+        harness: "t".into(),
+        project: Some(p.to_path_buf()),
+        assume_yes: true,
+        ..Default::default()
+    };
+    let b = build_with(&env, &opts(&project), harness()).unwrap();
+    let e = &b.spec.env;
+    assert!(!b.inherit_env);
+    assert!(!e.contains_key("PLAIN_SETTING"));
+    assert_eq!(e["JAVA_HOME"].value, "/jvm");
+    assert_eq!(e["AGENT_ONLY"].origin, "manifest env.agent.t pass");
+    assert!(!e.contains_key("OTHER_AGENT"));
+    assert_eq!(e["APP_ENV"].value, "test");
+    // The never-pass list has no switch, not even [env] pass.
+    for k in ["SSH_AUTH_SOCK", "HISTFILE", "BASH_ENV"] {
+        assert!(!e.contains_key(k), "{k}");
+    }
+    let notes = b.spec.notices.join("\n");
+    assert!(
+        notes.contains("SSH_AUTH_SOCK stays on this computer") && notes.contains("HISTFILE stays"),
+        "{notes}"
+    );
+    // The record of the run names them, without values.
+    let r = paddock::envset::record(&env, &b.spec, paddock::envset::Mode::Listed);
+    let held: Vec<&str> = r.held.iter().map(|h| h.name.as_str()).collect();
+    assert!(
+        held.contains(&"SSH_AUTH_SOCK") && held.contains(&"BASH_ENV"),
+        "{held:?}"
+    );
+    assert!(!serde_json::to_string(&r).unwrap().contains("/jvm"));
+
+    // Another project: no project scope.
+    let b = build_with(&env, &opts(&other), harness()).unwrap();
+    assert!(!b.spec.env.contains_key("APP_ENV"));
+
+    // inherit mode drops the code loaders and the history too.
+    let b = build_with(
+        &env,
+        &Options {
+            inherit_env: Some(true),
+            ..opts(&project)
+        },
+        harness(),
+    )
+    .unwrap();
+    assert!(b.spec.env.contains_key("PLAIN_SETTING"));
+    for k in ["HISTFILE", "BASH_ENV", "SSH_AUTH_SOCK"] {
+        assert!(!b.spec.env.contains_key(k), "{k}");
+    }
+}
+
+/// A current installation keeps inherit, and the notice asks for the
+/// review; two releases after the migration, only the lists pass.
+#[test]
+fn a_current_installation_gets_the_review_then_the_forced_default() {
+    let (_t, env, project) = setup(&[]);
+    std::fs::create_dir_all(env.paddock_state()).unwrap();
+    std::fs::write(env.paddock_state().join("recent.json"), "[]").unwrap();
+    let opts = Options {
+        harness: "t".into(),
+        project: Some(project),
+        assume_yes: true,
+        ..Default::default()
+    };
+    let b = build_with(&env, &opts, harness()).unwrap();
+    assert!(b.inherit_env);
+    let notes = b.spec.notices.join("\n");
+    assert!(notes.contains("paddock env migrate"), "{notes}");
+
+    let cfg = env.home.join(".config/paddock/config.toml");
+    std::fs::write(&cfg, "[env]\nmode = \"inherit\"\nmigrated = \"0.0.1\"\n").unwrap();
+    let b = build_with(&env, &opts, harness()).unwrap();
+    assert!(!b.inherit_env);
+    assert!(!b.spec.env.contains_key("PLAIN_SETTING"));
+    assert!(b
+        .spec
+        .notices
+        .iter()
+        .any(|n| n.contains("review time") && n.contains("paddock env mode inherit")));
+}

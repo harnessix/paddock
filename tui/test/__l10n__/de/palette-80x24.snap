@@ -1,0 +1,24 @@
+paddock · 4 laufen · 3 warten auf …  Läufe   Board   Genehmigungen ◆3   Post ✉2
+╭─ Befehlspalette · tippen zum Suchen · ↵ ausführen · Esc schließt ────────────╮
+│ :                                                                            │
+│ › H         Startseite: neuer Agent, Apps, Anfragen, Läufe, Welt, Einstellu… │
+│   ↵         ausgewähltes Element öffnen                                      │
+│   q Esc     zurück (auf dem ersten Bildschirm beenden)                       │
+│   n         neuer Lauf: Harness, Projekt, Prompt-Datei                       │
+│   s         ausgewählten Lauf stoppen (fragt vorher)                         │
+│   v         Splitansicht der markierten Läufe oder Ansicht des gewählten La… │
+│   Space     Lauf für die Splitansicht markieren                              │
+│   o         Live-Ansicht des Laufs in einem neuen Terminalfenster öffnen     │
+│   w         Nachricht an den Agenten des Laufs schreiben                     │
+│   r         Läufe anzeigen                                                   │
+│   b         Board anzeigen: die Ranch oder die Liste                         │
+│   a         wartende Genehmigungen anzeigen                                  │
+│   m         Post der Läufe anzeigen                                          │
+│   Tab       nächster Tab oder Bereich (Shift+Tab zurück)                     │
+│   /         Liste filtern                                                    │
+│   : Ctrl+P  Befehlspalette: alle Aktionen                                    │
+│   ?         diese Hilfe                                                      │
+│   M         Maus an oder aus (aus: das Terminal markiert Text)               │
+╰──────────────────────────────────────────────────────────────────────────────╯
+aktuell · v öffnet ein Ansichtsfenster (kein paddock split)
+↵ öffnen  n neu  s stoppen  v Split  a Genehmigungen  ? Hilfe

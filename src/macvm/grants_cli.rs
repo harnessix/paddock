@@ -161,14 +161,29 @@ pub fn parse_answer(line: &str) -> Result<Answer> {
     serde_json::from_str(json).with_context(|| text::grant_bad_answer(line))
 }
 
-/// What a change prints with `--json`.
+/// What a change prints with `--json`. `v` and `ok` as in the other
+/// launcher answers.
 #[derive(Debug, Serialize)]
 pub struct Outcome {
+    pub v: u32,
+    pub ok: bool,
     pub change: Change,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub live: Option<Answer>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub warnings: Vec<String>,
+}
+
+impl Outcome {
+    pub fn new(change: Change, live: Option<Answer>, warnings: Vec<String>) -> Self {
+        Outcome {
+            v: 1,
+            ok: true,
+            change,
+            live,
+            warnings,
+        }
+    }
 }
 
 fn mode_word(read_only: bool) -> &'static str {
@@ -272,11 +287,7 @@ pub fn share_add(
         Ok((c, live))
     })?;
     grants::event(&t.profile, &change, &env.home);
-    let o = Outcome {
-        change,
-        live,
-        warnings,
-    };
+    let o = Outcome::new(change, live, warnings);
     print(env, &t, &o, json)
 }
 
@@ -346,11 +357,7 @@ pub fn share_remove(
         Ok((c, live))
     })?;
     grants::event(&t.profile, &change, &env.home);
-    let o = Outcome {
-        change,
-        live,
-        warnings: Vec::new(),
-    };
+    let o = Outcome::new(change, live, Vec::new());
     print(env, &t, &o, json)
 }
 
@@ -423,11 +430,7 @@ pub fn share_mode(
         Ok((c, live))
     })?;
     grants::event(&t.profile, &change, &env.home);
-    let o = Outcome {
-        change,
-        live,
-        warnings: Vec::new(),
-    };
+    let o = Outcome::new(change, live, Vec::new());
     print(env, &t, &o, json)
 }
 
@@ -621,11 +624,7 @@ pub fn network(env: &HostEnv, name: &str, mode: &str, json: bool) -> Result<i32>
         Ok((c, live))
     })?;
     grants::event(&t.profile, &change, &env.home);
-    let o = Outcome {
-        change,
-        live,
-        warnings: Vec::new(),
-    };
+    let o = Outcome::new(change, live, Vec::new());
     print(env, &t, &o, json)
 }
 
@@ -646,10 +645,15 @@ pub fn clipboard(
 ) -> Result<i32> {
     let t = Target::of(env, name)?;
     if to_app.is_none() && from_app.is_none() {
-        let g = grants::load(&t.profile)?;
         if json {
-            println!("{}", serde_json::to_string_pretty(&g.clipboard)?);
+            // The saved directions, also as `to_app` and `from_app` at the
+            // top for older readers, and the session's while it runs.
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&clipboard_state(env, name)?)?
+            );
         } else {
+            let g = grants::load(&t.profile)?;
             println!("{}", text::grant_clipboard_now(name, g.clipboard));
         }
         return Ok(0);
@@ -685,11 +689,7 @@ pub fn clipboard(
         Ok((c, live))
     })?;
     grants::event(&t.profile, &change, &env.home);
-    let o = Outcome {
-        change,
-        live,
-        warnings: Vec::new(),
-    };
+    let o = Outcome::new(change, live, Vec::new());
     print(env, &t, &o, json)
 }
 
@@ -756,6 +756,12 @@ pub fn extend_status(v: &mut serde_json::Value, profile: &Profile, record: Optio
         obj.extend(part);
     }
 }
+
+#[path = "grants_session.rs"]
+mod session;
+pub use session::{
+    clipboard_session, clipboard_show, clipboard_state, share_keep, ClipboardState, SessionOutcome,
+};
 
 #[cfg(test)]
 #[path = "grants_cli_tests.rs"]

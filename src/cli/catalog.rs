@@ -16,7 +16,9 @@ pub(crate) fn list(env: &HostEnv, json: bool) -> Result<i32> {
                     let desc = f.profile(&name).map(|p| p.description.clone()).unwrap_or_default();
                     let app = f.profile(&name).is_some_and(|p| p.app.is_some());
                     let exe = f.create(&name).ok().map(|h| h.exe.display().to_string());
-                    serde_json::json!({ "name": name, "description": desc, "installed": exe.is_some(), "exe": exe, "app": app })
+                    // Which step found the program: PATH, the profile's folders, or a common folder.
+                    let found_by = exe.as_ref().and_then(|_| f.found(&name)).map(|x| x.by.as_str());
+                    serde_json::json!({ "name": name, "description": desc, "installed": exe.is_some(), "exe": exe, "found_by": found_by, "app": app })
                 })
                 .collect();
         println!(
@@ -200,6 +202,8 @@ pub(crate) fn pick(env: &HostEnv, harness: &str) -> Result<i32> {
     let status = std::process::Command::new(me)
         .arg(harness)
         .arg(&path)
+        // A launcher run works on a copy of the project ([copy] default).
+        .arg("--launcher")
         .status()?;
     let code = status.code().unwrap_or(1);
     if code != 0 {

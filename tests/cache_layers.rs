@@ -128,6 +128,8 @@ fn run(root: &Path, project: &Path, script: &str) -> Output {
             "--network",
             "none",
             "-y",
+            // The scripts write what they saw in the project folder.
+            "--direct",
         ])
         .arg(project)
         .current_dir(project)
@@ -277,6 +279,8 @@ fn active_cache_survives_controller_kill() {
                 "--network",
                 "none",
                 "-y",
+                // The script writes its ready flag in the project folder.
+                "--direct",
             ])
             .arg(root.join("project"))
             .current_dir(root.join("project"))
